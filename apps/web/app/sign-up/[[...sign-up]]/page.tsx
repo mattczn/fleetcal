@@ -236,6 +236,27 @@ export default async function SignUpPage({
               forceRedirectUrl={afterSignUpUrl}
               fallbackRedirectUrl={afterSignUpUrl}
             />
+            {/* Legal consent line — carriers reviewing 10DLC registrations
+                want to see Terms + Privacy referenced at the point of
+                account creation, even though Clerk's own UI hides this
+                inside its flow. */}
+            <p style={{
+              fontSize:   12,
+              lineHeight: 1.6,
+              color:      '#5f6368',
+              textAlign:  'center',
+              marginTop:  16,
+              maxWidth:   380,
+              marginLeft: 'auto',
+              marginRight:'auto',
+            }}>
+              By creating an account, you agree to FleetCal&rsquo;s{' '}
+              <a href="/terms" style={{ color: '#1558d6', textDecoration: 'underline' }}>Terms of Service</a>{' '}
+              and{' '}
+              <a href="/privacy" style={{ color: '#1558d6', textDecoration: 'underline' }}>Privacy Policy</a>,
+              including consent to receive transactional SMS related to your account and dispatch operations.
+              Message and data rates may apply. Reply STOP to opt out.
+            </p>
           </div>
         </div>
       </main>

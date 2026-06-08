@@ -1098,8 +1098,8 @@ function Footer() {
           © {new Date().getFullYear()} FleetCal · Built in Salt Lake City
         </span>
         <div style={{ display: 'flex', gap: 24 }}>
-          <Link href="#" style={{ fontSize: 15, color: '#5f6368', textDecoration: 'none' }}>Privacy</Link>
-          <Link href="#" style={{ fontSize: 15, color: '#5f6368', textDecoration: 'none' }}>Terms</Link>
+          <Link href="/privacy" style={{ fontSize: 15, color: '#5f6368', textDecoration: 'none' }}>Privacy</Link>
+          <Link href="/terms" style={{ fontSize: 15, color: '#5f6368', textDecoration: 'none' }}>Terms</Link>
         </div>
       </div>
     </footer>
