@@ -48,6 +48,61 @@ function extractJson(text: string): Record<string, unknown> {
 }
 
 const PASS_1_MAX_TOKENS = 8192;
+
+// ─── Reliability guards ─────────────────────────────────────────────
+//
+// MAX_PDF_BYTES: post-decode size ceiling. PDFs above this almost
+// always mean a user mis-uploaded a scanned-document archive or a
+// glitchy export — they're an order of magnitude bigger than any
+// real rate-con (typical = 50KB-2MB). Failing fast saves the
+// Anthropic call cost AND surfaces a clear "split this PDF" message
+// instead of a 60-second wait followed by a generic timeout.
+// 10 MB is well above the largest real rate-con we've seen and
+// well below Anthropic's 32 MB document hard limit.
+const MAX_PDF_BYTES = 10 * 1024 * 1024;
+
+// ANTHROPIC_TIMEOUT_MS: per-call timeout passed to the SDK. Set
+// below Vercel's function limit (60s Hobby, 300s Pro) so we always
+// fail with a clean timeout error before the platform kills the
+// invocation with a generic 504. callWithRetry sees the SDK's
+// APIConnectionTimeoutError as non-retryable (no .status code),
+// so the user gets one fast failure rather than three 45-second
+// hangs in a row.
+const ANTHROPIC_TIMEOUT_MS = 45_000;
+
+/** Decode the base64 payload length to byte count. base64 inflates
+ *  bytes by ~4/3, so the decoded length is (chars * 3 / 4) minus
+ *  padding chars. Close enough for an upper-bound check. */
+function estimatePdfBytes(base64: string): number {
+  const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
+  return Math.floor((base64.length * 3) / 4) - padding;
+}
+
+/** Map a thrown Anthropic / network error to a user-friendly
+ *  message + stable error_code (for ai_usage_logs grouping). The
+ *  user sees `message` verbatim in the EventModal parse-error
+ *  banner, so keep them short (~60 chars) and actionable. */
+function friendlyError(err: unknown): { message: string; code: string; httpStatus: number } {
+  const status = (err as { status?: number })?.status;
+  const errName = (err as { name?: string })?.name ?? '';
+  // SDK's timeout error name. APIConnectionTimeoutError matches all
+  // timeout paths whether from explicit `timeout:` option or
+  // AbortController cancellation.
+  if (errName.includes('Timeout') || errName === 'APIConnectionTimeoutError') {
+    return { message: 'AI took too long to respond. Please try again.', code: 'anthropic_timeout', httpStatus: 504 };
+  }
+  if (status === 429) {
+    return { message: 'AI service is busy right now. Please try again in a moment.', code: 'anthropic_429', httpStatus: 503 };
+  }
+  if (status && status >= 500) {
+    return { message: 'AI service had a hiccup. Please try again.', code: 'anthropic_5xx', httpStatus: 502 };
+  }
+  if (status === 401 || status === 403) {
+    // Shouldn't reach the user — our key is bad. Log clearly.
+    return { message: 'AI service rejected our credentials. Contact support.', code: 'anthropic_auth', httpStatus: 502 };
+  }
+  return { message: 'Couldn\'t parse the rate confirmation. Please try again.', code: 'anthropic_other', httpStatus: 500 };
+}
 // Bumped from 2048 so multi-stop loads with 5+ corrections can fit
 // without truncation. Cost is only on output tokens actually produced,
 // so the ceiling is free.
@@ -203,18 +258,46 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
   }
 
+  // PDF size guard — runs BEFORE the tracker so size-rejected
+  // requests don't even pretend to be Anthropic calls. We log the
+  // rejection through a one-shot insert below so the dashboard can
+  // count denied requests separately from billed ones.
+  const pdfBytes = estimatePdfBytes(data);
+  if (pdfBytes > MAX_PDF_BYTES) {
+    const mb = (pdfBytes / 1024 / 1024).toFixed(1);
+    const maxMb = MAX_PDF_BYTES / 1024 / 1024;
+    // Log the denial through the tracker so it shows up alongside
+    // real Anthropic failures in /admin/ai-usage. No tokens, no $$.
+    const denyTracker = makeUsageTracker({
+      orgId,
+      userId:       userId ?? null,
+      endpoint:     'parse-ratecon',
+      requestBytes: pdfBytes,
+    });
+    denyTracker.recordFailure({
+      model:     'none',
+      pass:      1,
+      errorCode: 'pdf_too_large',
+      latencyMs: 0,
+    });
+    return NextResponse.json({
+      error: `Rate-con PDF is ${mb} MB — max ${maxMb} MB. Try a smaller file or split it.`,
+      code:  'pdf_too_large',
+    }, { status: 413 });
+  }
+
   // Per-call usage tracker. Pass 1 + (conditional) pass 2 both
   // report through this — one row per Anthropic call lands in
   // ai_usage_logs, and the DB trigger maintains ai_usage_monthly.
   // Writes are fire-and-forget; a failed insert never blocks the
-  // user's parse response. `requestBytes` is the inbound PDF byte
-  // length (base64-decoded ≈ data.length * 0.75; rough is fine for
-  // dashboard scale).
+  // user's parse response. `requestBytes` is the DECODED PDF byte
+  // length (same units as the size guard above), so dashboard rows
+  // can be compared directly against MAX_PDF_BYTES.
   const usageTracker = makeUsageTracker({
     orgId,
     userId:       userId ?? null,
     endpoint:     'parse-ratecon',
-    requestBytes: data.length,
+    requestBytes: pdfBytes,
   });
 
   const client = new Anthropic({ apiKey: key });
@@ -282,7 +365,7 @@ export async function POST(req: NextRequest) {
         max_tokens: PASS_1_MAX_TOKENS,
         temperature: 0,
         messages: [{ role: 'user', content }],
-      }), 'pass-1');
+      }, { timeout: ANTHROPIC_TIMEOUT_MS }), 'pass-1');
       usageTracker.recordSuccess({
         model:     PASS_1_MODEL,
         pass:      1,
@@ -316,21 +399,25 @@ export async function POST(req: NextRequest) {
       // Only record if the Anthropic call itself failed before we
       // got to recordSuccess. The JSON-parse branch above handles
       // its own attribution.
+      const friendly = friendlyError(err);
       if (!recordedAnthropic) {
-        const errStatus = (err as { status?: number })?.status;
-        const code =
-          errStatus === 429 ? 'anthropic_429' :
-          errStatus && errStatus >= 500 ? 'anthropic_5xx' :
-          'anthropic_other';
         usageTracker.recordFailure({
           model:     PASS_1_MODEL,
           pass:      1,
-          errorCode: code,
+          errorCode: friendly.code,
           latencyMs: Date.now() - startedAt,
         });
       }
-      const msg = err instanceof Error ? err.message : 'Unknown error';
-      return NextResponse.json({ error: msg, trace }, { status: 500 });
+      // Surface a USER-friendly message in `error` (the EventModal
+      // banner renders it verbatim). Keep the raw error in trace for
+      // DevTools debugging, but never leak it to the banner.
+      const rawMsg = err instanceof Error ? err.message : String(err);
+      console.error('[parse-ratecon] pass-1 failed:', friendly.code, rawMsg);
+      return NextResponse.json({
+        error: friendly.message,
+        code:  friendly.code,
+        trace: { ...trace, rawError: rawMsg },
+      }, { status: friendly.httpStatus });
     }
   }
 
@@ -374,7 +461,7 @@ export async function POST(req: NextRequest) {
         max_tokens: PASS_2_MAX_TOKENS,
         temperature: 0,
         messages: [{ role: 'user', content }],
-      }), 'pass-2');
+      }, { timeout: ANTHROPIC_TIMEOUT_MS }), 'pass-2');
       usageTracker.recordSuccess({
         model:     PASS_2_MODEL,
         pass:      2,

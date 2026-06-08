@@ -5196,13 +5196,17 @@ export default function EventModal() {
                   </div>
                 )}
                 {parseState === 'error' && (
-                  <div className="flex items-center justify-between px-4 py-3 rounded-xl" style={{ background: '#fef2f2', border: '1px solid #fecaca' }}>
-                    <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="flex items-center justify-between px-4 py-3 rounded-xl gap-3" style={{ background: '#fef2f2', border: '1px solid #fecaca' }}>
+                    {/* Title attr surfaces the full message on hover when
+                        the banner is narrow and `truncate` clips it —
+                        size-guard errors include the file size which
+                        can push past the ~60-char visible window. */}
+                    <div className="flex items-center gap-2.5 min-w-0 flex-1" title={parseError || 'Parse failed'}>
                       <AlertCircle size={17} style={{ color: '#dc2626', flexShrink: 0 }} />
                       <span className="text-sm font-medium truncate" style={{ color: '#dc2626' }}>{parseError || 'Parse failed'}</span>
                     </div>
                     <button type="button" onClick={() => fileInputRef.current?.click()}
-                      className="text-xs font-medium ml-3 shrink-0"
+                      className="text-xs font-medium shrink-0"
                       style={{ color: '#dc2626' }}
                       onMouseEnter={e => (e.currentTarget.style.textDecoration = 'underline')}
                       onMouseLeave={e => (e.currentTarget.style.textDecoration = 'none')}>
