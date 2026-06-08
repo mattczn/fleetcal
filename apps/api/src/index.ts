@@ -57,6 +57,7 @@ import capacityRoute from "./routes/capacity.js";
 import { syncIncrementalAllOrgs, snapshotOdometersAllOrgs } from "./lib/motiveIngest.js";
 import { sweepAutoDeliver } from "./lib/autoDeliverSweep.js";
 import { runConfirmReminders } from "./jobs/confirmReminders.js";
+import { runAiUsageSweep } from "./jobs/aiUsageSweep.js";
 import { runFuelAutoMatchSweep } from "./jobs/fuelAutoMatchSweep.js";
 import pkg from "../package.json" with { type: "json" };
 
@@ -458,3 +459,35 @@ async function fireFuelAutoMatch(label: string): Promise<void> {
 }
 setTimeout(() => void fireFuelAutoMatch("startup pass"), FUEL_AUTO_MATCH_STARTUP_DELAY).unref();
 setInterval(() => void fireFuelAutoMatch("tick"), FUEL_AUTO_MATCH_INTERVAL_MS).unref();
+
+// ── Daily AI-usage sweep ───────────────────────────────────────────────
+//
+// Flags orgs over their monthly Anthropic budget cap (or sudden 24h
+// volume spikes vs their 7-day baseline) and emails a digest to the
+// super-admin allowlist. See jobs/aiUsageSweep.ts for the full flag
+// criteria.
+//
+// Daily cadence: 24h interval with a small startup pass on boot, so
+// a deploy never delays the first run by more than a few minutes.
+// Idempotent — re-flagging an already-flagged org just refreshes
+// flagged_at; no duplicate emails because the digest reports the
+// current snapshot, not deltas.
+//
+// Single-replica caveat: same as the other in-process crons. If the
+// service is ever scaled horizontally we'd need to gate on a
+// "primary instance" flag — for now the unique deploy is the gate.
+const AI_USAGE_SWEEP_INTERVAL_MS   = Number(process.env.AI_USAGE_SWEEP_INTERVAL_MS   ?? 24 * 60 * 60 * 1000);
+const AI_USAGE_SWEEP_STARTUP_DELAY = Number(process.env.AI_USAGE_SWEEP_STARTUP_DELAY ?? 5 * 60 * 1000);
+async function fireAiUsageSweep(label: string): Promise<void> {
+  try {
+    const r = await runAiUsageSweep();
+    console.log(
+      `[ai-usage-sweep] ${label}: flagged=${r.flaggedCount}/${r.totalOrgsSeen}, emailSent=${r.emailSent}`
+      + (r.emailError ? ` (email error: ${r.emailError})` : "")
+    );
+  } catch (err) {
+    console.error(`[ai-usage-sweep] ${label} failed:`, err);
+  }
+}
+setTimeout(() => void fireAiUsageSweep("startup pass"), AI_USAGE_SWEEP_STARTUP_DELAY).unref();
+setInterval(() => void fireAiUsageSweep("daily tick"), AI_USAGE_SWEEP_INTERVAL_MS).unref();

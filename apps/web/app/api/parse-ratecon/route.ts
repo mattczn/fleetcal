@@ -8,7 +8,7 @@ import {
   DEFAULT_PROMPT_VARIABLES,
   PromptVariables,
 } from '@/lib/prompt';
-import { makeUsageTracker } from '@/lib/aiUsage';
+import { makeUsageTracker, preflightCheck } from '@/lib/aiUsage';
 import { geocodeAll } from '@/lib/geocode';
 import { cleanBrokerName } from '@/lib/brokerName';
 import type { StopType, GeocodeStatus } from '@/lib/types';
@@ -299,6 +299,25 @@ export async function POST(req: NextRequest) {
     endpoint:     'parse-ratecon',
     requestBytes: pdfBytes,
   });
+
+  // Pre-flight gates — per-minute rate limit + monthly cap. Both
+  // return before the Anthropic call so a runaway loop never bills
+  // a single token. Denials are logged through the tracker so the
+  // admin dashboard can count "denied" alongside "billed" in the
+  // error-rate breakdown.
+  const gate = await preflightCheck({ orgId, endpoint: 'parse-ratecon' });
+  if (!gate.ok) {
+    usageTracker.recordFailure({
+      model:     'none',
+      pass:      1,
+      errorCode: gate.code,
+      latencyMs: 0,
+    });
+    return NextResponse.json({
+      error: gate.message,
+      code:  gate.code,
+    }, { status: gate.status });
+  }
 
   const client = new Anthropic({ apiKey: key });
 
