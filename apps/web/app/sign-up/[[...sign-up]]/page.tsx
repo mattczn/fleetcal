@@ -179,9 +179,8 @@ export default async function SignUpPage({
                 margin:     '20px 0 0',
               }}
             >
-              FleetCal turns rate-cons into invoices in one screen. Built and used daily
-              at <strong style={{ color: '#202124' }}>Curzon Trucking</strong>, a 13-truck
-              reefer carrier.
+              FleetCal turns rate-cons into invoices in one screen. Built by a carrier,
+              for carriers.
             </p>
 
             <ul style={{ marginTop: 28, marginBottom: 32, padding: 0, listStyle: 'none', display: 'grid', gap: 14 }}>
@@ -224,8 +223,8 @@ export default async function SignUpPage({
                 Built by carriers
               </div>
               <p style={{ fontSize: 13.5, lineHeight: 1.6, color: '#5f6368' }}>
-                FleetCal is built by a 13-truck fleet owner, for fleets like yours.
-                No ELD lock-in. No per-driver fees.
+                FleetCal is built by a carrier, for carriers. No ELD lock-in.
+                No per-driver fees.
               </p>
             </div>
           </div>

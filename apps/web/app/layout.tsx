@@ -43,7 +43,7 @@ const ibmMono = IBM_Plex_Mono({
 
 export const metadata: Metadata = {
   title: 'FleetCal',
-  description: 'The TMS built by a 13-truck fleet owner, for fleets like yours.',
+  description: 'The TMS built by a carrier, for carriers.',
 };
 
 const darkModeCSS = `

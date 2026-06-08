@@ -259,7 +259,7 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
                   boxShadow:    '0 0 0 3px rgba(30,142,62,0.18)',
                 }}
               />
-              Built &amp; used daily at a 13-truck carrier
+              Built by a carrier, for carriers
             </span>
           </Reveal>
           <Reveal delay={60}>
@@ -348,36 +348,6 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
                 </span>
                 See how it works
               </Link>
-            </div>
-          </Reveal>
-          <Reveal delay={240}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 13, marginTop: 38 }}>
-              <div style={{ display: 'flex' }}>
-                {[['#ea4335', 'JC'], ['#1e8e3e', 'MR'], ['#f9ab00', 'TK'], ['#1a73e8', 'SD']].map(([bg, t]) => (
-                  <span
-                    key={t}
-                    className="font-display"
-                    style={{
-                      width:        34,
-                      height:       34,
-                      borderRadius: 999,
-                      border:       '2px solid #fff',
-                      marginLeft:   -9,
-                      display:      'grid',
-                      placeItems:   'center',
-                      background:   bg,
-                      color:        '#fff',
-                      fontWeight:   700,
-                      fontSize:     12,
-                    }}
-                  >
-                    {t}
-                  </span>
-                ))}
-              </div>
-              <span style={{ fontSize: 14.5, color: '#5f6368', fontWeight: 500 }}>
-                Run by dispatchers at real carriers
-              </span>
             </div>
           </Reveal>
         </div>
@@ -863,45 +833,6 @@ function Story() {
             Made by people who&apos;ve actually{' '}
             <span style={{ color: 'var(--gc-blue)' }}>run a dispatch desk.</span>
           </SectionTitle>
-          <div
-            style={{
-              marginTop:    32,
-              background:   '#fff',
-              border:       '1px solid #e8eaed',
-              borderRadius: 24,
-              padding:      '26px 28px',
-              display:      'flex',
-              gap:          18,
-              alignItems:   'center',
-              boxShadow:    'var(--shadow-card)',
-            }}
-          >
-            <div
-              className="font-display"
-              style={{
-                width:        56,
-                height:       56,
-                borderRadius: 999,
-                flex:         'none',
-                background:   '#e8f0fe',
-                display:      'grid',
-                placeItems:   'center',
-                color:        '#1967d2',
-                fontWeight:   800,
-                fontSize:     18,
-              }}
-            >
-              CT
-            </div>
-            <div>
-              <div className="font-display" style={{ fontWeight: 700, fontSize: 16, color: '#202124' }}>
-                Curzon Trucking
-              </div>
-              <div style={{ fontSize: 14, color: '#5f6368' }}>
-                13-truck reefer carrier · Salt Lake City
-              </div>
-            </div>
-          </div>
         </Reveal>
         <Reveal delay={100}>
           <div
@@ -914,10 +845,8 @@ function Story() {
             }}
           >
             <p>
-              FleetCal was built at{' '}
-              <strong style={{ color: '#202124' }}>Curzon Trucking</strong>, a 13-truck
-              reefer carrier. The first version replaced a dispatch whiteboard. Then came
-              a POD queue. Then invoicing. Then payroll.
+              FleetCal was built inside a working carrier. The first version replaced a
+              dispatch whiteboard. Then came a POD queue. Then invoicing. Then payroll.
             </p>
             <p>
               Every feature exists because someone yelled across the dispatch office for
@@ -1107,7 +1036,7 @@ function Footer() {
             style={{ height: 32, width: 'auto', objectFit: 'contain', display: 'block' }}
           />
           <p style={{ fontSize: 14.5, lineHeight: 1.6, color: '#5f6368', marginTop: 18, maxWidth: 260 }}>
-            The dispatch-to-invoice TMS built by a 13-truck carrier, for fleets like yours.
+            The dispatch-to-invoice TMS built by a carrier, for fleets like yours.
           </p>
         </div>
         {cols.map(([title, links]) => (
