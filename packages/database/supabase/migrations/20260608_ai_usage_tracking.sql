@@ -182,3 +182,12 @@ $$;
 CREATE TRIGGER ai_usage_logs_rollup_trg
 AFTER INSERT ON ai_usage_logs
 FOR EACH ROW EXECUTE FUNCTION ai_usage_logs_rollup();
+
+-- Disable RLS to match the project-wide pattern. Supabase enables
+-- RLS by default on newly-created tables; without an explicit
+-- DISABLE, INSERTs from the anon-key client fail with
+-- "new row violates row-level security policy" even though no
+-- policies exist. Caught this in PR 1 rollout — logs were silently
+-- failing until this line landed.
+ALTER TABLE ai_usage_logs    DISABLE ROW LEVEL SECURITY;
+ALTER TABLE ai_usage_monthly DISABLE ROW LEVEL SECURITY;
