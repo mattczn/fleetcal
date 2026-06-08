@@ -378,7 +378,20 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
         <Reveal delay={140}>
           <div style={{ position: 'relative' }}>
             <Frame url="app.fleetcal.com/calendar">
-              <Placeholder label="Dispatch calendar — screenshot" height={400} />
+              {/* Real product screenshot — actual dispatch calendar
+                  with 5 truck columns + sample loads. 1715×945 source
+                  (1.815:1). next/image handles retina sizing. Display
+                  block kills the inline-image baseline gap that
+                  would otherwise leave a hairline strip below the
+                  image inside the rounded frame. */}
+              <Image
+                src="/hero-calendar.png"
+                alt="FleetCal dispatch calendar"
+                width={1715}
+                height={945}
+                priority
+                style={{ width: '100%', height: 'auto', display: 'block' }}
+              />
             </Frame>
             {/* Floating "Delivered" chip — top-right */}
             <div
