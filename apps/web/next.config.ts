@@ -65,4 +65,19 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+// Sentry — wrap the config so source-maps upload at build time and a
+// tunnel route is created to bypass ad-blockers. If SENTRY_AUTH_TOKEN
+// isn't set (e.g. local dev, preview builds without secrets), the
+// withSentryConfig call short-circuits — no build error.
+import { withSentryConfig } from '@sentry/nextjs';
+
+export default withSentryConfig(nextConfig, {
+  silent:       !process.env.CI,
+  org:          process.env.SENTRY_ORG,
+  project:      process.env.SENTRY_PROJECT,
+  // Tunneling — sends Sentry events through /monitoring on our domain so
+  // ad-blockers like uBlock Origin don't drop them. Costs nothing; helps
+  // catch errors customers running aggressive blockers would hit.
+  tunnelRoute:  '/monitoring',
+  disableLogger: true,
+});

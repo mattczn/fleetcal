@@ -14,6 +14,7 @@ import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { secureHeaders } from "hono/secure-headers";
 import { serve } from "@hono/node-server";
+import * as Sentry from "@sentry/node";
 
 import { env, isProd } from "./lib/env.js";
 import { clerkAuth, type AuthVariables } from "./middleware/clerk.js";
@@ -60,6 +61,33 @@ import { runFuelAutoMatchSweep } from "./jobs/fuelAutoMatchSweep.js";
 import pkg from "../package.json" with { type: "json" };
 
 import type { HealthResponse } from "@fleetcal/types";
+
+// Sentry — init BEFORE the Hono app so any startup-time exception
+// (env var missing, route registration crash, port-already-in-use) is
+// captured. DSN comes from SENTRY_DSN. Missing DSN = no-op, no crash.
+if (process.env.SENTRY_DSN) {
+  Sentry.init({
+    dsn:                process.env.SENTRY_DSN,
+    environment:        process.env.NODE_ENV ?? "development",
+    release:            pkg.version,
+    tracesSampleRate:   0.1,
+    // Suppress noise from the Hono logger middleware which produces
+    // INFO-level breadcrumbs for every request; we only want errors.
+    integrations:       (defaults) => defaults,
+  });
+
+  // Catch any unhandled async rejection. Process-level rather than per-
+  // request because some bugs (lib internals) reject promises that
+  // never bubble back to a handler.
+  process.on("unhandledRejection", (reason) => {
+    console.error("[api] unhandledRejection:", reason);
+    Sentry.captureException(reason, { tags: { source: "unhandledRejection" } });
+  });
+  process.on("uncaughtException", (err) => {
+    console.error("[api] uncaughtException:", err);
+    Sentry.captureException(err, { tags: { source: "uncaughtException" } });
+  });
+}
 
 const app = new Hono<{ Variables: AuthVariables }>();
 
@@ -218,9 +246,30 @@ app.route("/v1", authed);
 // ── Error handler ───────────────────────────────────────────────────────
 
 app.onError((err, c) => {
-  console.error("[api] unhandled error:", err);
+  // Capture to Sentry with whatever request context we have. The event
+  // ID is what we hand back to the user — they can paste it into a
+  // support ticket and we can find the full stack trace in Sentry in
+  // one click. If Sentry isn't initialised (no SENTRY_DSN locally),
+  // captureException returns undefined and we fall back to a synthetic
+  // ID so the error response shape stays consistent.
+  const errorId = Sentry.captureException(err, {
+    tags: {
+      route:  c.req.path,
+      method: c.req.method,
+      org_id: c.get("orgId") ?? "anonymous",
+    },
+  }) ?? `local-${Date.now().toString(36)}`;
+
+  console.error(`[api] unhandled error [${errorId}]:`, err);
+
   return c.json(
-    { error: "internal_server_error", ...(isProd ? {} : { message: err.message }) },
+    {
+      error:   "internal_server_error",
+      errorId,
+      // Only leak the raw message in non-prod so users don't see stack
+      // detail in production, but the error ID always comes back.
+      ...(isProd ? {} : { message: err.message }),
+    },
     500,
   );
 });

@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { cookies } from 'next/headers';
 import { ClerkProvider } from '@clerk/nextjs';
 import { Plus_Jakarta_Sans, Figtree, Hanken_Grotesk, IBM_Plex_Mono } from 'next/font/google';
+import { Toaster } from 'sonner';
 import ThemeProvider from '@/components/ThemeProvider';
 import { RailwayClientProvider } from '@/components/RailwayClientProvider';
 import { clerkAppearance } from '@/lib/clerkAppearance';
@@ -106,6 +107,25 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         <body className="h-full overflow-hidden antialiased" style={{ fontFamily: 'var(--font-jakarta), sans-serif' }}>
           <ThemeProvider />
           <RailwayClientProvider>{children}</RailwayClientProvider>
+          {/* Sonner — single global toaster. Imperatively triggered
+              via `toast.success(...)` / `toast.error(...)` from
+              anywhere in the tree. richColors=true uses our blue/green/
+              red palette via Sonner's default; theme="light" forces
+              light styling regardless of the dashboard's dark-mode
+              setting because the dashboard toasts should be readable
+              on top of the calendar's color blocks. */}
+          <Toaster
+            position="top-right"
+            theme="light"
+            richColors
+            closeButton
+            duration={5000}
+            toastOptions={{
+              style: {
+                fontFamily: 'var(--font-jakarta), system-ui, sans-serif',
+              },
+            }}
+          />
         </body>
       </html>
     </ClerkProvider>

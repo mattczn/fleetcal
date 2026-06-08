@@ -16,6 +16,7 @@
     "@fleetcal/types": "*",
     "@hono/node-server": "^1.13.0",
     "@react-pdf/renderer": "^4.5.1",
+    "@sentry/node": "^10.56.0",
     "@supabase/supabase-js": "^2.105.1",
     "@types/react": "^19.2.14",
     "dotenv": "^17.4.2",
