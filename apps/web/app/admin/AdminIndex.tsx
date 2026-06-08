@@ -10,6 +10,7 @@
 import Link from 'next/link';
 import AppShell from '@/components/nav/AppShell';
 import { Activity, Building2, ShieldAlert, ShieldCheck } from 'lucide-react';
+import PulseCard from './PulseCard';
 
 export default function AdminIndex() {
   return (
@@ -23,6 +24,8 @@ export default function AdminIndex() {
             Cross-org tools. Only visible to users in the SUPER_ADMIN_USER_IDS allowlist.
           </div>
         </div>
+
+        <PulseCard />
 
         <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))' }}>
           <AdminCard
