@@ -121,8 +121,17 @@ export function useOrgTier(): OrgTierApi {
     // need to know about this state to render upgrade banners cleanly.
 
     // Cap rule: count trucks where `activeTo` is null — i.e. not
-    // retired. Deliberately ignoring `activeFrom`. The previous
-    // rule (isActiveOn with both bounds) was over-engineered:
+    // retired. Deliberately ignoring `activeFrom`. Also excludes
+    // optimistic (in-flight) assets — those have a negative
+    // tempId from the store's addAsset action and haven't been
+    // confirmed by the server yet. Counting them would cause a
+    // momentary "capBlocked=true" flicker every time the user
+    // adds a truck (8/9 → optimistic 9/9 → server 201 → real
+    // 9/9), producing a visible banner flash even on the happy
+    // path. We count only assets with a real (positive) id.
+    //
+    // The previous rule (isActiveOn with both bounds) was
+    // over-engineered:
     //
     //  - It introduced a server/client tz disagreement window
     //    every night (server uses UTC `today`, client uses local
@@ -149,6 +158,7 @@ export function useOrgTier(): OrgTierApi {
     // The Unassigned row is a virtual asset the calendar adds for
     // unrouted events; not a real truck, doesn't burn a seat.
     const currentTrucks = assets.filter(a =>
+      a.id > 0 &&                  // exclude optimistic/in-flight (tempId < 0)
       a.type !== 'Unassigned' &&
       a.name !== 'Unassigned' &&
       a.activeTo == null

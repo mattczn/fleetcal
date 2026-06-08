@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { X, AlertTriangle } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { PRESET_COLORS } from '@/lib/asset-colors';
@@ -35,14 +35,14 @@ export default function AddAssetDialog({ onClose }: { onClose: () => void }) {
   // /pricing and losing the truck-add form state.
   const [upgradeOpen, setUpgradeOpen] = useState(false);
 
-  // serverError is sticky — set once on 402, never cleared as the
-  // user's state changes. If they leave this dialog open, retire
-  // a truck elsewhere (or buy an upgrade), `blocked` flips false
-  // but the error banner stays. Clear it as soon as they're no
-  // longer blocked so the form re-enables cleanly.
-  useEffect(() => {
-    if (!blocked && serverError) setServerError(null);
-  }, [blocked, serverError]);
+  // Sister-file note (AssetsModal had the same useEffect): we
+  // removed the auto-clear here because it was hiding real 402
+  // messages during the optimistic-insert-then-rollback cycle.
+  // serverError is now cleared at the start of the next
+  // handleSubmit (see below) and on dialog close (unmount). The
+  // cap count itself is unaffected — useOrgTier excludes
+  // optimistic assets (id < 0) so `blocked` doesn't spuriously
+  // flip during the in-flight window.
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim() || blocked) return;

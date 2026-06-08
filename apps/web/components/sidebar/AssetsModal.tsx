@@ -118,16 +118,24 @@ function AssetsModal({ onClose, initialAssetId, embedded }, modalRef) {
   // calendar context and shortens time-to-paid.
   const [upgradeOpen, setUpgradeOpen] = useState(false);
 
-  // tierError is a sticky message — once set from a failed add
-  // attempt, it stays until manually cleared. That's fine while
-  // the user is genuinely still at the cap, but the moment they
-  // free a seat (retire/delete a truck) capBlocked flips false
-  // and the banner becomes a lie ("PLAN LIMIT REACHED" sitting
-  // above "8/9 trucks used"). Clear it the instant they're no
-  // longer blocked.
-  useEffect(() => {
-    if (!capBlocked && tierError) setTierError(null);
-  }, [capBlocked, tierError]);
+  // Earlier versions of this file had a useEffect here that
+  // auto-cleared tierError when capBlocked flipped false. That
+  // turned out to mask real server errors — during the optimistic
+  // -insert-then-rollback cycle, capBlocked toggled true→false
+  // within a render or two, and the useEffect erased the 402
+  // message before the user could read it (the "flash"). The fix
+  // is structural, not reactive:
+  //
+  //   - useOrgTier now excludes optimistic (id<0) assets from
+  //     the count, so capBlocked doesn't spuriously flip during
+  //     the optimistic window.
+  //   - The cap banner below only renders from capBlocked; it
+  //     does NOT render from tierError alone, so we can't end up
+  //     in the contradictory "PLAN LIMIT REACHED above 8/9" state.
+  //   - tierError renders as its own small inline message above
+  //     the truck list, and is cleared by the user's next
+  //     handleAdd attempt (already does `setTierError(null)`
+  //     at the start).
 
   // Unsaved-changes guard. The detail panel owns its form state and
   // exposes save/discard via a ref; this modal intercepts every
@@ -419,11 +427,13 @@ function AssetsModal({ onClose, initialAssetId, embedded }, modalRef) {
                   Status row:  ⚠ tier label · X/Y active
                   Action:      [Upgrade plan] or [Contact sales]
                   Hint:        "or retire a truck to free a slot"
-                Shown when at/over cap OR when the server returned a
-                402 (tierError). The primary action opens an in-app
-                UpgradePlanDialog instead of routing to /pricing so
-                the dispatcher doesn't lose context. */}
-            {(capBlocked || tierError) && (
+                Shown ONLY when the user is actually at/over the
+                cap. Server errors (tierError) render separately
+                below so the cap banner can't lie about the
+                current count. The primary action opens an in-app
+                UpgradePlanDialog instead of routing to /pricing
+                so the dispatcher doesn't lose context. */}
+            {capBlocked && (
               <div
                 className="mx-3 mt-2 mb-3 rounded-xl"
                 style={{
@@ -504,6 +514,22 @@ function AssetsModal({ onClose, initialAssetId, embedded }, modalRef) {
                     {tierError}
                   </div>
                 )}
+              </div>
+            )}
+            {/* Standalone server-error message — renders only when
+                the cap banner isn't already showing. Happens after
+                a 402 if the user has since retired a truck (so
+                they're no longer at the cap, but the previous
+                attempt's error is still relevant context). Cleared
+                on the next add attempt. */}
+            {tierError && !capBlocked && (
+              <div className="mx-3 mt-2 mb-3 rounded-lg px-3 py-2 text-[11.5px]"
+                style={{
+                  background: 'rgba(220, 38, 38, 0.08)',
+                  color:      '#991b1b',
+                  border:     '1px solid rgba(220, 38, 38, 0.20)',
+                }}>
+                {tierError}
               </div>
             )}
             {upgradeOpen && <UpgradePlanDialog onClose={() => setUpgradeOpen(false)} />}
