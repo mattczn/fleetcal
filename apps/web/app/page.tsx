@@ -445,10 +445,10 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
 
 function TrustBand() {
   const stats: ReadonlyArray<[string, string]> = [
-    ['13',       'trucks run on it daily'],
-    ['3 clicks', 'POD to sent invoice'],
-    ['$0',       'per-driver fees, ever'],
-    ['14 days',  'free, no card needed'],
+    ['60 sec',    'rate-con to dispatch'],
+    ['3 clicks',  'POD to sent invoice'],
+    ['$0',        'per-driver fees, ever'],
+    ['All-in-1',  'dispatch, payroll, billing'],
   ];
   return (
     <section style={{ borderTop: '1px solid #e8eaed', borderBottom: '1px solid #e8eaed', background: '#f8f9fa' }}>
@@ -794,8 +794,8 @@ function Pricing() {
             <span style={{ color: '#5f6368' }}>Same product at every tier.</span>
           </SectionTitle>
           <SectionSub>
-            14-day free trial on every plan. No credit card to start, no per-driver
-            surcharges, no annual lock-in.
+            14-day free trial on every plan. No per-driver surcharges,
+            no annual lock-in.
           </SectionSub>
         </Reveal>
         <Reveal delay={60}>
@@ -878,7 +878,7 @@ function Story() {
 const FAQS = [
   { q: 'Do I have to switch ELD providers?',           a: "No. FleetCal has no ELD lock-in — keep whatever ELD and telematics you already run. We integrate where it helps and stay out of the way where it doesn't." },
   { q: 'Is there a per-driver or per-seat fee?',       a: 'Never. You pay one flat monthly price based on your truck count. Add as many dispatchers, drivers, and office staff as you need at no extra cost.' },
-  { q: 'How does the free trial work?',                a: "14 days free on every plan, no credit card required to start. Set up your fleet, run real loads, and decide once you've seen it on your own freight." },
+  { q: 'How does the free trial work?',                a: "Every plan starts with a 14-day free trial. Pick a plan, add your card, and you're set up — you won't be charged until day 15, and you can cancel any time before then in the app." },
   { q: 'Can I bring my existing loads and customers over?', a: "Yes. You can import your current loads, customers, drivers, and equipment so you're not starting from an empty calendar on day one." },
   { q: 'Who is FleetCal built for?',                   a: 'Small to mid-size carriers running roughly 1–14 trucks — owner-operators acting as their own dispatcher up through fleets where dispatch is its own department.' },
   { q: 'What if I grow past 14 trucks?',               a: "Reach out to sales and we'll set you up with a plan sized to your fleet. The product is the same — only the truck cap changes." },

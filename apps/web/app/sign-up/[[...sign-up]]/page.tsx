@@ -31,7 +31,7 @@ const PLAN_META: Record<PlanKey, { name: string; price: number; trucks: string }
 const BULLETS = [
   'AI rate-con parser — drop a PDF, get a load.',
   'Dispatch calendar, payroll, and invoicing in one app.',
-  '14-day free trial. No credit card.',
+  '14-day free trial. Cancel any time before billing.',
 ];
 
 export default async function SignUpPage({

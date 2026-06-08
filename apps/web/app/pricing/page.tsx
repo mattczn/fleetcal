@@ -66,7 +66,7 @@ export default async function PricingPage() {
                 maxWidth:   620,
               }}
             >
-              14-day free trial on every plan. No credit card to start. Cancel any time —
+              14-day free trial on every plan. Cancel any time —
               no annual lock-in, no per-driver surcharges.
             </p>
           </Reveal>
