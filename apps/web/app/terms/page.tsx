@@ -143,10 +143,10 @@ export default async function TermsOfService() {
 
       <H2>6. Third-Party Services &amp; Integrations</H2>
       <p>
-        The Service integrates with third-party services (such as Motive ELDs, Google Maps, payment processors,
-        and email/SMS gateways). Your use of those services is subject to the third party&rsquo;s own terms and
-        privacy policies. We are not responsible for third-party services, and their availability is not
-        guaranteed.
+        The Service integrates with third-party services (such as mapping and routing providers, payment
+        processors, and email/SMS gateways). Your use of those services is subject to the third party&rsquo;s
+        own terms and privacy policies. We are not responsible for third-party services, and their
+        availability is not guaranteed.
       </p>
 
       <H2>7. Intellectual Property</H2>

@@ -424,7 +424,11 @@ function PlanSelectStep({
                   </div>
                 )}
 
-                {/* Feature list */}
+                {/* Feature list — kept in sync with the marketing page's
+                    FleetCal MVP features section (apps/web/app/page.tsx
+                    FEATURES). Anything not shipped to the marketing
+                    page must NOT show here either, or we'd be promising
+                    features the prospect can't actually use yet. */}
                 <ul className="flex flex-col gap-2.5 text-[13px]" style={{ color: 'var(--gc-text-2)' }}>
                   <li className="flex items-start gap-2.5">
                     <Check size={16} style={{ color: 'var(--gc-blue)', flexShrink: 0, marginTop: 2 }} />
@@ -432,15 +436,15 @@ function PlanSelectStep({
                   </li>
                   <li className="flex items-start gap-2.5">
                     <Check size={16} style={{ color: 'var(--gc-blue)', flexShrink: 0, marginTop: 2 }} />
-                    <span>AI rate-con parsing + driver mobile app</span>
+                    <span>Drag-and-drop fleet calendar</span>
                   </li>
                   <li className="flex items-start gap-2.5">
                     <Check size={16} style={{ color: 'var(--gc-blue)', flexShrink: 0, marginTop: 2 }} />
-                    <span>Motive ELD sync, accounting &amp; invoicing</span>
+                    <span>AI rate-con extraction &amp; bulk invoicing</span>
                   </li>
                   <li className="flex items-start gap-2.5">
                     <Check size={16} style={{ color: 'var(--gc-blue)', flexShrink: 0, marginTop: 2 }} />
-                    <span>Asset timeline + AI cost analysis</span>
+                    <span>Closeout + weekly payroll built-in</span>
                   </li>
                 </ul>
 

@@ -223,8 +223,8 @@ export default async function SignUpPage({
                 Built by carriers
               </div>
               <p style={{ fontSize: 13.5, lineHeight: 1.6, color: '#5f6368' }}>
-                FleetCal is built by a carrier, for carriers. No ELD lock-in.
-                No per-driver fees.
+                FleetCal is built by a carrier, for carriers. No per-driver
+                fees, no per-seat fees — one flat price per truck.
               </p>
             </div>
           </div>

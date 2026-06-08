@@ -878,7 +878,6 @@ function Story() {
 }
 
 const FAQS = [
-  { q: 'Do I have to switch ELD providers?',           a: "No. FleetCal has no ELD lock-in — keep whatever ELD and telematics you already run. We integrate where it helps and stay out of the way where it doesn't." },
   { q: 'Is there a per-driver or per-seat fee?',       a: 'Never. You pay one flat monthly price based on your truck count. Add as many dispatchers, drivers, and office staff as you need at no extra cost.' },
   { q: 'How does the free trial work?',                a: "Every plan starts with a 14-day free trial. Pick a plan, add your card, and you're set up — you won't be charged until day 15, and you can cancel any time before then in the app." },
   { q: 'Can I bring my existing loads and customers over?', a: "Yes. You can import your current loads, customers, drivers, and equipment so you're not starting from an empty calendar on day one." },
@@ -1014,7 +1013,7 @@ function FinalCta({ cta }: { cta: { href: string; label: string } }) {
 
 function Footer() {
   const cols: ReadonlyArray<[string, ReadonlyArray<[string, string]>]> = [
-    ['Product', [['Features', '#features'], ['How it works', '#how'], ['Pricing', '#pricing'], ['Mobile app', '#features']]],
+    ['Product', [['Features', '#features'], ['How it works', '#how'], ['Pricing', '#pricing']]],
     ['Company', [['Why FleetCal', '#story'], ['Built by carriers', '#story'], ['Contact sales', 'mailto:hello@fleetcal.app'], ['Careers', '#story']]],
     ['Support', [['Help center', 'mailto:hello@fleetcal.app'], ['Sign in', '/sign-in'], ['System status', '#'], ['Contact us', 'mailto:hello@fleetcal.app']]],
   ];

@@ -85,7 +85,6 @@ export default async function PrivacyPolicy() {
       <ul>
         <li>Loads, customers, brokers, equipment, drivers, trailers, routes, locations, and uploaded documents (rate cons, POD scans, invoices, etc.).</li>
         <li>Driver names, phone numbers, license details, and assignment history.</li>
-        <li>Geolocation data from connected ELD providers (e.g. Motive) for trucks and drivers you have authorized to share with us.</li>
       </ul>
       <h3 style={H3}>Communications</h3>
       <ul>
