@@ -166,8 +166,8 @@ export default async function SignUpPage({
                 margin:        0,
               }}
             >
-              Dispatch that{' '}
-              <span style={{ color: 'var(--gc-blue)' }}>fits how you work.</span>
+              Dispatch workflows that help you{' '}
+              <span style={{ color: 'var(--gc-blue)' }}>focus on what matters.</span>
             </h1>
 
             <p
