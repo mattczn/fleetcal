@@ -1,12 +1,14 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { ContentBlockParam, DocumentBlockParam, TextBlockParam } from '@anthropic-ai/sdk/resources/messages';
 import { NextRequest, NextResponse } from 'next/server';
+import { auth } from '@clerk/nextjs/server';
 import {
   buildRateConPrompt,
   buildRateConCorrectivePrompt,
   DEFAULT_PROMPT_VARIABLES,
   PromptVariables,
 } from '@/lib/prompt';
+import { makeUsageTracker } from '@/lib/aiUsage';
 import { geocodeAll } from '@/lib/geocode';
 import { cleanBrokerName } from '@/lib/brokerName';
 import type { StopType, GeocodeStatus } from '@/lib/types';
@@ -173,6 +175,17 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'ANTHROPIC_API_KEY not set' }, { status: 500 });
   }
 
+  // Clerk auth — orgId is required to attribute the call in
+  // ai_usage_logs (PR 1 of the AI usage tracker). Missing org →
+  // 401 because the rate-con parser is dispatcher-only; there's no
+  // legitimate anonymous use case. The auth() call also drives the
+  // userId column so the admin dashboard can spot "one dispatcher
+  // in a reparse loop" vs an org-wide spike.
+  const { orgId, userId } = await auth();
+  if (!orgId) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   let data: string;
   let enabledFields: string[] = [];
   let customInstructions = '';
@@ -189,6 +202,20 @@ export async function POST(req: NextRequest) {
   } catch {
     return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
   }
+
+  // Per-call usage tracker. Pass 1 + (conditional) pass 2 both
+  // report through this — one row per Anthropic call lands in
+  // ai_usage_logs, and the DB trigger maintains ai_usage_monthly.
+  // Writes are fire-and-forget; a failed insert never blocks the
+  // user's parse response. `requestBytes` is the inbound PDF byte
+  // length (base64-decoded ≈ data.length * 0.75; rough is fine for
+  // dashboard scale).
+  const usageTracker = makeUsageTracker({
+    orgId,
+    userId:       userId ?? null,
+    endpoint:     'parse-ratecon',
+    requestBytes: data.length,
+  });
 
   const client = new Anthropic({ apiKey: key });
 
@@ -233,32 +260,78 @@ export async function POST(req: NextRequest) {
   } = {};
 
   // ── Pass 1 (Haiku) ───────────────────────────────────────────────
+  // Usage-tracking semantics: ONE row per Anthropic call.
+  //   - Successful call → recordSuccess (success=true, tokens set).
+  //   - Failed Anthropic call → recordFailure (success=false, no tokens).
+  //   - Successful Anthropic call + downstream JSON-parse failure →
+  //     recordSuccess for the actual call (it billed) + a SEPARATE
+  //     recordFailure to surface the parse failure in error_code
+  //     stats. Two rows total: one with tokens, one with a
+  //     'json_parse_fail' error_code marker.
+  // `recordedAnthropic` guards against the catch block double-recording
+  // an already-recorded success path.
   let parsed: Record<string, unknown>;
-  try {
-    const textBlock: TextBlockParam = { type: 'text', text: prompt };
-    const content: ContentBlockParam[] = [docBlock, textBlock];
-    const response = await callWithRetry(() => client.messages.create({
-      model: PASS_1_MODEL,
-      max_tokens: PASS_1_MAX_TOKENS,
-      temperature: 0,
-      messages: [{ role: 'user', content }],
-    }), 'pass-1');
-    const text = response.content[0].type === 'text' ? response.content[0].text : '';
-    trace.pass1RawText = text;
+  {
+    const startedAt = Date.now();
+    let recordedAnthropic = false;
     try {
-      parsed = extractJson(text);
-      trace.pass1Parsed = parsed;
-    } catch (parseErr) {
-      console.error('[parse-ratecon] pass-1 JSON parse failed:', {
-        stopReason: response.stop_reason,
-        textLength: text.length,
-        tail: text.slice(-200),
+      const textBlock: TextBlockParam = { type: 'text', text: prompt };
+      const content: ContentBlockParam[] = [docBlock, textBlock];
+      const response = await callWithRetry(() => client.messages.create({
+        model: PASS_1_MODEL,
+        max_tokens: PASS_1_MAX_TOKENS,
+        temperature: 0,
+        messages: [{ role: 'user', content }],
+      }), 'pass-1');
+      usageTracker.recordSuccess({
+        model:     PASS_1_MODEL,
+        pass:      1,
+        response,
+        latencyMs: Date.now() - startedAt,
       });
-      throw parseErr;
+      recordedAnthropic = true;
+      const text = response.content[0].type === 'text' ? response.content[0].text : '';
+      trace.pass1RawText = text;
+      try {
+        parsed = extractJson(text);
+        trace.pass1Parsed = parsed;
+      } catch (parseErr) {
+        console.error('[parse-ratecon] pass-1 JSON parse failed:', {
+          stopReason: response.stop_reason,
+          textLength: text.length,
+          tail: text.slice(-200),
+        });
+        // Tokens were billed (recordSuccess above). Add a second
+        // row marked json_parse_fail so the error-rate breakdown
+        // surfaces this distinct downstream failure.
+        usageTracker.recordFailure({
+          model:     PASS_1_MODEL,
+          pass:      1,
+          errorCode: 'json_parse_fail',
+          latencyMs: 0,
+        });
+        throw parseErr;
+      }
+    } catch (err) {
+      // Only record if the Anthropic call itself failed before we
+      // got to recordSuccess. The JSON-parse branch above handles
+      // its own attribution.
+      if (!recordedAnthropic) {
+        const errStatus = (err as { status?: number })?.status;
+        const code =
+          errStatus === 429 ? 'anthropic_429' :
+          errStatus && errStatus >= 500 ? 'anthropic_5xx' :
+          'anthropic_other';
+        usageTracker.recordFailure({
+          model:     PASS_1_MODEL,
+          pass:      1,
+          errorCode: code,
+          latencyMs: Date.now() - startedAt,
+        });
+      }
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      return NextResponse.json({ error: msg, trace }, { status: 500 });
     }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Unknown error';
-    return NextResponse.json({ error: msg, trace }, { status: 500 });
   }
 
   // Verbose dump of pass-1 dates → Vercel logs. Mirror what the
@@ -285,6 +358,12 @@ export async function POST(req: NextRequest) {
     escalatedToSonnet = true;
     console.warn('[parse-ratecon] pass-1 date check failed, escalating to Sonnet:', discrepancies);
 
+    // Same one-row-per-call semantics as pass 1. The pass-2 PDF
+    // block is the same cache-controlled doc, so this call reads
+    // input tokens at ~10% rate (cache_read_input_tokens, costed
+    // separately in aiPricing.ts).
+    const pass2StartedAt = Date.now();
+    let pass2RecordedAnthropic = false;
     try {
       const correctivePrompt = buildRateConCorrectivePrompt(parsed, discrepancies, promptVariables);
       trace.correctivePrompt = correctivePrompt;
@@ -296,6 +375,13 @@ export async function POST(req: NextRequest) {
         temperature: 0,
         messages: [{ role: 'user', content }],
       }), 'pass-2');
+      usageTracker.recordSuccess({
+        model:     PASS_2_MODEL,
+        pass:      2,
+        response,
+        latencyMs: Date.now() - pass2StartedAt,
+      });
+      pass2RecordedAnthropic = true;
       const text = response.content[0].type === 'text' ? response.content[0].text : '';
       trace.pass2RawText = text;
       const correction = extractJson(text);
@@ -316,6 +402,28 @@ export async function POST(req: NextRequest) {
       // Non-fatal — fall through with pass-1 output. Better to return
       // a slightly inconsistent parse than fail the whole request.
       console.error('[parse-ratecon] pass-2 corrective call failed, returning pass-1:', err);
+      if (!pass2RecordedAnthropic) {
+        const errStatus = (err as { status?: number })?.status;
+        const code =
+          errStatus === 429 ? 'anthropic_429' :
+          errStatus && errStatus >= 500 ? 'anthropic_5xx' :
+          'anthropic_other';
+        usageTracker.recordFailure({
+          model:     PASS_2_MODEL,
+          pass:      2,
+          errorCode: code,
+          latencyMs: Date.now() - pass2StartedAt,
+        });
+      } else {
+        // Anthropic call succeeded but JSON parse / cross-check
+        // bookkeeping threw downstream. Record as a parse failure.
+        usageTracker.recordFailure({
+          model:     PASS_2_MODEL,
+          pass:      2,
+          errorCode: 'json_parse_fail',
+          latencyMs: 0,
+        });
+      }
     }
   }
 
