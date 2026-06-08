@@ -48,7 +48,7 @@ export default function MarketingNav({ cta, showSignIn }: { cta: Cta; showSignIn
         transition:        'border-color .25s, box-shadow .25s',
       }}
     >
-      <div className="mx-auto flex items-center justify-between max-w-[1160px] px-8" style={{ height: 68 }}>
+      <div className="mx-auto flex items-center justify-between w-full max-w-[1600px] px-8 lg:px-12" style={{ height: 68 }}>
         <Link href="/" aria-label="FleetCal home" className="flex items-center">
           <Image
             src="/logo-horizontal.png"

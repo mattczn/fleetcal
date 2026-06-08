@@ -75,7 +75,11 @@ function ctaFor(state: AuthCta): { href: string; label: string } {
 
 // ── Building blocks ─────────────────────────────────────────────────────
 
-const WRAP = 'mx-auto max-w-[1160px] px-8';
+// Page-wide container. 1600px cap is wider than the Google Workspace
+// 1160 default the handoff specced; the founder asked for a less
+// boxed-in feel on big screens. px-8 → px-12 gutter at lg keeps a
+// comfortable rhythm without the page hugging the viewport edge.
+const WRAP = 'mx-auto w-full max-w-[1600px] px-8 lg:px-12';
 
 /** Mac-style browser frame around a product placeholder. Real
  *  screenshots drop into the `<children>` slot once shipped. */
@@ -225,7 +229,10 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
         className={WRAP}
         style={{
           display:             'grid',
-          gridTemplateColumns: '1fr 1.06fr',
+          // Hero leans heavily right (1 : 1.4) so the product screenshot
+          // dominates — ~1.6x wider than the original 1 : 1.06 split.
+          // Copy still gets plenty of room on the left.
+          gridTemplateColumns: '1fr 1.4fr',
           gap:                 64,
           alignItems:          'center',
         }}
