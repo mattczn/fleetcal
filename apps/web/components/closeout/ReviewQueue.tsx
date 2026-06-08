@@ -1994,6 +1994,14 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                 const hasAny$ = accs.some(a => a.amount != null);
                 return (
                   <Tooltip
+                    // Drop the bubble DOWN into the doc-list area below
+                    // — the badge lives in the Docs header strip and
+                    // the VerifyList sits immediately above it. With
+                    // the default placement='top' the bubble obscures
+                    // the verification chips ("Rate Confirmation
+                    // Present", etc.). The doc list below is empty
+                    // chrome at the top, so 'bottom' lands cleanly.
+                    placement="bottom"
                     content={
                       // Tooltip surface is dark (rgba(32,33,36,0.95)) and
                       // capped at maxWidth: 280 by the shared component —
