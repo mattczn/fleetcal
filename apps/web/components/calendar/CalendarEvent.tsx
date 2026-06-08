@@ -313,51 +313,102 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
               )}
             </div>
           )}
-          {/* Title — always shown */}
-          <div className="flex items-start gap-1">
-            <div className="font-extrabold leading-tight break-words min-w-0" style={{ color: 'white', paddingRight: isRelay ? 22 : 0, fontSize: fsTitle }}>
-              {displayTitle}
-            </div>
-          </div>
-          {/* User-configured fields */}
-          {cardFields.map((key, i) => {
-            const def = CARD_FIELD_DEFS.find(d => d.key === key);
-            if (!def) return null;
-            // Hide $-amount fields from roles that lack the visibility
-            // cap. Maintenance opening a calendar should see route +
-            // driver + status but not the rate.
-            if (key === 'loadPrice' && !canDo('loads.view_price')) return null;
-            // Total billable mirrors loads.view_price — same financial
-            // info, just including accessorials. Maintenance-tier roles
-            // shouldn't see either.
-            if (key === 'totalBillable' && !canDo('loads.view_price')) return null;
-            if (key === 'driverPay' && !canDo('loads.view_driver_pay')) return null;
-            const value = def.render(event, { driverLabel, customers });
-            if (!value) return null;
-            const minHeight = 20 + i * 14;
-            if (height <= minHeight) return null;
-            const Icon = def.icon;
-            // Per-field icon visibility — empty / true = on (default),
-            // explicit false from the org setting hides this glyph.
-            const showIcon = cardFieldIcons[key] !== false;
-            // Icon sized just below the text so it sits visually
-            // centered against the cap-height. Tighter gap (3px) +
-            // smaller icon ratio (0.75) so the icon reads as a label
-            // glyph rather than a separate column — every pixel goes
-            // to the actual driver name / customer / time range.
-            const iconSize = Math.max(8, Math.round(fsField * 0.75));
+          {/* Height-budget allocation for title + fields.
+              Each renderable field is single-line (truncated). Fields
+              get first claim on vertical space in priority order; the
+              title takes whatever's left and wraps into as many lines
+              as fit (1-line minimum). This prevents a long broker
+              title from pushing the time/driver/$ rows off the bottom
+              of a short event card — a real bug visible on 30-60 min
+              loads where the title would wrap to 3 lines and the
+              entire bottom row clipped past the card border. */}
+          {(() => {
+            // Build the renderable-fields list once: skip null values
+            // (e.g. no broker on this load) and role-restricted ones
+            // (price/driverPay capabilities). i isn't the cardFields
+            // index anymore — it's the visible-row index after filtering.
+            const visible = cardFields.flatMap(key => {
+              const def = CARD_FIELD_DEFS.find(d => d.key === key);
+              if (!def) return [];
+              if (key === 'loadPrice' && !canDo('loads.view_price')) return [];
+              if (key === 'totalBillable' && !canDo('loads.view_price')) return [];
+              if (key === 'driverPay' && !canDo('loads.view_driver_pay')) return [];
+              const value = def.render(event, { driverLabel, customers });
+              if (!value) return [];
+              return [{ key, def, value }];
+            });
+
+            // Line heights match `leading-tight` (~1.15 of fontSize).
+            const titleLineH = Math.ceil(fsTitle * 1.15);
+            const fieldLineH = Math.ceil(fsField * 1.15);
+            // px-1.5 pt-0.5 → 2px top; paddingBottom 14 if status overlay else 2.
+            const padTop    = 2;
+            const padBottom = event.status && showStatusOverlay ? 14 : 2;
+            const usableH   = Math.max(0, height - padTop - padBottom);
+
+            // Reserve 1 title line first, then fit as many field rows
+            // as the budget allows. If even one title line doesn't fit,
+            // titleLines becomes 0 and we'd render only the truncated
+            // title via maxHeight — but in practice CalendarColumn
+            // clamps minimum card height well above this floor.
+            const budgetAfterTitle = usableH - titleLineH;
+            const fieldCount = Math.max(0, Math.min(
+              visible.length,
+              Math.floor(budgetAfterTitle / fieldLineH),
+            ));
+            const fieldsHeight = fieldCount * fieldLineH;
+            // Title can claim everything that isn't taken by fields —
+            // grows naturally when the card is tall enough that the
+            // title wants to wrap (e.g. relay legs with prefix:route).
+            const titleMaxH    = Math.max(titleLineH, usableH - fieldsHeight);
+            const titleLines   = Math.max(1, Math.floor(titleMaxH / titleLineH));
+
             return (
-              <div key={key} className="font-medium leading-tight truncate flex items-center" style={{ color: 'rgba(255,255,255,0.85)', fontSize: fsField }}>
-                {Icon && showIcon && (
-                  <Icon
-                    size={iconSize}
-                    style={{ flexShrink: 0, opacity: 0.75, marginRight: 3 }}
-                  />
-                )}
-                <span className="truncate">{value}</span>
-              </div>
+              <>
+                {/* Title — always shown, line-clamped to fit budget. */}
+                <div className="flex items-start gap-1">
+                  <div
+                    className="font-extrabold leading-tight break-words min-w-0"
+                    style={{
+                      color: 'white',
+                      paddingRight: isRelay ? 22 : 0,
+                      fontSize: fsTitle,
+                      display: '-webkit-box',
+                      WebkitBoxOrient: 'vertical',
+                      WebkitLineClamp: titleLines,
+                      overflow: 'hidden',
+                    } as React.CSSProperties}
+                  >
+                    {displayTitle}
+                  </div>
+                </div>
+                {/* User-configured fields — single-line, priority order. */}
+                {visible.slice(0, fieldCount).map(({ key, def, value }) => {
+                  const Icon = def.icon;
+                  // Per-field icon visibility — empty / true = on (default),
+                  // explicit false from the org setting hides this glyph.
+                  const showIcon = cardFieldIcons[key] !== false;
+                  // Icon sized just below the text so it sits visually
+                  // centered against the cap-height. Tighter gap (3px) +
+                  // smaller icon ratio (0.75) so the icon reads as a label
+                  // glyph rather than a separate column — every pixel goes
+                  // to the actual driver name / customer / time range.
+                  const iconSize = Math.max(8, Math.round(fsField * 0.75));
+                  return (
+                    <div key={key} className="font-medium leading-tight truncate flex items-center" style={{ color: 'rgba(255,255,255,0.85)', fontSize: fsField }}>
+                      {Icon && showIcon && (
+                        <Icon
+                          size={iconSize}
+                          style={{ flexShrink: 0, opacity: 0.75, marginRight: 3 }}
+                        />
+                      )}
+                      <span className="truncate">{value}</span>
+                    </div>
+                  );
+                })}
+              </>
             );
-          })}
+          })()}
         </div>
       )}
 
