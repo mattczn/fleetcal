@@ -30,6 +30,7 @@
  */
 
 import Link from 'next/link';
+import Image from 'next/image';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import {
@@ -164,32 +165,34 @@ export default function AppSidebar() {
         zIndex: 30,
       }}>
 
-      {/* Brand strip — minimal. Just the app name. */}
+      {/* Brand strip — uses the horizontal wordmark when the sidebar
+          is expanded, the square calendar mark when collapsed. The
+          wordmark image already bakes "FC + FleetCal" so we drop the
+          old separate F-tile + text node. */}
       <div
         className="flex items-center px-3"
         style={{
           height: 56,
           borderBottom: '1px solid var(--gc-border-light)',
-          gap: 10,
         }}>
-        <div
-          className="rounded-md flex items-center justify-center shrink-0"
-          style={{
-            width: 32, height: 32,
-            background: 'var(--gc-blue)',
-            color: '#fff',
-            fontWeight: 800,
-            fontSize: 14,
-            letterSpacing: '-0.5px',
-          }}>
-          F
-        </div>
-        {!collapsed && (
-          <div
-            className="text-[15px] font-bold truncate"
-            style={{ color: 'var(--gc-text-1)', letterSpacing: '-0.2px' }}>
-            FleetCal
-          </div>
+        {collapsed ? (
+          <Image
+            src="/logo-square.png"
+            alt="FleetCal"
+            width={32}
+            height={32}
+            priority
+            style={{ borderRadius: 6 }}
+          />
+        ) : (
+          <Image
+            src="/logo-horizontal.png"
+            alt="FleetCal"
+            width={140}
+            height={40}
+            priority
+            style={{ objectFit: 'contain', height: 40, width: 'auto' }}
+          />
         )}
       </div>
 
