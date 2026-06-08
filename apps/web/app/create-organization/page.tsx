@@ -20,10 +20,11 @@
  *                    → /onboarding/pick-plan?plan=growth
  *                    → /calendar
  */
-import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { auth } from '@clerk/nextjs/server';
 import { CreateOrganization, SignOutButton } from '@clerk/nextjs';
+import AuthNav from '@/components/marketing/AuthNav';
+import { clerkAppearanceMarketing } from '@/lib/clerkAppearanceMarketing';
 
 export default async function CreateOrganizationPage({
   searchParams,
@@ -40,40 +41,69 @@ export default async function CreateOrganizationPage({
     : '/onboarding/pick-plan';
 
   return (
-    <div className="h-full overflow-y-auto font-sys text-sys-primary bg-sys-bg">
-      {/* Same nav pattern as /sign-up and /onboarding/pick-plan so the
-          user has a consistent escape hatch — logo back to landing,
-          sign-out button to bail entirely. Without this, this page was
-          a centered modal with zero navigation, and any user who
-          landed here via the middleware fallback was effectively
-          trapped. */}
-      <nav className="sticky top-0 z-50 h-16 bg-sys-bg border-b border-sys-line">
-        <div className="h-full max-w-6xl mx-auto px-8 md:px-12 flex items-center justify-between">
-          <Link href="/" className="font-mono font-bold text-[15px] uppercase" style={{ letterSpacing: '0.2em' }}>
-            <span className="text-sys-blue">FLEET</span>
-            <span className="text-sys-orange">CAL</span>
-          </Link>
-          <div className="flex items-center gap-6">
-            <Link
-              href="/"
-              className="font-sys font-medium text-[13px] text-sys-muted hover:text-sys-primary transition-colors"
+    <div
+      className="h-full overflow-y-auto font-sys bg-sys-bg text-sys-primary"
+      style={{
+        background: 'radial-gradient(ellipse 70% 80% at 50% 0%, #e8f0fe 0%, #fff 50%)',
+      }}
+    >
+      <AuthNav
+        escape={
+          <SignOutButton redirectUrl="/">
+            <button
+              type="button"
+              className="font-display text-[14px] font-medium text-[#5f6368] hover:text-[#1967d2] transition-colors"
             >
-              ← Back to home
-            </Link>
-            <SignOutButton redirectUrl="/">
-              <button
-                type="button"
-                className="font-sys text-[12px] text-sys-muted hover:text-sys-primary transition-colors"
-              >
-                Sign out
-              </button>
-            </SignOutButton>
+              Sign out
+            </button>
+          </SignOutButton>
+        }
+      />
+      <main className="mx-auto max-w-[520px] px-8 pt-14 pb-24">
+        <div style={{ textAlign: 'center', marginBottom: 28 }}>
+          <div
+            className="font-mono"
+            style={{
+              fontSize:      12,
+              fontWeight:    600,
+              color:         '#1967d2',
+              letterSpacing: '0.14em',
+              textTransform: 'uppercase',
+              marginBottom:  12,
+            }}
+          >
+            One last step
           </div>
+          <h1
+            className="font-display"
+            style={{
+              fontWeight:    800,
+              fontSize:      'clamp(28px, 3.4vw, 38px)',
+              lineHeight:    1.05,
+              letterSpacing: '-0.022em',
+              color:         '#202124',
+              margin:        0,
+            }}
+          >
+            Set up your fleet.
+          </h1>
+          <p
+            style={{
+              fontSize:   16,
+              lineHeight: 1.55,
+              color:      '#5f6368',
+              maxWidth:   420,
+              margin:     '12px auto 0',
+            }}
+          >
+            Name your organization so dispatch knows whose calendar it is.
+            You can rename it later.
+          </p>
         </div>
-      </nav>
-
-      <main className="flex items-center justify-center py-16 md:py-24">
-        <CreateOrganization afterCreateOrganizationUrl={afterCreateOrganizationUrl} />
+        <CreateOrganization
+          appearance={clerkAppearanceMarketing}
+          afterCreateOrganizationUrl={afterCreateOrganizationUrl}
+        />
       </main>
     </div>
   );

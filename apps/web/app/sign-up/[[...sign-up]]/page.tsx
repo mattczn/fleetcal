@@ -1,22 +1,25 @@
 /**
- * /sign-up — Zapier-style 2-column conversion page.
+ * /sign-up — 2-column conversion page (Google Workspace look).
  *
- * Left rail: Systematica-style marketing copy (eyebrow, serif headline,
- * checkmark feature list, founder trust line). Right rail: Clerk's
- * <SignUp /> form, restyled via the appearance API to match the
- * zero-radius / DM Sans aesthetic.
+ * Left rail: marketing copy in Figtree + Hanken (eyebrow, accent-blue
+ * headline, check-bullet feature list, founder trust line, footer
+ * "built by carriers" block). Right rail: Clerk's <SignUp /> form
+ * restyled via `clerkAppearanceMarketing` (Hanken inputs, pill primary
+ * CTA, soft elevation card).
  *
  * When the user arrives via a pricing-card CTA (e.g. /sign-up?plan=growth),
- * we surface a chip above the headline confirming their plan choice.
- * Plan selection itself happens server-side after sign-up (separate
- * post-signup hook to be wired later) — for now the chip is purely
- * visual reassurance that their click landed.
+ * a chip above the headline confirms their plan choice. Plan selection
+ * itself happens server-side after sign-up (separate post-signup hook
+ * to be wired later) — for now the chip is purely visual reassurance
+ * that their click landed.
  */
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { auth } from '@clerk/nextjs/server';
 import { SignUp, SignOutButton } from '@clerk/nextjs';
 import { Check } from 'lucide-react';
+import AuthNav from '@/components/marketing/AuthNav';
+import { clerkAppearanceMarketing } from '@/lib/clerkAppearanceMarketing';
 
 type PlanKey = 'owner_op' | 'growth' | 'fleet';
 const PLAN_META: Record<PlanKey, { name: string; price: number; trucks: string }> = {
@@ -67,113 +70,163 @@ export default async function SignUpPage({
     : '/onboarding/pick-plan';
 
   return (
-    <div className="h-full overflow-y-auto font-sys text-sys-primary bg-sys-bg">
-      {/* Sticky nav — wordmark + auth-aware escape. The Sign out
-          button below appears once the user is partially signed in
-          (e.g. after Google OAuth but before they finish the in-SignUp
-          org-creation step) so they can bail without being trapped on
-          /sign-up/tasks/choose-organization. */}
-      <nav className="sticky top-0 z-50 h-16 bg-sys-bg border-b border-sys-line">
-        <div className="h-full max-w-6xl mx-auto px-8 md:px-12 flex items-center justify-between">
-          <Link href="/" className="font-mono font-bold text-[15px] uppercase" style={{ letterSpacing: '0.2em' }}>
-            <span className="text-sys-blue">FLEET</span>
-            <span className="text-sys-orange">CAL</span>
-          </Link>
-          {/* Primary escape — single, obvious "back to home" link. The
-              partially-signed-in user wants OUT of the flow; whether
-              they keep their Clerk session is irrelevant to that
-              decision. If they want to resume later they just visit
-              /sign-up again. */}
-          <div className="flex items-center gap-6">
-            <Link
-              href="/"
-              className="font-sys font-medium text-[13px] text-sys-muted hover:text-sys-primary transition-colors"
-            >
-              ← Back to home
-            </Link>
-            {partiallySignedIn ? (
-              <SignOutButton redirectUrl="/">
-                <button
-                  type="button"
-                  className="font-sys text-[12px] text-sys-muted hover:text-sys-primary transition-colors"
-                >
-                  Sign out
-                </button>
-              </SignOutButton>
-            ) : (
-              <Link
-                href="/sign-in"
-                className="hidden md:inline font-sys text-[12px] text-sys-muted hover:text-sys-primary transition-colors"
+    <div
+      className="h-full overflow-y-auto font-sys bg-sys-bg text-sys-primary"
+      style={{
+        background: 'radial-gradient(ellipse 60% 70% at 85% 0%, #e8f0fe 0%, #fff 55%)',
+      }}
+    >
+      <AuthNav
+        escape={
+          partiallySignedIn ? (
+            <SignOutButton redirectUrl="/">
+              <button
+                type="button"
+                className="font-display text-[14px] font-medium text-[#5f6368] hover:text-[#1967d2] transition-colors"
               >
-                Already have an account? <span className="text-sys-blue font-semibold">Sign in</span>
-              </Link>
-            )}
-          </div>
-        </div>
-      </nav>
+                Sign out
+              </button>
+            </SignOutButton>
+          ) : (
+            <Link
+              href="/sign-in"
+              className="text-[14px] font-medium text-[#5f6368] hover:text-[#1967d2] transition-colors"
+            >
+              Already have an account?{' '}
+              <span style={{ color: '#1967d2', fontWeight: 600 }}>Sign in</span>
+            </Link>
+          )
+        }
+      />
 
-      <main className="max-w-6xl mx-auto px-8 md:px-12 py-16 md:py-24">
-        <div className="grid md:grid-cols-2 gap-12 md:gap-20 items-start">
-
+      <main className="mx-auto max-w-[1160px] px-8 pt-14 pb-24">
+        <div
+          className="grid gap-12 md:gap-20 items-start"
+          style={{ gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 480px)' }}
+        >
           {/* LEFT — marketing copy */}
           <div>
             {plan && (
-              <div className="inline-flex items-center gap-3 mb-8 px-4 py-2 bg-sys-blue-light border border-sys-blue" style={{ borderRadius: 0 }}>
-                <span className="font-mono font-bold text-[11px] uppercase text-sys-blue" style={{ letterSpacing: '0.12em' }}>
+              <div
+                className="inline-flex items-center gap-3 mb-7 font-display"
+                style={{
+                  padding:      '7px 14px',
+                  borderRadius: 999,
+                  background:   '#e8f0fe',
+                  border:       '1px solid #c2dafa',
+                }}
+              >
+                <span
+                  className="font-mono"
+                  style={{
+                    fontSize:      11,
+                    fontWeight:    700,
+                    color:         '#1967d2',
+                    letterSpacing: '0.12em',
+                    textTransform: 'uppercase',
+                  }}
+                >
                   {plan.name} plan
                 </span>
-                <span className="font-sys text-[13px] text-sys-primary">
+                <span style={{ fontSize: 13, color: '#202124' }}>
                   ${plan.price}/mo · {plan.trucks}
                 </span>
               </div>
             )}
 
-            <div className="font-sys font-semibold text-[13px] uppercase text-sys-blue mb-6" style={{ letterSpacing: '0.12em' }}>
+            <div
+              className="font-mono"
+              style={{
+                fontSize:      12,
+                fontWeight:    600,
+                color:         '#1967d2',
+                letterSpacing: '0.14em',
+                textTransform: 'uppercase',
+                marginBottom:  14,
+              }}
+            >
               Start your free trial
             </div>
 
-            <h1 className="font-display text-[44px] md:text-[56px] leading-[1.05] tracking-tight mb-8">
+            <h1
+              className="font-display"
+              style={{
+                fontWeight:    800,
+                fontSize:      'clamp(36px, 4.6vw, 54px)',
+                lineHeight:    1.05,
+                letterSpacing: '-0.022em',
+                color:         '#202124',
+                margin:        0,
+              }}
+            >
               Run dispatch like a{' '}
-              <span className="text-sys-blue">real software company.</span>
+              <span style={{ color: 'var(--gc-blue)' }}>real software company.</span>
             </h1>
 
-            <p className="font-sys text-[16px] md:text-[17px] leading-[1.6] text-sys-muted mb-10 max-w-lg">
-              FleetCal turns rate-cons into invoices in one screen. Built and
-              used daily at <strong className="text-sys-primary font-semibold">Curzon Trucking</strong>,
-              a 13-truck reefer carrier.
+            <p
+              style={{
+                fontSize:   17.5,
+                lineHeight: 1.6,
+                color:      '#5f6368',
+                maxWidth:   480,
+                margin:     '20px 0 0',
+              }}
+            >
+              FleetCal turns rate-cons into invoices in one screen. Built and used daily
+              at <strong style={{ color: '#202124' }}>Curzon Trucking</strong>, a 13-truck
+              reefer carrier.
             </p>
 
-            <ul className="space-y-4 mb-10">
-              {BULLETS.map((b) => (
-                <li key={b} className="flex items-start gap-3 font-sys text-[15px] leading-[1.5]">
+            <ul style={{ marginTop: 28, marginBottom: 32, padding: 0, listStyle: 'none', display: 'grid', gap: 14 }}>
+              {BULLETS.map(b => (
+                <li
+                  key={b}
+                  style={{ display: 'flex', alignItems: 'flex-start', gap: 12, fontSize: 15, lineHeight: 1.55, color: '#202124' }}
+                >
                   <span
-                    className="flex-shrink-0 inline-flex items-center justify-center w-5 h-5 mt-0.5 bg-sys-orange text-white"
-                    style={{ borderRadius: 0 }}
+                    style={{
+                      flex:         'none',
+                      width:        22,
+                      height:       22,
+                      borderRadius: 999,
+                      background:   '#e6f4ea',
+                      display:      'grid',
+                      placeItems:   'center',
+                      marginTop:    1,
+                    }}
                   >
-                    <Check size={13} strokeWidth={3} />
+                    <Check size={13} strokeWidth={3} style={{ color: '#1e8e3e' }} />
                   </span>
                   <span>{b}</span>
                 </li>
               ))}
             </ul>
 
-            <div className="pt-8 border-t border-sys-line">
-              <div className="font-mono text-[11px] uppercase text-sys-muted mb-2" style={{ letterSpacing: '0.12em' }}>
+            <div style={{ paddingTop: 28, borderTop: '1px solid #e8eaed' }}>
+              <div
+                className="font-mono"
+                style={{
+                  fontSize:      11,
+                  fontWeight:    600,
+                  color:         '#5f6368',
+                  letterSpacing: '0.12em',
+                  textTransform: 'uppercase',
+                  marginBottom:  8,
+                }}
+              >
                 Built by carriers
               </div>
-              <p className="font-sys text-[13px] text-sys-muted leading-relaxed">
+              <p style={{ fontSize: 13.5, lineHeight: 1.6, color: '#5f6368' }}>
                 FleetCal is built by a 13-truck fleet owner, for fleets like yours.
                 No ELD lock-in. No per-driver fees.
               </p>
             </div>
           </div>
 
-          {/* RIGHT — Clerk's SignUp form, restyled */}
+          {/* RIGHT — Clerk's SignUp form, restyled via marketing appearance. */}
           <div>
-            {/* Appearance comes from the global clerkAppearance via
-                <ClerkProvider> in layout.tsx — applies FleetCal/Google-
-                style tokens to every Clerk component including this one. */}
             <SignUp
+              appearance={clerkAppearanceMarketing}
               forceRedirectUrl={afterSignUpUrl}
               fallbackRedirectUrl={afterSignUpUrl}
             />
