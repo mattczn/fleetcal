@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { X, AlertTriangle } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { PRESET_COLORS } from '@/lib/asset-colors';
@@ -34,6 +34,15 @@ export default function AddAssetDialog({ onClose }: { onClose: () => void }) {
   // "Upgrade plan" CTA on the cap banner instead of routing them to
   // /pricing and losing the truck-add form state.
   const [upgradeOpen, setUpgradeOpen] = useState(false);
+
+  // serverError is sticky — set once on 402, never cleared as the
+  // user's state changes. If they leave this dialog open, retire
+  // a truck elsewhere (or buy an upgrade), `blocked` flips false
+  // but the error banner stays. Clear it as soon as they're no
+  // longer blocked so the form re-enables cleanly.
+  useEffect(() => {
+    if (!blocked && serverError) setServerError(null);
+  }, [blocked, serverError]);
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim() || blocked) return;

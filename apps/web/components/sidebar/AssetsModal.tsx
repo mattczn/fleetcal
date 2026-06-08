@@ -118,6 +118,17 @@ function AssetsModal({ onClose, initialAssetId, embedded }, modalRef) {
   // calendar context and shortens time-to-paid.
   const [upgradeOpen, setUpgradeOpen] = useState(false);
 
+  // tierError is a sticky message — once set from a failed add
+  // attempt, it stays until manually cleared. That's fine while
+  // the user is genuinely still at the cap, but the moment they
+  // free a seat (retire/delete a truck) capBlocked flips false
+  // and the banner becomes a lie ("PLAN LIMIT REACHED" sitting
+  // above "8/9 trucks used"). Clear it the instant they're no
+  // longer blocked.
+  useEffect(() => {
+    if (!capBlocked && tierError) setTierError(null);
+  }, [capBlocked, tierError]);
+
   // Unsaved-changes guard. The detail panel owns its form state and
   // exposes save/discard via a ref; this modal intercepts every
   // "navigate away" intent (close, switch trucks) and shows a 3-button
