@@ -288,7 +288,7 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
               }}
             >
               Drop a rate-con PDF. Dispatch the load. Verify the POD. Send the invoice.
-              Pay the driver. Every step where it should be — no leaving the app.
+              Pay the driver. Every step where it should be — all in one platform.
             </p>
           </Reveal>
           <Reveal delay={180}>
