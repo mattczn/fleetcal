@@ -1335,7 +1335,7 @@ function AccountingPageInner() {
         <div className="w-full min-h-0 flex-1 flex flex-col gap-4">
 
           {/* Purpose hint */}
-          <div className="text-[12.5px]" style={{ color: 'var(--gc-text-3)' }}>
+          <div className="fleetcal-page-subtitle text-[12.5px]" style={{ color: 'var(--gc-text-3)' }}>
             Billing pipeline. Loads land in <strong>Released</strong> once Paperwork marks them verified.
             Generate invoices, track delivery, mark paid.
           </div>
@@ -1358,7 +1358,7 @@ function AccountingPageInner() {
               Hysteresis on the scroll handler already debounces the
               full/compact swap so the row doesn't thrash. */}
           {tilesCompact ? (
-            <div className="flex items-center gap-2 flex-wrap">
+            <div className="fleetcal-buckets-compact flex items-center gap-2 flex-wrap">
               {BUCKETS.map(b => {
                 const active    = bucket === b.key;
                 const s         = stats[b.key];
@@ -1366,7 +1366,7 @@ function AccountingPageInner() {
                 return (
                   <button key={b.key}
                     onClick={() => setBucket(b.key)}
-                    className="inline-flex items-center gap-2 transition-colors"
+                    className="fleetcal-bucket-compact inline-flex items-center gap-2 transition-colors"
                     title={`${b.label} — ${b.subtitle}`}
                     style={{
                       height:       34,
@@ -1401,7 +1401,7 @@ function AccountingPageInner() {
               })}
             </div>
           ) : (
-            <div className="flex items-stretch gap-2">
+            <div className="fleetcal-buckets flex items-stretch gap-2">
               {BUCKETS.map((b, i) => {
                 const active    = bucket === b.key;
                 const s         = stats[b.key];
@@ -1416,7 +1416,7 @@ function AccountingPageInner() {
                     )}
                     <button
                       onClick={() => setBucket(b.key)}
-                      className="text-left rounded-2xl transition-all relative overflow-hidden flex-1 min-w-0"
+                      className="fleetcal-bucket text-left rounded-2xl transition-all relative overflow-hidden flex-1 min-w-0"
                       style={{
                         background: 'var(--gc-surface)',
                         border:     active ? '1px solid transparent' : '1px solid var(--gc-border-light)',
@@ -1481,7 +1481,7 @@ function AccountingPageInner() {
                         divider tile (`next.sep`) and after the last
                         tile. */}
                     {next && !next.sep && (
-                      <span className="hidden md:flex items-center justify-center" style={{
+                      <span className="fleetcal-chevron hidden md:flex items-center justify-center" style={{
                         width:  18,
                         color:  'var(--gc-border)',
                         flex:   'none',
@@ -1499,7 +1499,7 @@ function AccountingPageInner() {
               + bulk-action buttons all live INSIDE OpsTable below
               (the bulk-actions slot in particular replaces the
               chip row when rows are selected). */}
-          <div className="flex items-center gap-3 flex-wrap">
+          <div className="fleetcal-toolbar flex items-center gap-3 flex-wrap">
             <div className="relative">
               <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: 'var(--gc-text-3)' }} />
               <input type="text"

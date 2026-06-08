@@ -220,3 +220,75 @@ input[type="range"] { accent-color: var(--gc-blue); }
  *   style={{ fontSize: 'calc(15px * var(--ui-scale, 1))' }}
  * Inline so DatePicker's trigger button + popover cells scale with
  * the modal they live inside. */
+
+/* ============================================================
+ * Billing / Paperwork — responsive pass (Phase 5)
+ * Both pages render through OpsTable + shared bucket tiles, so
+ * one set of @media rules covers /accounting AND the Paperwork
+ * surface. Class names live on the consumers; tile-internal
+ * structure (icon chip, count, $) stays inline-styled.
+ *
+ * Breakpoints from the handoff:
+ *   ≤1100px — buckets + toolbar become horizontally-scrolling
+ *             chip rows (so a tile/chip never squishes), tile
+ *             min-width 190px. Above 1100px, tiles fill the row
+ *             via `flex: 1`.
+ *   ≤680px  — phone. Buckets become a single non-wrapping scroll
+ *             strip, page subtitle hides to claim back vertical
+ *             space, chevrons drop (they only make sense when
+ *             the pipeline is visible side-by-side), floating
+ *             bulk bar pins to 10px gutters and wraps.
+ * ============================================================ */
+@media (max-width: 1100px) {
+  .fleetcal-buckets,
+  .fleetcal-buckets-compact {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 6px;
+  }
+  .fleetcal-bucket {
+    flex: 0 0 auto !important;
+    min-width: 190px;
+  }
+  .fleetcal-bucket-compact {
+    flex: 0 0 auto;
+  }
+  .fleetcal-toolbar {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    flex-wrap: nowrap !important;
+  }
+  .fleetcal-toolbar > * {
+    flex: none;
+  }
+}
+
+@media (max-width: 680px) {
+  .fleetcal-buckets {
+    flex-wrap: nowrap;
+  }
+  .fleetcal-buckets-compact {
+    flex-wrap: nowrap !important;
+  }
+  .fleetcal-bucket {
+    min-width: 166px;
+    padding: 12px !important;
+  }
+  .fleetcal-chevron {
+    display: none !important;
+  }
+  .fleetcal-page-subtitle {
+    display: none !important;
+  }
+  .ops-floating-bulkbar-wrap {
+    left: 10px !important;
+    right: 10px !important;
+    padding: 0 !important;
+  }
+  .ops-floating-bulkbar {
+    width: 100% !important;
+    margin: 0 !important;
+    justify-content: center;
+    row-gap: 8px;
+  }
+}

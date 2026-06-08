@@ -1130,7 +1130,7 @@ export default function CloseoutView() {
               Billing visible while users are still building muscle
               memory, and surfaces the auto-flag rules so users don't
               have to guess what put a load in the Flagged bucket. */}
-          <div className="text-[12.5px] flex flex-wrap items-center gap-x-3 gap-y-1" style={{ color: 'var(--gc-text-3)' }}>
+          <div className="fleetcal-page-subtitle text-[12.5px] flex flex-wrap items-center gap-x-3 gap-y-1" style={{ color: 'var(--gc-text-3)' }}>
             <span>
               POD verification. Check paperwork and release loads for billing.
               Invoicing happens in <Link href="/accounting" className="font-semibold underline" style={{ color: 'var(--gc-blue)' }}>Billing</Link>.
@@ -1166,7 +1166,7 @@ export default function CloseoutView() {
               Released $ is intentionally blank — billing aggregates
               are role-gated to /accounting. */}
           {tilesCompact ? (
-            <div className="flex items-center gap-2 flex-wrap">
+            <div className="fleetcal-buckets-compact flex items-center gap-2 flex-wrap">
               {TABS.map(b => {
                 const active    = tab === b.value;
                 const count     = bucketTotals[b.value];
@@ -1176,7 +1176,7 @@ export default function CloseoutView() {
                 return (
                   <button key={b.value}
                     onClick={() => setTab(b.value)}
-                    className="inline-flex items-center gap-2 transition-colors"
+                    className="fleetcal-bucket-compact inline-flex items-center gap-2 transition-colors"
                     title={`${b.label} — ${b.subtitle}`}
                     style={{
                       height:       34,
@@ -1213,7 +1213,7 @@ export default function CloseoutView() {
               })}
             </div>
           ) : (
-            <div className="flex items-stretch gap-2">
+            <div className="fleetcal-buckets flex items-stretch gap-2">
               {TABS.map(b => {
                 const active    = tab === b.value;
                 const count     = bucketTotals[b.value];
@@ -1233,7 +1233,7 @@ export default function CloseoutView() {
                     )}
                     <button
                       onClick={() => setTab(b.value)}
-                      className="text-left rounded-2xl transition-all relative overflow-hidden flex-1 min-w-0"
+                      className="fleetcal-bucket text-left rounded-2xl transition-all relative overflow-hidden flex-1 min-w-0"
                       style={{
                         background: 'var(--gc-surface)',
                         border:     active ? '1px solid transparent' : '1px solid var(--gc-border-light)',
@@ -1309,7 +1309,7 @@ export default function CloseoutView() {
               inside OpsTable below. The Review queue + Refresh
               buttons sit here so they're always reachable regardless
               of selection state. */}
-          <div className="flex items-center gap-3 flex-wrap">
+          <div className="fleetcal-toolbar flex items-center gap-3 flex-wrap">
             <div className="relative">
               <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
                 style={{ color: searchQuery ? 'var(--gc-blue)' : 'var(--gc-text-3)' }} />
