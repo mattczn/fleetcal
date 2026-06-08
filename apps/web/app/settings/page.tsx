@@ -64,7 +64,7 @@ import type { InvoiceSnapshot } from '@fleetcal/types';
 
 const PREVIEW_COLOR = '#1a73e8';
 
-type NavItem = 'appearance' | 'timezone' | 'assets' | 'load-fields' | 'ratecon-ai' | 'invoicing' | 'integrations' | 'card-layout' | 'saved-locations' | 'dispatchers' | 'customers' | 'trailers' | 'driver-app' | 'documents' | 'members' | 'role-permissions' | 'modules';
+type NavItem = 'appearance' | 'timezone' | 'assets' | 'load-fields' | 'ratecon-ai' | 'invoicing' | 'integrations' | 'card-layout' | 'saved-locations' | 'customers' | 'trailers' | 'driver-app' | 'documents' | 'members' | 'role-permissions' | 'modules';
 
 // ─── Toggle ──────────────────────────────────────────────────────────────────
 
@@ -4449,153 +4449,6 @@ function TrailersPanel() {
   );
 }
 
-// ─── Dispatchers Panel ────────────────────────────────────────────────────────
-
-function DispatchersPanel() {
-  const { dispatchers, addDispatcher, updateDispatcher, removeDispatcher } = useCalendarStore();
-  const { can } = usePermissions();
-  const canDelete = can('dispatchers.delete');
-  const [newName, setNewName] = useState('');
-  const [newDefault, setNewDefault] = useState(false);
-  const [adding, setAdding] = useState(false);
-  const [editId, setEditId] = useState<string | null>(null);
-  const [editName, setEditName] = useState('');
-  const [editDefault, setEditDefault] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-
-  const inp: React.CSSProperties = {
-    border: '1px solid var(--gc-border)', borderRadius: 8, padding: '7px 10px',
-    fontSize: 13, color: 'var(--gc-text-1)', background: 'var(--gc-surface)', outline: 'none', width: '100%',
-  };
-
-  async function handleAdd() {
-    if (!newName.trim()) return;
-    setSaving(true);
-    await addDispatcher(newName.trim(), newDefault);
-    setNewName(''); setNewDefault(false); setAdding(false); setSaving(false);
-  }
-
-  async function handleSave(id: string) {
-    if (!editName.trim()) return;
-    setSaving(true);
-    await updateDispatcher(id, { name: editName.trim(), isDefault: editDefault });
-    setEditId(null); setSaving(false);
-  }
-
-  return (
-    <div className="space-y-6" style={{ maxWidth: 600 }}>
-      <div>
-        <div className="text-base font-semibold mb-1" style={{ color: 'var(--gc-text-1)' }}>Dispatchers</div>
-        <div className="text-sm" style={{ color: 'var(--gc-text-3)' }}>
-          Dispatchers linked to your org. The default is auto-filled on new loads.
-        </div>
-      </div>
-
-      {/* List */}
-      <div className="space-y-2">
-        {dispatchers.length === 0 && !adding && (
-          <div className="text-sm py-6 text-center rounded-xl" style={{ color: 'var(--gc-text-3)', border: '1px dashed var(--gc-border)' }}>
-            No dispatchers yet. Add one below.
-          </div>
-        )}
-        {dispatchers.map(d => (
-          <div key={d.id} className="rounded-xl p-3" style={{ border: '1px solid var(--gc-border)', background: 'var(--gc-surface)' }}>
-            {editId === d.id ? (
-              <div className="space-y-2">
-                <input value={editName} onChange={e => setEditName(e.target.value)} style={inp}
-                  onKeyDown={e => { if (e.key === 'Enter') void handleSave(d.id); if (e.key === 'Escape') setEditId(null); }} autoFocus />
-                <label className="flex items-center gap-2 text-sm cursor-pointer" style={{ color: 'var(--gc-text-2)' }}>
-                  <input type="checkbox" checked={editDefault} onChange={e => setEditDefault(e.target.checked)} />
-                  Set as default
-                </label>
-                <div className="flex gap-2">
-                  <button onClick={() => void handleSave(d.id)} disabled={saving}
-                    className="flex items-center gap-1 text-xs font-semibold px-3 py-1.5 rounded-lg"
-                    style={{ background: '#1a73e8', color: '#fff', border: 'none', cursor: 'pointer' }}>
-                    <Check size={12} /> Save
-                  </button>
-                  <button onClick={() => setEditId(null)}
-                    className="text-xs px-3 py-1.5 rounded-lg" style={{ border: '1px solid var(--gc-border)', background: 'transparent', color: 'var(--gc-text-2)', cursor: 'pointer' }}>
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium" style={{ color: 'var(--gc-text-1)' }}>{d.name}</span>
-                  {d.isDefault && (
-                    <span className="text-xs font-semibold px-2 py-0.5 rounded-lg" style={{ background: '#dbeafe', color: '#1d4ed8' }}>Default</span>
-                  )}
-                </div>
-                <div className="flex items-center gap-1">
-                  <button onClick={() => { setEditId(d.id); setEditName(d.name); setEditDefault(d.isDefault); }}
-                    style={{ padding: 6, borderRadius: 7, border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--gc-text-3)' }}
-                    onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; e.currentTarget.style.color = 'var(--gc-text-1)'; }}
-                    onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gc-text-3)'; }}>
-                    <Pencil size={14} />
-                  </button>
-                  {canDelete && (confirmDeleteId === d.id ? (
-                    <div className="flex items-center gap-1">
-                      <button onClick={() => { void removeDispatcher(d.id); setConfirmDeleteId(null); }}
-                        style={{ padding: '4px 8px', borderRadius: 7, border: 'none', background: '#d93025', cursor: 'pointer', color: '#fff', fontSize: 12, fontWeight: 700 }}>
-                        Delete
-                      </button>
-                      <button onClick={() => setConfirmDeleteId(null)}
-                        style={{ padding: '4px 8px', borderRadius: 7, border: '1px solid var(--gc-border)', background: 'transparent', cursor: 'pointer', color: 'var(--gc-text-2)', fontSize: 12 }}>
-                        Cancel
-                      </button>
-                    </div>
-                  ) : (
-                    <button onClick={() => setConfirmDeleteId(d.id)}
-                      style={{ padding: 6, borderRadius: 7, border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--gc-text-3)' }}
-                      onMouseEnter={e => { e.currentTarget.style.background = '#fef2f2'; e.currentTarget.style.color = '#d93025'; }}
-                      onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gc-text-3)'; }}>
-                      <Trash2 size={14} />
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        ))}
-
-        {/* Add form */}
-        {adding ? (
-          <div className="rounded-xl p-3 space-y-2" style={{ border: '1px solid var(--gc-border)', background: 'var(--gc-surface)' }}>
-            <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="Dispatcher name" style={inp}
-              onKeyDown={e => { if (e.key === 'Enter') void handleAdd(); if (e.key === 'Escape') setAdding(false); }} autoFocus />
-            <label className="flex items-center gap-2 text-sm cursor-pointer" style={{ color: 'var(--gc-text-2)' }}>
-              <input type="checkbox" checked={newDefault} onChange={e => setNewDefault(e.target.checked)} />
-              Set as default
-            </label>
-            <div className="flex gap-2">
-              <button onClick={() => void handleAdd()} disabled={saving || !newName.trim()}
-                className="flex items-center gap-1 text-xs font-semibold px-3 py-1.5 rounded-lg"
-                style={{ background: '#1a73e8', color: '#fff', border: 'none', cursor: 'pointer', opacity: newName.trim() ? 1 : 0.5 }}>
-                {saving ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />} Add
-              </button>
-              <button onClick={() => { setAdding(false); setNewName(''); setNewDefault(false); }}
-                className="text-xs px-3 py-1.5 rounded-lg" style={{ border: '1px solid var(--gc-border)', background: 'transparent', color: 'var(--gc-text-2)', cursor: 'pointer' }}>
-                Cancel
-              </button>
-            </div>
-          </div>
-        ) : (
-          <button onClick={() => setAdding(true)}
-            className="flex items-center gap-2 w-full text-sm font-medium py-2.5 rounded-xl transition-colors"
-            style={{ border: '1px dashed var(--gc-border)', background: 'transparent', color: 'var(--gc-text-3)', cursor: 'pointer' }}
-            onMouseEnter={e => { e.currentTarget.style.borderColor = '#1a73e8'; e.currentTarget.style.color = '#1a73e8'; }}
-            onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--gc-border)'; e.currentTarget.style.color = 'var(--gc-text-3)'; }}>
-            <Plus size={15} /> Add dispatcher
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
 // ─── Customers Panel ──────────────────────────────────────────────────────────
 
 function CustomersPanel() {
@@ -4781,7 +4634,6 @@ const NAV: { section: string; items: { id: NavItem; label: string; icon: React.R
       // panel functions are kept below in case a follow-up wants to
       // re-mount them anywhere, but they're not navigable from this
       // sidebar anymore.
-      { id: 'dispatchers',      label: 'Dispatchers',      icon: <Users size={15} /> },
       { id: 'load-fields',      label: 'Load Fields',      icon: <LayoutList size={15} /> },
       { id: 'card-layout',      label: 'Card Layout',      icon: <Layers size={15} /> },
       { id: 'ratecon-ai',       label: 'Rate Con AI',      icon: <Bot size={15} /> },
@@ -4822,7 +4674,6 @@ const NAV_CAPABILITY: Partial<Record<NavItem, Capability>> = {
 // because absent keys are treated as enabled. MVP-launch orgs see only
 // the panels whose flags are ON in MVP_LAUNCH_DEFAULTS.
 const NAV_MODULE: Partial<Record<NavItem, OrgModule>> = {
-  'dispatchers':      'team_roles',
   'integrations':     'motive_integration',
   'driver-app':       'driver_app',
   'role-permissions': 'team_roles',
@@ -4994,7 +4845,6 @@ export default function SettingsPage() {
           {active === 'integrations'    && <IntegrationsPanel />}
           {active === 'documents'       && <DocumentsPanel />}
           {active === 'saved-locations' && <SavedLocationsPanel />}
-          {active === 'dispatchers'     && <DispatchersPanel />}
           {/* Trucks + Customers moved to their own Directory modals. */}
           {active === 'driver-app'        && <DriverAppPanel setActive={setActive} />}
           {active === 'members'           && <MembersPanel />}

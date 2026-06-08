@@ -249,27 +249,40 @@ export async function deleteCustomer(id: string): Promise<void> {
 
 // ── Dispatchers ───────────────────────────────────────────────────────────────
 
+export interface DispatcherCreateInput {
+  firstName:    string;
+  lastName:     string;
+  hireDate?:    string;
+  clerkUserId?: string;
+  isDefault?:   boolean;
+}
+
+export interface DispatcherUpdateInput {
+  firstName?:   string;
+  lastName?:    string;
+  hireDate?:    string | null;
+  clerkUserId?: string | null;
+  isDefault?:   boolean;
+  active?:      boolean;
+}
+
 export async function fetchDispatchers(_orgId: string): Promise<Dispatcher[]> {
   try { return (await railway.listDispatchers()).dispatchers; }
   catch (err) { console.error('fetchDispatchers:', err); return []; }
 }
 
-export async function createDispatcher(_orgId: string, name: string, isDefault: boolean): Promise<Dispatcher | null> {
-  try { return (await railway.createDispatcher({ name, isDefault })).dispatcher; }
+export async function createDispatcher(_orgId: string, input: DispatcherCreateInput): Promise<Dispatcher | null> {
+  try { return (await railway.createDispatcher(input)).dispatcher; }
   catch (err) { console.error('createDispatcher:', err); return null; }
 }
 
-export async function updateDispatcher(id: string, _orgId: string, updates: { name?: string; isDefault?: boolean }): Promise<void> {
-  const body = {
-    ...(updates.name !== undefined      ? { name: updates.name } : {}),
-    ...(updates.isDefault !== undefined ? { isDefault: updates.isDefault } : {}),
-  };
-  if (Object.keys(body).length === 0) return;
-  try { await railway.updateDispatcher(id, body); }
+export async function updateDispatcher(id: number, _orgId: string, updates: DispatcherUpdateInput): Promise<void> {
+  if (Object.keys(updates).length === 0) return;
+  try { await railway.updateDispatcher(id, updates); }
   catch (err) { console.error('updateDispatcher:', err); }
 }
 
-export async function deleteDispatcher(id: string): Promise<void> {
+export async function deleteDispatcher(id: number): Promise<void> {
   try { await railway.deleteDispatcher(id); }
   catch (err) { console.error('deleteDispatcher:', err); }
 }

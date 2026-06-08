@@ -641,11 +641,33 @@ export interface Customer {
 }
 
 // ── Dispatcher ──────────────────────────────────────────────────────────
+//
+// Per-org directory entry for someone who dispatches loads. Lives in the
+// Manage Assets sidebar (alongside drivers/trailers/trucks/customers/
+// locations). Loads reference a dispatcher row via loads.dispatcher_id;
+// the legacy loads.dispatcher text column is still maintained as a
+// denormalized name cache so old rows render and simple reports don't
+// need the join.
+//
+// clerkUserId is OPTIONAL — a dispatcher row can exist without a Clerk
+// account (contractor, former employee). When set, it links to a Clerk
+// org member by their user_xxx ID.
+//
+// active is a soft-delete flag. Removing a dispatcher who has loads
+// attributed to them flips active=false instead of deleting the row so
+// historical attribution survives.
 
 export interface Dispatcher {
-  id: string;
-  name: string;
+  id: number;
+  firstName: string;
+  lastName: string;
+  /** YYYY-MM-DD. Optional. */
+  hireDate?: string;
+  /** Clerk user_xxx ID when this dispatcher corresponds to a Clerk
+   *  org member. Null/undefined for manually-added rows. */
+  clerkUserId?: string;
   isDefault: boolean;
+  active: boolean;
 }
 
 // ── Check call ──────────────────────────────────────────────────────────

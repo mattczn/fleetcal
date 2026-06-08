@@ -2559,7 +2559,7 @@ export default function EventModal() {
         }
         // Default dispatcher fallback (rate cons rarely name a dispatcher).
         const defaultDispatcher = dispatchers.find(d => d.isDefault);
-        if (defaultDispatcher && !vals['dispatcher']) vals['dispatcher'] = defaultDispatcher.name;
+        if (defaultDispatcher && !vals['dispatcher']) vals['dispatcher'] = `${defaultDispatcher.firstName} ${defaultDispatcher.lastName}`;
         setFieldValues(vals);
         // Generate title from resolved broker + stops (use raw values, not state which hasn't updated yet)
         const batchBroker = typeof vals['broker'] === 'string' ? vals['broker'] : (p.broker ? String(p.broker) : undefined);
@@ -2603,7 +2603,7 @@ export default function EventModal() {
         if (v !== undefined) vals[f.id] = v as string | number | boolean;
       });
       const defaultDispatcher = dispatchers.find(d => d.isDefault);
-      if (defaultDispatcher && !vals['dispatcher']) vals['dispatcher'] = defaultDispatcher.name;
+      if (defaultDispatcher && !vals['dispatcher']) vals['dispatcher'] = `${defaultDispatcher.firstName} ${defaultDispatcher.lastName}`;
       setFieldValues(vals);
       if (Array.isArray(d.stops) && d.stops.length > 0) {
         setStops((d.stops as Stop[]).map((s, i) => ({ ...s, id: crypto.randomUUID(), eventId: '', sequence: i + 1 })));
@@ -4065,9 +4065,16 @@ export default function EventModal() {
         onBlur={blurColor}
       >
         <option value="">— None —</option>
-        {dispatchers.map(d => (
-          <option key={d.id} value={d.name}>{d.name}{d.isDefault ? ' ★' : ''}</option>
-        ))}
+        {/* Soft-deleted (active=false) dispatchers hidden from the
+            picker so they can't be assigned to new loads; the legacy
+            loads.dispatcher text column still preserves their name
+            on historical rows. */}
+        {dispatchers.filter(d => d.active).map(d => {
+          const fullName = `${d.firstName} ${d.lastName}`;
+          return (
+            <option key={d.id} value={fullName}>{fullName}{d.isDefault ? ' ★' : ''}</option>
+          );
+        })}
       </StyledSelect>
     ),
     broker: (

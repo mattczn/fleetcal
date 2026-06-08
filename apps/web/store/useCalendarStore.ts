@@ -9,7 +9,7 @@ import { CardFieldKey, DEFAULT_CARD_FIELDS } from '@/lib/cardFields';
 import { DEFAULT_PROMPT_VARIABLES, PromptVariables } from '@/lib/prompt';
 import { getSupabase } from '@/lib/supabase';
 import { normalizePhone } from '@/lib/phone';
-import type { OrgData } from '@/lib/db';
+import type { OrgData, DispatcherCreateInput, DispatcherUpdateInput } from '@/lib/db';
 import { fetchEventsInRange, fetchSavedLocations, createSavedLocation, updateSavedLocation, deleteSavedLocation, fetchDispatchers, createDispatcher, updateDispatcher, deleteDispatcher, fetchCustomers, createCustomer, updateCustomer, deleteCustomer, fetchTrailers, createTrailer, updateTrailer, deleteTrailer } from '@/lib/db';
 import { railway } from '@/lib/railway';
 import { buildCreateLoadBody, splitForUpdate, buildEventByIdUpdate } from '@/lib/loadFieldSplit';
@@ -442,9 +442,9 @@ interface CalendarStore extends ModalState {
 
   dispatchers: Dispatcher[];
   fetchDispatchers: () => Promise<void>;
-  addDispatcher: (name: string, isDefault: boolean) => Promise<void>;
-  updateDispatcher: (id: string, updates: { name?: string; isDefault?: boolean }) => Promise<void>;
-  removeDispatcher: (id: string) => Promise<void>;
+  addDispatcher: (input: DispatcherCreateInput) => Promise<Dispatcher | null>;
+  updateDispatcher: (id: number, updates: DispatcherUpdateInput) => Promise<void>;
+  removeDispatcher: (id: number) => Promise<void>;
 
   customers: Customer[];
   fetchCustomers: () => Promise<void>;
@@ -923,16 +923,28 @@ export const useCalendarStore = create<CalendarStore>()(
     const list = await fetchDispatchers(orgId);
     set({ dispatchers: list });
   },
-  addDispatcher: async (name, isDefault) => {
+  addDispatcher: async (input) => {
     const { orgId } = get();
-    if (!orgId) return;
-    const created = await createDispatcher(orgId, name, isDefault);
-    if (!created) return;
+    if (!orgId) return null;
+    const created = await createDispatcher(orgId, input);
+    if (!created) return null;
+    // Sort by lastName then firstName, with active rows first — matches
+    // the server's ORDER BY active DESC, last_name, first_name so the
+    // optimistic list and the next fetch agree.
+    const sortFn = (a: Dispatcher, b: Dispatcher) => {
+      if (a.active !== b.active) return a.active ? -1 : 1;
+      const ln = a.lastName.localeCompare(b.lastName);
+      return ln !== 0 ? ln : a.firstName.localeCompare(b.firstName);
+    };
     set((s) => ({
-      dispatchers: isDefault
-        ? [...s.dispatchers.map(d => ({ ...d, isDefault: false })), created].sort((a, b) => a.name.localeCompare(b.name))
-        : [...s.dispatchers, created].sort((a, b) => a.name.localeCompare(b.name)),
+      dispatchers: input.isDefault
+        // Server clears every other row's isDefault when a row is
+        // created as default; mirror that locally so the UI doesn't
+        // briefly show two defaults.
+        ? [...s.dispatchers.map(d => ({ ...d, isDefault: false })), created].sort(sortFn)
+        : [...s.dispatchers, created].sort(sortFn),
     }));
+    return created;
   },
   updateDispatcher: async (id, updates) => {
     const { orgId } = get();
@@ -941,7 +953,20 @@ export const useCalendarStore = create<CalendarStore>()(
     set((s) => ({
       dispatchers: s.dispatchers.map(d => {
         if (updates.isDefault && d.id !== id) return { ...d, isDefault: false };
-        if (d.id === id) return { ...d, ...updates };
+        if (d.id === id) {
+          // Map UpdateInput keys (firstName/lastName/etc) directly
+          // onto the Dispatcher shape; nullable fields converted to
+          // undefined so the optimistic copy matches a fresh fetch.
+          return {
+            ...d,
+            ...(updates.firstName   !== undefined ? { firstName: updates.firstName } : {}),
+            ...(updates.lastName    !== undefined ? { lastName:  updates.lastName  } : {}),
+            ...('hireDate'    in updates ? { hireDate:    updates.hireDate    ?? undefined } : {}),
+            ...('clerkUserId' in updates ? { clerkUserId: updates.clerkUserId ?? undefined } : {}),
+            ...(updates.isDefault   !== undefined ? { isDefault: updates.isDefault } : {}),
+            ...(updates.active      !== undefined ? { active:    updates.active    } : {}),
+          };
+        }
         return d;
       }),
     }));
@@ -949,7 +974,14 @@ export const useCalendarStore = create<CalendarStore>()(
   removeDispatcher: async (id) => {
     try {
       await deleteDispatcher(id);
-      set((s) => ({ dispatchers: s.dispatchers.filter(d => d.id !== id) }));
+      // Server may have soft-deleted (active=false) if the dispatcher
+      // is referenced by loads. We re-fetch to get the canonical state
+      // rather than guessing which path the server took.
+      const { orgId } = get();
+      if (orgId) {
+        const list = await fetchDispatchers(orgId);
+        set({ dispatchers: list });
+      }
     } catch (err) {
       notifyDeleteError('Dispatcher', err);
     }

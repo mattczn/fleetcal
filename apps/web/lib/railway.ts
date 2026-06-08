@@ -794,10 +794,10 @@ class RailwayClient {
 
   listDispatchers()                          { return this.req<ListDispatchersResponse>('GET', '/v1/dispatchers'); }
   createDispatcher(body: CreateDispatcherRequest) { return this.req<CreateDispatcherResponse>('POST', '/v1/dispatchers', body); }
-  updateDispatcher(id: string, body: UpdateDispatcherRequest) {
+  updateDispatcher(id: number, body: UpdateDispatcherRequest) {
     return this.req<UpdateDispatcherResponse>('PATCH', `/v1/dispatchers/${id}`, body);
   }
-  deleteDispatcher(id: string)               { return this.req<void>('DELETE', `/v1/dispatchers/${id}`); }
+  deleteDispatcher(id: number)               { return this.req<void>('DELETE', `/v1/dispatchers/${id}`); }
 
   listDriverAssetPrefs()                     { return this.req<ListDriverAssetPrefsResponse>('GET', '/v1/driver-asset-prefs'); }
   setDriverAssetPref(assetId: number, body: SetDriverAssetPrefRequest) {

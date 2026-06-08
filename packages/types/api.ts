@@ -802,13 +802,23 @@ export interface UpdateTrailerResponse { trailer: Trailer; }
 
 export interface ListDispatchersResponse { dispatchers: Dispatcher[]; }
 export interface CreateDispatcherRequest {
-  name:       string;
-  isDefault?: boolean;
+  firstName:   string;
+  lastName:    string;
+  hireDate?:   string;   // YYYY-MM-DD
+  clerkUserId?: string;
+  isDefault?:  boolean;
+  active?:     boolean;
 }
 export interface CreateDispatcherResponse { dispatcher: Dispatcher; }
 export interface UpdateDispatcherRequest {
-  name?:      string;
-  isDefault?: boolean;
+  firstName?:   string;
+  lastName?:    string;
+  /** Pass null to clear an existing hire date; omit to leave it alone. */
+  hireDate?:    string | null;
+  /** Pass null to clear an existing Clerk link. */
+  clerkUserId?: string | null;
+  isDefault?:   boolean;
+  active?:      boolean;
 }
 export interface UpdateDispatcherResponse { dispatcher: Dispatcher; }
 
