@@ -142,11 +142,8 @@ export default function PricingCards() {
         </div>
       </div>
 
-      {/* Cards grid */}
-      <div
-        className="mt-11 grid gap-6 items-start"
-        style={{ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' }}
-      >
+      {/* Cards grid. Stacks on mobile, side-by-side from md up. */}
+      <div className="mt-11 grid gap-6 items-start grid-cols-1 md:grid-cols-3">
         {TIERS.map(tier => {
           const shown = annual ? tier.annualMonthly : tier.monthlyPrice;
           const billedLine = annual
@@ -155,13 +152,17 @@ export default function PricingCards() {
           return (
             <div
               key={tier.key}
+              // `md:translate-y-[-8px]` lifts the popular card only at
+              // md+ where the cards sit side-by-side. On mobile they
+              // stack, so the lift would just look like an awkward
+              // gap between the popular card and the one above it.
+              className={tier.popular ? 'md:-translate-y-2' : ''}
               style={{
                 position:      'relative',
                 background:    '#fff',
                 borderRadius:  24,
                 border:        tier.popular ? '2px solid var(--gc-blue)' : '1px solid #e8eaed',
                 boxShadow:     tier.popular ? 'var(--shadow-soft)' : 'none',
-                transform:     tier.popular ? 'translateY(-8px)' : 'none',
                 overflow:      'hidden',
                 height:        '100%',
                 display:       'flex',

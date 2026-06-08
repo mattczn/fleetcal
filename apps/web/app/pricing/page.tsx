@@ -29,7 +29,7 @@ export default async function PricingPage() {
       <MarketingNav cta={cta} showSignIn={state === 'out'} />
 
       <section style={{ paddingTop: 88, paddingBottom: 24 }}>
-        <div className="mx-auto max-w-[1160px] px-8" style={{ textAlign: 'center', maxWidth: 720, marginInline: 'auto' }}>
+        <div className="mx-auto max-w-[1160px] px-5 sm:px-6 md:px-8" style={{ textAlign: 'center', maxWidth: 720, marginInline: 'auto' }}>
           <Reveal>
             <span
               className="font-mono"
@@ -74,7 +74,7 @@ export default async function PricingPage() {
       </section>
 
       <section style={{ paddingBottom: 100 }}>
-        <div className="mx-auto max-w-[1160px] px-8">
+        <div className="mx-auto max-w-[1160px] px-5 sm:px-6 md:px-8">
           <Reveal delay={60}>
             <PricingCards />
           </Reveal>
@@ -83,15 +83,7 @@ export default async function PricingPage() {
 
       <footer style={{ background: '#f8f9fa', borderTop: '1px solid #e8eaed' }}>
         <div
-          className="mx-auto max-w-[1160px] px-8"
-          style={{
-            padding:        '28px 32px',
-            display:        'flex',
-            flexWrap:       'wrap',
-            justifyContent: 'space-between',
-            alignItems:     'center',
-            gap:            16,
-          }}
+          className="mx-auto max-w-[1160px] px-5 sm:px-6 md:px-8 py-7 flex flex-wrap justify-between items-center gap-4"
         >
           <Link href="/" aria-label="FleetCal home" className="flex items-center">
             <Image

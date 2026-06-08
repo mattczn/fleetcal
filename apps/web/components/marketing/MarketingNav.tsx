@@ -14,20 +14,23 @@
  * works. So we listen on window — confirmed against the prototype's
  * onScroll handler that uses `window.scrollY`.
  *
- * Hamburger collapse on narrow viewports — below ~860px we hide the
- * inline links and rely on the CTA-only header. (Full hamburger menu
- * is a follow-up; the handoff explicitly punts the responsive pass
- * to the implementer.)
+ * Mobile (<md): the inline link bar collapses behind a hamburger
+ * button on the right of the nav. Tapping it slides a panel down
+ * from under the nav with Features / How it works / Pricing / Why
+ * FleetCal + Sign in. The CTA stays in the bar at all sizes so the
+ * "Start free trial" call to action never disappears.
  */
 import Link from 'next/link';
 import Image from 'next/image';
 import { useEffect, useState } from 'react';
+import { Menu, X } from 'lucide-react';
 import SmoothScrollLink from './SmoothScrollLink';
 
 interface Cta { href: string; label: string }
 
 export default function MarketingNav({ cta, showSignIn }: { cta: Cta; showSignIn: boolean }) {
   const [scrolled, setScrolled] = useState(false);
+  const [open, setOpen] = useState(false);
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 8);
@@ -36,6 +39,24 @@ export default function MarketingNav({ cta, showSignIn }: { cta: Cta; showSignIn
     return () => window.removeEventListener('scroll', onScroll);
   }, []);
 
+  // Close the mobile panel on viewport resize across the md breakpoint
+  // (768px). Without this, opening it on phone, then rotating to
+  // landscape past 768 leaves the panel mounted off-screen, eating
+  // taps near the top of the page.
+  useEffect(() => {
+    const onResize = () => { if (window.innerWidth >= 768) setOpen(false); };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  // Section links — DRY between desktop bar + mobile panel.
+  const NAV: ReadonlyArray<{ to: string; label: string }> = [
+    { to: 'features', label: 'Features'     },
+    { to: 'how',      label: 'How it works'  },
+    { to: 'pricing',  label: 'Pricing'       },
+    { to: 'story',    label: 'Why FleetCal'  },
+  ];
+
   return (
     <nav
       className="sticky top-0 z-50 backdrop-blur"
@@ -43,12 +64,12 @@ export default function MarketingNav({ cta, showSignIn }: { cta: Cta; showSignIn
         background:        'rgba(255,255,255,0.82)',
         WebkitBackdropFilter: 'saturate(180%) blur(12px)',
         backdropFilter:    'saturate(180%) blur(12px)',
-        borderBottom:      `1px solid ${scrolled ? '#e8eaed' : 'transparent'}`,
+        borderBottom:      `1px solid ${scrolled || open ? '#e8eaed' : 'transparent'}`,
         boxShadow:         scrolled ? '0 1px 0 rgba(60,64,67,0.04)' : 'none',
         transition:        'border-color .25s, box-shadow .25s',
       }}
     >
-      <div className="mx-auto flex items-center justify-between w-full max-w-[1600px] px-8 lg:px-12" style={{ height: 68 }}>
+      <div className="mx-auto flex items-center justify-between w-full max-w-[1600px] px-5 sm:px-6 md:px-8 lg:px-12" style={{ height: 68 }}>
         <Link href="/" aria-label="FleetCal home" className="flex items-center">
           <Image
             src="/logo-horizontal.png"
@@ -61,30 +82,86 @@ export default function MarketingNav({ cta, showSignIn }: { cta: Cta; showSignIn
         </Link>
 
         <div className="hidden md:flex items-center gap-8 font-display">
-          <SmoothScrollLink to="features" className="text-[15px] font-medium text-sys-text-2 hover:text-sys-blue-text transition-colors">Features</SmoothScrollLink>
-          <SmoothScrollLink to="how"      className="text-[15px] font-medium text-sys-text-2 hover:text-sys-blue-text transition-colors">How it works</SmoothScrollLink>
-          <SmoothScrollLink to="pricing"  className="text-[15px] font-medium text-sys-text-2 hover:text-sys-blue-text transition-colors">Pricing</SmoothScrollLink>
-          <SmoothScrollLink to="story"    className="text-[15px] font-medium text-sys-text-2 hover:text-sys-blue-text transition-colors">Why FleetCal</SmoothScrollLink>
+          {NAV.map(n => (
+            <SmoothScrollLink
+              key={n.to}
+              to={n.to}
+              className="text-[15px] font-medium text-sys-text-2 hover:text-sys-blue-text transition-colors"
+            >
+              {n.label}
+            </SmoothScrollLink>
+          ))}
         </div>
 
-        <div className="flex items-center gap-4 font-display">
+        <div className="flex items-center gap-3 sm:gap-4 font-display">
           {showSignIn && (
             <Link href="/sign-in" className="hidden md:inline text-[15px] font-medium text-sys-text-2 hover:text-sys-blue-text transition-colors">Sign in</Link>
           )}
           <Link
             href={cta.href}
-            className="inline-flex items-center justify-center text-white font-semibold text-[14px] rounded-full transition-all hover:bg-sys-blue-hover"
+            className="inline-flex items-center justify-center text-white font-semibold text-[13px] sm:text-[14px] rounded-full transition-all hover:bg-sys-blue-hover whitespace-nowrap"
             style={{
               background:  'var(--gc-blue)',
-              padding:     '10px 20px',
+              padding:     '9px 16px',
               boxShadow:   'var(--shadow-1)',
-              whiteSpace:  'nowrap',
             }}
           >
             {cta.label.replace(' →', '')}
           </Link>
+          <button
+            type="button"
+            aria-label={open ? 'Close menu' : 'Open menu'}
+            aria-expanded={open}
+            onClick={() => setOpen(v => !v)}
+            className="md:hidden inline-flex items-center justify-center rounded-full"
+            style={{
+              width:  40,
+              height: 40,
+              color:  '#3c4043',
+              background: open ? '#f1f3f4' : 'transparent',
+              transition: 'background .15s',
+            }}
+          >
+            {open ? <X size={20} /> : <Menu size={22} />}
+          </button>
         </div>
       </div>
+
+      {/* Mobile panel — collapses the section links + Sign in when
+          the hamburger is open. Pinned under the nav, full-width.
+          Closes on link tap via SmoothScrollLink's onClick override. */}
+      {open && (
+        <div
+          className="md:hidden"
+          style={{
+            background: 'rgba(255,255,255,0.96)',
+            borderBottom: '1px solid #e8eaed',
+            padding: '8px 20px 18px',
+          }}
+        >
+          <div className="flex flex-col font-display">
+            {NAV.map(n => (
+              <SmoothScrollLink
+                key={n.to}
+                to={n.to}
+                onClick={() => setOpen(false)}
+                className="block text-[16px] font-medium text-sys-text-2 hover:text-sys-blue-text py-3 border-b border-[#f1f3f4] last:border-b-0"
+              >
+                {n.label}
+              </SmoothScrollLink>
+            ))}
+            {showSignIn && (
+              <Link
+                href="/sign-in"
+                onClick={() => setOpen(false)}
+                className="block text-[16px] font-medium text-sys-text-2 hover:text-sys-blue-text py-3"
+              >
+                Sign in
+              </Link>
+            )}
+          </div>
+        </div>
+      )}
     </nav>
   );
 }

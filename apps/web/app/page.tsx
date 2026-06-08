@@ -79,7 +79,7 @@ function ctaFor(state: AuthCta): { href: string; label: string } {
 // 1160 default the handoff specced; the founder asked for a less
 // boxed-in feel on big screens. px-8 → px-12 gutter at lg keeps a
 // comfortable rhythm without the page hugging the viewport edge.
-const WRAP = 'mx-auto w-full max-w-[1600px] px-8 lg:px-12';
+const WRAP = 'mx-auto w-full max-w-[1600px] px-5 sm:px-6 md:px-8 lg:px-12';
 
 /** Mac-style browser frame around a product placeholder. Real
  *  screenshots drop into the `<children>` slot once shipped. */
@@ -226,16 +226,7 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
       }}
     >
       <div
-        className={WRAP}
-        style={{
-          display:             'grid',
-          // Hero leans heavily right (1 : 1.4) so the product screenshot
-          // dominates — ~1.6x wider than the original 1 : 1.06 split.
-          // Copy still gets plenty of room on the left.
-          gridTemplateColumns: '1fr 1.4fr',
-          gap:                 64,
-          alignItems:          'center',
-        }}
+        className={`${WRAP} grid items-center gap-10 lg:gap-16 grid-cols-1 lg:grid-cols-[1fr_1.4fr]`}
       >
         <div>
           <Reveal>
@@ -369,8 +360,11 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
                 ariaLabel="AI parsing a rate confirmation PDF into a load"
               />
             </Frame>
-            {/* Floating "Delivered" chip — top-right */}
+            {/* Floating "Delivered" chip — top-right. Hidden below
+                sm: the negative offsets overflow the viewport on
+                phones and clip behind the screenshot. */}
             <div
+              className="hidden sm:flex"
               style={{
                 position:     'absolute',
                 top:          -24,
@@ -380,7 +374,6 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
                 boxShadow:    'var(--shadow-3)',
                 padding:      '14px 16px',
                 border:       '1px solid #e8eaed',
-                display:      'flex',
                 alignItems:   'center',
                 gap:          11,
               }}
@@ -402,8 +395,10 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
                 <div style={{ fontSize: 11.5, color: '#5f6368' }}>Load #4471 · POD verified</div>
               </div>
             </div>
-            {/* Floating "Invoice sent" chip — bottom-left */}
+            {/* Floating "Invoice sent" chip — bottom-left. Same
+                mobile-hide treatment as the Delivered chip. */}
             <div
+              className="hidden sm:flex"
               style={{
                 position:     'absolute',
                 bottom:       -22,
@@ -413,7 +408,6 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
                 boxShadow:    'var(--shadow-3)',
                 padding:      '14px 16px',
                 border:       '1px solid #e8eaed',
-                display:      'flex',
                 alignItems:   'center',
                 gap:          11,
               }}
@@ -452,13 +446,7 @@ function TrustBand() {
   return (
     <section style={{ borderTop: '1px solid #e8eaed', borderBottom: '1px solid #e8eaed', background: '#f8f9fa' }}>
       <div
-        className={WRAP}
-        style={{
-          display:             'grid',
-          gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
-          gap:                 24,
-          padding:             '34px 32px',
-        }}
+        className={`${WRAP} grid gap-6 grid-cols-2 md:grid-cols-4 py-7 sm:py-9`}
       >
         {stats.map(([n, l], i) => (
           <Reveal key={l} delay={i * 70} style={{ textAlign: 'center' }}>
@@ -617,12 +605,7 @@ function Features() {
         </Reveal>
 
         <div
-          style={{
-            display:             'grid',
-            gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-            gap:                 24,
-            marginTop:           56,
-          }}
+          className="grid gap-6 mt-12 sm:mt-14 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"
         >
           {FEATURES.map((f, i) => (
             <Reveal key={f.n} delay={(i % 3) * 80}>
@@ -750,12 +733,7 @@ function HowItWorks() {
           <SectionSub>The same path every load takes — without a single spreadsheet or re-keyed number.</SectionSub>
         </Reveal>
         <div
-          style={{
-            display:             'grid',
-            gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
-            gap:                 20,
-            marginTop:           52,
-          }}
+          className="grid gap-6 sm:gap-5 mt-10 sm:mt-12 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4"
         >
           {steps.map(([n, t, b], i) => (
             <Reveal key={n} delay={i * 90}>
@@ -836,13 +814,7 @@ function Story() {
       }}
     >
       <div
-        className={WRAP}
-        style={{
-          display:             'grid',
-          gridTemplateColumns: '1fr 1.1fr',
-          gap:                 72,
-          alignItems:          'center',
-        }}
+        className={`${WRAP} grid items-center gap-10 lg:gap-[72px] grid-cols-1 lg:grid-cols-[1fr_1.1fr]`}
       >
         <Reveal>
           <SectionLabel>Built by carriers</SectionLabel>
@@ -904,13 +876,7 @@ function Faq() {
   return (
     <section style={{ padding: '110px 0' }}>
       <div
-        className={WRAP}
-        style={{
-          display:             'grid',
-          gridTemplateColumns: '0.8fr 1.4fr',
-          gap:                 64,
-          alignItems:          'start',
-        }}
+        className={`${WRAP} grid items-start gap-10 lg:gap-16 grid-cols-1 lg:grid-cols-[0.8fr_1.4fr]`}
       >
         <Reveal>
           <SectionLabel>FAQ</SectionLabel>
@@ -936,7 +902,7 @@ function Faq() {
 function FinalCta({ cta }: { cta: { href: string; label: string } }) {
   return (
     <section style={{ background: 'var(--gc-blue)', color: '#fff' }}>
-      <div className={WRAP} style={{ padding: '100px 32px', textAlign: 'center' }}>
+      <div className={`${WRAP} text-center py-20 sm:py-[100px]`}>
         <Reveal>
           <span
             className="font-mono"
@@ -1035,15 +1001,9 @@ function Footer() {
   return (
     <footer style={{ background: '#f8f9fa', borderTop: '1px solid #e8eaed' }}>
       <div
-        className={WRAP}
-        style={{
-          padding:             '64px 32px 36px',
-          display:             'grid',
-          gridTemplateColumns: '1.4fr 1fr 1fr 1fr',
-          gap:                 40,
-        }}
+        className={`${WRAP} grid gap-10 pt-12 pb-9 grid-cols-2 md:grid-cols-[1.4fr_1fr_1fr_1fr]`}
       >
-        <div>
+        <div className="col-span-2 md:col-span-1">
           <Image
             src="/logo-horizontal.png"
             alt="FleetCal"
@@ -1090,14 +1050,9 @@ function Footer() {
         ))}
       </div>
       <div
-        className={WRAP}
+        className={`${WRAP} flex flex-wrap justify-between gap-3 py-[22px]`}
         style={{
-          padding:        '22px 32px',
           borderTop:      '1px solid #e8eaed',
-          display:        'flex',
-          flexWrap:       'wrap',
-          justifyContent: 'space-between',
-          gap:            12,
         }}
       >
         <span

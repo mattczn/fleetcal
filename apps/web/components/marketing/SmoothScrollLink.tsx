@@ -27,10 +27,13 @@ interface SmoothScrollLinkProps {
   to:        string;
   className?: string;
   style?:    CSSProperties;
+  /** Fires after the smooth-scroll kicks off. Used by MarketingNav
+   *  to close the mobile menu panel once a link is tapped. */
+  onClick?:  () => void;
   children:  ReactNode;
 }
 
-export default function SmoothScrollLink({ to, className, style, children }: SmoothScrollLinkProps) {
+export default function SmoothScrollLink({ to, className, style, onClick, children }: SmoothScrollLinkProps) {
   return (
     <a
       href={`#${to}`}
@@ -42,6 +45,7 @@ export default function SmoothScrollLink({ to, className, style, children }: Smo
         if (el) {
           el.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
+        onClick?.();
       }}
     >
       {children}

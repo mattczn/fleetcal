@@ -32,7 +32,7 @@ export default function AuthNav({ escape }: AuthNavProps) {
         borderBottom:         '1px solid #e8eaed',
       }}
     >
-      <div className="mx-auto flex items-center justify-between w-full max-w-[1600px] px-8 lg:px-12" style={{ height: 68 }}>
+      <div className="mx-auto flex items-center justify-between w-full max-w-[1600px] px-5 sm:px-6 md:px-8 lg:px-12" style={{ height: 68 }}>
         <Link href="/" aria-label="FleetCal home" className="flex items-center">
           <Image
             src="/logo-horizontal.png"
