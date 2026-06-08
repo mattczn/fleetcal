@@ -3648,6 +3648,17 @@ export default function EventModal() {
           setBrokerMatch(match);
         }
         if (parsed.trailerType) setField('trailerType', parsed.trailerType);
+        // commodity + weight are extracted on every parse (see
+        // ALWAYS_EXTRACT in lib/prompt.ts) so reefer / flatbed / hazmat
+        // carriers get them autofilled out of the box, and Curzon (who
+        // hides them on the modal) still persists the value to the
+        // load row. setField writes regardless of UI visibility — the
+        // save payload picks them up in buildOptionalPayload below.
+        if (parsed.commodity)   setField('commodity', parsed.commodity);
+        if (parsed.weight != null) {
+          const w = parseFloat(String(parsed.weight));
+          if (Number.isFinite(w) && w > 0) setField('weight', w);
+        }
         if (parsed.specialInstructions) setField('specialInstructions', parsed.specialInstructions);
         // Snap any drifted stop dates back into the load window before
         // building the Stop[]. See snapStopsToLoadWindow docs for the
@@ -3760,7 +3771,13 @@ export default function EventModal() {
       if (parsed.refNums)     setFieldValues(prev => ({ ...prev, refNums: parseAiRefNums(parsed.refNums) }));
       if (parsed.dispatcher)  setField('dispatcher', parsed.dispatcher);
       if (parsed.commodity)   setField('commodity', parsed.commodity);
-      if (parsed.weight != null) setField('weight', parsed.weight);
+      // AI sometimes returns weight as a string (e.g. "40000"). Coerce
+      // before writing so the number-typed field doesn't get a string
+      // that fails downstream Number.isFinite checks.
+      if (parsed.weight != null) {
+        const w = parseFloat(String(parsed.weight));
+        if (Number.isFinite(w) && w > 0) setField('weight', w);
+      }
       if (parsed.trailerType) setField('trailerType', parsed.trailerType);
       if (parsed.specialInstructions) setField('specialInstructions', parsed.specialInstructions);
       if (Number.isFinite(lpNum) && lpNum > 0) {

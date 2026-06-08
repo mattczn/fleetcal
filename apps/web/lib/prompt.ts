@@ -1,7 +1,20 @@
 import { ALL_FIELDS } from './fields';
 
-// Fields always extracted regardless of user settings (needed for the calendar event itself)
-const ALWAYS_EXTRACT = ['summary', 'start', 'end'];
+// Fields always extracted regardless of user settings.
+//
+// `summary` / `start` / `end` — needed for the calendar event itself.
+//
+// `commodity` / `weight` — Curzon has these hidden on the load modal
+// (they care about price + stops, not what's on the trailer), but
+// other carriers run reefer / flatbed / hazmat ops where commodity +
+// weight are first-class. Pulling them every time means a carrier
+// who later re-enables either field gets backfill for free on past
+// loads (the value is saved on the load row whether or not the UI
+// shows it), and other orgs see autofill on day one. Skipping
+// extraction just because the dispatcher who parsed the rate-con
+// happens to be Curzon would silently throw away a field the org
+// might want later.
+const ALWAYS_EXTRACT = ['summary', 'start', 'end', 'commodity', 'weight'];
 
 export interface PromptVariables {
   systemRole:  string;
@@ -91,9 +104,18 @@ export function buildRateConPrompt(
 
   const schemaLines: string[] = [];
 
-  // Always-present fields
+  // Always-present fields. For summary/start/end the hint lives in
+  // `alwaysSchema` above (they bake in titleFormat / timezone). For
+  // every other always-extract field (commodity, weight, …) we fall
+  // through to the ALL_FIELDS entry's extractionHint — that way one
+  // place owns the field description and the always-extract list is
+  // just a set of ids to force through regardless of org settings.
   for (const id of ALWAYS_EXTRACT) {
-    schemaLines.push(`  "${id}": "${alwaysSchema[id]}"`);
+    const hint =
+      alwaysSchema[id]
+      ?? ALL_FIELDS.find(f => f.id === id)?.extractionHint;
+    if (!hint) continue;
+    schemaLines.push(`  "${id}": "${hint}"`);
   }
 
   // Enabled optional fields. specialInstructions uses the user-customizable variable.
