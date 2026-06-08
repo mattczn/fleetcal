@@ -127,10 +127,15 @@ assets.post("/", requireCapability("assets.create"), async (c) => {
     // a future-start truck (active_from in the future) both DON'T
     // count — the customer can keep them as history without
     // consuming a paid seat.
+    //
+    // `.neq("type", "Unassigned")` excludes the calendar's virtual
+    // Unassigned column — it's a UI surface for unrouted events,
+    // not a real truck, and shouldn't burn a paid seat.
     const baseQ = supabase
       .from("assets")
       .select("*", { count: "exact", head: true })
-      .eq("org_id", orgId);
+      .eq("org_id", orgId)
+      .neq("type", "Unassigned");
     const { count: activeCount, error: countErr } = await applyActiveTodayFilter(baseQ, todayKey);
     if (countErr) {
       console.error("[POST /v1/assets] tier cap count failed:", countErr);

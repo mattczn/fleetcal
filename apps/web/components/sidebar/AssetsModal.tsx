@@ -414,7 +414,7 @@ function AssetsModal({ onClose, initialAssetId, embedded }, modalRef) {
                 the dispatcher doesn't lose context. */}
             {(capBlocked || tierError) && (
               <div
-                className="mx-3 mt-2 rounded-xl"
+                className="mx-3 mt-2 mb-3 rounded-xl"
                 style={{
                   background:  '#fffbeb',
                   border:      `1px solid ${overLimit ? '#fb923c' : '#fde68a'}`,

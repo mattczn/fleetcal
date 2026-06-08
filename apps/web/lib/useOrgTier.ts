@@ -129,11 +129,20 @@ export function useOrgTier(): OrgTierApi {
     // activeFrom — a future-start truck (e.g. scheduled to onboard
     // next week) doesn't consume a seat until it goes live.
     //
+    // The Unassigned row is a virtual asset the calendar adds to
+    // surface unrouted events as their own column — it's a UI
+    // affordance, not a truck. EXCLUDE it from the cap so a
+    // dispatcher's Unassigned column doesn't burn a paid seat.
+    //
     // Customers can keep ANY number of retired/future-scheduled
     // trucks as history without consuming paid capacity — only the
     // instantaneous active count matters.
     const today = dateKeyOf(new Date());
-    const currentTrucks = assets.filter(a => isActiveOn(a, today)).length;
+    const currentTrucks = assets.filter(a =>
+      a.type !== 'Unassigned' &&
+      a.name !== 'Unassigned' &&
+      isActiveOn(a, today)
+    ).length;
 
     return {
       tier,

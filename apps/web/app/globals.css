@@ -292,3 +292,31 @@ input[type="range"] { accent-color: var(--gc-blue); }
     row-gap: 8px;
   }
 }
+
+/* ============================================================
+ * Clerk billing portals — checkout drawer / modal z-index
+ * ============================================================
+ * Clerk's <PricingTable> opens its Stripe-backed checkout in a
+ * body-portal drawer at a default z-index that gets buried behind
+ * our in-app UpgradePlanDialog (z-120). When the user clicks
+ * "Switch to this plan", the checkout appears partially obscured
+ * on the right edge — looks like a bug.
+ *
+ * Bump every Clerk portal/modal element above any in-app modal so
+ * the checkout drawer renders cleanly above the upgrade dialog.
+ * `9999` is overkill but Clerk's surfaces are always user-
+ * initiated, so there's no surface we'd ever want above them.
+ *
+ * `.cl-*` is Clerk's standard class prefix. `[data-clerk-modal]`
+ * covers any newer portals that drop the cl- prefix.
+ */
+.cl-modalBackdrop,
+.cl-modal,
+.cl-checkout,
+.cl-checkoutContainer,
+.cl-checkout-modalBackdrop,
+.cl-rootBox.cl-modal,
+[data-clerk-modal-container],
+[data-floating-ui-portal] {
+  z-index: 9999 !important;
+}
