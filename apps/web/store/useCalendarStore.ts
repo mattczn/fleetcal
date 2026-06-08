@@ -1166,6 +1166,17 @@ export const useCalendarStore = create<CalendarStore>()(
       console.error('addAsset:', err);
       // Roll back the optimistic insert if the server call failed.
       set((state) => ({ assets: state.assets.filter((a) => a.id !== tempId) }));
+      // Re-throw with a more specific Error subclass when the server
+      // returned 402 tier_cap_exceeded — the UI catches this to show
+      // an upgrade prompt instead of a generic "failed to add" error.
+      // We can't import RailwayError statically (circular dep risk),
+      // so we sniff on shape.
+      const errObj = err as { status?: number; detail?: { error?: string; detail?: string } };
+      if (errObj.status === 402 && errObj.detail?.error === 'tier_cap_exceeded') {
+        const tierErr = new Error(errObj.detail.detail ?? 'Plan limit reached. Upgrade to add more trucks.');
+        (tierErr as Error & { code?: string }).code = 'tier_cap_exceeded';
+        throw tierErr;
+      }
       throw err;
     }
   },

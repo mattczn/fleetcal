@@ -25,6 +25,7 @@ import Link from 'next/link';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { usePermissions } from '@/lib/usePermissions';
 import { useModules } from '@/lib/useModules';
+import { useOrgTier, nextTierUp } from '@/lib/useOrgTier';
 import { formatHardDeleteError } from '@/lib/hardDeleteError';
 import { PRESET_COLORS } from '@/lib/asset-colors';
 import LoadHistorySection from './LoadHistorySection';
@@ -92,6 +93,16 @@ function AssetsModal({ onClose, initialAssetId, embedded }, modalRef) {
       : (assets.length > 0 ? assets[0].id : -1)
   );
   const [adding, setAdding] = useState(false);
+  // Tier cap UI state — set when the user tries to add past their
+  // plan's truck limit. The banner above the truck list explains
+  // the situation + offers an upgrade link. Cleared on close.
+  const [tierError, setTierError] = useState<string | null>(null);
+  const { tier, tierLabel, maxTrucks, currentTrucks, atLimit } = useOrgTier();
+  const upsellTier = nextTierUp(tier);
+  // capBlocked = "the next add would exceed the cap." For
+  // unrestricted (Curzon + internal orgs) or while billing is
+  // loading, we don't block.
+  const capBlocked = atLimit && tier !== 'unrestricted' && tier !== 'none';
 
   // Unsaved-changes guard. The detail panel owns its form state and
   // exposes save/discard via a ref; this modal intercepts every
@@ -196,8 +207,23 @@ function AssetsModal({ onClose, initialAssetId, embedded }, modalRef) {
   // without filling anything in, the placeholder is auto-removed.
   const handleAdd = async () => {
     if (adding) return;
+    // Tier cap gate — bail BEFORE optimistically inserting a draft
+    // row. Server-side enforcement (POST /v1/assets returns 402) is
+    // the actual security boundary; this is the UX heads-up so the
+    // user sees the upgrade prompt instead of a silently-rejected
+    // create.
+    if (capBlocked) {
+      setTierError(
+        `${tierLabel} plan limit reached — ${currentTrucks} of ${maxTrucks} trucks used. ` +
+        (upsellTier
+          ? 'Upgrade to add more.'
+          : 'Contact sales to raise the cap.')
+      );
+      return;
+    }
     cleanupDraft(); // drop any stranded draft from a previous click
     setAdding(true);
+    setTierError(null);
     try {
       // API requires non-empty name on create. Seed with "New asset"
       // so the call validates; the profile panel opens with the name
@@ -220,7 +246,14 @@ function AssetsModal({ onClose, initialAssetId, embedded }, modalRef) {
       draftIdRef.current = newId;
       setSelectedRaw(newId);
     } catch (err) {
-      console.error('add asset failed:', err);
+      // tier_cap_exceeded comes through with `.code === 'tier_cap_exceeded'`
+      // — see addAsset in useCalendarStore. Surface as the banner.
+      const tierCap = (err as Error & { code?: string }).code === 'tier_cap_exceeded';
+      if (tierCap) {
+        setTierError((err as Error).message);
+      } else {
+        console.error('add asset failed:', err);
+      }
     } finally {
       setAdding(false);
     }
@@ -342,17 +375,44 @@ function AssetsModal({ onClose, initialAssetId, embedded }, modalRef) {
                 </button>
                 <button
                   onClick={() => void handleAdd()}
-                  disabled={adding}
-                  title="Add truck"
+                  disabled={adding || capBlocked}
+                  title={capBlocked
+                    ? `${tierLabel} plan limit reached (${currentTrucks} of ${maxTrucks}). ${upsellTier ? 'Upgrade to add more.' : 'Contact sales.'}`
+                    : 'Add truck'}
                   className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold transition-colors disabled:opacity-50"
-                  style={{ color: 'var(--gc-blue)', background: 'transparent', border: 'none', cursor: adding ? 'default' : 'pointer' }}
-                  onMouseEnter={e => { if (!adding) e.currentTarget.style.background = 'var(--gc-blue-light)'; }}
+                  style={{ color: capBlocked ? 'var(--gc-text-3)' : 'var(--gc-blue)', background: 'transparent', border: 'none', cursor: (adding || capBlocked) ? 'default' : 'pointer' }}
+                  onMouseEnter={e => { if (!adding && !capBlocked) e.currentTarget.style.background = 'var(--gc-blue-light)'; }}
                   onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
                   <Plus size={12} />
                   {adding ? 'Adding…' : 'Truck'}
                 </button>
               </div>
             </div>
+
+            {/* Tier-cap banner — shows the user's current usage vs cap
+                whenever the org is on a paid tier (not Curzon /
+                internal / 'none'). The dialog version of this lives
+                in AddAssetDialog.tsx; here the truck directory needs
+                the same affordance because that's where dispatchers
+                naturally land when growing their fleet. */}
+            {(capBlocked || tierError) && (
+              <div className="mx-3 mt-2 rounded-lg px-3 py-2 text-[11px] leading-snug"
+                style={{
+                  background: '#fef3c7',
+                  border:     '1px solid #fde68a',
+                  color:      '#7c2d12',
+                }}>
+                <div className="font-bold">
+                  {tierLabel} plan — {currentTrucks} of {maxTrucks} trucks used
+                </div>
+                <div className="mt-0.5">
+                  {tierError ?? (upsellTier
+                    ? <>Upgrade to add more.{' '}
+                        <Link href="/pricing" className="underline font-semibold">View plans →</Link></>
+                    : 'Contact sales to raise the cap.')}
+                </div>
+              </div>
+            )}
 
             <div className="flex-1 overflow-y-auto px-2 pb-2">
               {assets.length === 0 && (

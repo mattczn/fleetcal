@@ -25,11 +25,29 @@ export default function AddAssetDialog({ onClose }: { onClose: () => void }) {
   const upsellTier = nextTierUp(tier);
   const blocked = atLimit && tier !== 'unrestricted';
 
-  const handleSubmit = (e: React.FormEvent) => {
+  // Server-side 402 (tier_cap_exceeded) surfaces as an inline message
+  // in case the client-side useOrgTier check was wrong (e.g. Clerk
+  // billing feature didn't propagate yet for a fresh signup). Belt-
+  // and-suspenders with the `blocked` gate above.
+  const [serverError, setServerError] = useState<string | null>(null);
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim() || blocked) return;
-    addAsset({ name: name.trim(), color, type, unit: unit.trim() || undefined, truck: truck.trim() || undefined, hidden: false, sortOrder: 0 });
-    onClose();
+    setServerError(null);
+    try {
+      await addAsset({ name: name.trim(), color, type, unit: unit.trim() || undefined, truck: truck.trim() || undefined, hidden: false, sortOrder: 0 });
+      onClose();
+    } catch (err) {
+      const tierCap = (err as Error & { code?: string }).code === 'tier_cap_exceeded';
+      if (tierCap) {
+        setServerError((err as Error).message);
+      } else {
+        // Unknown error — keep the dialog open and log; user can
+        // retry. The store already rolled back the optimistic insert.
+        console.error('AddAssetDialog handleSubmit failed:', err);
+        setServerError('Failed to add truck. Please try again.');
+      }
+    }
   };
 
   return (
@@ -89,6 +107,14 @@ export default function AddAssetDialog({ onClose }: { onClose: () => void }) {
                   )}
                 </div>
               </div>
+            </div>
+          )}
+          {serverError && !blocked && (
+            <div
+              className="rounded-lg px-4 py-3 flex items-start gap-3"
+              style={{ background: '#fef3c7', border: '1px solid #f59e0b', color: '#7c2d12' }}>
+              <AlertTriangle size={18} style={{ flex: '0 0 18px', marginTop: 1 }} />
+              <div className="flex-1 text-[13px] leading-snug">{serverError}</div>
             </div>
           )}
           <div>
