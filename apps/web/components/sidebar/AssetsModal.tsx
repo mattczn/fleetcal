@@ -26,6 +26,7 @@ import { useCalendarStore } from '@/store/useCalendarStore';
 import { usePermissions } from '@/lib/usePermissions';
 import { useModules } from '@/lib/useModules';
 import { useOrgTier, nextTierUp } from '@/lib/useOrgTier';
+import UpgradePlanDialog from './UpgradePlanDialog';
 import { formatHardDeleteError } from '@/lib/hardDeleteError';
 import { PRESET_COLORS } from '@/lib/asset-colors';
 import LoadHistorySection from './LoadHistorySection';
@@ -106,6 +107,16 @@ function AssetsModal({ onClose, initialAssetId, embedded }, modalRef) {
   // the UI lets the user attempt an add and the server silently
   // refuses, which is exactly the "runs dry" symptom we're fixing.
   const capBlocked = atLimit && tier !== 'unrestricted';
+  // Over-limit means the org dropped below their seat count after
+  // a downgrade — we still let them see the directory, but they
+  // can't add until they free seats. The banner uses different
+  // copy in this case ("over plan limit" vs "plan limit reached").
+  const overLimit = currentTrucks > maxTrucks && tier !== 'unrestricted';
+  // In-app upgrade modal — opens when user clicks the primary CTA
+  // on the cap banner. Routing to /pricing was the old behavior;
+  // an in-modal Clerk PricingTable keeps the dispatcher in the
+  // calendar context and shortens time-to-paid.
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
 
   // Unsaved-changes guard. The detail panel owns its form state and
   // exposes save/discard via a ref; this modal intercepts every
@@ -392,52 +403,99 @@ function AssetsModal({ onClose, initialAssetId, embedded }, modalRef) {
               </div>
             </div>
 
-            {/* Tier-cap banner — shows the user's current usage vs
-                cap whenever the org is at/over the cap. The cap is
-                on TRUCKS ACTIVE TODAY: retired trucks stay in the
-                directory for history but don't count, so the
-                cheapest way to make room is usually to retire one
-                that's no longer in service. We lead with that path
-                in every copy variant so dispatchers know it's an
-                option before they think about money.
-                  - upgradeable tier (owner_op, growth): retire OR
-                    upgrade
-                  - top tier (fleet): retire OR contact sales
-                  - no resolvable plan (tier === 'none', usually a
-                    Clerk feature-flag misconfig): retire OR contact
-                    support
-                The server returns matching copy on 402; the
-                `tierError` slot shows whichever message the server
-                sent verbatim when present. */}
+            {/* Tier-cap card — compact, two-line, single primary CTA.
+                Layout:
+                  Status row:  ⚠ tier label · X/Y active
+                  Action:      [Upgrade plan] or [Contact sales]
+                  Hint:        "or retire a truck to free a slot"
+                Shown when at/over cap OR when the server returned a
+                402 (tierError). The primary action opens an in-app
+                UpgradePlanDialog instead of routing to /pricing so
+                the dispatcher doesn't lose context. */}
             {(capBlocked || tierError) && (
-              <div className="mx-3 mt-2 rounded-lg px-3 py-2 text-[11px] leading-snug"
+              <div
+                className="mx-3 mt-2 rounded-xl"
                 style={{
-                  background: '#fef3c7',
-                  border:     '1px solid #fde68a',
-                  color:      '#7c2d12',
+                  background:  '#fffbeb',
+                  border:      `1px solid ${overLimit ? '#fb923c' : '#fde68a'}`,
+                  boxShadow:   'var(--shadow-1)',
+                  padding:     '10px 12px',
+                  overflow:    'hidden',
                 }}>
-                <div className="font-bold">
-                  {tier === 'none'
-                    ? `Truck limit reached`
-                    : `${tierLabel} plan — ${currentTrucks} of ${maxTrucks} active trucks`}
+                {/* Status row — chip + count, no wrap */}
+                <div className="flex items-center gap-1.5 text-[11px]">
+                  <span style={{
+                    display:        'inline-block',
+                    width:          6,
+                    height:         6,
+                    borderRadius:   999,
+                    background:     overLimit ? '#dc2626' : '#d97706',
+                    flex:           'none',
+                  }} />
+                  <span style={{
+                    color:         overLimit ? '#9a3412' : '#92400e',
+                    fontWeight:    700,
+                    letterSpacing: '0.04em',
+                    textTransform: 'uppercase',
+                  }}>
+                    {overLimit ? 'Over plan limit' : 'Plan limit reached'}
+                  </span>
                 </div>
-                <div className="mt-0.5">
-                  {tierError ?? (
-                    <>
-                      <strong>Retire</strong> or delete an existing truck to free a slot
-                      {tier === 'none' ? (
-                        <>, or contact support to increase capacity.</>
-                      ) : upsellTier ? (
-                        <>, or upgrade your plan to raise the cap.{' '}
-                          <Link href="/pricing" className="underline font-semibold">View plans →</Link></>
-                      ) : (
-                        <>, or contact sales to raise the cap.</>
-                      )}
-                    </>
-                  )}
+                {/* Count + tier name on one line, tight tabular nums */}
+                <div className="mt-1 flex items-baseline gap-1.5" style={{ color: '#7c2d12' }}>
+                  <span className="tabular-nums" style={{ fontSize: 18, fontWeight: 800, lineHeight: 1 }}>
+                    {currentTrucks}/{maxTrucks}
+                  </span>
+                  <span className="text-[11px]" style={{ color: '#92400e', fontWeight: 600 }}>
+                    {tier === 'none' ? 'active trucks' : `${tierLabel} plan`}
+                  </span>
                 </div>
+                {/* Primary CTA. Three variants based on what's
+                    actionable for this tier. */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (tier === 'none') {
+                      window.location.href = 'mailto:matt@curzontrucking.com?subject=FleetCal%20subscription%20help';
+                    } else if (upsellTier) {
+                      setUpgradeOpen(true);
+                    } else {
+                      window.location.href = 'mailto:matt@curzontrucking.com?subject=FleetCal%20fleet%20expansion';
+                    }
+                  }}
+                  className="w-full mt-2.5 text-[12px] font-bold rounded-lg transition-colors"
+                  style={{
+                    background: '#d97706',
+                    color:      '#fff',
+                    height:     32,
+                    border:     'none',
+                    cursor:     'pointer',
+                  }}
+                  onMouseEnter={e => (e.currentTarget.style.background = '#b45309')}
+                  onMouseLeave={e => (e.currentTarget.style.background = '#d97706')}>
+                  {tier === 'none' ? 'Contact support'
+                    : upsellTier ? 'Upgrade plan'
+                    : 'Contact sales'}
+                </button>
+                {/* Subtle secondary hint */}
+                <div className="mt-1.5 text-[10.5px] text-center" style={{ color: '#92400e' }}>
+                  or retire a truck below to free a slot
+                </div>
+                {/* If the server sent a more specific message
+                    (e.g. "your card declined"), show it discreetly
+                    above the CTA so the user knows the action they
+                    just took failed. */}
+                {tierError && (
+                  <div className="mt-2 text-[10.5px] rounded px-2 py-1.5" style={{
+                    background: 'rgba(220, 38, 38, 0.08)',
+                    color:      '#991b1b',
+                  }}>
+                    {tierError}
+                  </div>
+                )}
               </div>
             )}
+            {upgradeOpen && <UpgradePlanDialog onClose={() => setUpgradeOpen(false)} />}
 
             <div className="flex-1 overflow-y-auto px-2 pb-2">
               {assets.length === 0 && (

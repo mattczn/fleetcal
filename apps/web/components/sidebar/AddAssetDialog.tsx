@@ -1,11 +1,11 @@
 'use client';
 
 import { useState } from 'react';
-import Link from 'next/link';
 import { X, AlertTriangle } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { PRESET_COLORS } from '@/lib/asset-colors';
 import { useOrgTier, nextTierUp } from '@/lib/useOrgTier';
+import UpgradePlanDialog from './UpgradePlanDialog';
 
 const INPUT = 'w-full px-3 py-2 rounded-lg text-sm outline-none transition-all';
 const INPUT_STYLE = { border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)', background: 'var(--gc-surface)' };
@@ -30,6 +30,10 @@ export default function AddAssetDialog({ onClose }: { onClose: () => void }) {
   // billing feature didn't propagate yet for a fresh signup). Belt-
   // and-suspenders with the `blocked` gate above.
   const [serverError, setServerError] = useState<string | null>(null);
+  // In-app Clerk PricingTable modal. Opens when the user clicks the
+  // "Upgrade plan" CTA on the cap banner instead of routing them to
+  // /pricing and losing the truck-add form state.
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim() || blocked) return;
@@ -82,34 +86,60 @@ export default function AddAssetDialog({ onClose }: { onClose: () => void }) {
         <form onSubmit={handleSubmit} className="px-7 py-5 space-y-4">
           {blocked && (
             <div
-              className="rounded-lg px-4 py-3 flex items-start gap-3"
+              className="rounded-xl"
               style={{
-                background: '#fef3c7',
-                border: '1px solid #f59e0b',
-                color: '#7c2d12',
+                background:  '#fffbeb',
+                border:      '1px solid #fde68a',
+                padding:     '14px 16px',
+                boxShadow:   'var(--shadow-1)',
               }}
             >
-              <AlertTriangle size={18} style={{ flex: '0 0 18px', marginTop: 1 }} />
-              <div className="flex-1 text-[13px] leading-snug">
-                <div className="font-semibold">
-                  {tier === 'none'
-                    ? 'Truck limit reached.'
-                    : `${tierLabel} plan — ${currentTrucks} of ${maxTrucks} active trucks.`}
+              <div className="flex items-center gap-2.5">
+                <AlertTriangle size={18} style={{ color: '#d97706', flex: 'none' }} />
+                <div>
+                  <div className="text-[11px] font-bold uppercase tracking-wider" style={{ color: '#92400e' }}>
+                    Plan limit reached
+                  </div>
+                  <div className="mt-0.5 flex items-baseline gap-1.5" style={{ color: '#7c2d12' }}>
+                    <span className="tabular-nums" style={{ fontSize: 22, fontWeight: 800, lineHeight: 1 }}>
+                      {currentTrucks}/{maxTrucks}
+                    </span>
+                    <span className="text-[12px]" style={{ color: '#92400e', fontWeight: 600 }}>
+                      {tier === 'none' ? 'active trucks' : `${tierLabel} plan`}
+                    </span>
+                  </div>
                 </div>
-                <div className="mt-1">
-                  <strong>Retire</strong> or delete an existing truck to free a slot
-                  {tier === 'none' ? (
-                    <>, or contact support to increase capacity.</>
-                  ) : upsellTier ? (
-                    <>, or upgrade your plan to raise the cap.{' '}
-                      <Link href="/pricing" onClick={onClose} className="font-semibold underline">
-                        View plans →
-                      </Link>
-                    </>
-                  ) : (
-                    <>, or contact sales to raise the cap.</>
-                  )}
-                </div>
+              </div>
+              {/* Primary CTA — opens UpgradePlanDialog in-app rather
+                  than routing away. Three variants per the
+                  (none / upsellable / top-tier) state machine. */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (tier === 'none') {
+                    window.location.href = 'mailto:matt@curzontrucking.com?subject=FleetCal%20subscription%20help';
+                  } else if (upsellTier) {
+                    setUpgradeOpen(true);
+                  } else {
+                    window.location.href = 'mailto:matt@curzontrucking.com?subject=FleetCal%20fleet%20expansion';
+                  }
+                }}
+                className="w-full mt-3 text-[13px] font-bold rounded-lg transition-colors"
+                style={{
+                  background: '#d97706',
+                  color:      '#fff',
+                  height:     38,
+                  border:     'none',
+                  cursor:     'pointer',
+                }}
+                onMouseEnter={e => (e.currentTarget.style.background = '#b45309')}
+                onMouseLeave={e => (e.currentTarget.style.background = '#d97706')}>
+                {tier === 'none' ? 'Contact support'
+                  : upsellTier ? 'Upgrade plan'
+                  : 'Contact sales'}
+              </button>
+              <div className="mt-2 text-[11.5px] text-center" style={{ color: '#92400e' }}>
+                or close this dialog and retire an existing truck to free a slot
               </div>
             </div>
           )}
@@ -195,6 +225,7 @@ export default function AddAssetDialog({ onClose }: { onClose: () => void }) {
           </div>
         </form>
       </div>
+      {upgradeOpen && <UpgradePlanDialog onClose={() => setUpgradeOpen(false)} />}
     </div>
   );
 }
