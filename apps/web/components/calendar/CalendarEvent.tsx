@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef } from 'react';
-import { Star, CheckCircle2, FileCheck2 } from 'lucide-react';
+import { Star, CheckCircle2, FileCheck2, ArrowUpFromLine, ArrowDownToLine } from 'lucide-react';
 import { CalendarEvent as EventType, Asset, Driver, EventStatus } from '@/lib/types';
 import { CARD_FIELD_DEFS } from '@/lib/cardFields';
 import { timeToPixels, timeHeightPixels, localDateStr, naiveHomeToView } from '@/lib/time-utils';
@@ -299,18 +299,28 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
               to do it via a left-edge stripe (asset-color stays on
               card body) or some other treatment. The store flag
               showBillingOverlay is preserved for easy re-enable. */}
-          {/* Relay overlay — top-right corner */}
-          {isRelay && (
-            <div style={{
-              position: 'absolute', top: 4, right: 5,
-              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1,
-            }}>
-              <span style={{ fontSize: 16, fontWeight: 900, lineHeight: 1, color: '#fff', textShadow: '0 1px 4px rgba(0,0,0,0.4)' }}>⇄</span>
-              {relayRole && (
-                <span style={{ fontSize: 8, fontWeight: 800, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.9)', lineHeight: 1 }}>
-                  {relayRole === 'pickup' ? 'Pickup' : 'Delivery'}
-                </span>
-              )}
+          {/* Relay overlay — top-right corner.
+              Glyph-only role indicator (no text). ArrowUpFromLine for
+              pickup ("load lifts off the dock into the truck"),
+              ArrowDownToLine for delivery ("load comes down out of
+              the truck onto the dock"). The card's purple tint
+              already conveys that this is a relay leg, so the old
+              ⇄ + "PICKUP"/"DELIVERY" stack was redundant and
+              chewing up ~25×35px of card real estate. Native title
+              tooltip on hover preserves the explicit label for
+              new dispatchers learning the convention. */}
+          {isRelay && relayRole && (
+            <div
+              title={relayRole === 'pickup' ? 'Relay pickup leg' : 'Relay delivery leg'}
+              style={{
+                position: 'absolute', top: 4, right: 4,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                filter: 'drop-shadow(0 1px 3px rgba(0,0,0,0.4))',
+                color: '#fff', pointerEvents: 'auto',
+              }}>
+              {relayRole === 'pickup'
+                ? <ArrowUpFromLine size={14} strokeWidth={2.6} />
+                : <ArrowDownToLine size={14} strokeWidth={2.6} />}
             </div>
           )}
           {/* Height-budget allocation for title + fields.
@@ -371,7 +381,7 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
                     className="font-extrabold leading-tight break-words min-w-0"
                     style={{
                       color: 'white',
-                      paddingRight: isRelay ? 22 : 0,
+                      paddingRight: isRelay ? 16 : 0,
                       fontSize: fsTitle,
                       display: '-webkit-box',
                       WebkitBoxOrient: 'vertical',
