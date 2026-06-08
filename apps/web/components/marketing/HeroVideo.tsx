@@ -1,85 +1,58 @@
-'use client';
-
 /**
  * HeroVideo — autoplaying screencast for the marketing landing.
  *
- * Wraps a <video> with an explicit imperative play() call in useEffect.
+ * Renders a raw <video> tag via dangerouslySetInnerHTML so the
+ * browser parses the HTML attributes in the EXACT source order we
+ * specify, dodging React's attribute-application quirks entirely.
  *
- * Why we can't just rely on the `autoPlay` JSX attribute: React sets
- * attributes in JSX-declaration order, but the browser starts attempting
- * autoplay as soon as it sees `autoplay`. If `muted` is declared after
- * `autoPlay` (or set as a property after the attribute) the browser
- * tries to autoplay with sound, the autoplay policy rejects it
- * silently, and the video stays paused — even though the rendered HTML
- * looks correct. This is a long-standing React quirk:
- *   https://github.com/facebook/react/issues/10389
+ * Why this is necessary: prior iterations using both JSX attributes
+ * AND an imperative .play() in useEffect still resulted in a paused
+ * first-frame on production. The most likely cause was that the
+ * client component never hydrated (or hydrated too late) and the
+ * imperative play() never fired. By rendering the video as raw HTML,
+ * the browser starts autoplay immediately during page parse — no
+ * React, no hydration, no useEffect lifecycle to wait on.
  *
- * The reliable workaround across browsers is:
- *   1. Set the `muted` *property* on the element imperatively (the
- *      attribute alone isn't always enough for the autoplay policy).
- *   2. Call play() and swallow the returned promise's rejection (some
- *      browsers reject in private-mode / data-saver / low-power state).
+ * Tradeoffs: we lose JSX type-checking on the video element. The
+ * input shape is narrow (src, width, height, ariaLabel) so this is
+ * acceptable, and the inner HTML is fully under our control — no
+ * user-supplied data is interpolated.
  *
- * Failure case: the video stays on its first frame, which is fine on
- * a hero — the user sees a static screenshot of the AI parser instead
- * of motion. The Reveal wrapper around HeroVideo continues to behave
- * the same in either state.
+ * Server-renderable — no 'use client' directive needed.
  */
-import { useEffect, useRef, type CSSProperties } from 'react';
+import type { CSSProperties } from 'react';
 
 interface HeroVideoProps {
-  src:        string;
-  /** Source's native dimensions, used to compute aspectRatio. The
-   *  ratio is set inline so the element reserves vertical space on
-   *  first paint, before the video's metadata downloads. Without this
-   *  the frame is zero-height until the network round-trip completes. */
-  width:      number;
-  height:     number;
-  /** Accessible description of what's happening in the video. */
-  ariaLabel:  string;
-  style?:     CSSProperties;
+  src:       string;
+  width:     number;
+  height:    number;
+  ariaLabel: string;
+  style?:    CSSProperties;
 }
 
-export default function HeroVideo({ src, width, height, ariaLabel, style }: HeroVideoProps) {
-  const ref = useRef<HTMLVideoElement | null>(null);
+export default function HeroVideo({ src, width, height, ariaLabel, style: _style }: HeroVideoProps) {
+  // Note: style on the wrapping div, NOT the video — the video gets
+  // its sizing from inline `style=` in the raw HTML below.
+  // Attribute order is deliberate: muted FIRST so the autoplay policy
+  // check passes before autoplay is encountered.
+  const html =
+    `<video ` +
+      `muted ` +
+      `playsinline ` +
+      `autoplay ` +
+      `loop ` +
+      `preload="auto" ` +
+      `aria-label="${escapeAttr(ariaLabel)}" ` +
+      `style="width:100%;height:auto;aspect-ratio:${width}/${height};display:block;background:#f8f9fa;"` +
+    `>` +
+      `<source src="${escapeAttr(src)}" type="video/mp4">` +
+    `</video>`;
 
-  useEffect(() => {
-    const v = ref.current;
-    if (!v) return;
-    // Make sure the muted *property* is true before kicking off play().
-    // JSX `muted` sets the attribute, but the property is what the
-    // autoplay policy actually checks.
-    v.muted = true;
-    const playPromise = v.play();
-    if (playPromise && typeof playPromise.catch === 'function') {
-      playPromise.catch((err) => {
-        // Autoplay policy rejected — leave on first frame.
-        // Logged for debugging but harmless in production.
-        // eslint-disable-next-line no-console
-        console.warn('[HeroVideo] autoplay rejected:', err);
-      });
-    }
-  }, []);
+  return <div dangerouslySetInnerHTML={{ __html: html }} />;
+}
 
-  return (
-    <video
-      ref={ref}
-      src={src}
-      muted
-      loop
-      playsInline
-      preload="auto"
-      aria-label={ariaLabel}
-      // No `autoPlay` attribute — useEffect handles it imperatively so
-      // we avoid the React attribute-order race documented above.
-      style={{
-        width:       '100%',
-        height:      'auto',
-        aspectRatio: `${width} / ${height}`,
-        display:     'block',
-        background:  '#f8f9fa',
-        ...style,
-      }}
-    />
-  );
+/** Minimal attribute-context escaper — we control all inputs but this
+ *  hardens against future callers passing user-influenced strings. */
+function escapeAttr(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 }
