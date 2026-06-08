@@ -12,6 +12,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
+import { secureHeaders } from "hono/secure-headers";
 import { serve } from "@hono/node-server";
 
 import { env, isProd } from "./lib/env.js";
@@ -65,6 +66,44 @@ const app = new Hono<{ Variables: AuthVariables }>();
 // ── Global middleware ───────────────────────────────────────────────────
 
 app.use("*", logger());
+
+// Security headers on every response.
+//
+// What we override vs. Hono's defaults:
+//   - HSTS bumped to 1 year (was 6 months) to match the web app and the
+//     industry standard. `includeSubDomains` covers any future api.*.fleetcal.app.
+//   - xFrameOptions: DENY — nothing should ever embed the API in an iframe.
+//   - referrerPolicy: tighter than the default `no-referrer` for our case
+//     because we want cross-origin requests from fleetcal.app to be
+//     identifiable by origin (not URL) in logs/analytics.
+//   - permissionsPolicy: explicitly disable browser APIs the API never
+//     needs. Defense in depth against a hypothetical XSS payload trying
+//     to read mic/camera/geo through the API origin.
+//   - crossOriginResourcePolicy: 'cross-origin' — the API IS called from
+//     the fleetcal.app web app, which is a different origin. The default
+//     'same-origin' would break every request from the dashboard.
+//   - crossOriginEmbedderPolicy disabled — `require-corp` would break
+//     embeds of any third-party resources (Stripe webhooks, etc.).
+//   - originAgentCluster disabled — niche optimisation that can break
+//     shared workers across subdomains.
+//
+// CSP intentionally not set on the API. Nothing serves HTML here — every
+// route returns JSON. A restrictive CSP would be belt-and-braces, but it
+// adds no real protection because there's no HTML for a script to execute
+// from.
+app.use(
+  "*",
+  secureHeaders({
+    strictTransportSecurity: "max-age=31536000; includeSubDomains",
+    xFrameOptions:           "DENY",
+    xContentTypeOptions:     "nosniff",
+    referrerPolicy:          "strict-origin-when-cross-origin",
+    permissionsPolicy:       { geolocation: [], microphone: [], camera: [], usb: [] },
+    crossOriginResourcePolicy: "cross-origin",
+    crossOriginEmbedderPolicy: false,
+    originAgentCluster:        false,
+  }),
+);
 
 app.use(
   "*",
