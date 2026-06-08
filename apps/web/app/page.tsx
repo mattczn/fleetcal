@@ -52,7 +52,6 @@ export default async function HomePage() {
     >
       <MarketingNav cta={cta} showSignIn={state === 'out'} />
       <Hero cta={cta} />
-      <TrustBand />
       <Features />
       <HowItWorks />
       <Pricing />
@@ -354,19 +353,23 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
 
         <Reveal delay={140}>
           <div style={{ position: 'relative' }}>
-            <Frame url="app.fleetcal.com/calendar">
-              {/* Real product screenshot — actual dispatch calendar
-                  with 5 truck columns + sample loads. 1715×945 source
-                  (1.815:1). next/image handles retina sizing. Display
-                  block kills the inline-image baseline gap that
-                  would otherwise leave a hairline strip below the
-                  image inside the rounded frame. */}
-              <Image
-                src="/hero-calendar.png"
-                alt="FleetCal dispatch calendar"
-                width={1716}
-                height={944}
-                priority
+            <Frame url="app.fleetcal.com/loads/ai">
+              {/* Hero screencast — dispatcher dragging a rate-con PDF
+                  onto the calendar and FleetCal's AI extracts the
+                  customer, rate, stops, and times. autoPlay requires
+                  muted + playsInline (mobile Safari rule). Loop so the
+                  visual stays alive while a visitor scrolls past.
+                  preload="metadata" keeps initial page weight low —
+                  the browser only fetches enough to render the first
+                  frame until the user scrolls into view. */}
+              <video
+                src="/rateconai.mp4"
+                autoPlay
+                muted
+                loop
+                playsInline
+                preload="metadata"
+                aria-label="AI parsing a rate confirmation PDF into a load"
                 style={{ width: '100%', height: 'auto', display: 'block' }}
               />
             </Frame>
