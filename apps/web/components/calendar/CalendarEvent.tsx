@@ -300,27 +300,34 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
               card body) or some other treatment. The store flag
               showBillingOverlay is preserved for easy re-enable. */}
           {/* Relay overlay — top-right corner.
-              Glyph-only role indicator (no text). ArrowUpFromLine for
-              pickup ("load lifts off the dock into the truck"),
+              Glyph-only role indicator: ArrowUpFromLine for pickup
+              ("load lifts off the dock into the truck"),
               ArrowDownToLine for delivery ("load comes down out of
-              the truck onto the dock"). The card's purple tint
-              already conveys that this is a relay leg, so the old
-              ⇄ + "PICKUP"/"DELIVERY" stack was redundant and
-              chewing up ~25×35px of card real estate. Native title
-              tooltip on hover preserves the explicit label for
-              new dispatchers learning the convention. */}
+              the truck onto the dock"). Wrapped in a white badge
+              with a purple outline + purple icon stroke so it reads
+              as RELAY at a glance no matter what color the card
+              underneath is (truck colors vary, so a transparent
+              purple icon would disappear on some cards). Purple
+              tone matches the canonical relay color #7c3aed used
+              across EventModal, RouteMapPanel, ReviewQueue, etc.
+              Native title tooltip preserves the explicit label
+              for dispatchers learning the convention. */}
           {isRelay && relayRole && (
             <div
               title={relayRole === 'pickup' ? 'Relay pickup leg' : 'Relay delivery leg'}
               style={{
                 position: 'absolute', top: 4, right: 4,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                filter: 'drop-shadow(0 1px 3px rgba(0,0,0,0.4))',
-                color: '#fff', pointerEvents: 'auto',
+                width: 18, height: 18,
+                background: '#fff',
+                border: '1.5px solid #7c3aed',
+                borderRadius: 5,
+                boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+                pointerEvents: 'auto',
               }}>
               {relayRole === 'pickup'
-                ? <ArrowUpFromLine size={14} strokeWidth={2.6} />
-                : <ArrowDownToLine size={14} strokeWidth={2.6} />}
+                ? <ArrowUpFromLine size={11} strokeWidth={2.8} color="#7c3aed" />
+                : <ArrowDownToLine size={11} strokeWidth={2.8} color="#7c3aed" />}
             </div>
           )}
           {/* Height-budget allocation for title + fields.
@@ -381,7 +388,7 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
                     className="font-extrabold leading-tight break-words min-w-0"
                     style={{
                       color: 'white',
-                      paddingRight: isRelay ? 16 : 0,
+                      paddingRight: isRelay ? 22 : 0,
                       fontSize: fsTitle,
                       display: '-webkit-box',
                       WebkitBoxOrient: 'vertical',
