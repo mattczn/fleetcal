@@ -11,11 +11,13 @@ import Link from 'next/link';
 import AppShell from '@/components/nav/AppShell';
 import { Activity, Building2, ShieldAlert, ShieldCheck } from 'lucide-react';
 import PulseCard from './PulseCard';
+import Breadcrumbs from './Breadcrumbs';
 
 export default function AdminIndex() {
   return (
     <AppShell title="Admin" icon={ShieldCheck}>
       <div className="flex-1 flex flex-col min-h-0 px-6 pt-5 pb-6 gap-4 overflow-y-auto">
+        <Breadcrumbs trail={[{ label: 'Admin' }]} />
         <div>
           <div className="text-[20px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
             FleetCal admin

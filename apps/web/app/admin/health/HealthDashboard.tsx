@@ -13,6 +13,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import AppShell from '@/components/nav/AppShell';
+import Breadcrumbs from '../Breadcrumbs';
 import { Activity, AlertCircle, CheckCircle2, Loader2, RefreshCw, ShieldAlert } from 'lucide-react';
 
 interface CronRunRow {
@@ -79,6 +80,7 @@ export default function HealthDashboard() {
   return (
     <AppShell title="Health" icon={ShieldAlert}>
       <div className="flex-1 flex flex-col min-h-0 px-6 pt-5 pb-6 gap-4 overflow-y-auto">
+        <Breadcrumbs trail={[{ label: 'Admin', href: '/admin' }, { label: 'Operational health' }]} />
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div>
             <div className="text-[20px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>

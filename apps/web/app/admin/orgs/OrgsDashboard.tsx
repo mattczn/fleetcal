@@ -14,12 +14,18 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import AppShell from '@/components/nav/AppShell';
 import { AlertCircle, Building2, DollarSign, Loader2, RefreshCw, Users } from 'lucide-react';
+import Breadcrumbs from '../Breadcrumbs';
 
 interface OrgRow {
   orgId:                string;
   orgName:              string;
   createdAt:            number;     // Clerk createdAt (epoch ms)
   membersCount:         number;
+  truckCount:           number;
+  tier:                 'fleet' | 'growth' | 'owner_op' | 'none';
+  tierLabel:            string;
+  planPeriod:           'month' | 'annual' | null;
+  subscriptionStatus:   string | null;
   loadsCreated30d:      number;
   loadsVerified30d:     number;
   revenue30d:           number;
@@ -76,6 +82,7 @@ export default function OrgsDashboard() {
   return (
     <AppShell title="Orgs" icon={Building2}>
       <div className="flex-1 flex flex-col min-h-0 px-6 pt-5 pb-6 gap-4 overflow-y-auto">
+        <Breadcrumbs trail={[{ label: 'Admin', href: '/admin' }, { label: 'Orgs activity' }]} />
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div>
             <div className="text-[20px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
@@ -152,7 +159,9 @@ export default function OrgsDashboard() {
                 <thead>
                   <tr style={{ background: 'var(--gc-bg)' }}>
                     <Th>Org</Th>
+                    <Th>Tier</Th>
                     <Th>Flag</Th>
+                    <Th className="text-right">Trucks</Th>
                     <Th className="text-right">Members</Th>
                     <Th className="text-right">Loads (30d)</Th>
                     <Th className="text-right">Verified</Th>
@@ -174,8 +183,12 @@ export default function OrgsDashboard() {
                         </div>
                       </Td>
                       <Td>
+                        <TierBadge tier={o.tier} label={o.tierLabel} period={o.planPeriod} status={o.subscriptionStatus} />
+                      </Td>
+                      <Td>
                         <FlagBadge flag={o.flag} />
                       </Td>
+                      <Td className="text-right tabular-nums">{numFmt.format(o.truckCount)}</Td>
                       <Td className="text-right tabular-nums">{numFmt.format(o.membersCount)}</Td>
                       <Td className="text-right tabular-nums font-bold">{numFmt.format(o.loadsCreated30d)}</Td>
                       <Td className="text-right tabular-nums" style={{ color: 'var(--gc-text-2)' }}>{numFmt.format(o.loadsVerified30d)}</Td>
@@ -196,6 +209,34 @@ export default function OrgsDashboard() {
         </div>
       </div>
     </AppShell>
+  );
+}
+
+function TierBadge({ tier, label, period, status }: {
+  tier:   OrgRow['tier'];
+  label:  string;
+  period: OrgRow['planPeriod'];
+  status: OrgRow['subscriptionStatus'];
+}) {
+  if (tier === 'none') {
+    return <span className="text-[11px] font-semibold" style={{ color: 'var(--gc-text-3)' }}>—</span>;
+  }
+  // Color the chip by tier so the page is glanceable. Past-due
+  // status gets a red outline overriding the per-tier hue so a
+  // failed payment is visible at first glance.
+  const isPastDue = status === 'past_due' || status === 'unpaid';
+  const palette = isPastDue
+    ? { bg: '#fce8e6', fg: '#c5221f' }
+    : tier === 'fleet'    ? { bg: '#e8f0fe', fg: '#1558d6' }
+    : tier === 'growth'   ? { bg: '#e6f4ea', fg: '#137333' }
+    :                       { bg: '#f3e8fd', fg: '#6b21a8' };
+  const periodSuffix = period === 'annual' ? ' · yr' : period === 'month' ? ' · mo' : '';
+  return (
+    <span className="text-[11px] font-bold px-2 py-0.5 rounded inline-flex items-center gap-1"
+      style={{ background: palette.bg, color: palette.fg }}
+      title={status ? `Subscription status: ${status}` : undefined}>
+      {label.toUpperCase()}{periodSuffix}
+    </span>
   );
 }
 

@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import AppShell from '@/components/nav/AppShell';
 import { Activity, AlertCircle, DollarSign, Loader2, RefreshCw, Users } from 'lucide-react';
+import Breadcrumbs from '../Breadcrumbs';
 
 interface MonthlyRow {
   org_id:        string;
@@ -154,6 +155,7 @@ export default function AiUsageDashboard() {
   return (
     <AppShell title="AI Usage" icon={Activity}>
       <div className="flex-1 flex flex-col min-h-0 px-6 pt-5 pb-6 gap-4 overflow-y-auto">
+        <Breadcrumbs trail={[{ label: 'Admin', href: '/admin' }, { label: 'AI usage' }]} />
         {/* Header strip — title left, controls right. */}
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div>
