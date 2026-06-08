@@ -49,7 +49,17 @@ export const CARD_FIELD_DEFS: CardFieldDef[] = [
   { key: 'notes',     label: 'Notes',      icon: FileText,    render: (e) => e.notes ?? null },
 ];
 
-export const DEFAULT_CARD_FIELDS: CardFieldKey[] = ['time', 'driver', 'loadNum', 'loadPrice', 'totalBillable'];
+// Default card layout for a fresh org: time + driver up top, then the
+// money story. `totalBillable` is the headline $ on the load (linehaul
+// + billable accessorials); `loadPrice` is just the linehaul portion.
+// `totalBillable` self-suppresses when it equals loadPrice (see render
+// above), so the common no-accessorial case renders as just
+// time/driver/$linehaul — clean. When there ARE accessorials, the chip
+// shows the total first and the linehaul subset on the next line, which
+// matches how the invoice reads. Dispatchers can still toggle any of
+// these (and add loadNum, broker, refNums, notes) from Settings →
+// Appearance → Card Layout.
+export const DEFAULT_CARD_FIELDS: CardFieldKey[] = ['time', 'driver', 'totalBillable', 'loadPrice'];
 
 function fmt(t: string) {
   const [h, m] = t.split(':').map(Number);

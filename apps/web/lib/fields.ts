@@ -40,8 +40,21 @@ export const ALL_FIELDS: FieldDef[] = [
   { id: 'specialInstructions', label: 'Special Instructions', section: 'notes', type: 'textarea', defaultEnabled: true, placeholder: 'Driver must check in at gate B…', extractionHint: 'Driver-essential customer requirements only — see prompt variable for full guidance.' },
 ];
 
+/**
+ * Initial fieldSettings for an org that has nothing saved on the
+ * server yet (new sign-up, or local-state fallback before hydration).
+ *
+ * Policy: every field is ON by default. A new carrier gets the
+ * widest possible load modal so they can see everything FleetCal
+ * tracks; they can hide fields they don't need from Settings →
+ * Appearance → Load Modal. This matches the per-field
+ * `defaultEnabled: true` flags, but we force the value here too so a
+ * future field accidentally added with `defaultEnabled: false`
+ * doesn't silently ship a smaller modal to new orgs — that's a
+ * surprise we don't want.
+ */
 export function buildDefaultFieldSettings(): Record<string, boolean> {
-  return Object.fromEntries(ALL_FIELDS.map(f => [f.id, f.defaultEnabled]));
+  return Object.fromEntries(ALL_FIELDS.map(f => [f.id, true]));
 }
 
 export function getEnabledFieldsForSection(
