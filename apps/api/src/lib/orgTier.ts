@@ -26,7 +26,7 @@
  * change.
  */
 
-import { clerk } from "./clerk.js";
+import { env } from "./env.js";
 
 /** Internal-org allowlist. Mirrors apps/web/lib/internalOrg.ts.
  *  Keep these in sync — both files have to agree on which orgs
@@ -115,9 +115,21 @@ function rank(tier: "fleet" | "growth" | "owner_op"): number {
 /**
  * Fetch the org's effective tier + truck cap.
  *
- * Reads via Clerk's billing API — same shape the admin dashboard
- * uses. Internal orgs short-circuit to `unrestricted` so a
- * billing outage can't lock Curzon's calendar.
+ * Calls Clerk's billing HTTP endpoint directly. We used to go
+ * through `clerk().billing.getOrganizationBillingSubscription`
+ * but that method DOES NOT EXIST on @clerk/backend 1.x — only
+ * `users`, `organizations`, etc. are wrapped. The call silently
+ * threw `TypeError: cannot read .billing of undefined`, hit the
+ * catch, and every org collapsed to "none" / maxTrucks: 0 →
+ * every create returned 402 with the generic "contact support"
+ * message. The user only noticed when the cap enforcement landed.
+ *
+ * Raw fetch to `/v1/organizations/{org_id}/billing/subscription`
+ * works against the live Clerk REST API and returns snake_case
+ * JSON. We parse the plan features looking for our tier slugs.
+ *
+ * Internal orgs short-circuit to `unrestricted` so a billing
+ * outage can't lock Curzon's calendar.
  */
 export async function getOrgTier(orgId: string): Promise<OrgTierInfo> {
   if (INTERNAL_ORG_IDS.has(orgId)) {
@@ -125,15 +137,30 @@ export async function getOrgTier(orgId: string): Promise<OrgTierInfo> {
   }
 
   try {
-    // Clerk billing is @experimental — wrap so SDK changes can't
-    // 500 the entire create endpoint. We translate any failure
-    // into "tier: none" → maxTrucks: 0 → caller returns 402.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const sub: any = await (clerk() as any).billing.getOrganizationBillingSubscription(orgId);
-    let bestTier:  "fleet" | "growth" | "owner_op" | null = null;
+    const res = await fetch(
+      `https://api.clerk.com/v1/organizations/${encodeURIComponent(orgId)}/billing/subscription`,
+      { headers: { Authorization: `Bearer ${env.clerkSecretKey}` } },
+    );
+    if (!res.ok) {
+      // Surface the real reason in logs. The previous version swallowed
+      // everything into a generic "failed to resolve tier" warning
+      // which made the SDK-undefined bug invisible for hours. Capture
+      // the status + body so the next time something breaks, the cause
+      // is in the first log line.
+      const body = await res.text().catch(() => "");
+      console.warn(`[orgTier] Clerk ${res.status} for ${orgId}: ${body.slice(0, 200)}; failing closed`);
+      return { tier: "none", maxTrucks: 0 };
+    }
 
-    const items = (sub?.subscriptionItems ?? []) as Array<{ plan?: { features?: Array<{ slug?: string }> } }>;
-    for (const item of items) {
+    // Clerk's HTTP API returns snake_case — be explicit about that
+    // here so the field names don't drift if someone copies this
+    // block expecting camelCase.
+    const sub = (await res.json()) as {
+      subscription_items?: Array<{ plan?: { features?: Array<{ slug?: string }> } }>;
+    };
+
+    let bestTier: "fleet" | "growth" | "owner_op" | null = null;
+    for (const item of sub.subscription_items ?? []) {
       const features = item.plan?.features ?? [];
       for (const slot of TIER_FEATURE_PRIORITY) {
         if (features.some(f => f.slug === slot.feature)) {
