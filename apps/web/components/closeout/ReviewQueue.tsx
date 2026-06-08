@@ -1973,14 +1973,81 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
               );
             })()}
 
-            {/* Document management header — slimmed to just "Docs · N".
+            {/* Document management header — "Docs · N" on the left,
+                Accessorials hover-badge on the right when present.
                 Verification status now lives in the StatusBanner above;
                 the small per-chip row used to share this strip. */}
-            <div className="shrink-0 px-3 py-2 flex items-center justify-between gap-2"
+            <div className="shrink-0 px-3 py-2 flex items-center justify-between gap-2 flex-wrap"
               style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
               <span className="text-[11px] font-bold uppercase tracking-wider shrink-0" style={{ color: 'var(--gc-text-3)' }}>
                 Docs {docs.length > 0 && <span style={{ color: 'var(--gc-text-2)' }}>· {docs.length}</span>}
               </span>
+              {/* Accessorials badge — hover to see the per-line
+                  breakdown. Replaces the always-visible accessorials
+                  banner that used to live above this header strip;
+                  the badge keeps the redesign's calm rail without
+                  losing the "do I need a lumper receipt?" signal at
+                  a glance. Hidden when the load has no accessorials. */}
+              {(current.accessorials ?? []).length > 0 && (() => {
+                const accs    = current.accessorials ?? [];
+                const total   = accs.reduce((sum, a) => sum + (a.amount ?? 0), 0);
+                const hasAny$ = accs.some(a => a.amount != null);
+                return (
+                  <Tooltip
+                    content={
+                      <div style={{ minWidth: 240, maxWidth: 320 }}>
+                        <div className="text-[11px] font-bold uppercase tracking-wider mb-2" style={{ color: 'var(--gc-text-3)' }}>
+                          Accessorials · {accs.length}
+                        </div>
+                        <ul className="space-y-1.5">
+                          {accs.map((a, i) => {
+                            const status = (a as { status?: string }).status;
+                            return (
+                              <li key={i} className="flex items-start justify-between gap-3 text-[12.5px]">
+                                <span className="min-w-0 flex-1" style={{ color: 'var(--gc-text-1)' }}>
+                                  <span className="font-semibold">{ACCESSORIAL_LABEL[a.category] ?? a.category}</span>
+                                  {a.description && (
+                                    <span className="block" style={{ color: 'var(--gc-text-3)', fontSize: 11.5, marginTop: 1 }}>
+                                      {a.description}
+                                    </span>
+                                  )}
+                                </span>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  {status && <AccessorialStatusPill status={status} />}
+                                  <span className="font-bold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>
+                                    {a.amount != null ? moneyFmt.format(a.amount) : '—'}
+                                  </span>
+                                </div>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                        {hasAny$ && accs.length > 1 && (
+                          <div className="flex items-center justify-between gap-3 mt-2.5 pt-2 text-[12px]"
+                               style={{ borderTop: '1px solid var(--gc-border-light)' }}>
+                            <span className="font-bold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)', fontSize: 10.5 }}>
+                              Total
+                            </span>
+                            <span className="font-bold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>
+                              {moneyFmt.format(total)}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    }>
+                    <span className="inline-flex items-center gap-1 text-[10.5px] font-bold uppercase tracking-wider shrink-0 cursor-help"
+                      style={{
+                        background:   '#fef7e0',
+                        color:        '#b06000',
+                        border:       '1px solid #fde68a',
+                        padding:      '2px 8px',
+                        borderRadius: 999,
+                      }}>
+                      <Receipt size={10} /> Accessorials · {accs.length}
+                    </span>
+                  </Tooltip>
+                );
+              })()}
             </div>
 
             {/* Pending file kind picker — only when files are queued.
