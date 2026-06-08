@@ -123,14 +123,23 @@ assets.post("/", requireCapability("assets.create"), async (c) => {
   // count entirely so we don't add latency to dogfooding flows.
   const tier = await getOrgTier(orgId);
   if (Number.isFinite(tier.maxTrucks)) {
-    // `.neq("type", "Unassigned")` excludes the calendar's virtual
-    // Unassigned column — it's a UI surface for unrouted events,
-    // not a real truck, and shouldn't burn a paid seat.
+    // Exclude the calendar's virtual Unassigned column — it's a
+    // UI surface for unrouted events, not a real truck, and
+    // shouldn't burn a paid seat. We have to check BOTH `type`
+    // AND `name` because the seed isn't consistent across code
+    // paths: the production seed in useCalendarStore.ts line ~553
+    // creates it with type='Unassigned', but the demo-reset seed
+    // at line ~725 creates it with type='OTR', name='Unassigned'.
+    // The client filter checks both; the server used to check
+    // only type, so on demo-seeded orgs the server overcounted
+    // by 1 and returned 402 even when the dispatcher was 1 under
+    // the cap. Mirror the client's check exactly.
     const baseQ = supabase
       .from("assets")
       .select("*", { count: "exact", head: true })
       .eq("org_id", orgId)
-      .neq("type", "Unassigned");
+      .neq("type", "Unassigned")
+      .neq("name", "Unassigned");
     const { count: activeCount, error: countErr } = await applyActiveCapFilter(baseQ);
     if (countErr) {
       console.error("[POST /v1/assets] tier cap count failed:", countErr);

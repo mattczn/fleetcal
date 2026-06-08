@@ -31,6 +31,7 @@ interface LoadRow {
 interface TruckRow {
   org_id:      string;
   type:        string | null;
+  name:        string | null;
   active_from: string | null;
   active_to:   string | null;
 }
@@ -157,7 +158,7 @@ export async function GET() {
       .gte('created_at', thirtyDaysAgo)
       .limit(5000),
     db.from('assets')
-      .select('org_id, type, active_from, active_to')
+      .select('org_id, type, name, active_from, active_to')
       .limit(50_000),
   ]);
   if (loadsRes.error) {
@@ -174,7 +175,10 @@ export async function GET() {
     // Skip the calendar's virtual "Unassigned" column — it's a UI
     // surface, not a real truck. Matches useOrgTier's exclusion so
     // the dashboard's count agrees with the customer's banner.
-    if (t.type === 'Unassigned') continue;
+    // Check BOTH type AND name because demo-seeded orgs use
+    // type='OTR' but name='Unassigned' (see /v1/assets POST for
+    // the long explainer).
+    if (t.type === 'Unassigned' || t.name === 'Unassigned') continue;
     if (!consumesCapSeat(t)) continue;
     truckCountByOrg.set(t.org_id, (truckCountByOrg.get(t.org_id) ?? 0) + 1);
   }
