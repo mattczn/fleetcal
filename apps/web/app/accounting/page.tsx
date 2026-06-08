@@ -20,10 +20,10 @@
  *   All       — every billable artifact (except voids)
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Receipt, Loader2, AlertCircle, Search, X, Send, Check, FilePlus,
-  AlertOctagon, Inbox, CircleCheckBig, CheckCircle2, Layers, Eye, Star, RefreshCw, Info,
+  AlertOctagon, Inbox, CircleCheckBig, CheckCircle2, Layers, Eye, Star, RefreshCw, Info, ChevronRight,
 } from 'lucide-react';
 import Tooltip from '@/components/ui/Tooltip';
 import { useRouter } from 'next/navigation';
@@ -53,16 +53,33 @@ import type {
 
 type Bucket = 'released' | 'queued' | 'invoiced' | 'paid' | 'all';
 
-const BUCKETS: Array<{ key: Bucket; label: string; icon: React.ComponentType<{ size?: number; style?: React.CSSProperties }>; tint: string; subtitle: string; formula: React.ReactNode }> = [
-  { key: 'released', label: 'Released',  icon: AlertOctagon,    tint: '#1a73e8', subtitle: 'Paperwork verified · ready to invoice',
+// Per-bucket tile config. Tints align to the Closeout/Workspace
+// handoff: Released = brand blue, Queued = purple, Invoiced = indigo,
+// Paid = green, All = neutral. `sep: true` puts a hairline divider
+// before the tile so 'All' visually separates from the pipeline.
+const BUCKETS: Array<{
+  key: Bucket;
+  label: string;
+  icon: React.ComponentType<{ size?: number; style?: React.CSSProperties }>;
+  tint: string;
+  /** Background of the tinted icon chip (12%-alpha tint). */
+  tintLight: string;
+  /** Slightly darker tint used for the active-state $ value. */
+  tintText: string;
+  subtitle: string;
+  formula: React.ReactNode;
+  sep?: boolean;
+}> = [
+  { key: 'released', label: 'Released',  icon: AlertOctagon,    tint: '#1a73e8', tintLight: '#e8f0fe', tintText: '#1558d6', subtitle: 'Paperwork verified · ready to invoice',
     formula: <>Loads with <code>billing_status = verified</code> and no invoice yet. $ = sum of <strong>Total Billable</strong> (linehaul + billable accessorials) per load.</> },
-  { key: 'queued',   label: 'Queued',    icon: Inbox,           tint: '#9333ea', subtitle: 'Invoice generated · waiting to be sent',
+  { key: 'queued',   label: 'Queued',    icon: Inbox,           tint: '#7b1fa2', tintLight: '#f3e8fd', tintText: '#6b21a8', subtitle: 'Invoice generated · waiting to be sent',
     formula: <>Loads with <code>billing_status = invoiced</code> whose invoice is still in <code>draft</code>. $ = sum of the invoice <strong>Total</strong> (snapshot at draft time); falls back to load Total Billable if the snapshot is missing.</> },
-  { key: 'invoiced', label: 'Invoiced',  icon: CircleCheckBig,  tint: '#1d4ed8', subtitle: 'Invoice sent · awaiting payment',
+  { key: 'invoiced', label: 'Invoiced',  icon: CircleCheckBig,  tint: '#3730a3', tintLight: '#eef2ff', tintText: '#3730a3', subtitle: 'Invoice sent · awaiting payment',
     formula: <>Loads with <code>billing_status = invoiced</code> whose invoice is in <code>sent</code>. $ = sum of the invoice <strong>Total</strong> snapshot.</> },
-  { key: 'paid',     label: 'Paid',      icon: CheckCircle2,    tint: '#16a34a', subtitle: 'Payment received',
+  { key: 'paid',     label: 'Paid',      icon: CheckCircle2,    tint: '#188038', tintLight: '#e6f4ea', tintText: '#137333', subtitle: 'Payment received',
     formula: <>Loads with <code>billing_status = paid</code>. $ = sum of the invoice <strong>Total</strong> at the time payment was recorded.</> },
-  { key: 'all',      label: 'All',       icon: Layers,          tint: '#5f6368', subtitle: 'All released loads',
+  { key: 'all',      label: 'All',       icon: Layers,          tint: '#5f6368', tintLight: '#f1f3f4', tintText: '#3c4043', subtitle: 'All released loads',
+    sep:   true,
     formula: <>Union of Queued + Invoiced + Paid (excludes Released — those don&rsquo;t have an invoice yet). $ = sum of invoice <strong>Total</strong> per row.</> },
 ];
 
@@ -1323,60 +1340,160 @@ function AccountingPageInner() {
             Generate invoices, track delivery, mark paid.
           </div>
 
-          {/* Bucket tiles — full padding + value + subtitle on lg+ at
-              the top of the page; collapse to a one-row icon + label +
-              count once the user scrolls past 40 px inside the table
-              (or on narrow screens). Mirrors the Paperwork bucket
-              behaviour so the two surfaces feel the same. */}
-          <div className={`grid ${tilesCompact ? 'gap-2' : 'gap-2 lg:gap-3'}`} style={{ gridTemplateColumns: 'repeat(5, minmax(0, 1fr))' }}>
-            {BUCKETS.map(b => {
-              const active = bucket === b.key;
-              const s = stats[b.key];
-              const Icon = b.icon;
-              // Per-bucket priming spinner. Shown on any bucket tile
-              // whose slice is currently on the wire, so the operator
-              // sees inactive buckets are still loading too — not just
-              // the one they're sitting on.
-              const isPriming = bucketLoading.has(b.key);
-              return (
-                <button key={b.key}
-                  onClick={() => setBucket(b.key)}
-                  className={`text-left rounded-xl transition-all ${
-                    tilesCompact ? 'px-3 py-2' : 'px-3 lg:px-4 py-2 lg:py-3'
-                  }`}
-                  style={{
-                    background: 'var(--gc-surface)',
-                    border: active ? `2px solid ${b.tint}` : '1px solid var(--gc-border-light)',
-                    boxShadow: active ? '0 4px 12px rgba(26,115,232,0.12)' : 'var(--shadow-1)',
-                  }}>
-                  <div className="flex items-center gap-2">
-                    <Icon size={16} style={{ color: b.tint }} />
-                    <span className="text-[12.5px] font-semibold truncate" style={{ color: 'var(--gc-text-2)' }}>{b.label}</span>
-                    <Tooltip content={b.formula} placement="bottom">
-                      <Info size={11} style={{ color: 'var(--gc-text-3)', opacity: 0.6, cursor: 'help' }} />
-                    </Tooltip>
-                    {isPriming ? (
-                      <Loader2 size={13} className="ml-auto animate-spin" style={{ color: b.tint }} />
-                    ) : (
-                      <span className="ml-auto text-[15px] lg:text-[16px] font-bold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>{s.count.toLocaleString()}</span>
+          {/* Bucket tiles per the Billing/Paperwork redesign handoff.
+              Two modes driven by `tilesCompact`:
+                - Full (top of page):   tinted icon chip + label + big
+                                        count + subtitle + $ on a
+                                        second row + 4px accent stripe
+                                        on the active tile + soft
+                                        elevation. Chevrons between
+                                        pipeline stages (Released →
+                                        Queued → Invoiced → Paid) +
+                                        a hairline divider before All.
+                - Compact (scrolled):   single pill-row per bucket
+                                        (color dot + label + count +
+                                        $). Active fills with the
+                                        tint. Survives column reflow
+                                        on narrow widths.
+              Hysteresis on the scroll handler already debounces the
+              full/compact swap so the row doesn't thrash. */}
+          {tilesCompact ? (
+            <div className="flex items-center gap-2 flex-wrap">
+              {BUCKETS.map(b => {
+                const active    = bucket === b.key;
+                const s         = stats[b.key];
+                const isPriming = bucketLoading.has(b.key);
+                return (
+                  <button key={b.key}
+                    onClick={() => setBucket(b.key)}
+                    className="inline-flex items-center gap-2 transition-colors"
+                    title={`${b.label} — ${b.subtitle}`}
+                    style={{
+                      height:       34,
+                      padding:      '0 12px',
+                      borderRadius: 999,
+                      background:   active ? b.tint            : 'var(--gc-surface)',
+                      color:        active ? '#fff'            : 'var(--gc-text-2)',
+                      border:       active ? '1px solid transparent' : '1px solid var(--gc-border-light)',
+                      fontSize:     12.5,
+                      fontWeight:   700,
+                      cursor:       'pointer',
+                    }}>
+                    <span style={{
+                      width:        9,
+                      height:       9,
+                      borderRadius: 999,
+                      background:   active ? '#fff' : b.tint,
+                      flex:         'none',
+                    }} />
+                    {b.label}
+                    {isPriming
+                      ? <Loader2 size={12} className="animate-spin" style={{ color: active ? '#fff' : b.tint }} />
+                      : <span style={{ fontWeight: 800 }}>{s.count.toLocaleString()}</span>}
+                    <span className="tabular-nums" style={{
+                      color:      active ? 'rgba(255,255,255,0.85)' : 'var(--gc-text-3)',
+                      fontWeight: 600,
+                    }}>
+                      {moneyFmt.format(s.total)}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="flex items-stretch gap-2">
+              {BUCKETS.map((b, i) => {
+                const active    = bucket === b.key;
+                const s         = stats[b.key];
+                const Icon      = b.icon;
+                const isPriming = bucketLoading.has(b.key);
+                const next      = BUCKETS[i + 1];
+                return (
+                  <React.Fragment key={b.key}>
+                    {/* Hairline divider before "All" (`sep: true`). */}
+                    {b.sep && (
+                      <span style={{ width: 1, background: 'var(--gc-border-light)', margin: '6px 3px' }} />
                     )}
-                  </div>
-                  <div
-                    className={`${tilesCompact ? 'hidden' : 'hidden lg:block'} mt-1.5 text-[12px] tabular-nums transition-all`}
-                    style={{ color: 'var(--gc-text-3)' }}
-                  >
-                    {moneyFmt.format(s.total)}
-                  </div>
-                  <div
-                    className={`${tilesCompact ? 'hidden' : 'hidden lg:block'} mt-0.5 text-[10.5px] uppercase tracking-wider font-semibold transition-all`}
-                    style={{ color: 'var(--gc-text-3)' }}
-                  >
-                    {b.subtitle}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
+                    <button
+                      onClick={() => setBucket(b.key)}
+                      className="text-left rounded-2xl transition-all relative overflow-hidden flex-1 min-w-0"
+                      style={{
+                        background: 'var(--gc-surface)',
+                        border:     active ? '1px solid transparent' : '1px solid var(--gc-border-light)',
+                        boxShadow:  active ? 'var(--shadow-soft)' : 'var(--shadow-1)',
+                        transform:  active ? 'translateY(-2px)' : 'translateY(0)',
+                        padding:    '13px 15px',
+                      }}>
+                      {/* 4px left accent — visible only when active. */}
+                      <span style={{
+                        position:   'absolute',
+                        left:       0,
+                        top:        0,
+                        bottom:     0,
+                        width:      4,
+                        background: active ? b.tint : 'transparent',
+                      }} />
+                      <div className="flex items-center gap-2.5">
+                        <span style={{
+                          width:        30,
+                          height:       30,
+                          borderRadius: 8,
+                          display:      'grid',
+                          placeItems:   'center',
+                          background:   b.tintLight,
+                          flex:         'none',
+                        }}>
+                          <Icon size={17} style={{ color: b.tint }} />
+                        </span>
+                        <span className="text-[13.5px] font-extrabold truncate" style={{ color: 'var(--gc-text-1)' }}>
+                          {b.label}
+                        </span>
+                        <Tooltip content={b.formula} placement="bottom">
+                          <Info size={11} style={{ color: 'var(--gc-text-3)', opacity: 0.6, cursor: 'help' }} />
+                        </Tooltip>
+                        {isPriming ? (
+                          <Loader2 size={14} className="ml-auto animate-spin" style={{ color: b.tint }} />
+                        ) : (
+                          <span className="ml-auto tabular-nums" style={{
+                            fontSize:   22,
+                            fontWeight: 800,
+                            lineHeight: 1,
+                            color:      'var(--gc-text-1)',
+                          }}>
+                            {s.count.toLocaleString()}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-baseline justify-between gap-2 mt-2">
+                        <span className="text-[11.5px] font-semibold truncate" style={{ color: 'var(--gc-text-3)' }}>
+                          {b.subtitle}
+                        </span>
+                        <span className="tabular-nums" style={{
+                          fontSize:   13.5,
+                          fontWeight: 800,
+                          color:      active ? b.tintText : 'var(--gc-text-2)',
+                        }}>
+                          {moneyFmt.format(s.total)}
+                        </span>
+                      </div>
+                    </button>
+                    {/* Chevron between pipeline stages. Skip before the
+                        divider tile (`next.sep`) and after the last
+                        tile. */}
+                    {next && !next.sep && (
+                      <span className="hidden md:flex items-center justify-center" style={{
+                        width:  18,
+                        color:  'var(--gc-border)',
+                        flex:   'none',
+                      }}>
+                        <ChevronRight size={16} />
+                      </span>
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </div>
+          )}
 
           {/* Toolbar — search + Refresh. Column picker + filter chips
               + bulk-action buttons all live INSIDE OpsTable below

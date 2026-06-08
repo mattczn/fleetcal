@@ -19,7 +19,7 @@
  * calendar's loaded window.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { FileCheck2, Loader2, Flag, CheckCircle2, Clock, Play, Check, Star, X, MessageSquare, Search, Info } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
@@ -106,14 +106,30 @@ const DEFAULT_COL_WIDTHS = {
   actions:      170,
 };
 
-const TABS: { value: Tab; label: string; subtitle: string; tint: string; formula: React.ReactNode }[] = [
-  { value: 'all',      label: 'All',                subtitle: 'Delivered loads ready to release',     tint: '#5f6368',
+// Per-tab tile config. Tints align to the Closeout/Workspace handoff:
+// All = brand blue, Recently Delivered = amber, Flagged = red, Released
+// = green. `sep: true` puts a hairline divider before the tile so the
+// Released history surface visually separates from the open queue.
+const TABS: {
+  value: Tab;
+  label: string;
+  subtitle: string;
+  tint: string;
+  /** Background of the tinted icon chip (12%-alpha tint). */
+  tintLight: string;
+  /** Slightly darker tint used for the active-state $ value. */
+  tintText: string;
+  formula: React.ReactNode;
+  sep?: boolean;
+}[] = [
+  { value: 'all',      label: 'All',                subtitle: 'Delivered loads ready to release',     tint: '#1a73e8', tintLight: '#e8f0fe', tintText: '#1558d6',
     formula: <>Every delivered load not yet released for billing. Count is total loads; $ is sum of <strong>Total Billable</strong> (linehaul + billable accessorials) per load.</> },
-  { value: 'recent',   label: 'Recently Delivered', subtitle: 'Delivered within the past 24 hours',   tint: '#1a73e8',
+  { value: 'recent',   label: 'Recently Delivered', subtitle: 'Delivered within the past 24 hours',   tint: '#e37400', tintLight: '#fef7e0', tintText: '#b06000',
     formula: <>Loads whose delivery leg ended in the last 24 hours and aren&rsquo;t yet released. $ = sum of <strong>Total Billable</strong> per load.</> },
-  { value: 'flagged',  label: 'Flagged',            subtitle: 'Missing POD · pending acc · priority · manual', tint: '#b45309',
+  { value: 'flagged',  label: 'Flagged',            subtitle: 'Missing POD · pending acc · priority · manual', tint: '#d93025', tintLight: '#fce8e6', tintText: '#c5221f',
     formula: <>Delivered loads that need attention: missing POD, accessorial pending approval, marked priority, or manually flagged. $ = sum of <strong>Total Billable</strong> per load.</> },
-  { value: 'released', label: 'Released',           subtitle: 'Released for billing',                 tint: '#15803d',
+  { value: 'released', label: 'Released',           subtitle: 'Released for billing',                 tint: '#188038', tintLight: '#e6f4ea', tintText: '#137333',
+    sep:     true,
     formula: <>Loads already released to accounting. Count only — $ is hidden here so dispatchers without accounting access don&rsquo;t see revenue aggregates.</> },
 ];
 
@@ -1131,68 +1147,157 @@ export default function CloseoutView() {
             </FastTooltip>
           </div>
 
-          {/* Bucket tiles — same visual rhythm as /accounting. Each
-              tile shows live count + subtitle and toggles which queue
-              the table below is showing. Five-column grid is shared
-              with /accounting so cards stay the same width across
-              both pages (this view fills 3 of 5; right two slots are
-              spacers). */}
-          <div className="grid gap-2 lg:gap-3" style={{ gridTemplateColumns: 'repeat(5, minmax(0, 1fr))' }}>
-            {TABS.map(b => {
-              const active = tab === b.value;
-              const count = bucketTotals[b.value];
-              const value = bucketLoadValue[b.value];
-              const isPriming = countsPriming || bucketLoading.has(b.value);
-              const Icon =
-                b.value === 'recent'   ? Clock :
-                b.value === 'flagged'  ? Flag  :
-                b.value === 'released' ? CheckCircle2 :
-                                         FileCheck2;
-              // The Released bucket is a history surface for dispatchers
-              // who don't have accounting.access — billing $ aggregates
-              // would leak revenue data outside the accounting role.
-              // Keep the row spacing consistent by always reserving the
-              // line; just blank the text on Released.
-              const showValue = b.value !== 'released';
-              return (
-                <button key={b.value}
-                  onClick={() => setTab(b.value)}
-                  className={`text-left rounded-xl transition-all ${
-                    tilesCompact ? 'px-3 py-2' : 'px-3 lg:px-4 py-2 lg:py-3'
-                  }`}
-                  style={{
-                    background: 'var(--gc-surface)',
-                    border: active ? `2px solid ${b.tint}` : '1px solid var(--gc-border-light)',
-                    boxShadow: active ? '0 4px 12px rgba(26,115,232,0.12)' : 'var(--shadow-1)',
-                  }}>
-                  <div className="flex items-center gap-2">
-                    <Icon size={16} style={{ color: b.tint }} />
-                    <span className="text-[12.5px] font-semibold" style={{ color: 'var(--gc-text-2)' }}>{b.label}</span>
-                    <Tooltip content={b.formula} placement="bottom">
-                      <Info size={11} style={{ color: 'var(--gc-text-3)', opacity: 0.6, cursor: 'help' }} />
-                    </Tooltip>
-                    {isPriming ? (
-                      <Loader2 size={13} className="ml-auto animate-spin" style={{ color: b.tint }} />
-                    ) : (
-                      <span className="ml-auto text-[16px] font-bold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>{count.toLocaleString()}</span>
+          {/* Bucket tiles per the Billing/Paperwork redesign handoff.
+              Mirrors /accounting's two-mode pattern so both surfaces
+              feel like one product:
+                - Full mode:  tinted icon chip + label + big count + $
+                              + subtitle on a second row + 4px left
+                              accent + soft elevation on the active
+                              tile.
+                - Compact:    single pill-row per bucket (color dot +
+                              label + count + $; active = filled tint).
+              NO chevrons here — Paperwork is verification-stage, not
+              a left-to-right pipeline (handoff: "Skip chevrons on
+              Paperwork"). A hairline divider before "Released"
+              separates the open-queue tiles from the history surface.
+              Released $ is intentionally blank — billing aggregates
+              are role-gated to /accounting. */}
+          {tilesCompact ? (
+            <div className="flex items-center gap-2 flex-wrap">
+              {TABS.map(b => {
+                const active    = tab === b.value;
+                const count     = bucketTotals[b.value];
+                const value     = bucketLoadValue[b.value];
+                const isPriming = countsPriming || bucketLoading.has(b.value);
+                const showValue = b.value !== 'released';
+                return (
+                  <button key={b.value}
+                    onClick={() => setTab(b.value)}
+                    className="inline-flex items-center gap-2 transition-colors"
+                    title={`${b.label} — ${b.subtitle}`}
+                    style={{
+                      height:       34,
+                      padding:      '0 12px',
+                      borderRadius: 999,
+                      background:   active ? b.tint            : 'var(--gc-surface)',
+                      color:        active ? '#fff'            : 'var(--gc-text-2)',
+                      border:       active ? '1px solid transparent' : '1px solid var(--gc-border-light)',
+                      fontSize:     12.5,
+                      fontWeight:   700,
+                      cursor:       'pointer',
+                    }}>
+                    <span style={{
+                      width:        9,
+                      height:       9,
+                      borderRadius: 999,
+                      background:   active ? '#fff' : b.tint,
+                      flex:         'none',
+                    }} />
+                    {b.label}
+                    {isPriming
+                      ? <Loader2 size={12} className="animate-spin" style={{ color: active ? '#fff' : b.tint }} />
+                      : <span style={{ fontWeight: 800 }}>{count.toLocaleString()}</span>}
+                    {showValue && (
+                      <span className="tabular-nums" style={{
+                        color:      active ? 'rgba(255,255,255,0.85)' : 'var(--gc-text-3)',
+                        fontWeight: 600,
+                      }}>
+                        {moneyFmt.format(value)}
+                      </span>
                     )}
-                  </div>
-                  <div
-                    className={`${tilesCompact ? 'hidden' : 'hidden lg:block'} mt-1.5 text-[12px] tabular-nums transition-all`}
-                    style={{ color: 'var(--gc-text-3)' }}
-                  >
-                    {showValue ? moneyFmt.format(value) : ' '}
-                  </div>
-                  <div
-                    className={`${tilesCompact ? 'hidden' : 'hidden lg:block'} mt-0.5 text-[10.5px] uppercase tracking-wider font-semibold transition-all`}
-                    style={{ color: 'var(--gc-text-3)' }}
-                  >
-                    {b.subtitle}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="flex items-stretch gap-2">
+              {TABS.map(b => {
+                const active    = tab === b.value;
+                const count     = bucketTotals[b.value];
+                const value     = bucketLoadValue[b.value];
+                const isPriming = countsPriming || bucketLoading.has(b.value);
+                const showValue = b.value !== 'released';
+                const Icon =
+                  b.value === 'recent'   ? Clock :
+                  b.value === 'flagged'  ? Flag  :
+                  b.value === 'released' ? CheckCircle2 :
+                                           FileCheck2;
+                return (
+                  <React.Fragment key={b.value}>
+                    {/* Hairline divider before "Released". */}
+                    {b.sep && (
+                      <span style={{ width: 1, background: 'var(--gc-border-light)', margin: '6px 3px' }} />
+                    )}
+                    <button
+                      onClick={() => setTab(b.value)}
+                      className="text-left rounded-2xl transition-all relative overflow-hidden flex-1 min-w-0"
+                      style={{
+                        background: 'var(--gc-surface)',
+                        border:     active ? '1px solid transparent' : '1px solid var(--gc-border-light)',
+                        boxShadow:  active ? 'var(--shadow-soft)' : 'var(--shadow-1)',
+                        transform:  active ? 'translateY(-2px)' : 'translateY(0)',
+                        padding:    '13px 15px',
+                      }}>
+                      {/* 4px left accent — visible only when active. */}
+                      <span style={{
+                        position:   'absolute',
+                        left:       0,
+                        top:        0,
+                        bottom:     0,
+                        width:      4,
+                        background: active ? b.tint : 'transparent',
+                      }} />
+                      <div className="flex items-center gap-2.5">
+                        <span style={{
+                          width:        30,
+                          height:       30,
+                          borderRadius: 8,
+                          display:      'grid',
+                          placeItems:   'center',
+                          background:   b.tintLight,
+                          flex:         'none',
+                        }}>
+                          <Icon size={17} style={{ color: b.tint }} />
+                        </span>
+                        <span className="text-[13.5px] font-extrabold truncate" style={{ color: 'var(--gc-text-1)' }}>
+                          {b.label}
+                        </span>
+                        <Tooltip content={b.formula} placement="bottom">
+                          <Info size={11} style={{ color: 'var(--gc-text-3)', opacity: 0.6, cursor: 'help' }} />
+                        </Tooltip>
+                        {isPriming ? (
+                          <Loader2 size={14} className="ml-auto animate-spin" style={{ color: b.tint }} />
+                        ) : (
+                          <span className="ml-auto tabular-nums" style={{
+                            fontSize:   22,
+                            fontWeight: 800,
+                            lineHeight: 1,
+                            color:      'var(--gc-text-1)',
+                          }}>
+                            {count.toLocaleString()}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-baseline justify-between gap-2 mt-2">
+                        <span className="text-[11.5px] font-semibold truncate" style={{ color: 'var(--gc-text-3)' }}>
+                          {b.subtitle}
+                        </span>
+                        {showValue && (
+                          <span className="tabular-nums" style={{
+                            fontSize:   13.5,
+                            fontWeight: 800,
+                            color:      active ? b.tintText : 'var(--gc-text-2)',
+                          }}>
+                            {moneyFmt.format(value)}
+                          </span>
+                        )}
+                      </div>
+                    </button>
+                  </React.Fragment>
+                );
+              })}
+            </div>
+          )}
 
           {/* Toolbar — search lives outside the table (it drives the
               server-paged query, not the in-memory filter). The
