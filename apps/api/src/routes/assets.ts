@@ -25,6 +25,7 @@ import {
 import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability } from "../middleware/require.js";
+import { getOrgTier } from "../lib/orgTier.js";
 
 const assets = new Hono<{ Variables: AuthVariables }>();
 
@@ -102,6 +103,41 @@ assets.post("/", requireCapability("assets.create"), async (c) => {
   const body = await c.req.json<CreateAssetRequest>();
   if (!body.name || !body.color || !body.type) {
     return c.json({ error: "validation_failed", errors: ["name, color, type required"] } satisfies ApiErrorResponse, 400);
+  }
+
+  // ── Subscription cap (PR: server-side tier enforcement) ──────
+  // The client-side useOrgTier hook nags the user with an upgrade
+  // banner, but it's not a security gate — a motivated user could
+  // open DevTools and curl past it. This block is the actual gate.
+  //
+  // Count ACTIVE assets — anything with active_to NULL or > today
+  // (matches the client's filter so a retired truck doesn't take
+  // up a paid seat). Compare to the org's tier cap, return 402 if
+  // they'd exceed it.
+  //
+  // Unrestricted tier (Curzon + internal orgs) short-circuits the
+  // count entirely so we don't add latency to dogfooding flows.
+  const tier = await getOrgTier(orgId);
+  if (Number.isFinite(tier.maxTrucks)) {
+    const todayKey = todayUtcDateKey();
+    const { count: activeCount, error: countErr } = await supabase
+      .from("assets")
+      .select("*", { count: "exact", head: true })
+      .eq("org_id", orgId)
+      .or(`active_to.is.null,active_to.gt.${todayKey}`);
+    if (countErr) {
+      console.error("[POST /v1/assets] tier cap count failed:", countErr);
+      // Fail closed — if we can't count, we can't safely allow.
+      return c.json({ error: "tier_check_failed", detail: countErr.message } satisfies ApiErrorResponse, 500);
+    }
+    const current = activeCount ?? 0;
+    if (current >= tier.maxTrucks) {
+      return c.json({
+        error:  "tier_cap_exceeded",
+        detail: `Plan limit reached: ${current} of ${tier.maxTrucks} trucks used on the ${tier.tier} plan. Upgrade at /pricing or contact support.`,
+        errors: [`tier=${tier.tier}`, `current=${current}`, `max=${tier.maxTrucks}`],
+      } satisfies ApiErrorResponse, 402);
+    }
   }
 
   let sortOrder = body.sortOrder;
