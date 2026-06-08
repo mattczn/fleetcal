@@ -7,15 +7,15 @@
  * may apply", HELP).
  *
  * THIS IS NOT LEGAL ADVICE. Have an attorney review before going
- * live. Placeholders to fill in:
- *   - [LEGAL ENTITY NAME]        ← your registered LLC / corp name
- *   - [STATE OF INCORPORATION]   ← default: Utah
- *   - support@fleetcal.app       ← swap if you use a different inbox
- *   - Effective date below       ← set when you publish for real
+ * live.
+ *
+ * Async server component so MarketingNav gets the right CTA for
+ * the visitor's auth state.
  */
 
 import Link from 'next/link';
-import Image from 'next/image';
+import { auth } from '@clerk/nextjs/server';
+import MarketingNav from '@/components/marketing/MarketingNav';
 
 export const metadata = {
   title:       'Terms of Service · FleetCal',
@@ -23,26 +23,36 @@ export const metadata = {
 };
 
 const EFFECTIVE_DATE = 'June 8, 2026';
-const LEGAL_ENTITY   = '[LEGAL ENTITY NAME]';
+const LEGAL_ENTITY   = 'Systematica Solutions LLC';
 const STATE          = 'Utah';
-const SUPPORT_EMAIL  = 'support@fleetcal.app';
-const LEGAL_EMAIL    = 'legal@fleetcal.app';
+const CONTACT_EMAIL  = 'hello@fleetcal.app';
 
-export default function TermsOfService() {
+type AuthCta = 'out' | 'mid-signup' | 'in';
+function ctaFor(state: AuthCta): { href: string; label: string } {
+  if (state === 'in')         return { href: '/calendar', label: 'Open FleetCal →' };
+  if (state === 'mid-signup') return { href: '/sign-up',  label: 'Continue setup →' };
+  return                              { href: '/sign-up',  label: 'Start free trial' };
+}
+
+export default async function TermsOfService() {
+  const { userId, orgId } = await auth();
+  const state: AuthCta = !userId ? 'out' : !orgId ? 'mid-signup' : 'in';
+  const cta = ctaFor(state);
+
   return (
-    <main style={{
-      maxWidth:   860,
-      margin:     '0 auto',
-      padding:    '48px 24px 96px',
-      fontFamily: 'var(--font-jakarta), system-ui, sans-serif',
-      color:      '#202124',
-      lineHeight: 1.65,
-    }}>
+    <div
+      className="h-full overflow-y-auto font-sys bg-sys-bg text-sys-primary"
+      style={{ scrollBehavior: 'smooth' }}>
+      <MarketingNav cta={cta} showSignIn={state === 'out'} />
+      <main style={{
+        maxWidth:   860,
+        margin:     '0 auto',
+        padding:    '48px 24px 96px',
+        fontFamily: 'var(--font-jakarta), system-ui, sans-serif',
+        color:      '#202124',
+        lineHeight: 1.65,
+      }}>
       <header style={{ marginBottom: 40 }}>
-        <Link href="/" style={{ display: 'inline-block', marginBottom: 24 }}>
-          <Image src="/logo-horizontal.png" alt="FleetCal" width={140} height={32}
-            style={{ height: 32, width: 'auto' }} />
-        </Link>
         <h1 style={{ fontSize: 36, fontWeight: 800, margin: 0, letterSpacing: '-0.01em' }}>Terms of Service</h1>
         <p style={{ fontSize: 14, color: '#5f6368', marginTop: 8 }}>
           Effective {EFFECTIVE_DATE}. Last updated {EFFECTIVE_DATE}.
@@ -123,7 +133,7 @@ export default function TermsOfService() {
         <li><strong>Frequency.</strong> Message frequency varies based on dispatch activity.</li>
         <li><strong>Cost.</strong> Message and data rates may apply. Subscribers should contact their wireless carrier for plan details.</li>
         <li><strong>Opt-out.</strong> Subscribers may reply <strong>STOP</strong> to any message to stop receiving SMS. After replying STOP, the Subscriber will receive one confirmation message and no further SMS until they re-subscribe.</li>
-        <li><strong>Help.</strong> Subscribers may reply <strong>HELP</strong> for assistance or contact us at <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>.</li>
+        <li><strong>Help.</strong> Subscribers may reply <strong>HELP</strong> for assistance or contact us at <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>.</li>
         <li><strong>Supported carriers.</strong> Major U.S. carriers including AT&amp;T, T-Mobile, Verizon, and others. Carriers are not liable for delayed or undelivered messages.</li>
       </ul>
       <p>
@@ -196,13 +206,13 @@ export default function TermsOfService() {
       <H2>14. Contact</H2>
       <p style={CONTACT_BOX}>
         <strong>{LEGAL_ENTITY}</strong><br />
-        General support: <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a><br />
-        Legal notices: <a href={`mailto:${LEGAL_EMAIL}`}>{LEGAL_EMAIL}</a><br />
+        Email: <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a><br />
         State of formation: {STATE}, United States
       </p>
 
       <FooterNav />
-    </main>
+      </main>
+    </div>
   );
 }
 

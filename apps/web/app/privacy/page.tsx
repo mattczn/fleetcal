@@ -8,15 +8,16 @@
  * scan for during brand/campaign registration.
  *
  * THIS IS NOT LEGAL ADVICE. Have an attorney review before going
- * live. Placeholders to fill in:
- *   - [LEGAL ENTITY NAME]        ← your registered LLC / corp name
- *   - [STATE OF INCORPORATION]   ← default: Utah
- *   - privacy@fleetcal.app       ← swap if you use a different inbox
- *   - Effective date below       ← set when you publish for real
+ * live.
+ *
+ * Async server component so we can read the visitor's Clerk auth
+ * state and feed the right CTA into MarketingNav (matches the
+ * landing page's three-state pattern).
  */
 
 import Link from 'next/link';
-import Image from 'next/image';
+import { auth } from '@clerk/nextjs/server';
+import MarketingNav from '@/components/marketing/MarketingNav';
 
 export const metadata = {
   title:       'Privacy Policy · FleetCal',
@@ -24,25 +25,36 @@ export const metadata = {
 };
 
 const EFFECTIVE_DATE = 'June 8, 2026';
-const LEGAL_ENTITY   = '[LEGAL ENTITY NAME]';
+const LEGAL_ENTITY   = 'Systematica Solutions LLC';
 const STATE          = 'Utah';
-const PRIVACY_EMAIL  = 'privacy@fleetcal.app';
+const CONTACT_EMAIL  = 'hello@fleetcal.app';
 
-export default function PrivacyPolicy() {
+type AuthCta = 'out' | 'mid-signup' | 'in';
+function ctaFor(state: AuthCta): { href: string; label: string } {
+  if (state === 'in')         return { href: '/calendar', label: 'Open FleetCal →' };
+  if (state === 'mid-signup') return { href: '/sign-up',  label: 'Continue setup →' };
+  return                              { href: '/sign-up',  label: 'Start free trial' };
+}
+
+export default async function PrivacyPolicy() {
+  const { userId, orgId } = await auth();
+  const state: AuthCta = !userId ? 'out' : !orgId ? 'mid-signup' : 'in';
+  const cta = ctaFor(state);
+
   return (
-    <main style={{
-      maxWidth:   860,
-      margin:     '0 auto',
-      padding:    '48px 24px 96px',
-      fontFamily: 'var(--font-jakarta), system-ui, sans-serif',
-      color:      '#202124',
-      lineHeight: 1.65,
-    }}>
+    <div
+      className="h-full overflow-y-auto font-sys bg-sys-bg text-sys-primary"
+      style={{ scrollBehavior: 'smooth' }}>
+      <MarketingNav cta={cta} showSignIn={state === 'out'} />
+      <main style={{
+        maxWidth:   860,
+        margin:     '0 auto',
+        padding:    '48px 24px 96px',
+        fontFamily: 'var(--font-jakarta), system-ui, sans-serif',
+        color:      '#202124',
+        lineHeight: 1.65,
+      }}>
       <header style={{ marginBottom: 40 }}>
-        <Link href="/" style={{ display: 'inline-block', marginBottom: 24 }}>
-          <Image src="/logo-horizontal.png" alt="FleetCal" width={140} height={32}
-            style={{ height: 32, width: 'auto' }} />
-        </Link>
         <h1 style={{ fontSize: 36, fontWeight: 800, margin: 0, letterSpacing: '-0.01em' }}>Privacy Policy</h1>
         <p style={{ fontSize: 14, color: '#5f6368', marginTop: 8 }}>
           Effective {EFFECTIVE_DATE}. Last updated {EFFECTIVE_DATE}.
@@ -126,7 +138,7 @@ export default function PrivacyPolicy() {
       <p>
         You can opt out of SMS at any time by replying <strong>STOP</strong> to any message. After replying STOP,
         you will receive one confirmation message and then no further SMS. To resume, reply <strong>START</strong>
-        or contact us at <a href={`mailto:${PRIVACY_EMAIL}`}>{PRIVACY_EMAIL}</a>. For help, reply
+        or contact us at <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>. For help, reply
         <strong> HELP</strong> or email us.
       </p>
       <h3 style={H3}>Subprocessors used for SMS delivery</h3>
@@ -167,7 +179,7 @@ export default function PrivacyPolicy() {
       <p>
         Depending on where you live, you may have rights to access, correct, delete, port, or restrict our
         processing of your information. To exercise these rights, email us at
-        <a href={`mailto:${PRIVACY_EMAIL}`}> {PRIVACY_EMAIL}</a>. We will respond within the time required by
+        <a href={`mailto:${CONTACT_EMAIL}`}> {CONTACT_EMAIL}</a>. We will respond within the time required by
         applicable law.
       </p>
       <p>
@@ -205,12 +217,13 @@ export default function PrivacyPolicy() {
       <p style={CONTACT_BOX}>
         <strong>{LEGAL_ENTITY}</strong><br />
         Attn: Privacy<br />
-        Email: <a href={`mailto:${PRIVACY_EMAIL}`}>{PRIVACY_EMAIL}</a><br />
+        Email: <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a><br />
         State of formation: {STATE}, United States
       </p>
 
       <FooterNav />
-    </main>
+      </main>
+    </div>
   );
 }
 
