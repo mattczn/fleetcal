@@ -99,10 +99,13 @@ function AssetsModal({ onClose, initialAssetId, embedded }, modalRef) {
   const [tierError, setTierError] = useState<string | null>(null);
   const { tier, tierLabel, maxTrucks, currentTrucks, atLimit } = useOrgTier();
   const upsellTier = nextTierUp(tier);
-  // capBlocked = "the next add would exceed the cap." For
-  // unrestricted (Curzon + internal orgs) or while billing is
-  // loading, we don't block.
-  const capBlocked = atLimit && tier !== 'unrestricted' && tier !== 'none';
+  // capBlocked = "the next add would exceed the cap." Excludes only
+  // 'unrestricted' (Curzon + internal orgs). `tier === 'none'` MUST
+  // be treated as blocked — it means the org has no resolvable plan
+  // (Clerk feature didn't propagate or slug mismatch); without this
+  // the UI lets the user attempt an add and the server silently
+  // refuses, which is exactly the "runs dry" symptom we're fixing.
+  const capBlocked = atLimit && tier !== 'unrestricted';
 
   // Unsaved-changes guard. The detail panel owns its form state and
   // exposes save/discard via a ref; this modal intercepts every
@@ -390,11 +393,16 @@ function AssetsModal({ onClose, initialAssetId, embedded }, modalRef) {
             </div>
 
             {/* Tier-cap banner — shows the user's current usage vs cap
-                whenever the org is on a paid tier (not Curzon /
-                internal / 'none'). The dialog version of this lives
-                in AddAssetDialog.tsx; here the truck directory needs
-                the same affordance because that's where dispatchers
-                naturally land when growing their fleet. */}
+                whenever the org is at/over the cap. Three copy paths:
+                  - upgradeable tier (owner_op, growth): "Upgrade to
+                    add more" + /pricing link
+                  - top tier (fleet): "Contact sales to raise the cap"
+                  - no resolvable plan (tier === 'none', usually a
+                    Clerk feature-flag misconfig): "Contact support"
+                The server returns matching copy on 402, so even if
+                this banner doesn't fire pre-emptively for any reason
+                (e.g. a brand-new org whose hook hasn't hydrated yet),
+                the server denial lands in `tierError` and renders. */}
             {(capBlocked || tierError) && (
               <div className="mx-3 mt-2 rounded-lg px-3 py-2 text-[11px] leading-snug"
                 style={{
@@ -403,13 +411,21 @@ function AssetsModal({ onClose, initialAssetId, embedded }, modalRef) {
                   color:      '#7c2d12',
                 }}>
                 <div className="font-bold">
-                  {tierLabel} plan — {currentTrucks} of {maxTrucks} trucks used
+                  {tier === 'none'
+                    ? `Truck limit reached`
+                    : `${tierLabel} plan — ${currentTrucks} of ${maxTrucks} trucks used`}
                 </div>
                 <div className="mt-0.5">
-                  {tierError ?? (upsellTier
-                    ? <>Upgrade to add more.{' '}
+                  {tierError ?? (
+                    tier === 'none' ? (
+                      <>We couldn&apos;t verify your subscription. Contact support to increase capacity.</>
+                    ) : upsellTier ? (
+                      <>Upgrade your plan or contact sales to increase capacity.{' '}
                         <Link href="/pricing" className="underline font-semibold">View plans →</Link></>
-                    : 'Contact sales to raise the cap.')}
+                    ) : (
+                      <>You&apos;re on the highest standard tier. Contact sales to raise the cap.</>
+                    )
+                  )}
                 </div>
               </div>
             )}

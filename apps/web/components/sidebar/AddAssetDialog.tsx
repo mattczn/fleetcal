@@ -92,18 +92,22 @@ export default function AddAssetDialog({ onClose }: { onClose: () => void }) {
               <AlertTriangle size={18} style={{ flex: '0 0 18px', marginTop: 1 }} />
               <div className="flex-1 text-[13px] leading-snug">
                 <div className="font-semibold">
-                  {tierLabel} plan limit reached — {currentTrucks} of {maxTrucks} trucks used.
+                  {tier === 'none'
+                    ? 'Truck limit reached.'
+                    : `${tierLabel} plan limit reached — ${currentTrucks} of ${maxTrucks} trucks used.`}
                 </div>
                 <div className="mt-1">
-                  {upsellTier ? (
+                  {tier === 'none' ? (
+                    <>We couldn&apos;t verify your subscription. Contact support to increase capacity.</>
+                  ) : upsellTier ? (
                     <>
-                      Add more by upgrading to the next tier.{' '}
+                      Upgrade your plan or contact sales to increase capacity.{' '}
                       <Link href="/pricing" onClick={onClose} className="font-semibold underline">
                         View plans →
                       </Link>
                     </>
                   ) : (
-                    <>You&apos;ve reached the highest standard tier. Contact sales for fleets above 14 trucks.</>
+                    <>You&apos;re on the highest standard tier. Contact sales to raise the cap.</>
                   )}
                 </div>
               </div>
