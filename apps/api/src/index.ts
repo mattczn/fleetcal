@@ -51,6 +51,7 @@ import movementsRoute from "./routes/movements.js";
 import timelineRoute from "./routes/timeline.js";
 import fleetRoute from "./routes/fleet.js";
 import costAnalysisRoute from "./routes/cost-analysis.js";
+import capacityRoute from "./routes/capacity.js";
 import { syncIncrementalAllOrgs, snapshotOdometersAllOrgs } from "./lib/motiveIngest.js";
 import { sweepAutoDeliver } from "./lib/autoDeliverSweep.js";
 import { runConfirmReminders } from "./jobs/confirmReminders.js";
@@ -93,6 +94,10 @@ app.get("/v1/health", (c) => {
   };
   return c.json(body);
 });
+
+// Public broker capacity endpoint — fed to curzontrucking.com /capacity.
+// Aggregate counts only, no PII. Optional CAPACITY_API_KEY gate.
+app.route("/v1/capacity", capacityRoute);
 
 // ── Authenticated routes ────────────────────────────────────────────────
 
