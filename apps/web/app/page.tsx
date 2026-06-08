@@ -364,7 +364,7 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
                   first frame. See its docstring for details. */}
               <HeroVideo
                 src="/rateconai.mp4"
-                width={1848}
+                width={1844}
                 height={1080}
                 ariaLabel="AI parsing a rate confirmation PDF into a load"
               />
