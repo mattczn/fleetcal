@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useCalendarStore, DragState } from '@/store/useCalendarStore';
-import { GUTTER_W, hoursToTimeStr, addMsToNaiveDatetime, naiveViewToHome } from '@/lib/time-utils';
+import { GUTTER_W, addMsToNaiveDatetime, naiveViewToHome, timeToPixels, timeHeightPixels } from '@/lib/time-utils';
 import { isActiveInRange, dateKeyInTz } from '@/lib/lifecycle';
 import CalendarHeader from './CalendarHeader';
 import CalendarColumn from './CalendarColumn';
@@ -173,15 +173,21 @@ export default function CalendarView() {
       ];
       const gridRect = gridBodyRef.current.getBoundingClientRect();
       const xInGrid  = e.clientX - gridRect.left;
-      const yInGrid  = e.clientY - gridRect.top;
 
       const assetIndex  = Math.max(0, Math.min(assets.length - 1, Math.floor(xInGrid / rw)));
       const targetAsset = assets[assetIndex];
 
-      const rawTopPx     = Math.max(0, yInGrid - ds.grabOffsetPx);
-      const snappedHours = Math.min(23.75, Math.round((rawTopPx / hourH) * 4) / 4);
-      const newStart     = `${ds.dateStr}T${hoursToTimeStr(snappedHours)}`;
-      const newEnd       = addMsToNaiveDatetime(newStart, ds.durationMs);
+      // Pointer-delta math. dy in pixels → snapped to 15-min, applied
+      // as a uniform shift to BOTH originStart and originEnd. Duration
+      // is preserved naturally. Works the same for single-day events
+      // and continuations (where the grab point is on a column whose
+      // date isn't the event's start) because nothing here references
+      // an absolute "anchor date" — we just shift.
+      const dyPx        = e.clientY - ds.pointerStartY;
+      const dyHoursSnap = Math.round((dyPx / hourH) * 4) / 4;
+      const deltaMs     = dyHoursSnap * 3_600_000;
+      const newStart    = addMsToNaiveDatetime(ds.originStart, deltaMs);
+      const newEnd      = addMsToNaiveDatetime(ds.originEnd,   deltaMs);
 
       const updated: DragState = { ...ds, targetAssetId: targetAsset.id, newStart, newEnd, hasMoved: true };
       dragStateRef.current = updated;
@@ -194,10 +200,19 @@ export default function CalendarView() {
       const event      = events.find(ev => ev.id === ds.eventId);
       const eventAsset = assets.find(a => a.id === event?.assetId);
 
+      // Preview top/height clamped to the currently visible day, same
+      // way CalendarEvent positions multi-day blocks: continuation →
+      // pinned to y=0; segment ending after midnight → height clamped
+      // to the bottom of the grid.
+      const dateStr   = dateKeyInTz(dragCurrentDate, dragTz);
+      const newStartD = newStart.split('T')[0];
+      const previewTop    = newStartD < dateStr ? 0 : timeToPixels(newStart, hourH);
+      const previewHeight = Math.max(22, timeHeightPixels(newStart, newEnd, dateStr, hourH));
+
       setDragPreview({
         assetId: targetAsset.id,
-        top:     snappedHours * hourH,
-        height:  Math.max(22, (ds.durationMs / 3600000) * hourH),
+        top:     previewTop,
+        height:  previewHeight,
         color:   eventAsset?.color ?? targetAsset.color,
         title:   event?.title ?? '',
         newStart,

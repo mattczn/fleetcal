@@ -141,35 +141,24 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
       document.addEventListener('mouseup', cleanup);
       return;
     }
-    const rect = e.currentTarget.getBoundingClientRect();
     // Drag operates in view-tz space because the block was positioned
     // using viewStart/viewEnd (see top of component). The save handler
     // in calendar/index.tsx converts back to HOME_TZ before persisting.
-    const isContinuation = viewStart.split('T')[0] < dateStr;
-    const grabOffsetPx = isContinuation ? 0 : e.clientY - rect.top;
-
-    const [sd, st] = viewStart.split('T');
-    const [ed, et] = viewEnd.split('T');
-    const [sy, sm, sday] = sd.split('-').map(Number);
-    const [sh, smin] = st.split(':').map(Number);
-    const [ey, em, eday] = ed.split('-').map(Number);
-    const [eh, emin] = et.split(':').map(Number);
-    const durationMs = new Date(ey, em - 1, eday, eh, emin).getTime()
-                     - new Date(sy, sm - 1, sday, sh, smin).getTime();
-
+    //
+    // No grab-offset / dateStr anchor anymore — the mousemove handler
+    // works in pure pointer-delta space (Google Calendar style), which
+    // is correct for both single-day and multi-day events. Without it,
+    // dragging the tail of a cross-day event used to slam the event
+    // back to the previous day at whatever hour the pointer was over.
     setDragState({
       eventId: event.id,
       targetAssetId: asset.id,
-      // Use event's actual start date so time is preserved when reassigning asset
-      dateStr: sd,
-      grabOffsetPx,
-      durationMs,
       newStart: viewStart,
       newEnd: viewEnd,
       hasMoved: false,
-      // Anchor for the slop-distance check in calendar/index.tsx so
-      // a click + 1px pointer jitter doesn't turn into a database
-      // write at a snapped slot.
+      // Anchor for the slop-distance check AND the move-delta math in
+      // calendar/index.tsx. Tiny jitter stays a click; intentional
+      // drag arms past DRAG_SLOP_PX and produces a clean dy → dt map.
       pointerStartX: e.clientX,
       pointerStartY: e.clientY,
       // Snapshot the original asset + times so the save handler can

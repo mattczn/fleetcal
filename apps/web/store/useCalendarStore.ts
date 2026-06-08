@@ -60,9 +60,6 @@ function notifyDeleteError(resource: string, err: unknown) {
 export interface DragState {
   eventId: string;
   targetAssetId: number;
-  dateStr: string;
-  grabOffsetPx: number;
-  durationMs: number;
   newStart: string;
   newEnd: string;
   /** Becomes true only AFTER the pointer has moved past the slop
