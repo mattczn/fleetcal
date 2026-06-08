@@ -144,25 +144,31 @@ export default function AssetSidebar() {
 
         {/* New Load / Batch Import split button */}
         <div className="px-4 pb-3 shrink-0" style={{ paddingTop: 20, position: 'relative' }}>
+          {/* Primary CTA — full FleetCal blue split button. Replaces the
+              white-surface-with-blue-plus look. Both halves share the
+              same blue body so the bookend stays visually unified; the
+              hover state darkens just the hovered half via blue-hover. */}
           <div data-tour="new-load-area" className="flex rounded-2xl overflow-hidden text-sm font-medium"
-            style={{ boxShadow: 'var(--shadow-1)', background: 'var(--gc-surface)' }}>
+            style={{ boxShadow: 'var(--shadow-1)', background: 'var(--gc-blue)' }}>
             <button
               onClick={() => openCreateModal()}
               className="flex items-center gap-2.5 pl-5 pr-4 py-3.5 flex-1 transition-colors"
-              style={{ color: 'var(--gc-text-1)' }}
-              onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
-              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+              style={{ color: '#fff', background: 'var(--gc-blue)' }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-blue-hover)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-blue)')}
             >
-              <Plus size={22} style={{ color: 'var(--gc-blue)' }} strokeWidth={2} />
+              <Plus size={22} style={{ color: '#fff' }} strokeWidth={2.4} />
               <span>New Load</span>
             </button>
-            <div style={{ width: 1, background: 'var(--gc-border-light)', alignSelf: 'stretch' }} />
+            {/* Translucent white divider — keeps the split visible on
+                blue without introducing a third color. */}
+            <div style={{ width: 1, background: 'rgba(255,255,255,0.25)', alignSelf: 'stretch' }} />
             <button
               onClick={() => batchFileInputRef.current?.click()}
               className="flex items-center justify-center px-3.5 transition-colors"
-              style={{ color: 'var(--gc-text-3)' }}
-              onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; e.currentTarget.style.color = 'var(--gc-blue)'; setBatchHovered(true); }}
-              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gc-text-3)'; setBatchHovered(false); }}
+              style={{ color: 'rgba(255,255,255,0.88)', background: 'var(--gc-blue)' }}
+              onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-blue-hover)'; e.currentTarget.style.color = '#fff'; setBatchHovered(true); }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'var(--gc-blue)'; e.currentTarget.style.color = 'rgba(255,255,255,0.88)'; setBatchHovered(false); }}
             >
               <Layers size={16} />
             </button>
