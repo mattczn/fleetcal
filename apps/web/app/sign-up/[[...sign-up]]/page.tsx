@@ -37,7 +37,7 @@ const BULLETS = [
 export default async function SignUpPage({
   searchParams,
 }: {
-  searchParams: Promise<{ plan?: string }>;
+  searchParams: Promise<{ plan?: string; period?: string }>;
 }) {
   const params = await searchParams;
 
@@ -65,9 +65,16 @@ export default async function SignUpPage({
   // The /create-organization route still exists as a fallback for the
   // middleware-redirect case (signed-in user with no org somehow), but
   // the SignUp funnel never touches it.
-  const afterSignUpUrl = params.plan
-    ? `/onboarding/pick-plan?plan=${encodeURIComponent(params.plan)}`
-    : '/onboarding/pick-plan';
+  // Thread both ?plan= and ?period= through to the next step so the
+  // pricing-card choice survives the funnel. Period accepts 'monthly'
+  // or 'annual'; anything else is ignored.
+  const afterSignUpUrl = (() => {
+    const next = new URLSearchParams();
+    if (params.plan)                                next.set('plan', params.plan);
+    if (params.period === 'annual' || params.period === 'monthly') next.set('period', params.period);
+    const query = next.toString();
+    return query ? `/onboarding/pick-plan?${query}` : '/onboarding/pick-plan';
+  })();
 
   return (
     <div

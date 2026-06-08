@@ -21,9 +21,11 @@
  *   Fleet     monthly $199   · annual $2,028/yr ($169/mo · save $360/yr / 15%)
  *
  * The post-signup flow routes to Clerk's hosted checkout via
- * `/sign-up?plan=${key}`. The toggle is a marketing surface; actual
- * billing terms are confirmed at Clerk's PricingTable in
- * /onboarding/pick-plan.
+ * `/sign-up?plan=${key}&period=${monthly|annual}`. The period param
+ * is threaded through /sign-up → /create-organization → /onboarding/
+ * pick-plan so the customer's monthly/annual choice on this card
+ * survives the funnel and pre-selects the right billing option at
+ * Clerk's PricingTable checkout step.
  */
 import Link from 'next/link';
 import { useState } from 'react';
@@ -217,7 +219,7 @@ export default function PricingCards() {
                   {tier.blurb}
                 </p>
                 <Link
-                  href={`/sign-up?plan=${tier.key}`}
+                  href={`/sign-up?plan=${tier.key}&period=${annual ? 'annual' : 'monthly'}`}
                   className="font-display"
                   style={{
                     display:        'flex',

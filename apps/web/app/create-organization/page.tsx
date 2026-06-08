@@ -29,16 +29,22 @@ import { clerkAppearanceMarketing } from '@/lib/clerkAppearanceMarketing';
 export default async function CreateOrganizationPage({
   searchParams,
 }: {
-  searchParams: Promise<{ plan?: string }>;
+  searchParams: Promise<{ plan?: string; period?: string }>;
 }) {
   // Already in an org → no point showing a create-org form. Bounce.
   const { orgId } = await auth();
   if (orgId) redirect('/calendar');
 
   const params = await searchParams;
-  const afterCreateOrganizationUrl = params.plan
-    ? `/onboarding/pick-plan?plan=${encodeURIComponent(params.plan)}`
-    : '/onboarding/pick-plan';
+  // Thread both ?plan= and ?period= onward so the pricing-card choice
+  // survives the funnel into /onboarding/pick-plan.
+  const afterCreateOrganizationUrl = (() => {
+    const next = new URLSearchParams();
+    if (params.plan)                                next.set('plan', params.plan);
+    if (params.period === 'annual' || params.period === 'monthly') next.set('period', params.period);
+    const query = next.toString();
+    return query ? `/onboarding/pick-plan?${query}` : '/onboarding/pick-plan';
+  })();
 
   return (
     <div
