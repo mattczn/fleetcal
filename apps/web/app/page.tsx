@@ -588,7 +588,22 @@ function FeatureCard({ feature }: { feature: Feature }) {
 
 function Features() {
   return (
-    <section id="features" style={{ padding: '110px 0 100px', scrollMarginTop: 68 }}>
+    <section
+      id="features"
+      style={{
+        padding:         '110px 0 100px',
+        scrollMarginTop: 68,
+        // Pale-brand-blue canvas + matching borders. Establishes a
+        // distinct third tone alongside the white hero and the gray
+        // TrustBand / HowItWorks / Story, so the "Built by a carrier"
+        // section reads as its own block instead of flowing visually
+        // out of the hero. The feature cards inside are #fff, so the
+        // bg only shows in the gutters between cards — no impact on
+        // the icon-tile contrast inside each card.
+        background:    '#e8f0fe',
+        borderTop:     '1px solid #d2e3fc',
+        borderBottom:  '1px solid #d2e3fc',
+      }}>
       <div className={WRAP}>
         <Reveal style={{ maxWidth: 720 }}>
           <SectionLabel>FleetCal MVP features</SectionLabel>
