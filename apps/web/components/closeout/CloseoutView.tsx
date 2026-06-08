@@ -139,11 +139,14 @@ function ageDays(deliveredEnd: string): number {
   return Math.floor((Date.now() - t) / 86_400_000);
 }
 
+// Age color scale per the Billing/Paperwork handoff: three bands —
+// grey (≤2d, nothing to worry about), amber (3-5d, aging), red
+// (≥6d, surface to the top of the eye). Color alone signals
+// urgency (no icon). Mirrors `ageBg`/`ageFg` in /accounting.
 function ageColor(days: number): { bg: string; fg: string } {
-  if (days <= 1) return { bg: '#dcfce7', fg: '#15803d' };
-  if (days <= 3) return { bg: '#fef3c7', fg: '#92400e' };
-  if (days <= 7) return { bg: '#fed7aa', fg: '#9a3412' };
-  return { bg: '#fee2e2', fg: '#991b1b' };
+  if (days <= 2) return { bg: '#f1f3f4', fg: '#5f6368' };
+  if (days <= 5) return { bg: '#fef7e0', fg: '#b06000' };
+  return { bg: '#fce8e6', fg: '#c5221f' };
 }
 
 const moneyFmt = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0 });
@@ -1385,6 +1388,29 @@ export default function CloseoutView() {
                 }}
                 defaultSort={{ key: 'age', dir: 'desc' }}
                 priorityKey={r => !!r.priority}
+                // Left-edge problem stripe per the Billing/Paperwork
+                // redesign handoff. Paperwork is verification-stage,
+                // so the signal is "what needs paperwork attention":
+                //   red   — missing required RC/POD on a delivered
+                //           load, or row is flagged (the existing
+                //           priority/flag semantics already raise it
+                //           at the cell-level; the stripe just
+                //           carries the same urgency at the row).
+                //   amber — aging 3–5 days since delivery.
+                // Uses the same `docCounts` map the Docs column
+                // reads, so the two views are consistent.
+                rowAccent={r => {
+                  const counts = docCounts[r.loadId ?? r.id] ?? {};
+                  const rcCount  = Math.max(counts.rate_con ?? 0, r.rateConPdf ? 1 : 0);
+                  const podCount = counts.pod ?? 0;
+                  const missingRC  = rcCount === 0;
+                  const missingPOD = !r.isTonu && podCount === 0;
+                  if (missingRC || missingPOD) return '#d93025';
+                  const days = ageDays(effectiveDeliveryEnd(r));
+                  if (days >= 6) return '#d93025';
+                  if (days >= 3) return '#e37400';
+                  return null;
+                }}
                 columnPicker
                 columnReorder
                 persistKey={`closeout-${tab}`}

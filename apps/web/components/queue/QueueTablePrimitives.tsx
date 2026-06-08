@@ -191,19 +191,26 @@ export function RequiredDocBadge({
       </FastTooltip>
     );
   }
+  // Missing state per the Billing/Paperwork handoff: white chip with
+  // a 1.5px DASHED red border + red text + a "?" suffix. The "?" is
+  // the visual signal — at a glance you spot `POD?` rather than
+  // having to read color. Uses the design system's red-text token
+  // (`#c5221f`) so it harmonizes with the row's red problem stripe.
   return (
     <FastTooltip text={`${label} — Missing`}>
-      <span className="rounded-lg text-[10px] font-extrabold tabular-nums"
+      <span className="rounded-md text-[10.5px] font-extrabold tabular-nums"
         style={{
-          background: 'transparent',
-          color:      '#991b1b',
-          border:     '1px dashed #991b1b',
-          // Subtract the 1px border so the missing chip lines up at the
-          // same height as the opaque present chips (which have no
-          // border but do have the same vertical padding).
-          padding:    '1px 7px',
+          background:    '#fff',
+          color:         '#c5221f',
+          border:        '1.5px dashed #d93025',
+          letterSpacing: '0.02em',
+          // Match the present-chip height: present is `px-2 py-0.5` on
+          // a 10px font (≈21px tall). Subtract the 1.5px border so the
+          // missing chip lines up at the same height.
+          padding:       '0 7px',
+          lineHeight:    '18px',
         }}>
-        {label}
+        {label}?
       </span>
     </FastTooltip>
   );

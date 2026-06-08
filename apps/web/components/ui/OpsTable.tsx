@@ -273,6 +273,15 @@ export interface OpsTableProps<T> {
    *  user scrolling the rows (e.g. collapse a hero strip once the
    *  user is focused on the table). */
   onScrollChange?: (info: { scrollTop: number; scrollLeft: number }) => void;
+  /** Optional per-row left-edge problem stripe. Return a CSS color
+   *  to paint a 4px accent stripe at the row's leading edge (via
+   *  `box-shadow: inset 4px 0 0 …`), or null/undefined for no
+   *  stripe. The Billing + Paperwork queues use this to flag
+   *  missing-doc/overdue (red) and aging (amber) rows so problems
+   *  jump out at a glance without scanning each cell. The stripe
+   *  sits on the row container, so it survives horizontal scroll
+   *  and stays under the sticky utility column. */
+  rowAccent?: (row: T) => string | null | undefined;
 }
 
 // ── Component ─────────────────────────────────────────────────────────
@@ -303,6 +312,7 @@ export function OpsTable<T>({
   fillHeight = false,
   columnReorder = false,
   onScrollChange,
+  rowAccent,
 }: OpsTableProps<T>) {
   // ── Filter state ───────────────────────────────────────────────────
   // Keyed by filter.key for select filters and '__search' for search.
@@ -1050,6 +1060,11 @@ export function OpsTable<T>({
                         : isSelected ? '#f0f7ff'
                         : isPriority ? '#fffbeb'
                         :              'var(--gc-surface)';
+            // Problem stripe — 4px left accent painted via inset
+            // box-shadow so it doesn't shift cell content. Sticky
+            // utility col sits on top of it (its own background
+            // covers the inset bleed past col-1 of the grid).
+            const accent = rowAccent?.(original) ?? null;
             return (
               <div
                 key={id}
@@ -1100,6 +1115,11 @@ export function OpsTable<T>({
                   borderTop: '1px solid #f1f3f4',
                   cursor: onRowClick ? 'pointer' : 'default',
                   background: rowBg,
+                  // Inset 4px left accent stripe when `rowAccent`
+                  // returns a color. Sticky-left cells repaint their
+                  // own backgrounds, so the stripe stays visible
+                  // beneath them as a leading edge marker.
+                  boxShadow: accent ? `inset 4px 0 0 ${accent}` : undefined,
                 }}
                 onMouseEnter={e => {
                   if (active || isSelected) return;

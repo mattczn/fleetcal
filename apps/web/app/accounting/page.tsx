@@ -1557,6 +1557,34 @@ function AccountingPageInner() {
                   && rowsForBucket.length === 0
                 }
                 priorityKey={r => !!r.load.pickupPriority}
+                // Left-edge problem stripe per the redesign handoff.
+                // Red when something is broken (missing required doc
+                // on a delivered load, or invoice 30+ days overdue);
+                // amber when the row is just aging (delivered 3–5d
+                // ago without a release). Same `daysSince` math the
+                // Age column uses, kept local so the rowAccent
+                // reflects the row's actual state without an extra
+                // prop on the data.
+                rowAccent={r => {
+                  const counts = r.load.documentCounts ?? {};
+                  const rcCount  = Math.max(counts.rate_con ?? 0, r.load.rateConPdf ? 1 : 0);
+                  const podCount = counts.pod ?? 0;
+                  const missingRC  = rcCount === 0;
+                  const missingPOD = !r.load.isTonu && podCount === 0;
+                  // Invoice 30+ days past due → red.
+                  const inv = r.invoice;
+                  const overdue = inv?.dueAt
+                    ? daysSince(inv.dueAt) >= 30 && inv.status !== 'paid'
+                    : false;
+                  if (missingRC || missingPOD || overdue) return '#d93025';
+                  const iso = r.load.deliveryAt || r.load.verifiedAt;
+                  if (iso) {
+                    const a = daysSince(iso);
+                    if (a >= 6) return '#d93025';
+                    if (a >= 3) return '#e37400';
+                  }
+                  return null;
+                }}
                 columnPicker
                 columnReorder
                 persistKey={`accounting-${bucket}`}
@@ -1820,19 +1848,24 @@ function PriorityToggle({
 // returns one row per load. legs[] carries both relay legs for
 // detail consumers; the page no longer cares.)
 
-// ─── Age color helpers (mirror closeout) ────────────────────────────────
+// ─── Age color helpers (Billing/Paperwork handoff) ──────────────────────
+//
+// Three-band color scale, color alone signals urgency (no icon):
+//   ≤2 days  → neutral grey  (fresh / nothing to worry about)
+//   3-5 days → amber          (aging — surface to the operator)
+//   ≥6 days  → red            (overdue — bubble to the top of the eye)
+// Lines up with the handoff `--bg2`/`--amber-light`/`--red-light` chip
+// surfaces in `billing-pages.css`.
 
 function ageBg(days: number): string {
-  if (days <= 1) return '#dcfce7';
-  if (days <= 3) return '#fef3c7';
-  if (days <= 7) return '#fed7aa';
-  return '#fee2e2';
+  if (days <= 2) return '#f1f3f4';
+  if (days <= 5) return '#fef7e0';
+  return '#fce8e6';
 }
 function ageFg(days: number): string {
-  if (days <= 1) return '#15803d';
-  if (days <= 3) return '#92400e';
-  if (days <= 7) return '#9a3412';
-  return '#991b1b';
+  if (days <= 2) return '#5f6368';
+  if (days <= 5) return '#b06000';
+  return '#c5221f';
 }
 
 // (BucketEmpty removed — OpsTable owns its own empty-state messaging
