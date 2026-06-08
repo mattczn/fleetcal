@@ -55,7 +55,7 @@ export default async function PricingPage() {
               }}
             >
               Priced by fleet size.{' '}
-              <span style={{ color: '#5f6368' }}>Same product at every tier.</span>
+              <span style={{ color: 'var(--gc-blue)' }}>Same product at every tier.</span>
             </h1>
             <p
               style={{

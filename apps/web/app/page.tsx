@@ -728,7 +728,10 @@ function HowItWorks() {
       <div className={WRAP}>
         <Reveal style={{ maxWidth: 640 }}>
           <SectionLabel>How it works</SectionLabel>
-          <SectionTitle>One flow, start to finish.</SectionTitle>
+          <SectionTitle>
+            One flow,{' '}
+            <span style={{ color: 'var(--gc-blue)' }}>start to finish.</span>
+          </SectionTitle>
           <SectionSub>The same path every load takes — without a single spreadsheet or re-keyed number.</SectionSub>
         </Reveal>
         <div
@@ -790,7 +793,7 @@ function Pricing() {
           <SectionTitle>
             Priced by fleet size.
             <br />
-            <span style={{ color: '#5f6368' }}>Same product at every tier.</span>
+            <span style={{ color: 'var(--gc-blue)' }}>Same product at every tier.</span>
           </SectionTitle>
           <SectionSub>
             14-day free trial on every plan. No per-driver surcharges,
@@ -945,7 +948,7 @@ function FinalCta({ cta }: { cta: { href: string; label: string } }) {
             }}
           >
             See your loads on a calendar that{' '}
-            <span style={{ color: 'rgba(255,255,255,0.7)' }}>
+            <span style={{ color: '#202124' }}>
               actually fits how you dispatch.
             </span>
           </h2>
