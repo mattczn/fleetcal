@@ -166,8 +166,8 @@ export default async function SignUpPage({
                 margin:        0,
               }}
             >
-              Run dispatch like a{' '}
-              <span style={{ color: 'var(--gc-blue)' }}>real software company.</span>
+              Dispatch that{' '}
+              <span style={{ color: 'var(--gc-blue)' }}>fits how you work.</span>
             </h1>
 
             <p
@@ -230,34 +230,19 @@ export default async function SignUpPage({
           </div>
 
           {/* RIGHT — Clerk's SignUp form, restyled via marketing appearance.
-              The formal Terms + Privacy acceptance checkbox lives INSIDE
-              the Clerk card (configured in Clerk Dashboard → Configure →
-              User & Authentication → Legal). The carrier-required SMS
-              disclosure language sits below as a small disclaimer so it's
-              visible at the point of opt-in — Clerk's built-in checkbox
-              doesn't include the STOP/HELP/msg-rates language carriers
-              vet for 10DLC. */}
+              Terms + Privacy acceptance is handled by Clerk's built-in
+              Legal Acceptance setting (Dashboard → User & Authentication
+              → Legal), which renders the checkbox inside the SignUp card
+              and stamps the acceptance timestamp on the user record.
+              Driver-side SMS opt-in lives at /sms-consent — the dispatcher
+              signing up here doesn't receive driver dispatch messages, so
+              there's no SMS consent surface needed on this page. */}
           <div>
             <SignUp
               appearance={clerkAppearanceMarketing}
               forceRedirectUrl={afterSignUpUrl}
               fallbackRedirectUrl={afterSignUpUrl}
             />
-            <p style={{
-              fontSize:   11.5,
-              lineHeight: 1.6,
-              color:      '#5f6368',
-              textAlign:  'center',
-              marginTop:  14,
-              maxWidth:   380,
-              marginLeft: 'auto',
-              marginRight:'auto',
-            }}>
-              By creating an account, you also consent to receive transactional SMS related to your account and
-              dispatch operations (load assignments, schedule changes, verification codes). Message and data
-              rates may apply. Frequency varies. Reply <strong>STOP</strong> to opt out, <strong>HELP</strong>{' '}
-              for help.
-            </p>
           </div>
         </div>
       </main>
