@@ -29,7 +29,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useUser } from '@clerk/nextjs';
-import { X, ChevronLeft, ChevronRight, CheckCircle2, Circle, Flag, FileText, AlertCircle, Pin, FastForward, Copy, Check, Upload, Loader2, MessageSquare, Plus, Pencil, Trash2, Layers, MapPin, Receipt, RefreshCw, Download } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, CheckCircle2, Circle, Flag, FileText, AlertCircle, AlertTriangle, Pin, FastForward, Copy, Check, Upload, Loader2, MessageSquare, Plus, Pencil, Trash2, Layers, MapPin, Receipt, RefreshCw, Download, Truck } from 'lucide-react';
 import type { Load, CalendarEvent, Stop } from '@/lib/types';
 import type { LoadDocument } from '@/lib/db';
 import Tooltip from '@/components/ui/Tooltip';
@@ -1502,112 +1502,134 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   return (
     <>
       <Shell onClose={attemptClose} blocked={eventModalOpen} zIndex={zIndex}>
-        {/* Top bar — matches the load modal's header treatment:
-              • px-6 py-4 padding (was px-5 py-3) for matching breathing room
-              • 36×36 rounded-xl blue icon tile as the brand anchor on the left
-              • 11px extrabold uppercase tracking-wider blue kicker
-                ("CLOSEOUT REVIEW") sitting above the load title
-              • 3px blue bottom under-rule (was 1px hairline) so the
-                header reads as one continuous chrome strip with the
-                content area below */}
-        {/* Top bar — collapsed to a single row so the chrome doesn't
-            eat two text lines on a 13" laptop. Brand anchor + kicker
-            + age pill + title + meta + nav all sit inline; meta uses
-            • separators on the same baseline as the title. */}
-        <div className="shrink-0 flex items-center gap-3 px-5 py-2.5"
-          style={{ borderBottom: '3px solid var(--gc-blue)', background: 'var(--gc-surface)' }}>
-          <div className="flex items-center justify-center shrink-0"
-            style={{ width: 30, height: 30, borderRadius: 10, background: 'var(--gc-blue)', color: 'white' }}
-            title="Closeout Review">
-            <CheckCircle2 size={15} />
-          </div>
-          <span className="text-[11px] font-extrabold uppercase tracking-wider shrink-0"
-            style={{ color: 'var(--gc-blue)' }}>
-            Closeout · {safeIdx + 1} of {loads.length}
-          </span>
-          <span style={{ background: ageColor.bg, color: ageColor.fg, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>
-            {days === 0 ? 'today' : days === 1 ? '1 day' : `${days} days`}
-          </span>
-          {/* Title + meta inline. The title stays bold and clickable;
-              everything else is muted gray text separated by · so the
-              whole strip reads as one continuous line. */}
-          <div className="flex-1 min-w-0 flex items-center gap-2 text-[13px]">
-            {onOpenLoadModal ? (
-              <button type="button"
-                onClick={() => onOpenLoadModal(current)}
-                className="font-extrabold truncate text-left hover:underline transition-colors"
-                style={{ color: 'var(--gc-blue)' }}
-                title="Open full load details">
-                {current.title}
-              </button>
-            ) : (
-              <div className="font-extrabold truncate" style={{ color: 'var(--gc-text-1)' }}>
-                {current.title}
-              </div>
-            )}
-            <span className="shrink-0" style={{ color: 'var(--gc-text-3)' }}>·</span>
-            <span className="tabular-nums shrink-0" style={{ color: 'var(--gc-text-3)' }}>
-              {fmtMetaDate(pickupDate)} <span style={{ opacity: 0.6 }}>→</span> {fmtMetaDate(deliveryDate)}
-            </span>
-            {cust && (
-              <>
-                <span className="shrink-0" style={{ color: 'var(--gc-text-3)' }}>·</span>
-                <span className="truncate max-w-[180px]" title={cust} style={{ color: 'var(--gc-text-3)' }}>{cust}</span>
-              </>
-            )}
-            {current.loadNum && (
-              <>
-                <span className="shrink-0" style={{ color: 'var(--gc-text-3)' }}>·</span>
-                <span className="shrink-0" style={{ color: 'var(--gc-text-3)' }}>
-                  <CopyLoadNum value={current.loadNum} />
-                </span>
-              </>
-            )}
-            {(current.totalBillable ?? current.loadPrice) != null && (
-              <>
-                <span className="shrink-0" style={{ color: 'var(--gc-text-3)' }}>·</span>
-                <span className="tabular-nums font-semibold shrink-0" style={{ color: 'var(--gc-text-2)' }}
-                      title={current.totalBillable != null && current.loadPrice != null && current.totalBillable !== current.loadPrice
-                        ? `Linehaul ${moneyFmt.format(current.loadPrice)} + accessorials = ${moneyFmt.format(current.totalBillable)}`
-                        : undefined}>
-                  {moneyFmt.format(current.totalBillable ?? current.loadPrice!)}
-                </span>
-              </>
-            )}
-            <span className="shrink-0" style={{ color: 'var(--gc-text-3)' }}>·</span>
-            {drivers.length === 0 ? (
-              <span className="shrink-0" style={{ color: 'var(--gc-text-3)', fontStyle: 'italic' }}>Unassigned</span>
-            ) : drivers.length === 1 ? (
-              <span className="truncate max-w-[160px]" title={drivers[0]} style={{ color: 'var(--gc-text-2)' }}>
-                {drivers[0]}
-              </span>
-            ) : (
-              <span className="truncate max-w-[220px]" title={drivers.join(' → ')} style={{ color: 'var(--gc-text-2)' }}>
-                {drivers[0]} <span style={{ opacity: 0.5 }}>→</span> {drivers[1]}
-              </span>
-            )}
-          </div>
-          <button onClick={() => attemptNavigate(safeIdx - 1)} disabled={safeIdx === 0}
-            className="p-2 rounded-full transition-colors disabled:opacity-30"
-            title="Previous (←)"
-            onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
-            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-            <ChevronLeft size={18} />
-          </button>
-          <button onClick={() => attemptNavigate(safeIdx + 1)} disabled={safeIdx >= loads.length - 1}
-            className="p-2 rounded-full transition-colors disabled:opacity-30"
-            title="Next (→)"
-            onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
-            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-            <ChevronRight size={18} />
-          </button>
+        {/* Top bar — Layout A from the Closeout Review redesign handoff.
+            Two-line IdentityBlock instead of the old run-on metadata
+            strip: line 1 = event title (bold), line 2 = broker · #load
+            · $rate · driver (muted, dot-separated). Right cluster: age
+            chip (day-based ramp preserved from the legacy treatment),
+            QueueProgress (`Load N of M` + dot row), prev/next, close.
+            The old `pickup → delivery` date range is removed from the
+            header — still visible on the rate-con and the load detail
+            page, and the spec is opinionated about keeping the header
+            calm + scannable. */}
+        <div className="shrink-0 flex items-center gap-3 px-4 py-2.5"
+          style={{ borderBottom: '1px solid var(--gc-border-light)', background: 'var(--gc-surface)' }}>
+          {/* Close X at the start — matches the prototype, frees the
+              right cluster for navigation. */}
           <button onClick={attemptClose}
-            className="p-2 rounded-full transition-colors"
+            className="p-1.5 rounded-lg transition-colors shrink-0"
             title="Close (Esc)"
+            style={{ color: 'var(--gc-text-2)' }}
             onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
             onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
             <X size={18} />
           </button>
+          {/* Brand pill (blue bg, white truck + Closeout). Identity
+              anchor so the user knows where they are inside the queue. */}
+          <span className="shrink-0 inline-flex items-center gap-1.5 text-[11px] font-bold"
+            style={{ background: 'var(--gc-blue)', color: '#fff', height: 26, padding: '0 10px', borderRadius: 999 }}>
+            <Truck size={12} /> Closeout
+          </span>
+          {/* IdentityBlock — line 1 = title (bold), line 2 = subline. */}
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 min-w-0">
+              {onOpenLoadModal ? (
+                <button type="button"
+                  onClick={() => onOpenLoadModal(current)}
+                  className="font-extrabold truncate text-left hover:underline transition-colors text-[15.5px]"
+                  style={{ color: 'var(--gc-text-1)', lineHeight: 1.1 }}
+                  title="Open full load details">
+                  {current.title}
+                </button>
+              ) : (
+                <div className="font-extrabold truncate text-[15.5px]" style={{ color: 'var(--gc-text-1)', lineHeight: 1.1 }}>
+                  {current.title}
+                </div>
+              )}
+            </div>
+            <div className="flex items-center gap-1.5 mt-0.5 text-[12px] flex-wrap" style={{ color: 'var(--gc-text-3)' }}>
+              {cust && (
+                <>
+                  <span className="truncate max-w-[180px] font-semibold" title={cust} style={{ color: 'var(--gc-text-2)' }}>{cust}</span>
+                </>
+              )}
+              {current.loadNum && (
+                <>
+                  {cust && <span className="shrink-0">·</span>}
+                  <span className="shrink-0"><CopyLoadNum value={current.loadNum} /></span>
+                </>
+              )}
+              {(current.totalBillable ?? current.loadPrice) != null && (
+                <>
+                  <span className="shrink-0">·</span>
+                  <span className="tabular-nums font-bold shrink-0"
+                        style={{ color: '#137333' }}
+                        title={current.totalBillable != null && current.loadPrice != null && current.totalBillable !== current.loadPrice
+                          ? `Linehaul ${moneyFmt.format(current.loadPrice)} + accessorials = ${moneyFmt.format(current.totalBillable)}`
+                          : undefined}>
+                    {moneyFmt.format(current.totalBillable ?? current.loadPrice!)}
+                  </span>
+                </>
+              )}
+              <span className="shrink-0">·</span>
+              {drivers.length === 0 ? (
+                <span className="shrink-0 italic">Unassigned</span>
+              ) : drivers.length === 1 ? (
+                <span className="truncate max-w-[160px]" title={drivers[0]}>{drivers[0]}</span>
+              ) : (
+                <span className="truncate max-w-[220px]" title={drivers.join(' → ')}>
+                  {drivers[0]} <span style={{ opacity: 0.5 }}>→</span> {drivers[1]}
+                </span>
+              )}
+            </div>
+          </div>
+          {/* Age chip — keeps the existing day-based 4-step color ramp
+              (today/days), just with the new pill shape. */}
+          <span className="shrink-0 inline-flex items-center"
+            style={{ background: ageColor.bg, color: ageColor.fg, height: 24, padding: '0 10px', borderRadius: 999, fontSize: 11.5, fontWeight: 600 }}>
+            {days === 0 ? 'today' : days === 1 ? '1 day old' : `${days} days old`}
+          </span>
+          {/* QueueProgress — Load N of M + dot row. Past = blue-light,
+              current = blue elongated pill, future = grey. */}
+          <div className="shrink-0 flex items-center gap-2.5">
+            <span className="text-[12.5px] font-bold whitespace-nowrap" style={{ color: 'var(--gc-text-2)' }}>
+              Load {safeIdx + 1} <span className="font-semibold" style={{ color: 'var(--gc-text-3)' }}>of {loads.length}</span>
+            </span>
+            {loads.length > 1 && loads.length <= 24 && (
+              <div className="flex items-center gap-1">
+                {Array.from({ length: loads.length }).map((_, i) => (
+                  <span key={i}
+                    style={{
+                      width:        i === safeIdx ? 16 : 6,
+                      height:       6,
+                      borderRadius: 999,
+                      background:   i === safeIdx ? 'var(--gc-blue)'
+                                  : i  <  safeIdx ? 'var(--gc-blue-light)'
+                                  :                 'var(--gc-border)',
+                      transition:   'all .2s',
+                    }} />
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="shrink-0 flex items-center gap-0.5">
+            <button onClick={() => attemptNavigate(safeIdx - 1)} disabled={safeIdx === 0}
+              className="p-1.5 rounded-lg transition-colors disabled:opacity-30"
+              title="Previous (←)"
+              style={{ color: 'var(--gc-text-2)' }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+              <ChevronLeft size={18} />
+            </button>
+            <button onClick={() => attemptNavigate(safeIdx + 1)} disabled={safeIdx >= loads.length - 1}
+              className="p-1.5 rounded-lg transition-colors disabled:opacity-30"
+              title="Next (→)"
+              style={{ color: 'var(--gc-text-2)' }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+              <ChevronRight size={18} />
+            </button>
+          </div>
         </div>
 
         {/* Internal notes — banner when there are notes, slim "Add note"
@@ -1689,7 +1711,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
         <div className="flex-1 min-h-0"
           style={{
             display: 'grid',
-            gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr) 320px',
+            gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr) 376px',
             // Explicit single row at the container's height. Without
             // this, grid implicit-row sizing defaults to `auto`, so
             // when the middle column's PdfCanvas wants to render a
@@ -1871,79 +1893,94 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
               the bottom get pushed below the visible area in an
               oscillating layout fight. */}
           <div className="flex flex-col min-h-0 overflow-hidden" style={{ borderLeft: '1px solid var(--gc-border-light)', background: 'var(--gc-surface)' }}>
-            {/* Accessorials banner — surfaces detention / lumper / scale
-                etc. with their amounts so the dispatcher knows what
-                support docs they're verifying against. */}
-            {(current.accessorials ?? []).length > 0 && (
-              <div className="shrink-0 px-4 py-3"
-                style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
-                <div className="text-[11px] font-bold uppercase tracking-wider mb-1.5"
-                  style={{ color: 'var(--gc-text-3)' }}>
-                  Accessorials ({(current.accessorials ?? []).length})
-                </div>
-                <ul className="space-y-1">
-                  {(current.accessorials ?? []).map((a, i) => {
-                    const status = (a as { status?: string }).status;
-                    return (
-                      <li key={i} className="flex items-center justify-between gap-2 text-[12px]">
-                        <span className="min-w-0 truncate" style={{ color: 'var(--gc-text-1)' }}>
-                          {ACCESSORIAL_LABEL[a.category] ?? a.category}
-                          {a.description && (
-                            <span className="ml-1" style={{ color: 'var(--gc-text-3)', fontSize: 11 }}>· {a.description}</span>
-                          )}
-                        </span>
-                        <div className="flex items-center gap-2 shrink-0">
-                          {status && <AccessorialStatusPill status={status} />}
-                          <span className="font-semibold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>
-                            {a.amount != null ? moneyFmt.format(a.amount) : '—'}
+            {/* StatusBanner + Verification — the redesign's hero. The
+                old per-chip verification row + accessorials banner are
+                replaced by:
+                  1) A big green/amber banner answering "what's the
+                     blocker?" at a glance.
+                  2) A full VerifyList card with one Present/Missing
+                     row per checklist item.
+                Accessorial detail moves off this panel per spec — it
+                still lives on the load detail page; the dispatcher's
+                job here is paperwork, not amount review. */}
+            {(() => {
+              // requiredPass already filters out skipped items;
+              // visible checklist mirrors that for the row count.
+              const visibleChecklist = checklist.filter(c => !c.skip);
+              const missingCount     = visibleChecklist.filter(c => !c.pass).length;
+              const pass             = visibleChecklist.length > 0 && missingCount === 0;
+              const bg               = pass ? '#e6f4ea' : '#fef7e0';
+              const fg               = pass ? '#137333' : '#b06000';
+              return (
+                <div className="shrink-0 px-4 pt-4 pb-3 space-y-3" style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
+                  {/* StatusBanner */}
+                  <div className="flex items-center gap-3 rounded-xl px-3 py-3" style={{ background: bg, color: fg }}>
+                    <span className="shrink-0 grid place-items-center rounded-full"
+                      style={{ width: 28, height: 28, background: '#fff' }}>
+                      {pass ? <Check size={16} strokeWidth={2.8} /> : <AlertTriangle size={15} strokeWidth={2.4} />}
+                    </span>
+                    <div className="min-w-0">
+                      <div className="font-extrabold text-[14px] leading-tight">
+                        {pass ? 'Ready to release' : `${missingCount} required ${missingCount === 1 ? 'doc' : 'docs'} missing`}
+                      </div>
+                      <div className="text-[11.5px] font-semibold mt-0.5" style={{ opacity: 0.85 }}>
+                        {pass ? 'All required paperwork is present' : 'Add the missing paperwork to release'}
+                      </div>
+                    </div>
+                    {isTonu && (
+                      <span className="ml-auto text-[10px] px-2 py-0.5 font-extrabold uppercase tracking-wider shrink-0"
+                        style={{ background: '#dbeafe', color: '#1e40af', border: '1px solid #bfdbfe', borderRadius: 999 }}
+                        title="No POD required — Truck Ordered Not Used">
+                        TONU
+                      </span>
+                    )}
+                  </div>
+                  {/* Verification card */}
+                  <div>
+                    <div className="text-[10.5px] font-bold uppercase mb-1.5" style={{ color: 'var(--gc-text-3)', letterSpacing: '0.09em' }}>
+                      Verification
+                    </div>
+                    <div className="rounded-xl overflow-hidden" style={{ border: '1px solid var(--gc-border-light)' }}>
+                      {visibleChecklist.map((c, i) => (
+                        <div key={c.id}
+                          className="flex items-center gap-2.5 px-3.5 py-2.5 text-[13px]"
+                          style={{
+                            background: c.pass ? '#fff' : '#fef7e0',
+                            borderTop: i === 0 ? 'none' : '1px solid var(--gc-border-light)',
+                          }}>
+                          <span className="grid place-items-center rounded-full shrink-0"
+                            style={{
+                              width: 20, height: 20,
+                              background: c.pass ? '#e6f4ea' : 'transparent',
+                              color:      c.pass ? '#137333' : '#b06000',
+                              boxShadow:  c.pass ? 'none' : 'inset 0 0 0 1.5px #e37400',
+                            }}>
+                            {c.pass
+                              ? <Check size={12} strokeWidth={3} />
+                              : <AlertTriangle size={11} strokeWidth={2.4} />}
+                          </span>
+                          <span className="font-semibold" style={{ color: c.pass ? 'var(--gc-text-2)' : '#b06000' }}>
+                            {c.label}
+                          </span>
+                          <span className="ml-auto text-[11.5px] font-bold" style={{ color: c.pass ? '#137333' : '#b06000' }}>
+                            {c.pass ? 'Present' : 'Missing'}
                           </span>
                         </div>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </div>
-            )}
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
 
-            {/* Document management lives here. Layout, top → bottom:
-                  ┌─ "Docs · N" label + Verification chips (Rate Con ✓,
-                  │   POD ✓, Lumper / Scale if accessorials require them)
-                  ├─ Pending file kind picker (only when uploading)
-                  ├─ Doc rows (flex-1 — scrolls when many docs)
-                  └─ "Manage documents" button (opens merge / convert)
-
-                The "+ Add Documents" button lives in the middle column's
-                viewer header (mirrors the Rate Con tab's "+ Replace"
-                pattern) so the upload affordance sits where the result
-                shows up. */}
-            <div className="shrink-0 px-3 py-2.5 flex items-center justify-between gap-2 flex-wrap"
+            {/* Document management header — slimmed to just "Docs · N".
+                Verification status now lives in the StatusBanner above;
+                the small per-chip row used to share this strip. */}
+            <div className="shrink-0 px-3 py-2 flex items-center justify-between gap-2"
               style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
               <span className="text-[11px] font-bold uppercase tracking-wider shrink-0" style={{ color: 'var(--gc-text-3)' }}>
                 Docs {docs.length > 0 && <span style={{ color: 'var(--gc-text-2)' }}>· {docs.length}</span>}
               </span>
-              {/* Verification chips — Rate Con + POD (+ Lumper / Scale
-                  if the load's accessorials require them). Green check
-                  when present, red ! when missing. TONU shows a blue
-                  badge instead (POD not required). flex-wrap on the
-                  container so a long load with all four checks gracefully
-                  drops the last chip to a second row. */}
-              <div className="flex items-center gap-2 flex-wrap justify-end">
-                {isTonu && (
-                  <span className="text-[10px] px-2 py-0.5 font-extrabold uppercase tracking-wider"
-                    style={{ background: '#dbeafe', color: '#1e40af', border: '1px solid #bfdbfe', borderRadius: 999 }}>
-                    TONU
-                  </span>
-                )}
-                {checklist.filter(c => !c.skip).map(c => (
-                  <span key={c.id} className="flex items-center gap-1 text-[11px] font-semibold"
-                    style={{ color: c.pass ? 'var(--gc-text-1)' : '#dc2626' }}>
-                    {c.pass
-                      ? <CheckCircle2 size={12} style={{ color: '#15803d' }} />
-                      : <AlertCircle  size={12} style={{ color: '#dc2626' }} />}
-                    <span>{c.label}</span>
-                  </span>
-                ))}
-              </div>
             </div>
 
             {/* Pending file kind picker — only when files are queued.
@@ -2416,6 +2453,11 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                   {invoiceError}
                 </div>
               )}
+              {/* Release dominates — full-width, larger CTA per the
+                  redesign's "primary action gets visual weight" rule.
+                  Flag + Skip drop to a smaller side-by-side row below.
+                  Released/Invoiced/Paid stamp replaces the button on
+                  loads that have already left 'pending'. */}
               {(current.billingStatus === 'verified'
                 || current.billingStatus === 'invoiced'
                 || current.billingStatus === 'paid') ? (
@@ -2425,7 +2467,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                     background: '#dcfce7',
                     color:      '#166534',
                     border:     '1px solid #bbf7d0',
-                    padding:    '10px 14px',
+                    padding:    '12px 14px',
                   }}
                   title={
                     current.billingStatus === 'paid'      ? 'Already paid'
@@ -2444,25 +2486,50 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                 </div>
               ) : (
                 <button onClick={() => void handleRelease()} disabled={busy}
-                  className="w-full flex items-center justify-center gap-2 rounded-lg text-sm font-bold transition-colors disabled:opacity-50"
-                  style={{ background: '#15803d', color: '#fff', padding: '10px 14px' }}
+                  className="w-full flex items-center justify-center gap-2.5 rounded-lg text-[14.5px] font-bold transition-all disabled:opacity-50"
+                  style={{
+                    background: '#188038',
+                    color:      '#fff',
+                    padding:    '0 16px',
+                    height:     46,
+                    boxShadow:  'var(--shadow-1)',
+                  }}
+                  onMouseEnter={e => { if (!busy) { e.currentTarget.style.background = '#157030'; e.currentTarget.style.boxShadow = 'var(--shadow-2)'; } }}
+                  onMouseLeave={e => { if (!busy) { e.currentTarget.style.background = '#188038'; e.currentTarget.style.boxShadow = 'var(--shadow-1)'; } }}
                   title={requiredPass ? 'Release for invoicing' : 'Required docs missing — confirm before releasing'}>
-                  <CheckCircle2 size={15} /> Release for invoicing
-                  <span className="text-[10px] font-mono opacity-70 ml-1">R</span>
+                  <CheckCircle2 size={16} />
+                  Release for invoicing
+                  <span className="inline-grid place-items-center text-[10.5px] font-bold ml-0.5"
+                    style={{ minWidth: 18, height: 18, padding: '0 5px', borderRadius: 4, background: 'rgba(255,255,255,0.25)' }}>
+                    R
+                  </span>
                 </button>
               )}
-              <button onClick={() => setShowFlag(true)} disabled={busy}
-                className="w-full flex items-center justify-center gap-2 rounded-lg text-sm font-bold transition-colors disabled:opacity-50"
-                style={{ background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a', padding: '10px 14px' }}>
-                <Flag size={15} /> Flag for follow-up
-                <span className="text-[10px] font-mono opacity-70 ml-1">F</span>
-              </button>
-              <button onClick={next} disabled={busy || safeIdx >= loads.length - 1}
-                className="w-full flex items-center justify-center gap-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
-                style={{ background: 'transparent', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)', padding: '10px 14px' }}>
-                <FastForward size={14} /> Skip
-                <span className="text-[10px] font-mono opacity-70 ml-1">→</span>
-              </button>
+              {/* Flag + Skip — secondary row below the dominant Release. */}
+              <div className="grid grid-cols-2 gap-2">
+                <button onClick={() => setShowFlag(true)} disabled={busy}
+                  className="flex items-center justify-center gap-2 rounded-lg text-[13px] font-bold transition-colors disabled:opacity-50"
+                  style={{ background: '#fef7e0', color: '#b06000', padding: '0 12px', height: 40 }}
+                  onMouseEnter={e => { if (!busy) e.currentTarget.style.background = '#fdeecb'; }}
+                  onMouseLeave={e => { if (!busy) e.currentTarget.style.background = '#fef7e0'; }}>
+                  <Flag size={14} /> Flag
+                  <span className="inline-grid place-items-center text-[10.5px] font-bold ml-0.5"
+                    style={{ minWidth: 18, height: 18, padding: '0 5px', borderRadius: 4, background: 'var(--gc-bg)', color: 'var(--gc-text-3)', border: '1px solid var(--gc-border-light)' }}>
+                    F
+                  </span>
+                </button>
+                <button onClick={next} disabled={busy || safeIdx >= loads.length - 1}
+                  className="flex items-center justify-center gap-2 rounded-lg text-[13px] font-semibold transition-colors disabled:opacity-50"
+                  style={{ background: '#fff', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)', padding: '0 12px', height: 40 }}
+                  onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-bg)'; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = '#fff'; }}>
+                  <FastForward size={13} /> Skip
+                  <span className="inline-grid place-items-center text-[10.5px] font-bold ml-0.5"
+                    style={{ minWidth: 18, height: 18, padding: '0 5px', borderRadius: 4, background: 'var(--gc-bg)', color: 'var(--gc-text-3)', border: '1px solid var(--gc-border-light)' }}>
+                    →
+                  </span>
+                </button>
+              </div>
               {resolved.has((current as Load).loadId ?? current.id) && (
                 <div className="text-[11px] text-center pt-1" style={{ color: '#15803d' }}>
                   ✓ Resolved — moving on
