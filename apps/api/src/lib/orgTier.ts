@@ -45,32 +45,36 @@ export interface OrgTierInfo {
 }
 
 /**
- * The single rule for "does this truck consume a paid seat":
+ * The rule for "does this truck consume a paid seat":
  *
- *   active_to IS NULL
+ *   active_to IS NULL  OR  active_to >= today
  *
- * i.e. "not retired." Mirrors the client useOrgTier rule. We
- * deliberately ignore `active_from` (and any "today" date) for
- * three reasons:
+ * i.e. "currently in service." A truck is currently in service
+ * if it has no retire date set, OR if its scheduled retire date
+ * is still in the future. The earlier version of this filter
+ * was `active_to IS NULL` only — and that turned out to be a
+ * loophole: setting active_to to '2099-01-01' would silently
+ * exclude the truck from the cap while it kept showing on the
+ * calendar (since the lifecycle predicate just needs active_to
+ * to be >= today, not null).
  *
- *   1. Date-free → no server/client tz disagreement window. The
- *      previous rule used `today` on both sides, but server-UTC
- *      and client-local diverged for ~6 hours every night, so
- *      a Mountain-time dispatcher could see 8/9 while the server
- *      still saw 9/9 (last truck retired today UTC vs. yesterday
- *      local). Removing the date kills the race entirely.
+ * `active_from` is still deliberately ignored. A back-dated
+ * truck for reporting purposes (e.g. activeFrom='2026-01-01'
+ * on Curzon's fleet) doesn't trigger a phantom overlap with
+ * retired trucks under this rule, because the cap is about
+ * RIGHT-NOW operational capacity, not historical reconstruction.
  *
- *   2. Matches how dispatchers describe the cap: "how many trucks
- *      do I have in service right now?" Retire one, slot opens.
- *      No mental gymnastics about retire dates or activeFrom.
- *
- *   3. Back-dating a new truck for historical reporting (a
- *      Curzon-specific habit — every new asset is created with
- *      activeFrom = 2026-01-01 so it shows up in YTD reports)
- *      no longer triggers a phantom overlap with retired trucks.
- *      The seat count is the instantaneous "currently held"
- *      number; what dates the truck claims for reporting is
- *      orthogonal.
+ * tz note: server uses UTC for "today", client uses local. They
+ * can disagree by a day at the midnight boundary. Direction of
+ * the disagreement under THIS rule is safe:
+ *   - server's today is one day AHEAD of client's
+ *   - a truck retired with active_to = client-today is < server-
+ *     today on the server, so server excludes it
+ *   - net effect: server is slightly more permissive than client
+ * That's a UX glitch (truck create succeeds even though client
+ * shows the cap as already hit) but it can't undercount, so it's
+ * not a billing leak. The previous bug was the opposite direction
+ * (server stricter than client) which DID block legitimate adds.
  *
  * Apply via Supabase query builders:
  *
@@ -79,7 +83,8 @@ export interface OrgTierInfo {
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function applyActiveCapFilter(q: any): any {
-  return q.is("active_to", null);
+  const today = new Date().toISOString().slice(0, 10);
+  return q.or(`active_to.is.null,active_to.gte.${today}`);
 }
 
 /** @deprecated kept for any caller still importing the old name.

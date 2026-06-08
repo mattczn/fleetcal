@@ -36,12 +36,14 @@ interface TruckRow {
   active_to:   string | null;
 }
 
-/** Cap-count rule: a truck consumes a paid seat iff it's not
- *  retired (active_to IS NULL). Matches useOrgTier on the client
- *  and applyActiveCapFilter on the API. Date-free on purpose —
- *  see the explainer in apps/api/src/lib/orgTier.ts. */
-function consumesCapSeat(t: TruckRow): boolean {
-  return t.active_to == null;
+/** Cap-count rule: a truck consumes a paid seat iff it's CURRENTLY
+ *  in service — i.e. not yet retired as of today. Matches
+ *  useOrgTier on the client and applyActiveCapFilter on the API.
+ *  Future-dated active_to still counts (it's a "scheduled retire"
+ *  not a "retired"). See the long explainer in apps/api/src/lib/
+ *  orgTier.ts. */
+function consumesCapSeat(t: TruckRow, today: string): boolean {
+  return t.active_to == null || t.active_to >= today;
 }
 
 // Feature-flag → tier-label mapping. Mirrors useOrgTier on the
@@ -170,6 +172,7 @@ export async function GET() {
   }
   const loads  = (loadsRes.data  ?? []) as LoadRow[];
   const trucks = (trucksRes.data ?? []) as TruckRow[];
+  const todayKey = new Date().toISOString().slice(0, 10);
   const truckCountByOrg = new Map<string, number>();
   for (const t of trucks) {
     // Skip the calendar's virtual "Unassigned" column — it's a UI
@@ -179,7 +182,7 @@ export async function GET() {
     // type='OTR' but name='Unassigned' (see /v1/assets POST for
     // the long explainer).
     if (t.type === 'Unassigned' || t.name === 'Unassigned') continue;
-    if (!consumesCapSeat(t)) continue;
+    if (!consumesCapSeat(t, todayKey)) continue;
     truckCountByOrg.set(t.org_id, (truckCountByOrg.get(t.org_id) ?? 0) + 1);
   }
 

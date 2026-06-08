@@ -36,6 +36,7 @@ import { useMemo } from "react";
 import { useAuth, useOrganization } from "@clerk/nextjs";
 import { useCalendarStore } from "@/store/useCalendarStore";
 import { isInternalOrg } from "@/lib/internalOrg";
+import { dateKeyOf } from "@/lib/lifecycle";
 
 export type OrgTier = "owner_op" | "growth" | "fleet" | "unrestricted" | "none";
 
@@ -157,11 +158,22 @@ export function useOrgTier(): OrgTierApi {
     //
     // The Unassigned row is a virtual asset the calendar adds for
     // unrouted events; not a real truck, doesn't burn a seat.
+    // Cap rule: count trucks that are CURRENTLY in service.
+    // A truck consumes a seat iff:
+    //   activeTo IS NULL  OR  activeTo >= today
+    //
+    // Tightened from the previous "activeTo IS NULL" rule because
+    // setting activeTo to a future date (e.g. '2099-01-01') was a
+    // way to exclude a truck from the cap while it kept showing
+    // on the calendar — net result: 10 trucks visible, cap counted
+    // 9. The new rule treats future-dated retire as "still in
+    // service today" which matches what the calendar shows.
+    const today = dateKeyOf(new Date());
     const currentTrucks = assets.filter(a =>
       a.id > 0 &&                  // exclude optimistic/in-flight (tempId < 0)
       a.type !== 'Unassigned' &&
       a.name !== 'Unassigned' &&
-      a.activeTo == null
+      (a.activeTo == null || a.activeTo >= today)
     ).length;
 
     return {
