@@ -16,10 +16,9 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { auth } from '@clerk/nextjs/server';
-import { SignOutButton } from '@clerk/nextjs';
+import { SignUp, SignOutButton } from '@clerk/nextjs';
 import { Check } from 'lucide-react';
 import AuthNav from '@/components/marketing/AuthNav';
-import GatedSignUp from '@/components/auth/GatedSignUp';
 import { clerkAppearanceMarketing } from '@/lib/clerkAppearanceMarketing';
 
 type PlanKey = 'owner_op' | 'growth' | 'fleet';
@@ -230,15 +229,35 @@ export default async function SignUpPage({
             </div>
           </div>
 
-          {/* RIGHT — Clerk's SignUp form wrapped in the consent gate.
-              The wrapper renders the Terms/Privacy/SMS consent checkbox
-              above and locks the form until it's ticked. */}
+          {/* RIGHT — Clerk's SignUp form, restyled via marketing appearance.
+              The formal Terms + Privacy acceptance checkbox lives INSIDE
+              the Clerk card (configured in Clerk Dashboard → Configure →
+              User & Authentication → Legal). The carrier-required SMS
+              disclosure language sits below as a small disclaimer so it's
+              visible at the point of opt-in — Clerk's built-in checkbox
+              doesn't include the STOP/HELP/msg-rates language carriers
+              vet for 10DLC. */}
           <div>
-            <GatedSignUp
+            <SignUp
               appearance={clerkAppearanceMarketing}
               forceRedirectUrl={afterSignUpUrl}
               fallbackRedirectUrl={afterSignUpUrl}
             />
+            <p style={{
+              fontSize:   11.5,
+              lineHeight: 1.6,
+              color:      '#5f6368',
+              textAlign:  'center',
+              marginTop:  14,
+              maxWidth:   380,
+              marginLeft: 'auto',
+              marginRight:'auto',
+            }}>
+              By creating an account, you also consent to receive transactional SMS related to your account and
+              dispatch operations (load assignments, schedule changes, verification codes). Message and data
+              rates may apply. Frequency varies. Reply <strong>STOP</strong> to opt out, <strong>HELP</strong>{' '}
+              for help.
+            </p>
           </div>
         </div>
       </main>
