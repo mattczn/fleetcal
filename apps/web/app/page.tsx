@@ -394,8 +394,8 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
               <Image
                 src="/hero-calendar.png"
                 alt="FleetCal dispatch calendar"
-                width={1715}
-                height={945}
+                width={1716}
+                height={944}
                 priority
                 style={{ width: '100%', height: 'auto', display: 'block' }}
               />
