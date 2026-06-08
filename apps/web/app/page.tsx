@@ -844,29 +844,47 @@ function Story() {
             }}
           >
             <p>
-              FleetCal was built inside a working carrier. The first version replaced a
-              dispatch whiteboard. Then came a POD queue. Then invoicing. Then payroll.
+              FleetCal is built on years of industry experience and a deep understanding
+              of the workflows dispatchers run every day. We tried enterprise TMS products
+              like Alvys and RoseRocket, but they&apos;re weighed down by bloat that pulls
+              dispatchers away from what actually matters. They treat loads like another
+              row in a spreadsheet. We treat loads as the core unit of dispatch, organized
+              in a calendar so you can see at a glance which trucks are moving and which
+              need attention.
             </p>
             <p>
-              Every feature exists because someone yelled across the dispatch office for
-              it. No design committee, no UX consultancy, no &ldquo;competitive feature
-              parity&rdquo; spreadsheet driving the roadmap. Just the actual work of
-              running freight.
+              As we grew our fleet from 3 to 15 trucks, we couldn&apos;t find tools that
+              gave us real visibility into our bottom line. We wanted certainty that
+              invoices were getting paid. We wanted certainty that every asset was
+              earning every day.
             </p>
-            <p
+            <p>
+              FleetCal&apos;s philosophy is practical software for the people who actually
+              run the business: owners, dispatchers, and owner-operators. Simple workflows.
+              Powerful fundamentals. Everything in one ecosystem, from rate con to invoice.
+            </p>
+            {/* Signature block. Uses the same left-blue-rule treatment
+                the old pull-quote did so it carries the same visual
+                weight in the layout, but reframed as an attribution
+                rather than a free-floating quote. */}
+            <div
               className="font-display"
               style={{
-                fontSize:    20,
-                fontWeight:  600,
-                color:       '#202124',
                 borderLeft:  '3px solid var(--gc-blue)',
                 paddingLeft: 20,
+                marginTop:   4,
               }}
             >
-              &ldquo;If you&apos;ve ever paid for a TMS clearly built by someone
-              who&apos;s never sat next to a dispatcher at 6am, you&apos;ll feel the
-              difference.&rdquo;
-            </p>
+              <div style={{ fontWeight: 700, fontSize: 17, color: '#202124' }}>
+                Matt Curzon
+              </div>
+              <div style={{ fontSize: 14.5, color: '#5f6368', marginTop: 2 }}>
+                Founder &amp; Operator, Curzon Trucking LLC
+              </div>
+              <div style={{ fontSize: 14.5, color: '#5f6368' }}>
+                Salt Lake City, UT
+              </div>
+            </div>
           </div>
         </Reveal>
       </div>
