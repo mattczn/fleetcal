@@ -1332,7 +1332,15 @@ function LoadFormPane({
   // controls render the same, they just don't fire.
   function renderSection(section: FieldSection, first: boolean) {
     if (section === 'locations') {
-      const loadedMiles = primary.loadedMiles ?? null;
+      // Load-level miles: for relay loads, sum BOTH legs' miles so the
+      // displayed RPM is `loadPrice / totalLoadedMiles` instead of
+      // `loadPrice / thisLegMiles`. Previous behavior made a short
+      // delivery leg show an inflated RPM and a long pickup leg show a
+      // deflated one, because each leg divided the whole-load price by
+      // only its own miles.
+      const primMi = primary.loadedMiles ?? 0;
+      const partMi = partner?.loadedMiles ?? 0;
+      const loadedMiles = (primMi + partMi) > 0 ? (primMi + partMi) : null;
       const rpm = loadedMiles && loadedMiles > 0 && primary.loadPrice != null
         ? primary.loadPrice / loadedMiles
         : null;

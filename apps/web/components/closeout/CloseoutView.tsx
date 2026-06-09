@@ -28,6 +28,7 @@ import { useAuth, useUser } from '@clerk/nextjs';
 import { railway } from '@/lib/railway';
 import Link from 'next/link';
 import type { Load, CalendarEvent } from '@/lib/types';
+import { buildRelayMilesMap } from '@/lib/legMiles';
 import AppShell from '@/components/nav/AppShell';
 import { displayBrokerName } from '@/lib/customerMatch';
 import ReviewQueue from './ReviewQueue';
@@ -581,6 +582,17 @@ export default function CloseoutView() {
   const tableColumns = useMemo<OpsColumn<QueueRow>[]>(() => {
     const cols: OpsColumn<QueueRow>[] = [];
 
+    // Pre-compute total loaded miles per relay group so the RPM column
+    // can divide load price by ALL-LEGS miles instead of just this row's
+    // own miles. Without this, a short delivery leg shows an inflated
+    // RPM and a long pickup leg shows a deflated one — the RPM is
+    // load-level, not leg-level, so it must use load-total miles.
+    const relayMiles = buildRelayMilesMap(rows);
+    const loadMilesFor = (r: QueueRow): number => {
+      if (r.relayGroupId) return relayMiles.get(r.relayGroupId) ?? 0;
+      return r.loadedMiles ?? 0;
+    };
+
     // Star + Notes pinned LEFT — utility column. alwaysVisible so it
     // can't be hidden in the picker (dispatchers always need the
     // priority/notes affordances).
@@ -788,11 +800,11 @@ export default function CloseoutView() {
       // and missing-mile rows sort to the bottom (0). Coloured against
       // common book rates: <$1.75 red, $1.75–$2.25 amber, >$2.25 green.
       sortValue: r => {
-        const m = r.loadedMiles ?? 0;
+        const m = loadMilesFor(r);
         return m > 0 && r.loadPrice != null ? r.loadPrice / m : 0;
       },
       render: r => {
-        const m = r.loadedMiles ?? 0;
+        const m = loadMilesFor(r);
         if (m <= 0 || r.loadPrice == null) {
           return <span style={{ color: 'var(--gc-text-3)' }}>—</span>;
         }

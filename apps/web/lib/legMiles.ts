@@ -56,3 +56,51 @@ export function relayLegShare(thisLeg: CalendarEvent, partnerLeg: CalendarEvent)
   if (a + b <= 0) return 0.5;
   return a / (a + b);
 }
+
+/**
+ * Total loaded miles for a load across ALL of its legs. For single-event
+ * loads this is just the event's own loadedMiles. For relay loads it's
+ * the sum across both legs (pickup + delivery), so RPM displays in
+ * lists and on the load page use load-level miles rather than per-leg.
+ *
+ * Pass the list of events visible in the current view (e.g. all events
+ * the page already has loaded for the date range). The function only
+ * sums events that share the given event's relayGroupId — no extra
+ * fetch.
+ *
+ * Returns null when nothing usable is available, so callers can
+ * distinguish "0 miles confirmed" from "no data yet".
+ */
+export function loadTotalLoadedMiles(
+  event:    Pick<CalendarEvent, 'loadedMiles' | 'relayGroupId'>,
+  allEvents: Array<Pick<CalendarEvent, 'loadedMiles' | 'relayGroupId'>>,
+): number | null {
+  if (!event.relayGroupId) {
+    return typeof event.loadedMiles === 'number' && event.loadedMiles > 0 ? event.loadedMiles : null;
+  }
+  let sum = 0;
+  let any = false;
+  for (const ev of allEvents) {
+    if (ev.relayGroupId !== event.relayGroupId) continue;
+    if (typeof ev.loadedMiles === 'number' && ev.loadedMiles > 0) { sum += ev.loadedMiles; any = true; }
+  }
+  return any ? sum : null;
+}
+
+/**
+ * Pre-compute a relayGroupId → totalMiles map from a list of events.
+ * Cheaper than calling loadTotalLoadedMiles repeatedly inside a table
+ * render — the closeout + accounting RPM columns build this once per
+ * render and look up per row.
+ */
+export function buildRelayMilesMap(
+  events: Array<Pick<CalendarEvent, 'loadedMiles' | 'relayGroupId'>>,
+): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const ev of events) {
+    if (!ev.relayGroupId) continue;
+    if (typeof ev.loadedMiles !== 'number' || ev.loadedMiles <= 0) continue;
+    out.set(ev.relayGroupId, (out.get(ev.relayGroupId) ?? 0) + ev.loadedMiles);
+  }
+  return out;
+}
