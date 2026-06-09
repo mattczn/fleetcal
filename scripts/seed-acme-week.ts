@@ -29,30 +29,47 @@
  *   T-612 → Bobcat / Tim Jones        (hybrid)
  *   (Kevin Dutton picks up the weekend extras on Bison/Bobcat)
  *
- * Usage:
- *   FLEETCAL_API_URL=https://fleetcalapi-production.up.railway.app \
- *   FLEETCAL_CLERK_BEARER=<jwt> \
+ * Usage — ONE-LINER (paste, grab token, paste token, done):
+ *
+ *   cd ~/Desktop/fleetcal && git pull && \
+ *   read -s FLEETCAL_CLERK_BEARER && export FLEETCAL_CLERK_BEARER && \
  *   npx tsx scripts/seed-acme-week.ts
  *
- * Grab the bearer by signing in to fleetcal.app as an ACME admin, then
- * DevTools → Application → Cookies → __session value.
+ * After `read -s` runs you'll see a silent prompt — grab a fresh
+ * __session cookie from fleetcal.app DevTools → Application → Cookies,
+ * paste it, press Enter. Script wipes the existing seeded week and
+ * re-seeds in ~30 seconds.
+ *
+ * Env knobs (defaults work for the common case):
+ *   - FLEETCAL_CLERK_BEARER  required — Clerk session JWT for an ACME admin
+ *   - FLEETCAL_API_URL       optional — defaults to the prod Railway URL
+ *   - WIPE=0                 skip the pre-seed delete (default WIPE=1)
+ *   - DRY_RUN=1              preview API calls without writing
+ *   - START_AT=N             resume an interrupted run at load index N
+ *                            (auto-disables wipe so you don't nuke prior
+ *                            successes)
  *
  * Idempotency:
- *   - Customers: skipped if a customer with the same name already exists.
- *   - Dispatcher: skipped if any dispatcher already exists.
- *   - Loads: NOT idempotent — re-running creates duplicates. Wipe loads
- *     for the week first if re-running, or set DRY_RUN=1 to preview.
+ *   - Customers + Dispatcher: skipped if a row with the same name exists.
+ *   - Loads:                  wiped + re-inserted (override with WIPE=0).
  */
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-const API_URL = (process.env.FLEETCAL_API_URL ?? '').replace(/\/$/, '');
+// Sensible default — production Railway URL. Override via env if
+// you're pointing at a preview / local API. With this default the
+// only env var the user MUST set is the bearer.
+const API_URL = (process.env.FLEETCAL_API_URL ?? 'https://fleetcalapi-production.up.railway.app').replace(/\/$/, '');
 const BEARER  = process.env.FLEETCAL_CLERK_BEARER;
 const DRY_RUN = process.env.DRY_RUN === '1';
 // START_AT lets us resume an interrupted run without re-inserting loads
-// that already succeeded. The script logs progress every 5 loads — use
-// the last "+ N/50" line + 1 as your START_AT.
+// that already succeeded. Pairs with WIPE=0 — otherwise the wipe step
+// would delete the loads you're resuming from.
 const START_AT = Math.max(0, Number(process.env.START_AT) || 0);
+// WIPE=0 to skip the pre-seed delete. Default ON so re-runs always
+// produce a clean week — the script is intended for demo seeding,
+// not append-mode batch ingest.
+const WIPE = process.env.WIPE !== '0';
 
 if (!API_URL) throw new Error('FLEETCAL_API_URL required (e.g. https://fleetcalapi-production.up.railway.app)');
 if (!BEARER)  throw new Error('FLEETCAL_CLERK_BEARER required (Clerk __session JWT for ACME admin)');
@@ -408,6 +425,37 @@ async function main() {
     'T-522': 'James Walker',
     'T-612': 'Tim Jones',
   };
+
+  // 2.5 Wipe seed-window loads (Sat Jun 6 – Sat Jun 13). Defaults on
+  // so re-running the script produces a clean week without manual SQL.
+  // Set WIPE=0 to skip this step (e.g. when using START_AT to resume).
+  if (WIPE && !DRY_RUN && START_AT === 0) {
+    const list = await api<{ loads: Array<{ id: string; events?: Array<{ start?: string }> }> }>('GET', '/v1/loads');
+    const toDelete = (list.loads ?? []).filter(l => {
+      // Match by event-start window — anything starting Jun 6–12 2026
+      // (the script's day-offset range from Monday Jun 8). Edge: a load
+      // whose first event starts before Jun 6 but ends inside the
+      // window would survive — none in this seed do that.
+      const firstEv = (l.events ?? [])[0];
+      const start = firstEv?.start ?? '';
+      return start >= '2026-06-06' && start < '2026-06-13';
+    });
+    if (toDelete.length > 0) {
+      console.log(`[seed] wiping ${toDelete.length} existing loads in Jun 6-12 window…`);
+      let wiped = 0;
+      for (const l of toDelete) {
+        try {
+          await api('DELETE', `/v1/loads/${l.id}`);
+          wiped += 1;
+        } catch (err) {
+          console.error(`[seed] delete ${l.id} failed:`, (err as Error).message);
+        }
+      }
+      console.log(`[seed] wiped ${wiped}/${toDelete.length}`);
+    } else {
+      console.log(`[seed] nothing to wipe (clean window)`);
+    }
+  }
 
   // 3. Create customers (skip if exists)
   const existingCustomers = await api<{ customers: Array<{ id: string; name: string }> }>('GET', '/v1/customers');
