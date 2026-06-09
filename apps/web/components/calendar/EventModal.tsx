@@ -5989,8 +5989,18 @@ export default function EventModal() {
                         // leg's own miles makes the displayed RPM look wrong
                         // (e.g. "4 mi · $2.08/mi" on a tiny delivery leg of a
                         // 1200-mile haul). Both legs render the same number.
+                        //
+                        // Stale-data guard: prefer the partner event's
+                        // server-stored loadedMiles (present immediately when
+                        // relayPartner arrives) over the async-computed
+                        // partnerLoadedMiles (which falls behind by a Google
+                        // Directions round-trip). If neither is known yet,
+                        // return null so the header shows "—" instead of
+                        // briefly displaying the per-leg-only mileage.
                         if ((isPickupLeg || isDeliveryLeg) && relayPartner && loadedMiles != null) {
-                          return (partnerLoadedMiles ?? 0) + loadedMiles;
+                          const partnerMi = relayPartner.loadedMiles ?? partnerLoadedMiles;
+                          if (partnerMi == null) return null;
+                          return partnerMi + loadedMiles;
                         }
                         return loadedMiles;
                       })()}
@@ -6004,8 +6014,15 @@ export default function EventModal() {
                         // price or we'd double-count. The denominator is the
                         // total trip miles (this leg + partner leg) so both
                         // legs show the same load-level RPM.
+                        //
+                        // Stale-data guard: same as loadedMiles above —
+                        // partnerLoadedMiles updates asynchronously, so prefer
+                        // the partner's cached loaded_miles column and bail
+                        // out with null if we genuinely don't know yet.
                         if ((isPickupLeg || isDeliveryLeg) && relayPartner) {
-                          const totalMiles = (partnerLoadedMiles ?? 0) + loadedMiles;
+                          const partnerMi = relayPartner.loadedMiles ?? partnerLoadedMiles;
+                          if (partnerMi == null) return null;
+                          const totalMiles = partnerMi + loadedMiles;
                           if (totalMiles === 0) return null;
                           return Math.round((thisPrice / totalMiles) * 100) / 100;
                         }
