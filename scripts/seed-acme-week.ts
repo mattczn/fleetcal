@@ -187,48 +187,61 @@ const BROKERS: BrokerSpec[] = [
 
 // ── Facility directory ────────────────────────────────────────────
 
-interface Facility { name: string; address: string; city: string; state: string; zip: string; }
+// Each facility has approximate lat/lng baked in so stops show up
+// pre-geocoded — the calendar map / route lines work the moment the
+// load is created. Coordinates are city-center approximations (good
+// enough for tutorials/videos; the dispatcher can repin in the UI
+// for pinpoint accuracy if needed).
+interface Facility {
+  name:    string;
+  address: string;
+  city:    string;
+  state:   string;
+  zip:     string;
+  lat:     number;
+  lng:     number;
+}
 
 const FACILITIES: Record<string, Facility> = {
-  // DFW
-  sysco_dallas:         { name: 'Sysco Dallas',                 address: '800 Trinity Industrial Dr',  city: 'Dallas',         state: 'TX', zip: '75207' },
-  samsclub_garland:     { name: "Sam's Club DC #6404",          address: '5000 W Northwest Hwy',       city: 'Garland',        state: 'TX', zip: '75044' },
-  walmart_sanger:       { name: 'Walmart DC #6094',             address: '1701 Sam Walton Way',        city: 'Sanger',         state: 'TX', zip: '76266' },
-  amazon_dfw7:          { name: 'Amazon DFW7',                  address: '940 W Bethel Rd',            city: 'Coppell',        state: 'TX', zip: '75019' },
-  amazon_dfw8:          { name: 'Amazon DFW8',                  address: '700 Westport Pkwy',          city: 'Fort Worth',     state: 'TX', zip: '76177' },
-  target_lancaster:     { name: 'Target DC T-0584',             address: '3601 N Houston School Rd',   city: 'Lancaster',      state: 'TX', zip: '75134' },
-  mclane_carrollton:    { name: 'McLane Foodservice',           address: '1900 Innovation Dr',         city: 'Carrollton',     state: 'TX', zip: '75007' },
-  fritolay_plano:       { name: 'Frito-Lay HQ',                 address: '7701 Legacy Dr',             city: 'Plano',          state: 'TX', zip: '75024' },
-  benekeith_ftworth:    { name: 'Ben E. Keith Foods',           address: '7300 Will Rogers Blvd',      city: 'Fort Worth',     state: 'TX', zip: '76140' },
-  niagara_arlington:    { name: 'Niagara Bottling',             address: '2200 W Park Row Dr',         city: 'Arlington',      state: 'TX', zip: '76013' },
-  coca_cola_dallas:     { name: 'Coca-Cola Southwest',          address: '5301 Mountain Creek Pkwy',   city: 'Dallas',         state: 'TX', zip: '75236' },
-  pepsi_carrollton:     { name: 'PepsiCo Carrollton',           address: '2900 Realty Rd',             city: 'Carrollton',     state: 'TX', zip: '75006' },
-  homedepot_lancaster:  { name: 'Home Depot RDC #5045',         address: '700 Crowell Rd',             city: 'Lancaster',      state: 'TX', zip: '75146' },
-  costco_dallas:        { name: 'Costco Wholesale #1262',       address: '8055 Churchill Way',         city: 'Dallas',         state: 'TX', zip: '75251' },
-  kroger_dallas:        { name: 'Kroger DC',                    address: '6300 Atlantic Blvd',         city: 'Dallas',         state: 'TX', zip: '75217' },
-  sprouts_aubrey:       { name: 'Sprouts Farmers Market DC',    address: '1450 Sprouts Way',           city: 'Aubrey',         state: 'TX', zip: '76227' },
-  freshpet_ennis:       { name: 'Freshpet Kitchens',            address: '402 W Ennis Ave',            city: 'Ennis',          state: 'TX', zip: '75119' },
-  michaels_haslet:      { name: 'Michaels Stores DC',           address: '8000 Bell Spur Dr',         city: 'Haslet',         state: 'TX', zip: '76052' },
-  // Regional
-  heb_san_antonio:      { name: 'HEB Headquarters DC',          address: '646 S Main Ave',             city: 'San Antonio',    state: 'TX', zip: '78204' },
-  heb_houston:          { name: 'HEB Houston Warehouse',        address: '3663 Briarpark Dr',          city: 'Houston',        state: 'TX', zip: '77042' },
-  walmart_baytown:      { name: 'Walmart DC #7034',             address: '9001 Jenkins Rd',            city: 'Baytown',        state: 'TX', zip: '77521' },
-  kroger_houston:       { name: 'Kroger Houston DC',            address: '10000 Kroger Dr',            city: 'Houston',        state: 'TX', zip: '77064' },
-  tesla_austin:         { name: 'Tesla Gigafactory Texas',      address: '1 Tesla Rd',                 city: 'Austin',         state: 'TX', zip: '78725' },
-  amazon_okc:           { name: 'Amazon OKC2',                  address: '9201 S Portland Ave',        city: 'Oklahoma City',  state: 'OK', zip: '73159' },
-  hobby_lobby_okc:      { name: 'Hobby Lobby DC',               address: '7707 SW 44th St',            city: 'Oklahoma City',  state: 'OK', zip: '73179' },
-  walmart_shreveport:   { name: 'Walmart DC #6044',             address: '1601 N Hearne Ave',          city: 'Shreveport',     state: 'LA', zip: '71107' },
-  albertsons_baton_rouge: { name: 'Albertsons DC',              address: '10905 Industriplex Blvd',    city: 'Baton Rouge',    state: 'LA', zip: '70809' },
-  toyota_san_antonio:   { name: 'Toyota Manufacturing Texas',   address: '1 Lone Star Pass',           city: 'San Antonio',    state: 'TX', zip: '78264' },
-  // Long haul
-  homedepot_atlanta:    { name: 'Home Depot RDC #5000',         address: '3900 Bill Gardner Pkwy',     city: 'Locust Grove',   state: 'GA', zip: '30248' },
-  coke_atlanta:         { name: 'Coca-Cola Atlanta',            address: '1 Coca-Cola Plz NW',         city: 'Atlanta',        state: 'GA', zip: '30313' },
-  autozone_memphis:     { name: 'AutoZone DC',                  address: '3990 Hacks Cross Rd',       city: 'Memphis',        state: 'TN', zip: '38125' },
-  nike_memphis:         { name: 'Nike DC',                      address: '5051 Nike Dr',               city: 'Memphis',        state: 'TN', zip: '38125' },
-  sysco_phoenix:        { name: 'Sysco Arizona',                address: '611 S 80th Ave',             city: 'Tolleson',       state: 'AZ', zip: '85353' },
-  costco_tolleson:      { name: 'Costco Wholesale #1078',       address: '9404 W Buckeye Rd',          city: 'Tolleson',       state: 'AZ', zip: '85353' },
-  walmart_elwood:       { name: 'Walmart DC #6045',             address: '25600 W Eames St',           city: 'Elwood',         state: 'IL', zip: '60421' },
-  amazon_ord2:          { name: 'Amazon MDW2',                  address: '250 Emerald Dr',             city: 'Joliet',         state: 'IL', zip: '60433' },
+  // ── DFW ────────────────────────────────────────────────────────
+  sysco_dallas:         { name: 'Sysco Dallas',                 address: '800 Trinity Industrial Dr',  city: 'Dallas',         state: 'TX', zip: '75207', lat: 32.7944, lng: -96.8243 },
+  samsclub_garland:     { name: "Sam's Club DC #6404",          address: '5000 W Northwest Hwy',       city: 'Garland',        state: 'TX', zip: '75044', lat: 32.9264, lng: -96.6388 },
+  walmart_sanger:       { name: 'Walmart DC #6094',             address: '1701 Sam Walton Way',        city: 'Sanger',         state: 'TX', zip: '76266', lat: 33.3640, lng: -97.1740 },
+  amazon_dfw7:          { name: 'Amazon DFW7',                  address: '940 W Bethel Rd',            city: 'Coppell',        state: 'TX', zip: '75019', lat: 32.9646, lng: -96.9967 },
+  amazon_dfw8:          { name: 'Amazon DFW8',                  address: '700 Westport Pkwy',          city: 'Fort Worth',     state: 'TX', zip: '76177', lat: 32.9783, lng: -97.3203 },
+  target_lancaster:     { name: 'Target DC T-0584',             address: '3601 N Houston School Rd',   city: 'Lancaster',      state: 'TX', zip: '75134', lat: 32.6068, lng: -96.8030 },
+  mclane_carrollton:    { name: 'McLane Foodservice',           address: '1900 Innovation Dr',         city: 'Carrollton',     state: 'TX', zip: '75007', lat: 33.0118, lng: -96.8900 },
+  fritolay_plano:       { name: 'Frito-Lay HQ',                 address: '7701 Legacy Dr',             city: 'Plano',          state: 'TX', zip: '75024', lat: 33.0815, lng: -96.8186 },
+  benekeith_ftworth:    { name: 'Ben E. Keith Foods',           address: '7300 Will Rogers Blvd',      city: 'Fort Worth',     state: 'TX', zip: '76140', lat: 32.6373, lng: -97.3253 },
+  niagara_arlington:    { name: 'Niagara Bottling',             address: '2200 W Park Row Dr',         city: 'Arlington',      state: 'TX', zip: '76013', lat: 32.7257, lng: -97.1281 },
+  coca_cola_dallas:     { name: 'Coca-Cola Southwest',          address: '5301 Mountain Creek Pkwy',   city: 'Dallas',         state: 'TX', zip: '75236', lat: 32.7088, lng: -96.9210 },
+  pepsi_carrollton:     { name: 'PepsiCo Carrollton',           address: '2900 Realty Rd',             city: 'Carrollton',     state: 'TX', zip: '75006', lat: 32.9624, lng: -96.8900 },
+  homedepot_lancaster:  { name: 'Home Depot RDC #5045',         address: '700 Crowell Rd',             city: 'Lancaster',      state: 'TX', zip: '75146', lat: 32.5917, lng: -96.7561 },
+  costco_dallas:        { name: 'Costco Wholesale #1262',       address: '8055 Churchill Way',         city: 'Dallas',         state: 'TX', zip: '75251', lat: 32.9221, lng: -96.7705 },
+  kroger_dallas:        { name: 'Kroger DC',                    address: '6300 Atlantic Blvd',         city: 'Dallas',         state: 'TX', zip: '75217', lat: 32.7282, lng: -96.6928 },
+  sprouts_aubrey:       { name: 'Sprouts Farmers Market DC',    address: '1450 Sprouts Way',           city: 'Aubrey',         state: 'TX', zip: '76227', lat: 33.3043, lng: -96.9858 },
+  freshpet_ennis:       { name: 'Freshpet Kitchens',            address: '402 W Ennis Ave',            city: 'Ennis',          state: 'TX', zip: '75119', lat: 32.3293, lng: -96.6253 },
+  michaels_haslet:      { name: 'Michaels Stores DC',           address: '8000 Bell Spur Dr',          city: 'Haslet',         state: 'TX', zip: '76052', lat: 32.9774, lng: -97.3464 },
+  // ── Regional (TX/OK/LA) ────────────────────────────────────────
+  heb_san_antonio:      { name: 'HEB Headquarters DC',          address: '646 S Main Ave',             city: 'San Antonio',    state: 'TX', zip: '78204', lat: 29.4191, lng: -98.4934 },
+  heb_houston:          { name: 'HEB Houston Warehouse',        address: '3663 Briarpark Dr',          city: 'Houston',        state: 'TX', zip: '77042', lat: 29.7376, lng: -95.5613 },
+  walmart_baytown:      { name: 'Walmart DC #7034',             address: '9001 Jenkins Rd',            city: 'Baytown',        state: 'TX', zip: '77521', lat: 29.7669, lng: -94.9636 },
+  kroger_houston:       { name: 'Kroger Houston DC',            address: '10000 Kroger Dr',            city: 'Houston',        state: 'TX', zip: '77064', lat: 29.9277, lng: -95.5505 },
+  tesla_austin:         { name: 'Tesla Gigafactory Texas',      address: '1 Tesla Rd',                 city: 'Austin',         state: 'TX', zip: '78725', lat: 30.2206, lng: -97.6212 },
+  amazon_okc:           { name: 'Amazon OKC2',                  address: '9201 S Portland Ave',        city: 'Oklahoma City',  state: 'OK', zip: '73159', lat: 35.3919, lng: -97.5511 },
+  hobby_lobby_okc:      { name: 'Hobby Lobby DC',               address: '7707 SW 44th St',            city: 'Oklahoma City',  state: 'OK', zip: '73179', lat: 35.4143, lng: -97.6207 },
+  walmart_shreveport:   { name: 'Walmart DC #6044',             address: '1601 N Hearne Ave',          city: 'Shreveport',     state: 'LA', zip: '71107', lat: 32.5536, lng: -93.7677 },
+  albertsons_baton_rouge: { name: 'Albertsons DC',              address: '10905 Industriplex Blvd',    city: 'Baton Rouge',    state: 'LA', zip: '70809', lat: 30.4119, lng: -91.0707 },
+  toyota_san_antonio:   { name: 'Toyota Manufacturing Texas',   address: '1 Lone Star Pass',           city: 'San Antonio',    state: 'TX', zip: '78264', lat: 29.2870, lng: -98.4934 },
+  // ── Long haul ──────────────────────────────────────────────────
+  homedepot_atlanta:    { name: 'Home Depot RDC #5000',         address: '3900 Bill Gardner Pkwy',     city: 'Locust Grove',   state: 'GA', zip: '30248', lat: 33.3490, lng: -84.1086 },
+  coke_atlanta:         { name: 'Coca-Cola Atlanta',            address: '1 Coca-Cola Plz NW',         city: 'Atlanta',        state: 'GA', zip: '30313', lat: 33.7626, lng: -84.3923 },
+  autozone_memphis:     { name: 'AutoZone DC',                  address: '3990 Hacks Cross Rd',        city: 'Memphis',        state: 'TN', zip: '38125', lat: 35.0454, lng: -89.7958 },
+  nike_memphis:         { name: 'Nike DC',                      address: '5051 Nike Dr',               city: 'Memphis',        state: 'TN', zip: '38125', lat: 35.0454, lng: -89.7958 },
+  sysco_phoenix:        { name: 'Sysco Arizona',                address: '611 S 80th Ave',             city: 'Tolleson',       state: 'AZ', zip: '85353', lat: 33.4500, lng: -112.2596 },
+  costco_tolleson:      { name: 'Costco Wholesale #1078',       address: '9404 W Buckeye Rd',          city: 'Tolleson',       state: 'AZ', zip: '85353', lat: 33.4351, lng: -112.2772 },
+  walmart_elwood:       { name: 'Walmart DC #6045',             address: '25600 W Eames St',           city: 'Elwood',         state: 'IL', zip: '60421', lat: 41.4036, lng: -88.1109 },
+  amazon_ord2:          { name: 'Amazon MDW2',                  address: '250 Emerald Dr',             city: 'Joliet',         state: 'IL', zip: '60433', lat: 41.5250, lng: -88.0817 },
 };
 
 // ── Load specs ────────────────────────────────────────────────────
@@ -466,7 +479,17 @@ async function main() {
 
     const puStart = toIsoLocal(spec.puDay, spec.puTime);
     const dlStart = toIsoLocal(spec.delDay, spec.delTime);
-    const title   = `${pu.city}, ${pu.state} → ${dl.city}, ${dl.state}`;
+    // Title format: "{Broker}: {pickup city, ST} → {delivery city, ST}".
+    // Broker prefix lets the dispatcher scan the calendar at a glance
+    // and see who the load belongs to without opening it.
+    const title = `${broker.name}: ${pu.city}, ${pu.state} → ${dl.city}, ${dl.state}`;
+    // Single-line address with city/state/zip so the geocoder + the
+    // calendar tooltip both have everything they need. The schema also
+    // has dedicated city/state fields which we still pass, but having
+    // the full address in the address field means an unmapped stop can
+    // still be re-geocoded from text alone.
+    const puAddress = `${pu.address}, ${pu.city}, ${pu.state} ${pu.zip}`;
+    const dlAddress = `${dl.address}, ${dl.city}, ${dl.state} ${dl.zip}`;
 
     try {
       await api('POST', '/v1/loads', {
@@ -498,35 +521,42 @@ async function main() {
           // single click if needed.
           stops: [
             {
-              id:           crypto.randomUUID(),
-              sequence:     1,
-              type:         'pickup',
-              facilityName: pu.name,
-              address:      pu.address,
-              city:         pu.city,
-              state:        pu.state,
-              apptStart:    puStart,
-              apptEnd:      addMinutes(puStart, 30),
+              id:            crypto.randomUUID(),
+              sequence:      1,
+              type:          'pickup',
+              facilityName:  pu.name,
+              address:       puAddress,
+              city:          pu.city,
+              state:         pu.state,
+              lat:           pu.lat,
+              lng:           pu.lng,
+              geocodeStatus: 'success',
+              apptStart:     puStart,
+              apptEnd:       addMinutes(puStart, 30),
             },
             {
-              id:           crypto.randomUUID(),
-              sequence:     2,
-              type:         'delivery',
-              facilityName: dl.name,
-              address:      dl.address,
-              city:         dl.city,
-              state:        dl.state,
-              apptStart:    dlStart,
-              apptEnd:      addMinutes(dlStart, 30),
-              instructions: `Trailer #${trailerNum}`,
+              id:            crypto.randomUUID(),
+              sequence:      2,
+              type:          'delivery',
+              facilityName:  dl.name,
+              address:       dlAddress,
+              city:          dl.city,
+              state:         dl.state,
+              lat:           dl.lat,
+              lng:           dl.lng,
+              geocodeStatus: 'success',
+              apptStart:     dlStart,
+              apptEnd:       addMinutes(dlStart, 30),
+              instructions:  `Trailer #${trailerNum}`,
             },
           ],
         }],
       });
       created += 1;
       // Print the ABSOLUTE index so a 401 mid-run gives an exact
-      // `START_AT = lastAbs + 1` value with no math.
-      if (created % 5 === 0) console.log(`[seed] loads + ${created} (last abs idx ${i})`);
+      // `START_AT = lastAbs + 1` value with no math. Include driver
+      // so a glance at the log confirms it's being set.
+      if (created % 5 === 0) console.log(`[seed] loads + ${created} (last abs idx ${i}, driver=${driverName} truck=${spec.truck})`);
     } catch (err) {
       failed += 1;
       console.error(`[seed] load ${i} failed:`, (err as Error).message);
