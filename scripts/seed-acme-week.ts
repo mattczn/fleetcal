@@ -49,6 +49,10 @@
 const API_URL = (process.env.FLEETCAL_API_URL ?? '').replace(/\/$/, '');
 const BEARER  = process.env.FLEETCAL_CLERK_BEARER;
 const DRY_RUN = process.env.DRY_RUN === '1';
+// START_AT lets us resume an interrupted run without re-inserting loads
+// that already succeeded. The script logs progress every 5 loads — use
+// the last "+ N/50" line + 1 as your START_AT.
+const START_AT = Math.max(0, Number(process.env.START_AT) || 0);
 
 if (!API_URL) throw new Error('FLEETCAL_API_URL required (e.g. https://fleetcalapi-production.up.railway.app)');
 if (!BEARER)  throw new Error('FLEETCAL_CLERK_BEARER required (Clerk __session JWT for ACME admin)');
@@ -434,8 +438,15 @@ async function main() {
   // 5. Create loads
   let created = 0, failed = 0;
   let dryVanIdx = 0, reeferIdx = 0;
+  if (START_AT > 0) console.log(`[seed] resuming at index ${START_AT}`);
   for (let i = 0; i < LOADS.length; i++) {
     const spec = LOADS[i];
+    // Advance trailer rotation counters even for skipped loads so the
+    // resumed run picks the same trailer the original run would have.
+    if (i < START_AT) {
+      if (spec.isReefer) reeferIdx++; else dryVanIdx++;
+      continue;
+    }
     const truckId  = truckIdByScenario.get(spec.truck)!;
     const driverScenario = DRIVER_NAME_BY_TRUCK[spec.truck];
     const driverId   = driverIdByScenario.get(driverScenario)!;
