@@ -58,7 +58,14 @@ if (!BEARER)  throw new Error('FLEETCAL_CLERK_BEARER required (Clerk __session J
 async function api<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
   if (DRY_RUN && method !== 'GET') {
     console.log(`[DRY] ${method} ${path}`, body ? JSON.stringify(body).slice(0, 200) : '');
-    return {} as T;
+    // Return a shape that doesn't crash the caller's `.id` / `.customer.id`
+    // / `.dispatcher.id` access. Whichever field the caller reaches for,
+    // they'll get a stub string/number that's distinct from real data.
+    return {
+      customer:   { id: 'dry-customer',   name: 'dry-run' },
+      dispatcher: { id: 0,                firstName: 'dry', lastName: 'run' },
+      load:       { id: 'dry-load',       internalLoadId: 0 },
+    } as T;
   }
   const res = await fetch(`${API_URL}${path}`, {
     method,
