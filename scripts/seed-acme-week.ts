@@ -524,7 +524,9 @@ async function main() {
         }],
       });
       created += 1;
-      if (created % 5 === 0) console.log(`[seed] loads + ${created}/${LOADS.length}`);
+      // Print the ABSOLUTE index so a 401 mid-run gives an exact
+      // `START_AT = lastAbs + 1` value with no math.
+      if (created % 5 === 0) console.log(`[seed] loads + ${created} (last abs idx ${i})`);
     } catch (err) {
       failed += 1;
       console.error(`[seed] load ${i} failed:`, (err as Error).message);
