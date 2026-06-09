@@ -133,9 +133,28 @@ const DRIVER_NAME_BY_SCENARIO: Record<string, string> = {
 
 // Trailer rotation per equipment type. The scenario data tags loads
 // as reefer or dry van; we round-robin within type so the same
-// trailer doesn't dominate the calendar visually.
-const DRY_VAN_TRAILERS = ['689898 Dry Van', '408490 Dry Van'];
-const REEFER_TRAILERS  = ['509 Reefer', '510 Reefer'];
+// trailer doesn't dominate the calendar visually. The script looks
+// up the real trailer IDs by these names via GET /v1/trailers at
+// startup, then passes trailerId on each event so the trailer chip
+// shows up correctly in the load modal.
+const DRY_VAN_TRAILER_NAMES = ['689898 Dry Van', '408490 Dry Van'];
+const REEFER_TRAILER_NAMES  = ['509 Reefer', '510 Reefer'];
+
+// Pool of realistic load-level special instructions. One gets attached
+// to each load at random so the demo has a mix of typical broker asks
+// rather than every load looking identical.
+const SPECIAL_INSTRUCTIONS_POOL = [
+  'Driver must check in at security gate. PPE required on dock.',
+  'Detention starts 2 hours after appt. Lumper fee reimbursable up to $150.',
+  'Driver assist required at delivery. POD must be signed by receiver.',
+  'Sealed trailer — do not break seal except at final delivery. Note seal number on BOL.',
+  'Appointment is firm. Late arrival = TONU charge to carrier.',
+  'Driver must have hard hat + safety vest on dock. No early arrival.',
+  'Reefer set continuous at temp. Email reefer download to dispatch on arrival.',
+  'No-touch freight. Driver stays in cab unless directed otherwise.',
+  'Driver must provide MC + DOT at gate. Bring 2 copies of BOL.',
+  'Lumper fee paid by carrier — submit receipt with POD for reimbursement.',
+];
 
 // ── Brokers (customers) ───────────────────────────────────────────
 
@@ -415,6 +434,31 @@ async function main() {
   }
   console.log(`[seed] driver IDs resolved (${driverIdByScenario.size})`);
 
+  // 2.25 Lookup trailer IDs by name. The user's trailers are named like
+  // "509 Reefer" / "689898 Dry Van" — we match on the full name. Falls
+  // back gracefully (skip the trailerId field) if a name doesn't match,
+  // rather than crashing the seed — old runs without trailers should
+  // still complete and leave the trailer chip empty.
+  const trailersRes = await api<{ trailers: Array<{ id: number; name: string; trailerNumber?: string }> }>('GET', '/v1/trailers');
+  const trailerIdByName = new Map<string, number>();
+  for (const t of trailersRes.trailers ?? []) {
+    if (t.name) trailerIdByName.set(t.name, t.id);
+    if (t.trailerNumber) trailerIdByName.set(t.trailerNumber, t.id);
+  }
+  const resolveTrailerId = (names: string[]): { id: number; name: string } | null => {
+    for (const n of names) {
+      const id = trailerIdByName.get(n);
+      if (id) return { id, name: n };
+      // Also try matching on just the number portion ("509" if the user
+      // named their trailer "509 Reefer").
+      const num = n.split(' ')[0];
+      const numId = trailerIdByName.get(num);
+      if (numId) return { id: numId, name: n };
+    }
+    return null;
+  };
+  console.log(`[seed] trailer IDs resolved (${trailerIdByName.size} unique names)`);
+
   // Driver-name string by scenario truck id (for events.driverName).
   const DRIVER_NAME_BY_TRUCK: Record<string, string> = {
     'T-47':  'Carlos Ramirez',
@@ -517,20 +561,27 @@ async function main() {
     const broker = BROKERS.find(b => b.key === spec.broker)!;
     const customerId = customerIdByBrokerKey.get(spec.broker);
 
-    // Round-robin trailer of the right type.
-    const trailerName = spec.isReefer
-      ? REEFER_TRAILERS[reeferIdx++ % REEFER_TRAILERS.length]
-      : DRY_VAN_TRAILERS[dryVanIdx++ % DRY_VAN_TRAILERS.length];
-    // events.trailer_num expects just the number portion ('509') not
-    // the full "509 Reefer" label. Strip the suffix.
-    const trailerNum = trailerName.split(' ')[0];
+    // Round-robin trailer of the right type. Resolve to the real trailer
+    // row's id so the load modal's Trailer chip shows the user's actual
+    // trailer instead of a free-text "509".
+    const trailerCandidates = spec.isReefer
+      ? [REEFER_TRAILER_NAMES[reeferIdx++ % REEFER_TRAILER_NAMES.length]]
+      : [DRY_VAN_TRAILER_NAMES[dryVanIdx++ % DRY_VAN_TRAILER_NAMES.length]];
+    const trailer = resolveTrailerId(trailerCandidates);
 
     const puStart = toIsoLocal(spec.puDay, spec.puTime);
     const dlStart = toIsoLocal(spec.delDay, spec.delTime);
-    // Title format: "{Broker}: {pickup city, ST} → {delivery city, ST}".
-    // Broker prefix lets the dispatcher scan the calendar at a glance
-    // and see who the load belongs to without opening it.
-    const title = `${broker.name}: ${pu.city}, ${pu.state} → ${dl.city}, ${dl.state}`;
+    // Title format: "{BrokerShortName}: {pickup city, ST} → {delivery
+    // city, ST}". Using shortName ("TQL", "Cheema", "ITS") keeps titles
+    // scannable on the calendar — full names like "Total Quality
+    // Logistics" eat too much horizontal space.
+    const title = `${broker.shortName}: ${pu.city}, ${pu.state} → ${dl.city}, ${dl.state}`;
+    // Broker's 7-digit load number — lands in the Load # field on the
+    // load modal. We were generating this for refNums already; promote
+    // it to the top-level loadNum field too.
+    const brokerLoadNum = String(Math.floor(1_000_000 + Math.random() * 9_000_000));
+    const bolNum = String(Math.floor(1_000_000 + Math.random() * 9_000_000));
+    const poNum  = String(Math.floor(100_000   + Math.random() * 900_000));
     // Single-line address with city/state/zip so the geocoder + the
     // calendar tooltip both have everything they need. The schema also
     // has dedicated city/state fields which we still pass, but having
@@ -538,19 +589,24 @@ async function main() {
     // still be re-geocoded from text alone.
     const puAddress = `${pu.address}, ${pu.city}, ${pu.state} ${pu.zip}`;
     const dlAddress = `${dl.address}, ${dl.city}, ${dl.state} ${dl.zip}`;
+    // Random special instruction from the pool — gives each load some
+    // operational color rather than 50 identical demos.
+    const specialInstructions = SPECIAL_INSTRUCTIONS_POOL[i % SPECIAL_INSTRUCTIONS_POOL.length];
 
     try {
       await api('POST', '/v1/loads', {
         load: {
+          loadNum:     brokerLoadNum,
           broker:      broker.name,
           customerId,
           dispatcher:  'Frank Castillo',
           loadPrice:   spec.rate,
           commodity:   spec.commodity,
           weight:      spec.weight,
+          notes:       specialInstructions,
           refNums: [
-            { label: 'BOL', value: String(Math.floor(1_000_000 + Math.random() * 9_000_000)) },
-            { label: 'PO',  value: String(Math.floor(100_000   + Math.random() * 900_000))   },
+            { label: 'BOL', value: bolNum },
+            { label: 'PO',  value: poNum  },
           ],
         },
         events: [{
@@ -561,12 +617,11 @@ async function main() {
           driverId,
           driverName,
           trailerType: spec.isReefer ? 'Reefer' : 'Dry Van',
-          // trailerId is the FK to a trailers row; we don't know it
-          // from a free-text lookup here. The events table also has
-          // trailer_num text which is the user-visible identifier;
-          // we'll surface this via the trailerType + via a stop note.
-          // Actual trailer assignment can be redone in the UI in a
-          // single click if needed.
+          // Real trailer FK when we resolved a match; the trailer chip
+          // in the load modal renders from this id. Falls through to
+          // null when the trailer name doesn't match — the modal then
+          // shows only the trailerType label.
+          ...(trailer ? { trailerId: trailer.id } : {}),
           stops: [
             {
               id:            crypto.randomUUID(),
@@ -595,7 +650,7 @@ async function main() {
               geocodeStatus: 'success',
               apptStart:     dlStart,
               apptEnd:       addMinutes(dlStart, 30),
-              instructions:  `Trailer #${trailerNum}`,
+              instructions:  trailer ? `Trailer #${trailer.name.split(' ')[0]}` : undefined,
             },
           ],
         }],
