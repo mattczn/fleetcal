@@ -19,6 +19,7 @@ import * as Sentry from "@sentry/node";
 import { env, isProd } from "./lib/env.js";
 import { clerkAuth, type AuthVariables } from "./middleware/clerk.js";
 import { botAuth } from "./middleware/botAuth.js";
+import { captureErrors } from "./middleware/captureErrors.js";
 import loadsRoute from "./routes/loads.js";
 import closeoutRoute from "./routes/closeout.js";
 import botLoadsRoute from "./routes/bot-loads.js";
@@ -97,6 +98,13 @@ const app = new Hono<{ Variables: AuthVariables }>();
 // ── Global middleware ───────────────────────────────────────────────────
 
 app.use("*", logger());
+
+// Capture every 4xx/5xx response into the api_errors table for the
+// /admin/errors dashboard. Mounts globally so it sees public routes
+// AND authenticated ones — and runs the request-body snapshot BEFORE
+// the handler reads the stream. See captureErrors.ts for the long
+// explainer + skip rules.
+app.use("*", captureErrors);
 
 // Security headers on every response.
 //

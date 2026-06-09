@@ -9,7 +9,7 @@
 
 import Link from 'next/link';
 import AppShell from '@/components/nav/AppShell';
-import { Activity, Building2, ShieldAlert, ShieldCheck } from 'lucide-react';
+import { Activity, AlertOctagon, Building2, ShieldAlert, ShieldCheck } from 'lucide-react';
 import PulseCard from './PulseCard';
 import Breadcrumbs from './Breadcrumbs';
 
@@ -48,6 +48,12 @@ export default function AdminIndex() {
             iconBg="#f3e8fd"
             title="Orgs activity"
             description="Every Clerk org with 30-day load + revenue. Flags churn-risk." />
+          <AdminCard
+            href="/admin/errors"
+            icon={<AlertOctagon size={20} style={{ color: '#b91c1c' }} />}
+            iconBg="#fdecec"
+            title="API errors"
+            description="Live tail of 4xx/5xx responses with org_id, request body, and detail. Filter by status, window, path." />
         </div>
       </div>
     </AppShell>
