@@ -121,24 +121,16 @@ const TRUCK_NAME_BY_SCENARIO: Record<string, string> = {
   'T-612': 'Bobcat',
 };
 
-const DRIVER_NAME_BY_SCENARIO: Record<string, string> = {
-  'Carlos Mendoza':    'Carlos Ramirez',
-  'Tyrone Williams':   'Hunter Dawson',
-  'Brandon Hayes':     'Brandon Hayes',
-  'Miguel Ramirez':    'Michael Sanchez',
-  'David Thompson':    'David Romero',
-  'James Walker':      'James Walker',
-  'Roberto Garcia':    'Tim Jones',
-};
+// Truck order used for driver auto-assignment below. The first 7
+// drivers in the org get paired to these 7 trucks in this order.
+const TRUCK_ORDER: Array<keyof typeof TRUCK_NAME_BY_SCENARIO> = [
+  'T-47', 'T-102', 'T-215', 'T-309', 'T-414', 'T-522', 'T-612',
+];
 
-// Trailer rotation per equipment type. The scenario data tags loads
-// as reefer or dry van; we round-robin within type so the same
-// trailer doesn't dominate the calendar visually. The script looks
-// up the real trailer IDs by these names via GET /v1/trailers at
-// startup, then passes trailerId on each event so the trailer chip
-// shows up correctly in the load modal.
-const DRY_VAN_TRAILER_NAMES = ['689898 Dry Van', '408490 Dry Van'];
-const REEFER_TRAILER_NAMES  = ['509 Reefer', '510 Reefer'];
+// Trailers are auto-discovered by category at startup (see main()) so
+// we don't hardcode any specific trailer numbers / names. The script
+// picks dry-van trailers for non-reefer loads and reefer trailers for
+// reefer loads, rotating round-robin within each pool.
 
 // Pool of realistic load-level special instructions. One gets attached
 // to each load at random so the demo has a mix of typical broker asks
@@ -418,46 +410,52 @@ async function main() {
   }
   console.log(`[seed] truck IDs resolved (${truckIdByScenario.size})`);
 
-  // 2. Lookup driver IDs (by full name)
+  // 2. Fetch real drivers + auto-pair them to trucks by list order.
+  // No hardcoded name mapping — we just use whatever drivers the org
+  // actually has, in the order GET /v1/drivers returns them. The first
+  // 7 drivers get assigned to the 7 trucks (T-47 / T-102 / etc.); any
+  // 8th+ driver is spare.
   const driversRes = await api<{ drivers: Array<{ id: number; name?: string; firstName?: string; lastName?: string }> }>('GET', '/v1/drivers');
-  const driverIdByName = new Map<string, number>();
-  for (const d of driversRes.drivers) {
-    const full = `${d.firstName ?? ''} ${d.lastName ?? ''}`.trim();
-    if (full) driverIdByName.set(full, d.id);
-    if (d.name) driverIdByName.set(d.name, d.id);
+  const allDrivers = (driversRes.drivers ?? []).map(d => {
+    const full = `${d.firstName ?? ''} ${d.lastName ?? ''}`.trim() || d.name || `Driver #${d.id}`;
+    return { id: d.id, name: full };
+  });
+  if (allDrivers.length < TRUCK_ORDER.length) {
+    throw new Error(`Need ≥ ${TRUCK_ORDER.length} drivers in the org; found ${allDrivers.length}. Add more drivers and re-run.`);
   }
-  const driverIdByScenario = new Map<string, number>();
-  for (const [scenarioName, realName] of Object.entries(DRIVER_NAME_BY_SCENARIO)) {
-    const id = driverIdByName.get(realName);
-    if (!id) throw new Error(`Driver "${realName}" not found in org (needed for ${scenarioName})`);
-    driverIdByScenario.set(scenarioName, id);
+  const driverByTruck = new Map<string, { id: number; name: string }>();
+  TRUCK_ORDER.forEach((truck, i) => {
+    driverByTruck.set(truck, allDrivers[i]);
+  });
+  console.log(`[seed] truck → driver auto-assignments:`);
+  for (const truck of TRUCK_ORDER) {
+    const d = driverByTruck.get(truck);
+    console.log(`         ${truck} (${TRUCK_NAME_BY_SCENARIO[truck]}) → ${d!.name} (id ${d!.id})`);
   }
-  console.log(`[seed] driver IDs resolved (${driverIdByScenario.size})`);
+  if (allDrivers.length > TRUCK_ORDER.length) {
+    const spare = allDrivers.slice(TRUCK_ORDER.length).map(d => d.name).join(', ');
+    console.log(`         spare: ${spare}`);
+  }
 
-  // 2.25 Lookup trailer IDs by name. The user's trailers are named like
-  // "509 Reefer" / "689898 Dry Van" — we match on the full name. Falls
-  // back gracefully (skip the trailerId field) if a name doesn't match,
-  // rather than crashing the seed — old runs without trailers should
-  // still complete and leave the trailer chip empty.
-  const trailersRes = await api<{ trailers: Array<{ id: number; name: string; trailerNumber?: string }> }>('GET', '/v1/trailers');
-  const trailerIdByName = new Map<string, number>();
-  for (const t of trailersRes.trailers ?? []) {
-    if (t.name) trailerIdByName.set(t.name, t.id);
-    if (t.trailerNumber) trailerIdByName.set(t.trailerNumber, t.id);
-  }
-  const resolveTrailerId = (names: string[]): { id: number; name: string } | null => {
-    for (const n of names) {
-      const id = trailerIdByName.get(n);
-      if (id) return { id, name: n };
-      // Also try matching on just the number portion ("509" if the user
-      // named their trailer "509 Reefer").
-      const num = n.split(' ')[0];
-      const numId = trailerIdByName.get(num);
-      if (numId) return { id: numId, name: n };
-    }
-    return null;
+  // 2.5 Auto-discover trailers by category. Whatever Reefer / Dry Van
+  // trailers the org has, we round-robin across loads of the matching
+  // type. Falls back to whatever's available when one category is empty
+  // (e.g. no reefers configured → reefer loads get the dry-van pool).
+  const trailersRes = await api<{ trailers: Array<{ id: number; name: string; trailerNumber?: string; category?: string }> }>('GET', '/v1/trailers');
+  const allTrailers = trailersRes.trailers ?? [];
+  const trailerPoolReefer = allTrailers.filter(t => (t.category ?? '').toLowerCase().includes('reefer'));
+  const trailerPoolDryVan = allTrailers.filter(t => !((t.category ?? '').toLowerCase().includes('reefer')));
+  console.log(`[seed] trailer pools — reefer=${trailerPoolReefer.length}, other=${trailerPoolDryVan.length}`);
+  const pickTrailer = (isReefer: boolean, idx: number): { id: number; name: string } | null => {
+    const pool = isReefer && trailerPoolReefer.length > 0
+      ? trailerPoolReefer
+      : trailerPoolDryVan.length > 0
+        ? trailerPoolDryVan
+        : trailerPoolReefer;
+    if (pool.length === 0) return null;
+    const t = pool[idx % pool.length];
+    return { id: t.id, name: t.name };
   };
-  console.log(`[seed] trailer IDs resolved (${trailerIdByName.size} unique names)`);
 
   // Driver-name string by scenario truck id (for events.driverName).
   const DRIVER_NAME_BY_TRUCK: Record<string, string> = {
@@ -552,22 +550,18 @@ async function main() {
       if (spec.isReefer) reeferIdx++; else dryVanIdx++;
       continue;
     }
-    const truckId  = truckIdByScenario.get(spec.truck)!;
-    const driverScenario = DRIVER_NAME_BY_TRUCK[spec.truck];
-    const driverId   = driverIdByScenario.get(driverScenario)!;
-    const driverName = DRIVER_NAME_BY_SCENARIO[driverScenario];
+    const truckId = truckIdByScenario.get(spec.truck)!;
+    const driver  = driverByTruck.get(spec.truck)!;
+    const driverId   = driver.id;
+    const driverName = driver.name;
     const pu = FACILITIES[spec.pickup];
     const dl = FACILITIES[spec.delivery];
     const broker = BROKERS.find(b => b.key === spec.broker)!;
     const customerId = customerIdByBrokerKey.get(spec.broker);
 
-    // Round-robin trailer of the right type. Resolve to the real trailer
-    // row's id so the load modal's Trailer chip shows the user's actual
-    // trailer instead of a free-text "509".
-    const trailerCandidates = spec.isReefer
-      ? [REEFER_TRAILER_NAMES[reeferIdx++ % REEFER_TRAILER_NAMES.length]]
-      : [DRY_VAN_TRAILER_NAMES[dryVanIdx++ % DRY_VAN_TRAILER_NAMES.length]];
-    const trailer = resolveTrailerId(trailerCandidates);
+    // Round-robin a real trailer of the right type — fetched by
+    // category at startup so we use whatever the org has.
+    const trailer = pickTrailer(spec.isReefer, spec.isReefer ? reeferIdx++ : dryVanIdx++);
 
     const puStart = toIsoLocal(spec.puDay, spec.puTime);
     const dlStart = toIsoLocal(spec.delDay, spec.delTime);
