@@ -2024,6 +2024,55 @@ function LoadHistorySection({ load, calendarTimezone }: {
               parts.push({ key: 'end', node: <>{b('End')} changed from {b(fmtAuditTime(entry.prevEnd))} to {b(fmtAuditTime(entry.newEnd))}</> });
             if (entry.prevBillingStatus !== undefined || entry.newBillingStatus !== undefined)
               parts.push({ key: 'billing', node: <>{b('Billing')} changed from {b(entry.prevBillingStatus || '—')} to {b(entry.newBillingStatus || '—')}</> });
+            // Accessorial create/update/delete events. Mirrors the
+            // EventModal history footer renderer so an accessorial
+            // edit looks the same whether it came from the calendar
+            // modal or the load detail page below. Build a separate
+            // line per change so multi-row edits stay readable. */}
+            const fmtCat = (c: string) => c.replace(/_/g, ' ');
+            const onOff = (v?: boolean) => v ? 'on' : 'off';
+            for (const ac of (entry.accessorialsChanged ?? [])) {
+              const label = ac.description ? `${fmtCat(ac.category)} (${ac.description})` : fmtCat(ac.category);
+              if (ac.action === 'added') {
+                parts.push({
+                  key: `acc-add-${ac.id ?? Math.random()}`,
+                  node: <>{b(label)} {b('accessorial added')}{ac.amount != null ? <> — {b(fmt$(ac.amount))}</> : null}</>,
+                });
+                continue;
+              }
+              if (ac.action === 'removed') {
+                parts.push({
+                  key: `acc-rm-${ac.id ?? Math.random()}`,
+                  node: <>{b(label)} {b('accessorial removed')}{ac.amount != null ? <> · was {b(fmt$(ac.amount))}</> : null}</>,
+                });
+                continue;
+              }
+              // updated — list each changed pair the diff actually filled
+              const sub: React.ReactNode[] = [];
+              if (ac.prevAmount !== undefined)
+                sub.push(<>amount {b(fmt$(ac.prevAmount))} → {b(fmt$(ac.amount))}</>);
+              if (ac.prevStatus !== undefined || ac.newStatus !== undefined)
+                sub.push(<>status {b(ac.prevStatus || '—')} → {b(ac.newStatus || '—')}</>);
+              if (ac.prevBillable !== undefined || ac.newBillable !== undefined)
+                sub.push(<>billable {b(onOff(ac.prevBillable))} → {b(onOff(ac.newBillable))}</>);
+              if (ac.prevPayToDriver !== undefined || ac.newPayToDriver !== undefined)
+                sub.push(<>pay driver {b(onOff(ac.prevPayToDriver))} → {b(onOff(ac.newPayToDriver))}</>);
+              if (ac.prevPayDriverName !== undefined || ac.newPayDriverName !== undefined)
+                sub.push(<>pay-driver {b(ac.prevPayDriverName || '—')} → {b(ac.newPayDriverName || '—')}</>);
+              if (ac.prevCategory !== undefined)
+                sub.push(<>category {b(fmtCat(ac.prevCategory))} → {b(fmtCat(ac.category))}</>);
+              if (ac.prevDescription !== undefined || ac.newDescription !== undefined)
+                sub.push(<>description {b(ac.prevDescription || '—')} → {b(ac.newDescription || '—')}</>);
+              if (sub.length === 0) continue;
+              parts.push({
+                key: `acc-up-${ac.id ?? Math.random()}`,
+                node: (
+                  <>{b(label)} {b('accessorial updated')} — {sub.map((s, k) => (
+                    <span key={k}>{k > 0 && <span style={{ color: 'var(--gc-text-3)' }}>; </span>}{s}</span>
+                  ))}</>
+                ),
+              });
+            }
             if (parts.length === 0) return null;
             return (
               <div key={i} style={{ fontSize: 12, lineHeight: 1.5, color: 'var(--gc-text-2)' }}>

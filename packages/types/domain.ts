@@ -692,12 +692,37 @@ export interface CheckCall {
 
 export interface AccessorialChange {
   action: "added" | "removed" | "updated";
+  /** Stable id of the accessorial row this change refers to. Same id
+   *  across the row's full lifetime — added, any updates, removed —
+   *  so a renderer can group "this row's history" if it wants. */
+  id?: string;
+  /** Category at the time of the change. For "added" / "removed"
+   *  this is the new/snapshot category; for "updated" it's the current
+   *  (post-update) category. Use prevCategory when the dispatcher
+   *  switched categories. */
   category: string;
+  /** Description at the time of the change (same semantics as
+   *  `category`). For an "updated" entry where description itself
+   *  changed, both description and prevDescription are populated. */
   description?: string;
   amount?: number;
   prevAmount?: number;
   newStatus?: string;
   prevStatus?: string;
+  // ── Extended diff fields (added when more than just amount/status
+  //     changed on an "updated" entry). All optional — only the pairs
+  //     that actually differ get populated, so the renderer can
+  //     show "amount $50 → $80 & billable on → off" cleanly without
+  //     listing untouched fields. ────────────────────────────────────
+  prevCategory?:      string;
+  prevDescription?:   string;
+  newDescription?:    string;
+  prevBillable?:      boolean;
+  newBillable?:       boolean;
+  prevPayToDriver?:   boolean;
+  newPayToDriver?:    boolean;
+  prevPayDriverName?: string;
+  newPayDriverName?:  string;
 }
 
 export interface LoadAuditEntry {

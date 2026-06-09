@@ -2830,29 +2830,61 @@ export default function EventModal() {
     return out;
   };
 
+  // Mirrors apps/api/src/routes/loads.ts::diffAccessorialsForAudit so
+  // an EventModal save and a /v1/loads PATCH from the load-detail
+  // page produce structurally identical AccessorialChange[] entries.
+  // If you extend the comparable field set here, also extend the
+  // server helper — the two have to stay in sync or audit history
+  // will look different depending on which surface edited the row.
   function diffAccessorials(prev: Accessorial[] = [], next: Accessorial[] = []): AccessorialChange[] {
     const changes: AccessorialChange[] = [];
     const prevMap = new Map(prev.map(a => [a.id, a]));
     const nextMap = new Map(next.map(a => [a.id, a]));
     for (const [id, a] of nextMap) {
       if (!prevMap.has(id)) {
-        changes.push({ action: 'added', category: a.category, description: a.description, amount: a.amount });
+        changes.push({
+          action: 'added', id,
+          category: a.category, description: a.description, amount: a.amount,
+          newStatus:        a.status,
+          newBillable:      a.billable,
+          newPayToDriver:   a.payToDriver,
+          newPayDriverName: a.payDriverName,
+        });
       } else {
         const p = prevMap.get(id)!;
-        const amountChanged = (p.amount ?? 0) !== (a.amount ?? 0);
-        const statusChanged = (p.status ?? '') !== (a.status ?? '');
-        if (amountChanged || statusChanged) {
+        const amountChanged       = (p.amount ?? 0) !== (a.amount ?? 0);
+        const statusChanged       = (p.status ?? '') !== (a.status ?? '');
+        const billableChanged     = !!p.billable     !== !!a.billable;
+        const payToDriverChanged  = !!p.payToDriver  !== !!a.payToDriver;
+        const payNameChanged      = (p.payDriverName ?? '') !== (a.payDriverName ?? '');
+        const categoryChanged     = (p.category      ?? '') !== (a.category      ?? '');
+        const descriptionChanged  = (p.description   ?? '') !== (a.description   ?? '');
+        if (amountChanged || statusChanged || billableChanged || payToDriverChanged
+            || payNameChanged || categoryChanged || descriptionChanged) {
           changes.push({
-            action: 'updated', category: a.category, description: a.description,
-            ...(amountChanged ? { prevAmount: p.amount, amount: a.amount } : {}),
-            ...(statusChanged ? { prevStatus: p.status, newStatus: a.status } : {}),
+            action: 'updated', id,
+            category: a.category, description: a.description,
+            ...(amountChanged       ? { prevAmount: p.amount, amount: a.amount } : {}),
+            ...(statusChanged       ? { prevStatus: p.status, newStatus: a.status } : {}),
+            ...(billableChanged     ? { prevBillable: !!p.billable, newBillable: !!a.billable } : {}),
+            ...(payToDriverChanged  ? { prevPayToDriver: !!p.payToDriver, newPayToDriver: !!a.payToDriver } : {}),
+            ...(payNameChanged      ? { prevPayDriverName: p.payDriverName, newPayDriverName: a.payDriverName } : {}),
+            ...(categoryChanged     ? { prevCategory: p.category } : {}),
+            ...(descriptionChanged  ? { prevDescription: p.description, newDescription: a.description } : {}),
           });
         }
       }
     }
     for (const [id, a] of prevMap) {
       if (!nextMap.has(id)) {
-        changes.push({ action: 'removed', category: a.category, description: a.description, amount: a.amount });
+        changes.push({
+          action: 'removed', id,
+          category: a.category, description: a.description, amount: a.amount,
+          prevStatus:        a.status,
+          prevBillable:      a.billable,
+          prevPayToDriver:   a.payToDriver,
+          prevPayDriverName: a.payDriverName,
+        });
       }
     }
     return changes;

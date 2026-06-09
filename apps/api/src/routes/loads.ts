@@ -188,6 +188,106 @@ function badRequest(c: AnyHonoContext, errors: string[]) {
   return c.json(res, 400);
 }
 
+/**
+ * Server-side accessorial diff used by PATCH /v1/loads/:id to record
+ * create / update / delete events into the load's audit log. Mirrors
+ * apps/web/components/calendar/EventModal.tsx::diffAccessorials so
+ * the EventModal-edit and load-detail-page-edit paths produce
+ * structurally identical AccessorialChange[] entries.
+ *
+ * The shape `ServerAccessorialSnapshot` is the loose union of fields
+ * we actually compare; using `unknown[k]` via index sig keeps us
+ * forward-compatible with closeout adding more fields to the JSONB
+ * (approvedAt etc.) without false-flagging those as "changes."
+ */
+interface ServerAccessorialSnapshot {
+  id?:             string;
+  category?:       string;
+  description?:    string;
+  amount?:         number;
+  billable?:       boolean;
+  status?:         string;
+  payToDriver?:    boolean;
+  payDriverName?:  string;
+  // Anything else (closeout-owned approvedAt/approvedBy/etc.) is
+  // intentionally absent from the comparable set.
+  [k: string]:     unknown;
+}
+function diffAccessorialsForAudit(
+  prev: ServerAccessorialSnapshot[],
+  next: ServerAccessorialSnapshot[],
+): import("@fleetcal/types").AccessorialChange[] {
+  const changes: import("@fleetcal/types").AccessorialChange[] = [];
+  const prevMap = new Map<string, ServerAccessorialSnapshot>();
+  const nextMap = new Map<string, ServerAccessorialSnapshot>();
+  for (const a of prev) if (a?.id) prevMap.set(a.id, a);
+  for (const a of next) if (a?.id) nextMap.set(a.id, a);
+
+  // Added → in next, not in prev
+  for (const [id, a] of nextMap) {
+    if (prevMap.has(id)) continue;
+    changes.push({
+      action:        "added",
+      id,
+      category:      a.category ?? "other",
+      description:   a.description,
+      amount:        typeof a.amount === "number" ? a.amount : undefined,
+      newStatus:     a.status,
+      newBillable:   a.billable,
+      newPayToDriver:   a.payToDriver,
+      newPayDriverName: a.payDriverName,
+    });
+  }
+
+  // Removed → in prev, not in next. Snapshot the prev values so the
+  // log is still readable after the row is gone.
+  for (const [id, a] of prevMap) {
+    if (nextMap.has(id)) continue;
+    changes.push({
+      action:        "removed",
+      id,
+      category:      a.category ?? "other",
+      description:   a.description,
+      amount:        typeof a.amount === "number" ? a.amount : undefined,
+      prevStatus:    a.status,
+      prevBillable:  a.billable,
+      prevPayToDriver:   a.payToDriver,
+      prevPayDriverName: a.payDriverName,
+    });
+  }
+
+  // Updated → in both, but at least one comparable field differs.
+  // Only the pairs that actually changed get populated.
+  for (const [id, a] of nextMap) {
+    const p = prevMap.get(id);
+    if (!p) continue;
+    const amountChanged       = (p.amount        ?? 0)     !== (a.amount        ?? 0);
+    const statusChanged       = (p.status        ?? "")    !== (a.status        ?? "");
+    const billableChanged     = !!p.billable               !== !!a.billable;
+    const payToDriverChanged  = !!p.payToDriver            !== !!a.payToDriver;
+    const payNameChanged      = (p.payDriverName  ?? "")   !== (a.payDriverName  ?? "");
+    const categoryChanged     = (p.category       ?? "")   !== (a.category       ?? "");
+    const descriptionChanged  = (p.description    ?? "")   !== (a.description    ?? "");
+    if (!(amountChanged || statusChanged || billableChanged ||
+          payToDriverChanged || payNameChanged ||
+          categoryChanged || descriptionChanged)) continue;
+    changes.push({
+      action:        "updated",
+      id,
+      category:      a.category ?? "other",
+      description:   a.description,
+      ...(amountChanged       ? { prevAmount: p.amount, amount: a.amount } : {}),
+      ...(statusChanged       ? { prevStatus: p.status, newStatus: a.status } : {}),
+      ...(billableChanged     ? { prevBillable: !!p.billable, newBillable: !!a.billable } : {}),
+      ...(payToDriverChanged  ? { prevPayToDriver: !!p.payToDriver, newPayToDriver: !!a.payToDriver } : {}),
+      ...(payNameChanged      ? { prevPayDriverName: p.payDriverName, newPayDriverName: a.payDriverName } : {}),
+      ...(categoryChanged     ? { prevCategory: p.category } : {}),
+      ...(descriptionChanged  ? { prevDescription: p.description, newDescription: a.description } : {}),
+    });
+  }
+  return changes;
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // POST /v1/loads — create a load (1 or 2 events)
 // ─────────────────────────────────────────────────────────────────────────
@@ -1200,6 +1300,12 @@ loads.patch("/:id", requireCapability("loads.edit"), async (c) => {
   // each existing entry, and overlay the body's editable fields.
   // New ids in the body get inserted; existing ids missing from the
   // body get dropped (dispatcher deleted them).
+  // Snapshot the pre-merge accessorials list so the post-write audit
+  // block at the bottom of this handler can diff existing vs next and
+  // emit a `accessorialsChanged` audit entry. Stays `null` when the
+  // request didn't include accessorials at all (no work to diff).
+  let existingAccessorialsBeforeMerge: ServerAccessorialSnapshot[] | null = null;
+
   if ("accessorials" in body) {
     type AccessorialRow = {
       id: string;
@@ -1212,22 +1318,26 @@ loads.patch("/:id", requireCapability("loads.edit"), async (c) => {
       [k: string]: unknown;
     };
     const incoming = (body.accessorials ?? []) as unknown as AccessorialRow[];
+    // Always read the existing snapshot — we need it for the audit diff
+    // even when the dispatcher wipes the whole list (each row "removed").
+    const { data: row, error: readErr } = await supabase
+      .from("loads")
+      .select("accessorials")
+      .eq("id", loadId)
+      .eq("org_id", orgId)
+      .maybeSingle();
+    if (readErr) {
+      console.error("[PATCH /v1/loads/:id] accessorials read failed:", readErr);
+      return c.json({ error: "accessorials_read_failed", detail: readErr.message } satisfies ApiErrorResponse, 500);
+    }
+    const existing = ((row?.accessorials ?? []) as AccessorialRow[]) || [];
+    existingAccessorialsBeforeMerge = existing as unknown as ServerAccessorialSnapshot[];
+
     if (incoming.length === 0) {
       // Empty array → wipe all accessorials. The dispatcher explicitly
       // cleared them in the modal, so closeout state goes with them.
       update.accessorials = null;
     } else {
-      const { data: row, error: readErr } = await supabase
-        .from("loads")
-        .select("accessorials")
-        .eq("id", loadId)
-        .eq("org_id", orgId)
-        .maybeSingle();
-      if (readErr) {
-        console.error("[PATCH /v1/loads/:id] accessorials read failed:", readErr);
-        return c.json({ error: "accessorials_read_failed", detail: readErr.message } satisfies ApiErrorResponse, 500);
-      }
-      const existing = ((row?.accessorials ?? []) as AccessorialRow[]) || [];
       const existingById = new Map<string, AccessorialRow>();
       for (const a of existing) if (a?.id) existingById.set(a.id, a);
       const merged = incoming.map((a) => {
@@ -1261,6 +1371,33 @@ loads.patch("/:id", requireCapability("loads.edit"), async (c) => {
   if (error) {
     console.error("[PATCH /v1/loads/:id] update failed:", error);
     return c.json({ error: "update_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  }
+
+  // ── Audit log: accessorial change tracking ──────────────────────────
+  // The accessorials block above merges incoming vs existing and writes
+  // the merged array — but it never recorded WHICH rows were added,
+  // removed, or updated. Calendar EventModal computes this client-side
+  // and bundles it into the auditLog body it ships up, but loads edited
+  // via the load-detail page (apps/web/app/loads/[internalLoadId]/page.tsx)
+  // PATCH this endpoint without a precomputed entry, so accessorial
+  // changes from that surface were silent. Now they get an audit entry
+  // here whenever the merge produced a real diff.
+  //
+  // Skipped when the caller already sent an auditLog body (EventModal
+  // does the diff itself) — we'd double-count otherwise. We also skip
+  // the diff entirely when the request didn't include the accessorials
+  // field; the previous version recomputed even on unrelated PATCHes.
+  if (existingAccessorialsBeforeMerge !== null && !("auditLog" in body)) {
+    const next = (update.accessorials ?? []) as ServerAccessorialSnapshot[];
+    const diff = diffAccessorialsForAudit(existingAccessorialsBeforeMerge, next);
+    if (diff.length > 0) {
+      const actorName = await getUserDisplayName(c.get("userId"));
+      await appendLoadAudit(loadId, orgId, {
+        changedAt:           new Date().toISOString(),
+        changedByName:       actorName ?? "Dispatcher",
+        accessorialsChanged: diff,
+      });
+    }
   }
 
   const joined = await fetchLoadJoined(loadId, orgId);
