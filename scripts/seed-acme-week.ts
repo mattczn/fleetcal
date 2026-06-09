@@ -468,32 +468,33 @@ async function main() {
     'T-612': 'Tim Jones',
   };
 
-  // 2.5 Wipe seed-window loads (Sat Jun 6 – Sat Jun 13). Defaults on
-  // so re-running the script produces a clean week without manual SQL.
-  // Set WIPE=0 to skip this step (e.g. when using START_AT to resume).
+  // 2.5 Wipe seed-window loads (Sat Jun 6 – Fri Jun 12). Defaults on so
+  // re-running the script produces a clean week without manual SQL.
+  // Set WIPE=0 to skip (e.g. when using START_AT to resume an
+  // interrupted run).
+  //
+  // We use the API's native ?from=&to= filter (events.start range) so
+  // we don't have to fetch every load in the org. The endpoint returns
+  // each load with a flat `start` field for its primary event.
   if (WIPE && !DRY_RUN && START_AT === 0) {
-    const list = await api<{ loads: Array<{ id: string; events?: Array<{ start?: string }> }> }>('GET', '/v1/loads');
-    const toDelete = (list.loads ?? []).filter(l => {
-      // Match by event-start window — anything starting Jun 6–12 2026
-      // (the script's day-offset range from Monday Jun 8). Edge: a load
-      // whose first event starts before Jun 6 but ends inside the
-      // window would survive — none in this seed do that.
-      const firstEv = (l.events ?? [])[0];
-      const start = firstEv?.start ?? '';
-      return start >= '2026-06-06' && start < '2026-06-13';
-    });
+    const list = await api<{ loads: Array<{ id: string; start?: string; loadNum?: string | null }> }>(
+      'GET',
+      '/v1/loads?from=2026-06-06&to=2026-06-12',
+    );
+    const toDelete = list.loads ?? [];
     if (toDelete.length > 0) {
       console.log(`[seed] wiping ${toDelete.length} existing loads in Jun 6-12 window…`);
-      let wiped = 0;
+      let wiped = 0, failed = 0;
       for (const l of toDelete) {
         try {
           await api('DELETE', `/v1/loads/${l.id}`);
           wiped += 1;
         } catch (err) {
+          failed += 1;
           console.error(`[seed] delete ${l.id} failed:`, (err as Error).message);
         }
       }
-      console.log(`[seed] wiped ${wiped}/${toDelete.length}`);
+      console.log(`[seed] wiped ${wiped}/${toDelete.length}${failed ? ` (${failed} failed)` : ''}`);
     } else {
       console.log(`[seed] nothing to wipe (clean window)`);
     }
