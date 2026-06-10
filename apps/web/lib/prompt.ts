@@ -81,12 +81,14 @@ GROUND TRUTH RULES:
 Return ONLY a JSON object with the corrected date fields — no markdown, no explanation:
 
 {
-  "start": "<YYYY-MM-DDTHH:mm in ${variables.timezone}>",
-  "end":   "<YYYY-MM-DDTHH:mm in ${variables.timezone}>",
+  "start": "<copy from stops[0].apptStart EXACTLY — same naive YYYY-MM-DDTHH:mm string, no tz conversion>",
+  "end":   "<copy from stops[last].apptStart EXACTLY — same naive YYYY-MM-DDTHH:mm string, no tz conversion>",
   "stops": [
-    { "sequence": <integer matching the original>, "apptStart": "<corrected>", "apptEnd": "<corrected or empty>" }
+    { "sequence": <integer matching the original>, "apptStart": "<corrected, in this stop's local time>", "apptEnd": "<corrected or empty>" }
   ]
 }
+
+Times are LOCAL to each stop. If the rate con prints "15:00 PDT" at a Vegas pickup, output "2026-06-02T15:00" — do not convert. The downstream system tags each stop with the correct tz from geocoding.
 
 Include every stop from the original output, in the same sequence order. Do not add or remove stops.`;
 }
@@ -98,8 +100,8 @@ export function buildRateConPrompt(
 ): string {
   const alwaysSchema: Record<string, string> = {
     summary: variables.titleFormat,
-    start:   `First pickup date/time in YYYY-MM-DDTHH:mm (24-hour, ${variables.timezone})`,
-    end:     `Final delivery date/time in YYYY-MM-DDTHH:mm (24-hour, ${variables.timezone})`,
+    start:   `First pickup date/time in YYYY-MM-DDTHH:mm (24-hour, LOCAL to the first stop — copy literally from the rate con, do not convert tz)`,
+    end:     `Final delivery date/time in YYYY-MM-DDTHH:mm (24-hour, LOCAL to the last stop — copy literally from the rate con, do not convert tz)`,
   };
 
   const schemaLines: string[] = [];
@@ -143,8 +145,8 @@ export function buildRateConPrompt(
       "address": "<full street address including city, state, zip — as complete as possible>",
       "city": "<just the city name, e.g. 'Spanish Fork' or 'Milford' — no state, no road, no zip>",
       "scheduleType": "<appointment | window | fcfs — pick 'appointment' if a single time, 'window' if a time range, 'fcfs' if 'first come first served' or no fixed time. Empty string if unclear.>",
-      "apptStart": "<appointment time or window start in YYYY-MM-DDTHH:mm (${variables.timezone}), or empty string>",
-      "apptEnd": "<window end time in YYYY-MM-DDTHH:mm if a time window is given, otherwise empty string>",
+      "apptStart": "<appointment time or window start in YYYY-MM-DDTHH:mm — LOCAL to THIS stop's clock. If rate con prints '15:00 PDT' at a Vegas stop, output '2026-06-02T15:00'. If it prints '10:00 MDT' at a Draper UT stop, output '2026-06-03T10:00'. NEVER cross-convert between stops. Empty string if no time given.>",
+      "apptEnd": "<window end time in YYYY-MM-DDTHH:mm if a time window is given (same LOCAL-to-this-stop rule as apptStart), otherwise empty string>",
       "instructions": "<any stop-specific instructions, notes, gate codes, or requirements listed on the rate con for this location, or empty string>"
     }
   ],
@@ -188,5 +190,7 @@ The load's "start" is the FIRST stop's appointment time. The load's "end" is the
 ${schema},
 ${stopsSchema}
 ${customBlock}
-Convert all times to ${variables.timezone}.`;
+TIMES ARE LOCAL TO EACH STOP. Copy times LITERALLY as printed at each stop — do NOT cross-convert between stops, even when the document lists timezone labels like "PDT" or "MDT". A Vegas stop printed "15:00 PDT" outputs "2026-06-02T15:00". A Draper UT stop printed "10:00 MDT" on the same load outputs "2026-06-03T10:00". The downstream system pins each stop to its own timezone from geocoding, so cross-converting here would double-shift the appointment.
+
+The HARD CONSTRAINTS in section 4 above (stops[0].apptStart === start, stops[last].apptStart === end) compare the raw string values — they are still satisfied because each end of the load reads the literal time at its own stop.`;
 }
