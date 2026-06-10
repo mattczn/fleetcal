@@ -1015,6 +1015,47 @@ closeout.patch("/loads/:id", async (c) => {
     });
   }
 
+  // When transitioning AWAY from invoiced/paid back to an earlier
+  // stage (verified, pending, on_hold), auto-void any non-void invoice
+  // for the load. Otherwise the invoice row outlives the load's
+  // state — the next "Generate & Send" finds the existing sent/paid
+  // row and bails with "Already invoiced (status: sent). Refresh to
+  // update the bucket.", leaving the dispatcher stuck.
+  //
+  // Voiding (rather than deleting) preserves the audit trail and the
+  // void_reason explains why. The void endpoint itself sets
+  // billing_status='verified' as a side effect; we DON'T call it here
+  // because we've already written the target billing_status above,
+  // and re-setting it would clobber the actor's chosen state
+  // (e.g. reopen → pending should stay pending, not flip to verified).
+  if (
+    "billing_status" in update &&
+    (priorBillingStatus === "invoiced" || priorBillingStatus === "paid") &&
+    update.billing_status !== "invoiced" &&
+    update.billing_status !== "paid"
+  ) {
+    const { data: voidedRows, error: voidErr } = await supabase
+      .from("invoices")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .update({
+        status:      "void",
+        void_reason: `Load reverted to ${update.billing_status as string} after invoicing`,
+      } as any)
+      .eq("org_id", orgId)
+      .eq("load_id", loadId)
+      .neq("status", "void")
+      .select("id,invoice_number,status");
+    if (voidErr) {
+      // Best-effort: log + continue. The load update already succeeded;
+      // the dispatcher can void manually if needed.
+      console.warn("[closeout reopen → void invoice] failed:", voidErr.message);
+    } else if (voidedRows && voidedRows.length > 0) {
+      console.log(
+        `[closeout] auto-voided ${voidedRows.length} invoice(s) for load ${loadId} (transition ${priorBillingStatus} → ${update.billing_status as string})`,
+      );
+    }
+  }
+
   return c.json({ ok: true });
 });
 
