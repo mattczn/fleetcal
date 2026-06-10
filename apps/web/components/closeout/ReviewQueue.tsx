@@ -123,15 +123,20 @@ const ACCESSORIAL_LABEL: Record<string, string> = {
 // so dispatchers hit common buttons by muscle memory. Rate Con goes
 // first since it's required for release alongside POD.
 const KIND_OPTIONS: ReadonlyArray<{ kind: import('@fleetcal/types').DocumentKind; label: string; tint: { bg: string; fg: string } }> = [
-  { kind: 'pod',          label: 'POD',          tint: KIND_TINT.pod },
-  { kind: 'rate_con',     label: 'Rate Con',     tint: KIND_TINT.rate_con },
-  { kind: 'bol',          label: 'BOL',          tint: KIND_TINT.bol },
-  { kind: 'lumper',       label: 'Lumper',       tint: KIND_TINT.lumper },
-  { kind: 'scale',        label: 'Scale',        tint: KIND_TINT.scale },
-  { kind: 'receipt',      label: 'Receipt',      tint: KIND_TINT.receipt },
-  { kind: 'driver_sheet', label: 'Driver Sheet', tint: KIND_TINT.driver_sheet },
-  { kind: 'invoice',      label: 'Invoice',      tint: KIND_TINT.invoice },
-  { kind: 'other',        label: 'Other',        tint: KIND_TINT.other },
+  { kind: 'pod',            label: 'POD',          tint: KIND_TINT.pod },
+  { kind: 'rate_con',       label: 'Rate Con',     tint: KIND_TINT.rate_con },
+  { kind: 'bol',            label: 'BOL',          tint: KIND_TINT.bol },
+  { kind: 'lumper',         label: 'Lumper',       tint: KIND_TINT.lumper },
+  { kind: 'scale',          label: 'Scale',        tint: KIND_TINT.scale },
+  { kind: 'receipt',        label: 'Receipt',      tint: KIND_TINT.receipt },
+  { kind: 'driver_sheet',   label: 'Driver Sheet', tint: KIND_TINT.driver_sheet },
+  { kind: 'invoice',        label: 'Invoice',      tint: KIND_TINT.invoice },
+  // Invoice Packet sits right next to Invoice — they're the same
+  // family (invoice + supporting docs) just differently scoped, so
+  // the dropdown groups them visually. Different tint (darker purple)
+  // keeps the chip distinguishable at a glance.
+  { kind: 'invoice_packet', label: 'Packet',       tint: KIND_TINT.invoice_packet },
+  { kind: 'other',          label: 'Other',        tint: KIND_TINT.other },
 ];
 
 /** Sentinel id for the virtual rate-con primary (synthesized when a
