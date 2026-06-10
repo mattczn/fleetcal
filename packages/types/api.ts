@@ -398,13 +398,20 @@ export type DocumentKind =
   | "lumper"
   | "receipt"
   | "driver_sheet"
+  /** Bare invoice PDF — just the invoice page, no rate-con / POD / etc.
+   *  Used when the dispatcher needs to send "just the invoice" without
+   *  the supporting docs that normally make up the packet. */
   | "invoice"
+  /** Full broker-facing packet — invoice + rate-con + selected proof
+   *  docs (POD/BOL/lumper/scale/etc) merged into one PDF. This is
+   *  what gets emailed to the broker's AP team by default. */
+  | "invoice_packet"
   | "relay_handoff"
   | "other";
 
 /** Canonical ordered list — drives the UI chip order and validation. */
 export const DOCUMENT_KINDS: readonly DocumentKind[] = [
-  "rate_con", "pod", "bol", "scale", "lumper", "receipt", "driver_sheet", "invoice", "relay_handoff", "other",
+  "rate_con", "pod", "bol", "scale", "lumper", "receipt", "driver_sheet", "invoice", "invoice_packet", "relay_handoff", "other",
 ];
 
 /** Legacy default allow-list, retained as a fallback for the small
@@ -419,7 +426,7 @@ export const DEFAULT_DRIVER_VISIBLE_DOC_KINDS: readonly DocumentKind[] = [
  *  visible. Used by the Settings UI to disable the toggle for these
  *  rows and explain why in a tooltip. */
 export const DRIVER_HIDDEN_DOC_KINDS: readonly DocumentKind[] = [
-  "rate_con", "invoice",
+  "rate_con", "invoice", "invoice_packet",
 ];
 
 /** Default per-kind configuration for orgs that haven't set

@@ -88,21 +88,23 @@ const KIND_TINT: Record<string, { bg: string; fg: string }> = {
   lumper:       { bg: '#a16207', fg: '#fff' },  // Amber, darkened for white-text contrast
   receipt:      { bg: '#c2185b', fg: '#fff' },  // Pink
   driver_sheet: { bg: '#00838f', fg: '#fff' },  // Teal
-  invoice:      { bg: '#7b1fa2', fg: '#fff' },  // Purple
-  other:        { bg: '#5f6368', fg: '#fff' },  // Graphite gray
+  invoice:        { bg: '#7b1fa2', fg: '#fff' },  // Purple
+  invoice_packet: { bg: '#4a148c', fg: '#fff' },  // Darker purple — visually paired with invoice
+  other:          { bg: '#5f6368', fg: '#fff' },  // Graphite gray
 };
 
 // Display label per kind. snake_case → "Title Case" for the docs UI.
 const KIND_LABEL: Record<string, string> = {
-  rate_con:     'Rate Con',
-  pod:          'POD',
-  bol:          'BOL',
-  scale:        'Scale',
-  lumper:       'Lumper',
-  receipt:      'Receipt',
-  driver_sheet: 'Driver Sheet',
-  invoice:      'Invoice',
-  other:        'Other',
+  rate_con:       'Rate Con',
+  pod:            'POD',
+  bol:            'BOL',
+  scale:          'Scale',
+  lumper:         'Lumper',
+  receipt:        'Receipt',
+  driver_sheet:   'Driver Sheet',
+  invoice:        'Invoice',
+  invoice_packet: 'Packet',
+  other:          'Other',
 };
 
 // Display labels for accessorial categories — used by the banner in

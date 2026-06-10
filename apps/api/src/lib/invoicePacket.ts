@@ -513,10 +513,21 @@ export async function resolveRateConPathForLoad(loadId: string, orgId: string): 
 const DOC_BUCKET = "load-documents";
 
 /**
- * Replace (or create) the persisted packet PDF for an invoice. Looks
- * up any existing load_documents row tied to this invoice_id, deletes
- * the old storage object + DB row, then uploads + inserts the new
- * version. Safe to call repeatedly — the latest render always wins.
+ * Replace (or create) the persisted PDFs for an invoice. Two artifacts
+ * are saved on every call:
+ *
+ *   kind='invoice'         → bare invoice PDF only (single page, no
+ *                             supporting docs). Used when the dispatcher
+ *                             wants to send "just the invoice" without
+ *                             rate-con/POD.
+ *   kind='invoice_packet'  → full merged broker-facing packet (invoice
+ *                             + rate-con + POD/BOL/etc). The default
+ *                             email attachment.
+ *
+ * Both are wiped + re-uploaded together so they stay in sync — a stale
+ * packet shouldn't outlive an updated invoice. The return value
+ * references the packet row to preserve the original API shape
+ * (callers that care about the bare invoice can re-query by kind).
  *
  * Best-effort: callers should catch errors and log rather than fail
  * the parent request. A missing archive doesn't break invoice
@@ -525,8 +536,10 @@ const DOC_BUCKET = "load-documents";
 export async function persistInvoicePacket(args: {
   invoice:   Invoice;
   orgId:     string;
-  /** Optional pre-built buffer to skip re-rendering. Callers like the
-   *  email-send path that have a fresh packet pass it in. */
+  /** Optional pre-built PACKET buffer to skip re-rendering the merged
+   *  packet. Callers like the email-send path that have a fresh
+   *  packet pass it in. The bare invoice is always re-rendered (it's
+   *  cheap — no attachments to download). */
   prebuilt?: Buffer;
 }): Promise<{ documentId: string; storagePath: string }> {
   const { invoice, orgId } = args;
@@ -547,10 +560,9 @@ export async function persistInvoicePacket(args: {
     ?? legs[0]?.id;
   if (!eventId) throw new Error("no active event for load");
 
-  // Clear out any previous archived packet for this invoice. Storage
-  // object first (best-effort — Supabase tolerates missing keys), then
-  // the DB row. Re-uploading to the same path also works via
-  // `upsert: true` but tracking history would be harder.
+  // Clear out ANY previous archived artifact for this invoice (both
+  // the packet AND the bare invoice). Storage objects first (best-
+  // effort — Supabase tolerates missing keys), then the DB rows.
   const { data: existing } = await supabase
     .from("load_documents")
     .select("id,storage_path")
@@ -566,37 +578,89 @@ export async function persistInvoicePacket(args: {
       .eq("org_id", orgId);
   }
 
-  // Build the packet now if the caller didn't hand one in.
-  let buffer = args.prebuilt;
-  if (!buffer) {
+  const fmt = (iso?: string) => iso
+    ? new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+    : undefined;
+  const issuedDate = fmt(invoice.issuedAt);
+  const dueDate    = fmt(invoice.dueAt);
+
+  // Render the BARE invoice PDF. Cheap — no Storage downloads — but
+  // happens regardless because we need it for the kind='invoice' row.
+  const bareInvoiceBytes = await renderInvoicePdf({
+    snapshot:      invoice.snapshot,
+    invoiceNumber: invoice.invoiceNumber,
+    issuedDate,
+    dueDate,
+    logoData:      invoice.snapshot.companyLogoUrl,
+  });
+
+  // Build the full packet. If the caller already has one (email-send
+  // path), reuse it.
+  let packetBuffer = args.prebuilt;
+  if (!packetBuffer) {
     const [extraDocPaths, rateConPath] = await Promise.all([
       resolvePacketDocsForLoad(invoice.loadId, orgId),
       resolveRateConPathForLoad(invoice.loadId, orgId),
     ]);
-    const fmt = (iso?: string) => iso
-      ? new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
-      : undefined;
     const built = await buildInvoicePacket({
       invoice,
       rateConPath,
       extraDocPaths,
-      issuedDate: fmt(invoice.issuedAt),
-      dueDate:    fmt(invoice.dueAt),
+      issuedDate,
+      dueDate,
     });
-    buffer = built.buffer;
+    packetBuffer = built.buffer;
   }
 
-  const ts          = Date.now();
-  const storagePath = `${orgId}/${eventId}/${ts}_invoice-${invoice.id}.pdf`;
-  const fileName    = `Invoice-Packet-${invoice.invoiceNumber}.pdf`;
+  const ts = Date.now();
 
+  // Upload + insert both. Order: packet first so the legacy return
+  // value (documentId, storagePath) keeps pointing at the packet row,
+  // matching the pre-split API shape.
+  const packetUpload = await uploadArtifact(
+    eventId,
+    `${orgId}/${eventId}/${ts}_invoice-packet-${invoice.id}.pdf`,
+    `Invoice-Packet-${invoice.invoiceNumber}.pdf`,
+    "invoice_packet",
+    Buffer.from(packetBuffer),
+    invoice,
+    orgId,
+  );
+
+  // Bare invoice gets a slightly different storage path so the two
+  // can coexist under the same event.
+  await uploadArtifact(
+    eventId,
+    `${orgId}/${eventId}/${ts}_invoice-only-${invoice.id}.pdf`,
+    `Invoice-${invoice.invoiceNumber}.pdf`,
+    "invoice",
+    Buffer.from(bareInvoiceBytes),
+    invoice,
+    orgId,
+  );
+
+  return packetUpload;
+}
+
+/** Upload a single PDF + insert its load_documents row. Used by both
+ *  the packet and the bare-invoice paths so the storage/DB plumbing
+ *  lives in one place. */
+async function uploadArtifact(
+  eventId:     string,
+  storagePath: string,
+  fileName:    string,
+  kind:        "invoice" | "invoice_packet",
+  buffer:      Buffer,
+  invoice:     Invoice,
+  orgId:       string,
+): Promise<{ documentId: string; storagePath: string }> {
   const { error: uploadErr } = await supabase.storage
     .from(DOC_BUCKET)
     .upload(storagePath, buffer, {
       contentType: "application/pdf",
       upsert: false,
     });
-  if (uploadErr) throw new Error(`storage upload failed: ${uploadErr.message}`);
+  if (uploadErr) throw new Error(`storage upload failed (${kind}): ${uploadErr.message}`);
 
   const { data: row, error: insertErr } = await supabase
     .from("load_documents")
@@ -608,14 +672,14 @@ export async function persistInvoicePacket(args: {
       file_name:    fileName,
       mime_type:    "application/pdf",
       size_bytes:   buffer.length,
-      kind:         "invoice",
+      kind,
       invoice_id:   invoice.id,
     })
     .select("id")
     .single();
   if (insertErr || !row) {
     void supabase.storage.from(DOC_BUCKET).remove([storagePath]);
-    throw new Error(`load_documents insert failed: ${insertErr?.message}`);
+    throw new Error(`load_documents insert failed (${kind}): ${insertErr?.message}`);
   }
   return { documentId: (row as { id: string }).id, storagePath };
 }

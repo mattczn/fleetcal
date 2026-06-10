@@ -1114,20 +1114,22 @@ function SettingsNumberInput({
 // Human labels for each document kind — drives the toggle list copy in
 // the Driver App panel. Keep in sync with @fleetcal/types DocumentKind.
 const DOC_KIND_LABEL: Record<DocumentKind, string> = {
-  rate_con:      'Rate Confirmation',
-  pod:           'POD (Proof of Delivery)',
-  bol:           'Bill of Lading',
-  scale:         'Scale Ticket',
-  lumper:        'Lumper Receipt',
-  receipt:       'Receipt',
-  driver_sheet:  'Driver Sheet',
-  invoice:       'Invoice',
-  relay_handoff: 'Relay Handoff Photos',
-  other:         'Other',
+  rate_con:       'Rate Confirmation',
+  pod:            'POD (Proof of Delivery)',
+  bol:            'Bill of Lading',
+  scale:          'Scale Ticket',
+  lumper:         'Lumper Receipt',
+  receipt:        'Receipt',
+  driver_sheet:   'Driver Sheet',
+  invoice:        'Invoice',
+  invoice_packet: 'Invoice Packet',
+  relay_handoff:  'Relay Handoff Photos',
+  other:          'Other',
 };
 const DOC_KIND_HINT: Partial<Record<DocumentKind, string>> = {
-  rate_con: 'Off by default — customer proprietary.',
-  invoice:  'Off by default — customer-facing financial doc.',
+  rate_con:       'Off by default — customer proprietary.',
+  invoice:        'Off by default — customer-facing financial doc.',
+  invoice_packet: 'Off by default — full broker-facing packet (invoice + rate-con + POD/BOL/etc).',
 };
 
 /** Document Types panel — top-level org setting. Two toggles per kind:
