@@ -538,6 +538,46 @@ invoices.post("/", async (c) => {
   const invoiceNumber = body.invoiceNumber?.trim()
     || `${prefix}${load.internal_load_id}`;
 
+  // ── Auto-heal stale sent/paid invoice ───────────────────────────
+  // The load is the source of truth for "is this invoiced?". If a
+  // sent/paid invoice exists but the load is back in verified /
+  // pending / on_hold (the dispatcher reverted it and the closeout
+  // PATCH didn't fire — pre-auto-void data, direct DB edits,
+  // unusual paths), void the stale invoice up front so the
+  // void-revive branch below can pick it up. Without this, the
+  // single-create path used to 23505 on insert with no recovery,
+  // leaving the user permanently stuck.
+  const { data: activeRow } = await supabase
+    .from("invoices")
+    .select("id,status")
+    .eq("org_id", orgId)
+    .eq("load_id", load.id)
+    .neq("status", "void")
+    .maybeSingle();
+  if (activeRow) {
+    const activeTyped = activeRow as unknown as { id: string; status: string };
+    if (activeTyped.status === "sent" || activeTyped.status === "paid") {
+      const { data: loadStateRow } = await supabase
+        .from("loads")
+        .select("billing_status")
+        .eq("id", load.id)
+        .eq("org_id", orgId)
+        .maybeSingle();
+      const billingStatus = (loadStateRow as { billing_status: string | null } | null)?.billing_status ?? null;
+      const loadIsStale = billingStatus !== "invoiced" && billingStatus !== "paid";
+      if (loadIsStale) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await supabase.from("invoices").update({
+          status:      "void",
+          void_reason: `Auto-voided: load is in '${billingStatus ?? "unknown"}' state, not invoiced/paid`,
+        } as any)
+          .eq("id", activeTyped.id)
+          .eq("org_id", orgId);
+        console.log(`[POST /v1/invoices auto-heal] voided stale ${activeTyped.status} invoice ${activeTyped.id} for load ${load.id} (billing_status=${billingStatus})`);
+      }
+    }
+  }
+
   // Look for a void invoice on this load. If one exists, REVIVE it
   // instead of inserting a fresh row. Reason: the schema's
   // idx_invoices_number_per_org index is unconditional (void rows keep
@@ -1261,8 +1301,56 @@ invoices.post("/batch-generate", async (c) => {
         .eq("load_id", load.id)
         .neq("status", "void")
         .maybeSingle();
+      // ── Auto-heal stale sent/paid invoice ───────────────────────
+      // The load is the source of truth for "is this invoiced?".
+      // If we find a sent/paid invoice but the load is back in
+      // verified / pending / on_hold (e.g. the dispatcher reverted
+      // it and the closeout PATCH didn't fire — pre-auto-void data,
+      // direct DB edits, etc.), void the stale invoice and treat
+      // the load as needing a fresh draft. The next iteration
+      // through the rescue branch will pick up the void via the
+      // separate void-revive path below. Without this, the user is
+      // permanently stuck with "Already invoiced (status: sent).
+      // Refresh to update the bucket." every time they re-attempt.
       if (existingRow) {
         const existingTyped = existingRow as unknown as { id: string; status: string };
+        if (existingTyped.status !== "draft") {
+          const { data: loadStateRow } = await supabase
+            .from("loads")
+            .select("billing_status")
+            .eq("id", load.id)
+            .eq("org_id", orgId)
+            .maybeSingle();
+          const billingStatus = (loadStateRow as { billing_status: string | null } | null)?.billing_status ?? null;
+          const loadIsStale = billingStatus !== "invoiced" && billingStatus !== "paid";
+          if (loadIsStale) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            await supabase.from("invoices").update({
+              status:      "void",
+              void_reason: `Auto-voided: load is in '${billingStatus ?? "unknown"}' state, not invoiced/paid`,
+            } as any)
+              .eq("id", existingTyped.id)
+              .eq("org_id", orgId);
+            console.log(`[batch-generate auto-heal] voided stale ${existingTyped.status} invoice ${existingTyped.id} for load ${load.id} (billing_status=${billingStatus})`);
+            // Don't reuse existingRow — fall through to the void
+            // revive branch below by re-querying.
+          }
+        }
+      }
+
+      // Re-read after potential auto-heal so the rescue branch sees
+      // the current state. Cheap (PK lookup) and only fires when an
+      // existing row was found above.
+      const { data: existingRowFresh } = existingRow ? await supabase
+        .from("invoices")
+        .select(INVOICE_COLS)
+        .eq("org_id", orgId)
+        .eq("load_id", load.id)
+        .neq("status", "void")
+        .maybeSingle() : { data: null };
+
+      if (existingRowFresh) {
+        const existingTyped = existingRowFresh as unknown as { id: string; status: string };
         const existingStatus = existingTyped.status;
         if (existingStatus === "draft") {
           // Reuse the existing draft. Refresh snapshot/total/customer
@@ -1302,36 +1390,81 @@ invoices.post("/batch-generate", async (c) => {
           continue;
         }
       } else {
-        // No existing row — normal insert path.
-        const insertRow = {
-          org_id:          orgId,
-          load_id:         load.id,
-          customer_id:     load.customer_id,
-          invoice_number:  invoiceNumber,
-          status:          "draft" as InvoiceStatus,
-          total,
-          issued_at:       new Date().toISOString(),
-          due_at:          dueAt,
-          snapshot,
-        };
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const { data, error: insertErr } = await supabase
+        // No active invoice. Check for a void row first — the
+        // schema's idx_invoices_number_per_org index is
+        // unconditional (void rows keep their number reserved),
+        // so a fresh insert with the same invoice_number trips
+        // 23505 every time. Reviving the void is semantically
+        // identical to a fresh draft and avoids the dead-end UX.
+        // This also catches the auto-heal path above where we
+        // just voided a stale sent/paid row.
+        const { data: voidRows } = await supabase
           .from("invoices")
-          .insert(insertRow as any)
           .select(INVOICE_COLS)
-          .single();
-        if (insertErr || !data) {
-          if ((insertErr as { code?: string } | null)?.code === "23505") {
-            // Lost the race with a concurrent insert — rare but
-            // possible. Surface a distinct error so logs can tell
-            // it apart from the older stale-state case.
-            failed.push({ loadId, error: "An active invoice already exists for this load (race)." });
-          } else {
-            failed.push({ loadId, error: insertErr?.message ?? "insert_failed" });
+          .eq("org_id", orgId)
+          .eq("load_id", load.id)
+          .eq("status", "void")
+          .order("issued_at", { ascending: false })
+          .limit(1);
+        const existingVoid = ((voidRows ?? [])[0] as unknown as InvoiceRow | undefined);
+
+        if (existingVoid) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const { data: rev, error: revErr } = await supabase
+            .from("invoices")
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            .update({
+              customer_id:     load.customer_id,
+              invoice_number:  invoiceNumber,
+              status:          "draft" as InvoiceStatus,
+              void_reason:     null,
+              total,
+              issued_at:       new Date().toISOString(),
+              due_at:          dueAt,
+              snapshot,
+            } as any)
+            .eq("id", existingVoid.id)
+            .eq("org_id", orgId)
+            .eq("status", "void")
+            .select(INVOICE_COLS)
+            .single();
+          if (revErr || !rev) {
+            failed.push({ loadId, error: revErr?.message ?? "revive_failed" });
+            continue;
           }
-          continue;
+          invoiceRow = rev;
+        } else {
+          // No prior row at all — normal insert path.
+          const insertRow = {
+            org_id:          orgId,
+            load_id:         load.id,
+            customer_id:     load.customer_id,
+            invoice_number:  invoiceNumber,
+            status:          "draft" as InvoiceStatus,
+            total,
+            issued_at:       new Date().toISOString(),
+            due_at:          dueAt,
+            snapshot,
+          };
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const { data, error: insertErr } = await supabase
+            .from("invoices")
+            .insert(insertRow as any)
+            .select(INVOICE_COLS)
+            .single();
+          if (insertErr || !data) {
+            if ((insertErr as { code?: string } | null)?.code === "23505") {
+              // Lost the race with a concurrent insert — rare but
+              // possible. Surface a distinct error so logs can tell
+              // it apart from the older stale-state case.
+              failed.push({ loadId, error: "An active invoice already exists for this load (race)." });
+            } else {
+              failed.push({ loadId, error: insertErr?.message ?? "insert_failed" });
+            }
+            continue;
+          }
+          invoiceRow = data;
         }
-        invoiceRow = data;
       }
 
       // Always heal billing_status — covers both the fresh-insert
