@@ -222,10 +222,11 @@ const ANTHROPIC_CLIENT = new Anthropic({ apiKey: env.anthropicApiKey });
 // rate-con upload flow uses.
 const HARVEST_MODEL = "claude-haiku-4-5-20251001";
 
-/** KEEP IN SYNC with apps/web/lib/prompt.ts → buildBrokerHarvestPrompt.
- *  The fields returned drive both the broker-profile pre-fill on
- *  upload AND this on-demand refresh, so they need to extract the
- *  same things. */
+/** Single source of truth for the broker-harvest prompt. Drives both
+ *  /v1/customers/harvest-from-pdf (new-broker review modal) and
+ *  /v1/customers/:id/refresh-invoicing-from-ratecon (refresh button on
+ *  the existing-broker modal). No web copy — both UI surfaces hit
+ *  this endpoint and use the returned fields verbatim. */
 function buildBrokerHarvestPrompt(timezone: string): string {
   return `You are the first of a two-pass rate-confirmation parser. This pass extracts ONLY the broker/customer profile so the second pass can apply broker-specific rules.
 
@@ -237,14 +238,53 @@ Return a single JSON object with this exact shape — no markdown, no explanatio
     "contactName":         "<dispatcher or rep name on the rate con>",
     "contactEmail":        "<dispatcher / billing contact email>",
     "contactPhone":        "<dispatcher phone, digits + format as on the doc>",
-    "invoiceMethod":       "<'email' | 'portal' | '' — how this broker wants invoices submitted. 'portal' if any online billing system is named (TriumphPay, RMIS, McLeod, MyCarrierPortal, broker's own portal, etc.). 'email' if invoices go to a specific AP/billing email. Empty string if unclear.>",
-    "invoiceEmail":        "<AP / billing email when invoiceMethod is 'email', otherwise empty string>",
-    "invoicePortal":       "<portal name + URL when invoiceMethod is 'portal', e.g. 'TriumphPay (https://app.triumphpay.com)'. Otherwise empty string.>",
-    "invoiceInstructions": "<BROKER-WIDE billing policies only — things that apply to EVERY load from this broker, not just this one. Allowed: payment terms (net 30, quickpay rates), required documents that are always needed (BOL/POD/scale tickets/lumper receipts), factor preferences, remit-to address overrides, billing portal requirements, required line items the broker wants on every invoice. 1-3 short bulleted lines. STRICTLY EXCLUDE anything load-specific: this load's load number, PRO number, BOL number, PO number, shipment/order/confirmation number, references to 'this load' or 'this shipment', or any value that would change on the next load from the same broker. Empty string if there's nothing broker-wide to add.>",
+    "invoiceMethod":       "<'email' | 'portal' | '' — see SUBMISSION CHANNEL rules below. The decision is 'where does the invoice PDF physically GO at submission time?', NOT 'is a brand name mentioned'.>",
+    "invoiceEmail":        "<AP / billing / invoice-submission email when invoiceMethod is 'email', otherwise empty string. This is the address the rate con says to SEND invoices to (NOT the dispatcher's email, NOT a general support inbox).>",
+    "invoicePortal":       "<portal name + URL when invoiceMethod is 'portal' AND submission happens by logging in and uploading, e.g. 'RXO Connect (https://connect.rxo.com)'. Otherwise empty string. Do NOT put TriumphPay/OTR Solutions/AtoB/Apex here — those are payment processors, see below.>",
+    "invoiceInstructions": "<BROKER-WIDE billing policies only — things that apply to EVERY load from this broker, not just this one. Allowed: payment terms (net 30, quickpay rates), required documents that are always needed (BOL/POD/scale tickets/lumper receipts), factor preferences, remit-to address overrides, required line items the broker wants on every invoice, AND any downstream payment-processor note (e.g. 'Paid via TriumphPay — track status at app.triumphpay.com'). 1-3 short bulleted lines. STRICTLY EXCLUDE anything load-specific: this load's load number, PRO number, BOL number, PO number, shipment/order/confirmation number, references to 'this load' or 'this shipment', or any value that would change on the next load from the same broker. Empty string if there's nothing broker-wide to add.>",
     "billingAddress":      "<Physical mailing address where invoices should be sent — the 'Bill To' / 'Send invoices to' address. Multi-line format: 'Company Line 1\\nStreet\\nCity, ST ZIP'. Look for labels like 'Bill To', 'Remit To', 'Invoice To', 'Billing Address', 'A/P Address', or the broker's accounting/billing office. Empty string if only an email or portal is given, or if no postal address appears on the document.>"
   },
   "docType": "<rate_con | amendment | revised | other>"
 }
+
+SUBMISSION CHANNEL — invoiceMethod logic (read carefully):
+
+The question is "where does the carrier PUT the invoice PDF when they're ready to submit it?" There are exactly two answers: an email address (method = 'email') or a website login where you upload the PDF (method = 'portal').
+
+A payment processor is NOT the submission channel. These names tell you HOW the broker pays / where you track payment status, NOT where the invoice gets submitted:
+  - TriumphPay (app.triumphpay.com)
+  - OTR Solutions
+  - AtoB
+  - Apex Capital
+  - RTS Financial
+  - Compass Funding
+  - eCapital
+  - Factoring or quickpay programs in general
+
+If the rate con mentions one of these AND also gives a "send invoice to X@broker.com" / "billing@broker.com" / "ap@broker.com" address, the answer is invoiceMethod = 'email' with that address in invoiceEmail. The payment processor goes in invoiceInstructions as a note ("Paid via TriumphPay — track status at app.triumphpay.com"). Do NOT put the processor's URL in invoicePortal.
+
+A real submission portal is a website OWNED BY THE BROKER (or its TMS vendor acting as the broker's carrier-facing portal) where you log in and UPLOAD the invoice file. Examples:
+  - RXO Connect / Connect.rxo.com
+  - Coyote CTM / coyote.com carrier portal
+  - C.H. Robinson Navisphere Carrier
+  - Echo Global EchoDrive
+  - TQL Carrier Dashboard
+  - Loadsmith / Convoy / Uber Freight carrier apps where you upload the PDF
+  - A broker's own "Carrier Portal" / "carrier login" page
+
+Rules:
+  1. Find every email address on the document that's labeled for invoices / billing / AP / "send invoice to" / "submit invoices to" / "invoicing@". If one exists, invoiceMethod = 'email' regardless of any payment-processor branding elsewhere on the page. Put the address in invoiceEmail.
+  2. If no submission email exists and the rate con says "submit invoices via" / "upload invoices at" / "all invoices must be submitted through" a website that is the BROKER's own carrier portal, invoiceMethod = 'portal'. Put the portal name + URL in invoicePortal.
+  3. If the document only names a payment processor (TriumphPay et al.) and gives no submission email and no broker-owned portal, invoiceMethod = '' (empty) — this is genuinely unclear and the user should decide. Do NOT default to 'portal' just because TriumphPay was named.
+  4. Same rule when in doubt: empty string beats a wrong guess. The user reviews before saving.
+
+Examples:
+  - Rate con says "Submit invoices to billing@acme-logistics.com" and also "Acme partners with TriumphPay for payment processing"
+    → invoiceMethod = 'email', invoiceEmail = 'billing@acme-logistics.com', invoicePortal = '', invoiceInstructions includes 'Paid via TriumphPay — track status at app.triumphpay.com'
+  - Rate con says "All invoices must be uploaded to RXO Connect at connect.rxo.com"
+    → invoiceMethod = 'portal', invoicePortal = 'RXO Connect (https://connect.rxo.com)', invoiceEmail = ''
+  - Rate con says "Paid through TriumphPay" with no submission email and no broker portal
+    → invoiceMethod = '', invoiceEmail = '', invoicePortal = '', invoiceInstructions includes 'Paid via TriumphPay'
 
 The current timezone is ${timezone}.`;
 }
