@@ -32,7 +32,11 @@ export interface InvoiceSummaryModalProps {
   action:       'generate' | 'generateSend';
   onOpenBroker: (id: string) => void;
   onClose:      () => void;
-  onComplete:   () => void;
+  /** Called when the user clicks Done. The result (or undefined for
+   *  empty completions) lets the parent apply optimistic state
+   *  updates to its loads/invoices lists so buckets refresh
+   *  instantly instead of waiting on a silent server round-trip. */
+  onComplete:   (result?: BatchGenerateInvoicesResponse) => void;
 }
 
 export function InvoiceSummaryModal({
@@ -273,7 +277,7 @@ export function InvoiceSummaryModal({
               </div>
             </>
           ) : (
-            <button onClick={onComplete}
+            <button onClick={() => onComplete(result ?? undefined)}
               className="ml-auto text-[12px] font-semibold px-4 py-1.5 rounded-lg transition-colors"
               style={{ background: '#1a73e8', color: '#fff' }}>
               Done
@@ -356,7 +360,10 @@ export interface BatchSendDialogProps {
   mode?:        'send' | 'resend';
   onOpenBroker?: (brokerId: string) => void;
   onClose:      () => void;
-  onComplete:   () => void;
+  /** Receives the API result so the parent can optimistically mark
+   *  the affected invoices as sent (or sent_portal) without waiting
+   *  for the silent refresh round-trip. */
+  onComplete:   (result?: BatchSendInvoicesResponse) => void;
 }
 
 export function BatchSendDialog({ rows, mode = 'send', onOpenBroker, onClose, onComplete }: BatchSendDialogProps) {
@@ -543,7 +550,7 @@ export function BatchSendDialog({ rows, mode = 'send', onOpenBroker, onClose, on
               </button>
             </>
           ) : (
-            <button onClick={onComplete}
+            <button onClick={() => onComplete(result ?? undefined)}
               className="text-[12px] font-semibold px-4 py-1.5 rounded-lg transition-colors"
               style={{ background: '#1a73e8', color: '#fff' }}>
               Done

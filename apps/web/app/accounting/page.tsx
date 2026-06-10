@@ -704,6 +704,83 @@ function AccountingPageInner() {
     setLoads(prev => prev.map(l => l.loadId === loadId ? { ...l, ...patch } : l));
   }, []);
 
+  /**
+   * Apply the state transitions of a batch generate/send/generate+send
+   * response directly to local state, so buckets refresh instantly
+   * instead of waiting on the silent server round-trip. The silent
+   * refresh that follows is a sanity check; this is the visible win.
+   *
+   * Bucket move semantics:
+   *   - Released (load.billingStatus='verified')
+   *      → Queued   (load.billingStatus='invoiced', invoice.status='draft')
+   *      → Invoiced (load.billingStatus='invoiced', invoice.status='sent' or 'sent_portal')
+   *
+   * So: generate flips load.billingStatus; send flips invoice.status.
+   */
+  const applyInvoiceMutations = useCallback((opts: {
+    /** Load IDs that just got an invoice drafted (Released → Queued). */
+    createdLoadIds?:   string[];
+    /** Newly created invoices to append to local state. */
+    createdInvoices?:  Invoice[];
+    /** Per-invoice send outcomes (Queued → Invoiced when status === 'sent'). */
+    sentGroups?:       Array<{ invoiceIds: string[]; status: string }>;
+  }) => {
+    // 1. Loads: flip billingStatus 'verified' → 'invoiced' for any
+    // load that just had an invoice drafted.
+    if (opts.createdLoadIds && opts.createdLoadIds.length > 0) {
+      const set = new Set(opts.createdLoadIds);
+      setLoads(prev => prev.map(l =>
+        set.has(l.loadId) ? { ...l, billingStatus: 'invoiced' } : l
+      ));
+    }
+
+    // 2. Invoices: append any newly created drafts, then mark sent
+    // ones according to their group status. Merge in one pass so
+    // a generate+send completes both transitions atomically.
+    setAllInvoices(prev => {
+      let next = prev;
+
+      // Append newly created drafts (or upsert if one with the same
+      // id somehow arrived via realtime already).
+      if (opts.createdInvoices && opts.createdInvoices.length > 0) {
+        const incomingById = new Map(opts.createdInvoices.map(i => [i.id, i] as const));
+        const merged: Invoice[] = [];
+        const seen = new Set<string>();
+        for (const inv of next) {
+          const incoming = incomingById.get(inv.id);
+          merged.push(incoming ?? inv);
+          seen.add(inv.id);
+        }
+        for (const inv of opts.createdInvoices) {
+          if (!seen.has(inv.id)) merged.push(inv);
+        }
+        next = merged;
+      }
+
+      // Flip status on each successfully-sent invoice.
+      if (opts.sentGroups && opts.sentGroups.length > 0) {
+        const statusByInvId = new Map<string, 'sent' | 'sent_portal'>();
+        for (const g of opts.sentGroups) {
+          if (g.status === 'sent' || g.status === 'sent_portal') {
+            for (const invId of g.invoiceIds) statusByInvId.set(invId, g.status);
+          }
+        }
+        if (statusByInvId.size > 0) {
+          next = next.map(inv => {
+            const newStatus = statusByInvId.get(inv.id);
+            if (!newStatus) return inv;
+            // Synthetic sentAt so the Invoiced bucket's "sent X
+            // ago" column shows something sensible until the silent
+            // refresh comes back with the canonical server timestamp.
+            return { ...inv, status: 'sent' as const, sentAt: new Date().toISOString() };
+          });
+        }
+      }
+
+      return next;
+    });
+  }, []);
+
   // ── OpsTable column config ──────────────────────────────────────────
   // One OpsColumn per visible column. Closures capture state setters
   // so each cell can wire its own action handlers. Per-bucket col
@@ -1726,7 +1803,21 @@ function AccountingPageInner() {
           action={summaryAction}
           onClose={() => setSummaryAction(null)}
           onOpenBroker={(id) => setBrokerProfileId(id)}
-          onComplete={() => { setSummaryAction(null); setSelectedIds([]); setTableResetKey(k => k + 1); void refresh({ silent: true }); }} />
+          onComplete={(result) => {
+            // Optimistic — apply the result's state transitions to local
+            // loads + invoices BEFORE the silent refresh round-trips.
+            // Otherwise loads sit in their old bucket for the ~1s the
+            // server call takes, which feels wrong to the user.
+            if (result) applyInvoiceMutations({
+              createdLoadIds: result.created.map(c => c.loadId),
+              createdInvoices: result.created.map(c => c.invoice),
+              sentGroups: result.sent ?? [],
+            });
+            setSummaryAction(null);
+            setSelectedIds([]);
+            setTableResetKey(k => k + 1);
+            void refresh({ silent: true });
+          }} />
       )}
       {batchSendOpen && (
         <BatchSendDialog
@@ -1744,7 +1835,13 @@ function AccountingPageInner() {
           })()}
           onOpenBroker={(id) => setBrokerProfileId(id)}
           onClose={() => setBatchSendOpen(false)}
-          onComplete={() => { setBatchSendOpen(false); setSelectedIds([]); setTableResetKey(k => k + 1); void refresh({ silent: true }); }} />
+          onComplete={(result) => {
+            if (result) applyInvoiceMutations({ sentGroups: result.groups });
+            setBatchSendOpen(false);
+            setSelectedIds([]);
+            setTableResetKey(k => k + 1);
+            void refresh({ silent: true });
+          }} />
       )}
       {batchResendOpen && (
         // Same dialog as send, just hits the resend endpoint. Mode flag
@@ -1761,7 +1858,14 @@ function AccountingPageInner() {
           mode="resend"
           onOpenBroker={(id) => setBrokerProfileId(id)}
           onClose={() => setBatchResendOpen(false)}
-          onComplete={() => { setBatchResendOpen(false); setSelectedIds([]); setTableResetKey(k => k + 1); void refresh({ silent: true }); }} />
+          onComplete={() => {
+            // Resend doesn't change visible status (sent → sent), so no
+            // optimistic update needed — just close + silent refresh.
+            setBatchResendOpen(false);
+            setSelectedIds([]);
+            setTableResetKey(k => k + 1);
+            void refresh({ silent: true });
+          }} />
       )}
       {notesTarget && (
         <InternalNotesModal load={notesTarget} actorName={actorName}
