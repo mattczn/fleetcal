@@ -885,10 +885,33 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
                     </td>
                     <td className="px-4 py-3"><LegBadge role={load.relayRole} /></td>
                     <td className="px-4 py-3 max-w-[240px]">
+                      {/* TONU + cancelled get a colored pill before the
+                          title so it's obvious at a glance that this
+                          isn't a normal load — payroll legitimately pays
+                          for TONUs and sometimes for cancelled-mid-route
+                          loads, but the user needs to spot them when
+                          reviewing the week. Status read from load.status
+                          mirrors CalendarEvent.tsx's prefix logic. */}
                       <button onClick={() => openEditModal(load.id)}
-                        className="text-left truncate w-full font-medium hover:underline"
+                        className="inline-flex items-center gap-1.5 max-w-full text-left font-medium hover:underline"
                         style={{ color: 'var(--gc-blue)' }} title={load.title}>
-                        {load.title ?? '(no title)'}
+                        {load.status === 'tonu' && (
+                          <span
+                            className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wide shrink-0"
+                            style={{ background: '#fde68a', color: '#854d0e' }}>
+                            TONU
+                          </span>
+                        )}
+                        {load.status === 'cancelled' && (
+                          <span
+                            className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wide shrink-0"
+                            style={{ background: '#fee2e2', color: '#b91c1c' }}>
+                            Cancelled
+                          </span>
+                        )}
+                        <span className="truncate min-w-0">
+                          {load.title ?? '(no title)'}
+                        </span>
                       </button>
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap">
