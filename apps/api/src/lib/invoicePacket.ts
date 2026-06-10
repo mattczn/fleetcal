@@ -174,9 +174,16 @@ function detectFormat(bytes: Uint8Array): "pdf" | "jpeg" | "png" | "unknown" {
  * PDFs are page-copied; images are placed onto a fresh letter page
  * fit to the page width. Unknown formats are skipped.
  */
-async function appendSource(target: PDFDocument, src: SourceDoc): Promise<{ ok: boolean; reason?: string }> {
-  const bytes = await downloadBytes(src);
-  if (!bytes) return { ok: false, reason: "download_failed" };
+/**
+ * Embed pre-fetched source bytes into the target PDF. Same logic as
+ * appendSource() except the network call is hoisted out, so callers
+ * can fire all downloads in parallel before doing the serial embeds.
+ */
+async function embedPrefetched(
+  target: PDFDocument,
+  src:    SourceDoc,
+  bytes:  Uint8Array,
+): Promise<{ ok: boolean; reason?: string }> {
   const fmt = detectFormat(bytes);
   if (fmt === "pdf") {
     try {
@@ -190,93 +197,115 @@ async function appendSource(target: PDFDocument, src: SourceDoc): Promise<{ ok: 
     }
   }
   if (fmt === "jpeg" || fmt === "png") {
-    try {
-      const image = fmt === "jpeg"
-        ? await target.embedJpg(bytes)
-        : await target.embedPng(bytes);
-
-      // EXIF orientation only applies to JPEG; PNG has no equivalent
-      // metadata flag (chunks for orientation are nonstandard and
-      // unsupported by phone cameras).
-      const orient = fmt === "jpeg" ? readJpegOrientation(bytes) : 1;
-
-      // Intended display dimensions AFTER honoring EXIF rotation.
-      // Orientations 6 and 8 need a 90° spin, swapping the visible
-      // width and height. 1 and 3 keep the raw aspect.
-      const intendedW = (orient === 6 || orient === 8) ? image.height : image.width;
-      const intendedH = (orient === 6 || orient === 8) ? image.width  : image.height;
-
-      // Pick the page orientation that matches the intended display
-      // aspect. A landscape POD on a portrait page renders tiny with
-      // 50% wasted whitespace; a landscape page lets it fill the sheet
-      // at full readable size. US Letter = 612 × 792 pt @ 72 DPI.
-      const portrait = intendedH >= intendedW;
-      const pageW = portrait ? 612 : 792;
-      const pageH = portrait ? 792 : 612;
-      const page = target.addPage([pageW, pageH]);
-
-      const margin = 24;
-      const maxW = pageW - margin * 2;
-      const maxH = pageH - margin * 2;
-      const scale = Math.min(maxW / intendedW, maxH / intendedH, 1);
-
-      // Compute (x, y, width, height, rotate) for page.drawImage.
-      // `width` and `height` are in the IMAGE's pre-rotation coord
-      // system. `rotate` is applied around the (x, y) pivot, which is
-      // the image's bottom-left in PDF's Y-up space. For non-zero
-      // rotations we shift (x, y) so the rotated bounding box lands
-      // centered on the page. Derivations live in the comments next
-      // to each branch.
-      const w = image.width  * scale; // pre-rotation width in image coords
-      const h = image.height * scale;
-      let x: number, y: number, rot: number;
-      switch (orient) {
-        case 6: {
-          // 90° CW. Rotated corners (relative to pivot):
-          //   x ∈ [0, h], y ∈ [-w, 0]
-          // Centering on page: x = (pageW - h) / 2, y = (pageH + w) / 2.
-          rot = -90;
-          x = (pageW - h) / 2;
-          y = (pageH + w) / 2;
-          break;
-        }
-        case 8: {
-          // 90° CCW. Rotated corners: x ∈ [-h, 0], y ∈ [0, w].
-          // Centering: x = (pageW + h) / 2, y = (pageH - w) / 2.
-          rot = 90;
-          x = (pageW + h) / 2;
-          y = (pageH - w) / 2;
-          break;
-        }
-        case 3: {
-          // 180°. Rotated corners: x ∈ [-w, 0], y ∈ [-h, 0].
-          // Centering: x = (pageW + w) / 2, y = (pageH + h) / 2.
-          rot = 180;
-          x = (pageW + w) / 2;
-          y = (pageH + h) / 2;
-          break;
-        }
-        default: {
-          // 0°. Standard bottom-left placement.
-          rot = 0;
-          x = (pageW - w) / 2;
-          y = (pageH - h) / 2;
-        }
-      }
-
-      page.drawImage(image, {
-        x, y,
-        width:  w,
-        height: h,
-        rotate: degrees(rot),
-      });
-      return { ok: true };
-    } catch (err) {
-      console.warn("[invoicePacket] image embed failed:", src.path, err);
-      return { ok: false, reason: "image_embed_failed" };
-    }
+    return embedImagePrefetched(target, src, bytes, fmt);
   }
-  return { ok: false, reason: `unsupported_format_${fmt}` };
+  console.warn("[invoicePacket] unsupported format:", src.path, fmt);
+  return { ok: false, reason: "unsupported_format" };
+}
+
+async function embedImagePrefetched(
+  target: PDFDocument,
+  src:    SourceDoc,
+  bytes:  Uint8Array,
+  fmt:    "jpeg" | "png",
+): Promise<{ ok: boolean; reason?: string }> {
+  try {
+    const image = fmt === "jpeg"
+      ? await target.embedJpg(bytes)
+      : await target.embedPng(bytes);
+
+    // EXIF orientation only applies to JPEG; PNG has no equivalent
+    // metadata flag (chunks for orientation are nonstandard and
+    // unsupported by phone cameras).
+    const orient = fmt === "jpeg" ? readJpegOrientation(bytes) : 1;
+
+    // Intended display dimensions AFTER honoring EXIF rotation.
+    // Orientations 6 and 8 need a 90° spin, swapping the visible
+    // width and height. 1 and 3 keep the raw aspect.
+    const intendedW = (orient === 6 || orient === 8) ? image.height : image.width;
+    const intendedH = (orient === 6 || orient === 8) ? image.width  : image.height;
+
+    // Pick the page orientation that matches the intended display
+    // aspect. A landscape POD on a portrait page renders tiny with
+    // 50% wasted whitespace; a landscape page lets it fill the sheet
+    // at full readable size. US Letter = 612 × 792 pt @ 72 DPI.
+    const portrait = intendedH >= intendedW;
+    const pageW = portrait ? 612 : 792;
+    const pageH = portrait ? 792 : 612;
+    const page = target.addPage([pageW, pageH]);
+
+    const margin = 24;
+    const maxW = pageW - margin * 2;
+    const maxH = pageH - margin * 2;
+    const scale = Math.min(maxW / intendedW, maxH / intendedH, 1);
+
+    // Compute (x, y, width, height, rotate) for page.drawImage.
+    // `width` and `height` are in the IMAGE's pre-rotation coord
+    // system. `rotate` is applied around the (x, y) pivot, which is
+    // the image's bottom-left in PDF's Y-up space. For non-zero
+    // rotations we shift (x, y) so the rotated bounding box lands
+    // centered on the page. Derivations live in the comments next
+    // to each branch.
+    const w = image.width  * scale; // pre-rotation width in image coords
+    const h = image.height * scale;
+    let x: number, y: number, rot: number;
+    switch (orient) {
+      case 6: {
+        // 90° CW. Rotated corners (relative to pivot):
+        //   x ∈ [0, h], y ∈ [-w, 0]
+        // Centering on page: x = (pageW - h) / 2, y = (pageH + w) / 2.
+        rot = -90;
+        x = (pageW - h) / 2;
+        y = (pageH + w) / 2;
+        break;
+      }
+      case 8: {
+        // 90° CCW. Rotated corners: x ∈ [-h, 0], y ∈ [0, w].
+        // Centering: x = (pageW + h) / 2, y = (pageH - w) / 2.
+        rot = 90;
+        x = (pageW + h) / 2;
+        y = (pageH - w) / 2;
+        break;
+      }
+      case 3: {
+        // 180°. Rotated corners: x ∈ [-w, 0], y ∈ [-h, 0].
+        // Centering: x = (pageW + w) / 2, y = (pageH + h) / 2.
+        rot = 180;
+        x = (pageW + w) / 2;
+        y = (pageH + h) / 2;
+        break;
+      }
+      default: {
+        // 0°. Standard bottom-left placement.
+        rot = 0;
+        x = (pageW - w) / 2;
+        y = (pageH - h) / 2;
+      }
+    }
+
+    page.drawImage(image, {
+      x, y,
+      width:  w,
+      height: h,
+      rotate: degrees(rot),
+    });
+    return { ok: true };
+  } catch (err) {
+    console.warn("[invoicePacket] image embed failed:", src.path, err);
+    return { ok: false, reason: "image_embed_failed" };
+  }
+}
+
+/**
+ * Legacy entry: download + embed in one call. Kept for any callers that
+ * don't benefit from parallel pre-fetch (right now there are none in
+ * buildInvoicePacket, but the function is exported-internal so we keep
+ * the simple shape available for future single-doc append paths).
+ */
+async function appendSource(target: PDFDocument, src: SourceDoc): Promise<{ ok: boolean; reason?: string }> {
+  const bytes = await downloadBytes(src);
+  if (!bytes) return { ok: false, reason: "download_failed" };
+  return embedPrefetched(target, src, bytes);
 }
 
 // ─── Main builder ───────────────────────────────────────────────────────
@@ -284,15 +313,45 @@ async function appendSource(target: PDFDocument, src: SourceDoc): Promise<{ ok: 
 export async function buildInvoicePacket(args: PacketArgs): Promise<PacketResult> {
   const skipped: string[] = [];
 
-  // Render the invoice PDF in-process — same renderer the standalone
-  // /pdf endpoint uses.
-  const invoicePdfBytes = await renderInvoicePdf({
-    snapshot:      args.invoice.snapshot,
-    invoiceNumber: args.invoice.invoiceNumber,
-    issuedDate:    args.issuedDate,
-    dueDate:       args.dueDate,
-    logoData:      args.invoice.snapshot.companyLogoUrl,
-  });
+  // PARALLELIZE the slow stuff: the @react-pdf/renderer invocation +
+  // every Supabase Storage download happens at the same time. The
+  // serial-document mutations (PDFDocument.load, copyPages, embedJpg)
+  // still run sequentially after — those are CPU-bound and operate on
+  // a single mutable PDFDocument, so doing them concurrently would
+  // either race or require N extra documents to merge later (not worth
+  // it; the wins come from network parallelism).
+  //
+  // Speedup on a 4-attachment invoice: ~2.5s → ~1.2s based on
+  // rule-of-thumb numbers (render 1s + 4 downloads 300ms each
+  // sequentially) vs (max(render 1s, 4 parallel downloads ~400ms) = 1s).
+
+  // Resolve which buckets to try for the rate-con (legacy + current).
+  const rateConSources: SourceDoc[] = (() => {
+    if (!args.rateConPath || args.rateConPath.startsWith("data:")) return [];
+    return (["rate-cons", "load-documents"] as SourceDoc["bucket"][]).map(bucket => ({
+      bucket,
+      path:  args.rateConPath!,
+      label: "rate-con",
+    }));
+  })();
+  const extraSources: SourceDoc[] = args.extraDocPaths.map(path => ({
+    bucket: "load-documents",
+    path,
+  }));
+
+  // Fire everything in parallel.
+  const [invoicePdfBytes, extraFetched, rateConBytes] = await Promise.all([
+    renderInvoicePdf({
+      snapshot:      args.invoice.snapshot,
+      invoiceNumber: args.invoice.invoiceNumber,
+      issuedDate:    args.issuedDate,
+      dueDate:       args.dueDate,
+      logoData:      args.invoice.snapshot.companyLogoUrl,
+    }),
+    Promise.all(extraSources.map(s => downloadBytes(s))),
+    // Try each rate-con bucket in parallel; take the first non-null.
+    Promise.all(rateConSources.map(s => downloadBytes(s))),
+  ]);
 
   // Packet order: invoice → POD / BOL / lumper / scale / etc.
   // (the "proof" docs brokers actually need to approve payment) →
@@ -308,30 +367,25 @@ export async function buildInvoicePacket(args: PacketArgs): Promise<PacketResult
   for (const p of invoicePages) packet.addPage(p);
 
   // Selected supporting docs (POD/BOL/lumper/scale/receipt/driver_sheet,
-  // in the kind order resolveDefaultPacketDocs already emits).
-  for (const path of args.extraDocPaths) {
-    const r = await appendSource(packet, {
-      bucket: "load-documents",
-      path,
-    });
-    if (!r.ok) skipped.push(path);
+  // in the kind order resolveDefaultPacketDocs already emits). Bytes
+  // pre-fetched above; just embed sequentially.
+  for (let i = 0; i < extraSources.length; i++) {
+    const bytes = extraFetched[i];
+    const src   = extraSources[i];
+    if (!bytes) { skipped.push(src.path); continue; }
+    const r = await embedPrefetched(packet, src, bytes);
+    if (!r.ok) skipped.push(src.path);
   }
 
-  // Rate con last (if present + not a legacy data URL). New uploads
-  // land in the rate-cons bucket (Phase 3.1 split); legacy rows may
-  // still be in load-documents. Try rate-cons first, fall back.
+  // Rate con last: pick the first bucket that returned bytes.
+  const rateConBuf = rateConBytes.find(b => b != null) ?? null;
   if (args.rateConPath && !args.rateConPath.startsWith("data:")) {
-    const tryBuckets: SourceDoc["bucket"][] = ["rate-cons", "load-documents"];
-    let appended = false;
-    for (const bucket of tryBuckets) {
-      const r = await appendSource(packet, {
-        bucket,
-        path:   args.rateConPath,
-        label:  "rate-con",
-      });
-      if (r.ok) { appended = true; break; }
+    if (rateConBuf) {
+      const r = await embedPrefetched(packet, rateConSources[0], rateConBuf);
+      if (!r.ok) skipped.push(`rate-con:${args.rateConPath}`);
+    } else {
+      skipped.push(`rate-con:${args.rateConPath}`);
     }
-    if (!appended) skipped.push(`rate-con:${args.rateConPath}`);
   }
 
   const out = await packet.save();

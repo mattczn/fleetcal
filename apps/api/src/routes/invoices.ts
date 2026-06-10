@@ -62,6 +62,7 @@ import { getOrgIdentity } from "../lib/clerk.js";
 import { appendLoadAudit } from "../lib/auditLog.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability, requireModule } from "../middleware/require.js";
+import { pMapWithLimit } from "../lib/concurrency.js";
 
 /**
  * Set loads.billing_status AND write a load-level audit entry in one
@@ -1432,20 +1433,25 @@ invoices.post("/batch-generate", async (c) => {
         : undefined;
       const attachLoadDocs = body.attachLoadDocs ?? true;
 
-      const groups: BatchSendInvoicesResponse["groups"] = [];
-      for (const inv of invs) {
+      // Process invoices in parallel with a small concurrency cap. The
+      // packet build (~1.5s) + Resend send (~400ms) dominate per-invoice
+      // wall time; running 5 at a time turns a 30-invoice batch from
+      // ~60s to ~12s. Cap is small enough to keep memory bounded
+      // (each in-flight packet holds ~10-20 MB), respect Resend's
+      // ~10 req/sec rate limit, and not flood Supabase Storage.
+      type GroupResult = BatchSendInvoicesResponse["groups"][number];
+      const processInvoice = async (inv: typeof invs[number]): Promise<GroupResult> => {
         const loadNumber = inv.snapshot.loadNumber || undefined;
         if (!inv.customerId) {
           // Brokerless invoices can't be auto-sent. Surface them in
           // the result so the UI can show "Skipped — no broker on
           // load" instead of silently dropping them — the count
           // mismatch ("9 generated, only 6 sent") was the symptom.
-          groups.push({
+          return {
             customerId: "", brokerName: inv.snapshot.brokerName ?? "Unknown broker",
             to: null, status: "skipped_no_customer", invoiceIds: [inv.id], loadNumber,
             error: "No broker linked to this load — set a customer before sending.",
-          });
-          continue;
+          };
         }
         const customer = customerById.get(inv.customerId);
         const brokerName = customer?.name ?? inv.snapshot.brokerName ?? "Unknown broker";
@@ -1455,11 +1461,10 @@ invoices.post("/batch-generate", async (c) => {
 
         // Email-mode broker with no AP email saved — skip.
         if (!isPortal && !recipient) {
-          groups.push({
+          return {
             customerId: inv.customerId, brokerName, to: null,
             status: "skipped_no_email", invoiceIds: [inv.id], loadNumber,
-          });
-          continue;
+          };
         }
 
         let packet: Buffer;
@@ -1474,12 +1479,11 @@ invoices.post("/batch-generate", async (c) => {
           });
           packet = built.buffer;
         } catch (err) {
-          groups.push({
+          return {
             customerId: inv.customerId, brokerName, to: recipient ?? null, status: "failed",
             invoiceIds: [inv.id], loadNumber,
             error: `packet build failed: ${(err as Error)?.message}`,
-          });
-          continue;
+          };
         }
 
         // Portal brokers: skip the broker-bound email, optionally bcc
@@ -1522,12 +1526,11 @@ invoices.post("/batch-generate", async (c) => {
             });
             messageId = sendRes.messageId;
           } catch (err) {
-            groups.push({
+            return {
               customerId: inv.customerId, brokerName, to: recipient!, status: "failed",
               invoiceIds: [inv.id], loadNumber,
               error: (err as Error)?.message ?? "email send failed",
-            });
-            continue;
+            };
           }
         }
 
@@ -1552,15 +1555,15 @@ invoices.post("/batch-generate", async (c) => {
           } catch { /* best-effort */ }
         }
 
-        groups.push({
+        return {
           customerId: inv.customerId, brokerName,
           to:         isPortal ? portalLabel : recipient!,
           status:     isPortal ? "sent_portal" : "sent",
           invoiceIds: [inv.id], loadNumber, messageId,
-        });
-      }
+        };
+      };
 
-      res.sent = groups;
+      res.sent = await pMapWithLimit(invs, 5, processInvoice);
     } catch (err) {
       console.error("[POST /v1/invoices/batch-generate] thenSend stage failed:", err);
       // Don't fail the request — generation succeeded, just report
@@ -1731,9 +1734,13 @@ invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async
   // send result. The response shape is preserved (BatchSendInvoicesResponse
   // still keyed by customerId + invoiceIds[]) so the client doesn't
   // need a parallel rewrite — invoiceIds[] just always has length 1.
-  const groups: BatchSendInvoicesResponse["groups"] = [];
-
-  for (const inv of allInvoices) {
+  // Process invoices in parallel with a small concurrency cap. See the
+  // concurrency.ts helper for the trade-off rationale; cap of 5 keeps
+  // 5 in-flight packet builds (~50-100MB total) and respects Resend's
+  // ~10 req/sec rate limit. A 30-invoice batch goes from ~60s sequential
+  // to ~12s parallel.
+  type GroupResult = BatchSendInvoicesResponse["groups"][number];
+  const processInvoice = async (inv: typeof allInvoices[number]): Promise<GroupResult> => {
     const customerId = resolvedCustomerByInvoiceId.get(inv.id)!;
     const customer   = customerById.get(customerId);
     const brokerName = customer?.name ?? inv.snapshot.brokerName ?? "Unknown broker";
@@ -1744,15 +1751,14 @@ invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async
 
     // Email-mode broker with no AP email saved — can't send.
     if (!isPortal && !recipient) {
-      groups.push({
+      return {
         customerId,
         brokerName,
         to:         null,
         status:     "skipped_no_email",
         invoiceIds: [inv.id],
         loadNumber,
-      });
-      continue;
+      };
     }
 
     // Build the merged packet for THIS invoice only. Same call whether
@@ -1777,7 +1783,7 @@ invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async
       packet = built.buffer;
     } catch (err) {
       console.error("[batch-send] packet build failed for", inv.invoiceNumber, err);
-      groups.push({
+      return {
         customerId,
         brokerName,
         to:         recipient ?? null,
@@ -1785,8 +1791,7 @@ invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async
         invoiceIds: [inv.id],
         loadNumber,
         error:      `packet build failed: ${(err as Error)?.message}`,
-      });
-      continue;
+      };
     }
 
     // Branch on routing mode:
@@ -1839,7 +1844,7 @@ invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async
         messageId = result.messageId;
       } catch (err) {
         console.error("[batch-send] email send failed for", inv.invoiceNumber, err);
-        groups.push({
+        return {
           customerId,
           brokerName,
           to:         recipient ?? null,
@@ -1847,8 +1852,7 @@ invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async
           invoiceIds: [inv.id],
           loadNumber,
           error:      (err as Error)?.message ?? "email send failed",
-        });
-        continue;
+        };
       }
     }
 
@@ -1885,7 +1889,7 @@ invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async
       }
     }
 
-    groups.push({
+    return {
       customerId,
       brokerName,
       // For portal brokers, the "to" field carries the portal label
@@ -1897,9 +1901,10 @@ invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async
       invoiceIds: [inv.id],
       loadNumber,
       messageId,
-    });
-  }
+    };
+  };
 
+  const groups = await pMapWithLimit(allInvoices, 5, processInvoice);
   const res: BatchSendInvoicesResponse = { groups };
   return c.json(res);
 });
