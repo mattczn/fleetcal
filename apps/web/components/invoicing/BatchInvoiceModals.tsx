@@ -14,6 +14,7 @@
 import { useMemo, useState } from 'react';
 import { AlertCircle, FilePlus, Loader2, Receipt, Send, X } from 'lucide-react';
 import { railway, RailwayError } from '@/lib/railway';
+import { useBlockNavigation } from '@/lib/useBlockNavigation';
 import { Th, Td, moneyFmt } from '@/components/queue/QueueTablePrimitives';
 import type {
   Customer, Invoice,
@@ -47,6 +48,14 @@ export function InvoiceSummaryModal({
   const [attachLoadDocs, setAttach] = useState(true);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<BatchGenerateInvoicesResponse | null>(null);
+
+  // Block tab close + in-app nav while the API call is in flight.
+  // The browser aborts in-flight fetches on navigation, so leaving
+  // mid-batch can KILL the server-side processing partway through.
+  useBlockNavigation(
+    busy,
+    'Invoices are still being generated and sent. Leaving this page will cancel the rest of the batch. Stay on this page until it finishes?',
+  );
 
   // Batch-generate summary uses total_billable (linehaul + accessorials)
   // so the "$X total" in the header matches what the invoices will bill.
@@ -371,6 +380,15 @@ export function BatchSendDialog({ rows, mode = 'send', onOpenBroker, onClose, on
   const [attachLoadDocs, setAttach] = useState(true);
   const [busy, setBusy]             = useState(false);
   const [result, setResult]         = useState<BatchSendInvoicesResponse | null>(null);
+
+  // Same nav-guard as InvoiceSummaryModal — leaving mid-batch aborts
+  // the in-flight fetch and kills the server-side processing.
+  useBlockNavigation(
+    busy,
+    mode === 'resend'
+      ? 'Invoices are still being resent. Leaving this page will cancel the rest of the batch. Stay on this page until it finishes?'
+      : 'Invoices are still being sent. Leaving this page will cancel the rest of the batch. Stay on this page until it finishes?',
+  );
 
   const invoices = useMemo(() => rows.map(r => r.invoice), [rows]);
 
