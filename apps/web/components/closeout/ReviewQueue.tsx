@@ -29,7 +29,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useUser } from '@clerk/nextjs';
-import { X, ChevronLeft, ChevronRight, CheckCircle2, Circle, Flag, FileText, AlertCircle, AlertTriangle, Pin, FastForward, Copy, Check, Upload, Loader2, MessageSquare, Plus, Pencil, Trash2, Layers, MapPin, Receipt, RefreshCw, Download, Truck } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, CheckCircle2, Circle, Flag, FileText, AlertCircle, AlertTriangle, Pin, FastForward, Copy, Check, Upload, Loader2, MessageSquare, Plus, Pencil, Trash2, Layers, MapPin, Receipt, RefreshCw, Send, Download, Truck } from 'lucide-react';
 import type { Load, CalendarEvent, Stop } from '@/lib/types';
 import type { LoadDocument } from '@/lib/db';
 import Tooltip from '@/components/ui/Tooltip';
@@ -197,7 +197,21 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
 
   // Bound idx whenever the queue changes underneath us.
   const safeIdx = Math.min(Math.max(idx, 0), Math.max(loads.length - 1, 0));
-  const current = loads[safeIdx];
+  const rawCurrent = loads[safeIdx];
+
+  // Local billing-status override map. After invoice generation /
+  // send the server flips load.billing_status to 'invoiced', but the
+  // parent's loads array is fed from a one-shot list query and won't
+  // know until the next refresh. We patch locally so the panel
+  // immediately shows the right state (Released stamp, the
+  // Generate→Regenerate label flip, the new Send button) without
+  // waiting on the parent.
+  const [billingStatusOverride, setBillingStatusOverride] = useState<Map<string, 'verified' | 'invoiced' | 'paid'>>(() => new Map());
+  const rawLoadId = rawCurrent ? ((rawCurrent as Load).loadId ?? rawCurrent.id) : undefined;
+  const overriddenStatus = rawLoadId ? billingStatusOverride.get(rawLoadId) : undefined;
+  const current = rawCurrent && overriddenStatus
+    ? ({ ...rawCurrent, billingStatus: overriddenStatus } as typeof rawCurrent)
+    : rawCurrent;
 
   // Internal navigators — the keyboard / button paths use the
   // attemptNavigate wrappers below so dirty-state prompts can
@@ -557,9 +571,45 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
         result = await railway.createInvoice({ loadId: targetLoadId });
       }
       setActiveInvoice(result.invoice);
+      // Patch local billingStatus to 'invoiced' so the next render
+      // shows the Send button + the Released stamp without waiting on
+      // the parent's list refresh.
+      setBillingStatusOverride(prev => {
+        const next = new Map(prev);
+        next.set(targetLoadId, 'invoiced');
+        return next;
+      });
     } catch (err) {
       const msg = (err as Error).message ?? 'Unknown error';
       console.error('[review queue] invoice generate/regenerate failed:', err);
+      setInvoiceError(msg);
+    } finally {
+      setInvoiceBusy(false);
+    }
+  }
+
+  // Send the active draft invoice from the panel. Mirrors the
+  // billing-page "Send" CTA but pre-fills sensible defaults: email
+  // to the customer's billing contact, bcc self, attach load docs.
+  // The full BatchSendDialog is overkill for a single invoice here
+  // — the user is reviewing the load in front of them and just
+  // wants one click to ship it. The server resolves the broker
+  // address from the load + customer record, so we don't need to
+  // collect a "to" address client-side.
+  async function handleSendInvoice() {
+    if (!current || !activeInvoice || activeInvoice.status !== 'draft') return;
+    setInvoiceBusy(true);
+    setInvoiceError(null);
+    try {
+      const res = await railway.sendInvoice(activeInvoice.id, {
+        method:         'email',
+        bccSelf:        true,
+        attachLoadDocs: true,
+      });
+      setActiveInvoice(res.invoice);
+    } catch (err) {
+      const msg = (err as Error).message ?? 'Unknown error';
+      console.error('[review queue] invoice send failed:', err);
       setInvoiceError(msg);
     } finally {
       setInvoiceBusy(false);
@@ -2556,21 +2606,45 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                                  'Generate invoice';
                 const Icon = hasDraft ? RefreshCw : Receipt;
                 return (
-                  <button type="button"
-                    onClick={() => void handleGenerateOrRegenerate()}
-                    disabled={invoiceBusy || !!hasNonDraft}
-                    title={hasNonDraft ? `Cannot regenerate a ${activeInvoice!.status} invoice — void it first.` : undefined}
-                    className="w-full flex items-center justify-center gap-1.5 text-[12px] font-extrabold uppercase tracking-wider px-3 py-2 rounded-lg transition-opacity disabled:opacity-50"
-                    style={{
-                      background: hasNonDraft ? 'var(--gc-surface)' : '#188038',
-                      color:      hasNonDraft ? 'var(--gc-text-3)'  : '#fff',
-                      border:     hasNonDraft ? '1.5px solid var(--gc-border)' : 'none',
-                      textShadow: hasNonDraft ? undefined : '0 1px 1px rgba(0,0,0,0.2)',
-                      boxShadow:  hasNonDraft ? undefined : '0 1px 3px rgba(0,0,0,0.12)',
-                    }}>
-                    {invoiceBusy ? <Loader2 size={12} className="animate-spin" /> : <Icon size={12} />}
-                    {label}
-                  </button>
+                  <>
+                    <button type="button"
+                      onClick={() => void handleGenerateOrRegenerate()}
+                      disabled={invoiceBusy || !!hasNonDraft}
+                      title={hasNonDraft ? `Cannot regenerate a ${activeInvoice!.status} invoice — void it first.` : undefined}
+                      className="w-full flex items-center justify-center gap-1.5 text-[12px] font-extrabold uppercase tracking-wider px-3 py-2 rounded-lg transition-opacity disabled:opacity-50"
+                      style={{
+                        background: hasNonDraft ? 'var(--gc-surface)' : hasDraft ? 'var(--gc-surface)' : '#188038',
+                        color:      hasNonDraft ? 'var(--gc-text-3)'  : hasDraft ? 'var(--gc-text-2)' : '#fff',
+                        border:     hasNonDraft || hasDraft ? '1.5px solid var(--gc-border)' : 'none',
+                        textShadow: hasNonDraft || hasDraft ? undefined : '0 1px 1px rgba(0,0,0,0.2)',
+                        boxShadow:  hasNonDraft || hasDraft ? undefined : '0 1px 3px rgba(0,0,0,0.12)',
+                      }}>
+                      {invoiceBusy ? <Loader2 size={12} className="animate-spin" /> : <Icon size={12} />}
+                      {label}
+                    </button>
+                    {/* Once a draft exists, the load is in the
+                        Queued bucket (same as the billing page).
+                        Promote Send to the primary green CTA and
+                        demote Regenerate above to a secondary
+                        outline — the next action the dispatcher
+                        wants is almost always Send, not another
+                        round-trip through Regenerate. */}
+                    {hasDraft && (
+                      <button type="button"
+                        onClick={() => void handleSendInvoice()}
+                        disabled={invoiceBusy}
+                        className="w-full flex items-center justify-center gap-1.5 text-[12px] font-extrabold uppercase tracking-wider px-3 py-2 rounded-lg transition-opacity disabled:opacity-50"
+                        style={{
+                          background: '#188038',
+                          color:      '#fff',
+                          textShadow: '0 1px 1px rgba(0,0,0,0.2)',
+                          boxShadow:  '0 1px 3px rgba(0,0,0,0.12)',
+                        }}>
+                        {invoiceBusy ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />}
+                        Send invoice
+                      </button>
+                    )}
+                  </>
                 );
               })()}
               {current.billingStatus !== 'pending' && invoiceError && (
