@@ -59,6 +59,64 @@
   }
 }
 
+/* ── Landing /features section — interactive states ──────────────────
+ * Hover-scale on product screenshots + sliding-arrow learn-more pills.
+ * Keeping the :hover behaviors as utility classes (vs inline styles)
+ * because Tailwind v4's @hover doesn't compose with the bespoke
+ * scale + raised-z-index pattern we want here. Everything else for
+ * the section is inline-styled in page.tsx — only these need a real
+ * stylesheet rule. */
+.feat-frame-shadow {
+  box-shadow: var(--shadow-soft);
+  transition: transform .4s cubic-bezier(.2,.7,.3,1), box-shadow .4s;
+}
+.feat-frame-shadow:hover {
+  transform: scale(1.4);
+  box-shadow: 0 44px 90px -26px rgba(26,35,50,.42), 0 14px 36px -12px rgba(26,35,50,.24);
+  position: relative;
+  z-index: 6;
+}
+.learn-link .learn-arrow {
+  display: inline-flex;
+  transition: transform .2s;
+}
+.learn-link:hover .learn-arrow {
+  transform: translateX(3px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .feat-frame-shadow,
+  .learn-link .learn-arrow {
+    transition: none;
+  }
+  .feat-frame-shadow:hover {
+    transform: none;
+  }
+  .learn-link:hover .learn-arrow {
+    transform: none;
+  }
+}
+/* Editorial-heroes layout collapse — at narrow widths the alternating
+ * grids stack to a single column and overlays drop to in-flow so the
+ * floating offsets don't clip off-screen on phones. */
+@media (max-width: 880px) {
+  .feat-row {
+    grid-template-columns: 1fr !important;
+    gap: 32px !important;
+  }
+  .feat-row > div {
+    order: unset !important;
+  }
+  .group-secondary,
+  .group-topbadge {
+    position: static !important;
+    transform: none !important;
+    width: auto !important;
+    margin-top: 14px;
+    left: auto !important;
+    right: auto !important;
+  }
+}
+
 @theme inline {
   --font-sans: var(--font-jakarta);
 }

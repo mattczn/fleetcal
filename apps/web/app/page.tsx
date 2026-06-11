@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import Image from 'next/image';
 import { auth } from '@clerk/nextjs/server';
-import { Truck, FileText, MapPin, Receipt, Send, Wallet, BarChart3, Check, Play } from 'lucide-react';
+import { Calendar, Receipt, Send, Wallet, Check, Play, Sparkles, ArrowRight } from 'lucide-react';
 import PricingCards from '@/components/marketing/PricingCards';
 import MarketingNav from '@/components/marketing/MarketingNav';
 import FaqAccordion from '@/components/marketing/FaqAccordion';
@@ -480,107 +480,485 @@ function TrustBand() {
   );
 }
 
-interface Feature {
-  n:      string;
-  Icon:   React.ComponentType<{ size?: number; style?: React.CSSProperties; strokeWidth?: number }>;
-  color:  string;
-  light:  string;
-  title:  string;
-  body:   string;
-  ai?:    boolean;
+// ── Features — three consolidated "groups" replacing the prior 6+1
+// icon-card grid. Each group has a kicker, title, body, chips, one
+// or two learn-more pill links, a primary product screenshot/video,
+// and (group-specific) overlay mockups (AI badge, status chip,
+// invoice bar, finalize-pay button). Editorial-heroes layout —
+// copy/visual rows alternate sides at >880px and stack at narrow.
+interface FeatureGroup {
+  key:       string;
+  n:         string;
+  kicker:    string;
+  Icon:      React.ComponentType<{ size?: number; style?: React.CSSProperties; strokeWidth?: number }>;
+  color:     string;
+  light:     string;
+  title:     string;
+  body:      string;
+  chips:     ReadonlyArray<string>;
+  links:     ReadonlyArray<readonly [string, string]>;
+  /** Bare-frame primary media (rounded card, no browser chrome). */
+  primary:   { kind: 'video' | 'image'; src: string; alt?: string };
+  /** Optional top-corner status chip (group 02). */
+  topBadge?: { title: string; sub: string };
+  /** Optional secondary overlay — AI badge, invoice bar, or a
+   *  smaller bare-frame image with its own overlay button. */
+  secondary?:
+    | { kind: 'badge'; text: string }
+    | { kind: 'invoicebar' }
+    | { kind: 'image'; src: string; alt?: string; widthPct: number; bottomOffset: number; overlay?: { kind: 'finalizepay'; label: string; amount: string } };
 }
 
-const FEATURES: ReadonlyArray<Feature> = [
-  { n: '01', Icon: Truck,    color: '#1a73e8', light: '#e8f0fe', title: 'Your whole fleet, one screen', body: 'Every truck gets its own column and color. See availability at a glance, then drag-and-drop to reassign loads when plans change.' },
-  { n: '02', Icon: FileText, color: '#7c3aed', light: '#f3e8fd', title: 'Drop the rate con, go dispatch', body: 'Upload a rate con and AI extracts pickup, delivery, pay, and instructions automatically. Review, confirm, dispatch.', ai: true },
-  { n: '03', Icon: MapPin,   color: '#1e8e3e', light: '#e6f4ea', title: 'Everything for the load, in one place', body: 'Geocoded P&D locations, mapped route, rate con viewer, and POD upload. All in the load detail. No tab switching.' },
-  { n: '04', Icon: Receipt,  color: '#f97316', light: '#fef0e6', title: 'Close out loads fast', body: 'POD on one side, rate con on the other. Review the paperwork side-by-side and submit for billing in seconds.' },
-  { n: '05', Icon: Send,     color: '#7c3aed', light: '#f3e8fd', title: 'Get paid faster', body: 'Send invoices one at a time or in bulk. AI reads customer-specific billing instructions from the rate con so nothing gets rejected.', ai: true },
-  { n: '06', Icon: Wallet,   color: '#1e8e3e', light: '#e6f4ea', title: 'Payroll without the headache', body: 'Driver events auto-populate the weekly payroll page. Set default rates, make adjustments, close it out every Friday.' },
+const FEATURE_GROUPS: ReadonlyArray<FeatureGroup> = [
+  {
+    key:    'dispatch',
+    n:      '01',
+    kicker: 'Dispatch calendar',
+    Icon:   Calendar,
+    color:  '#1a73e8',
+    light:  '#e8f0fe',
+    title:  'See the whole fleet. Dispatch in one drag.',
+    body:   'Every truck gets its own column. Drop a rate-con PDF and AI fills in the stops, rate, and instructions — then drag the load onto a driver. The calendar is your entire dispatch desk.',
+    chips:  ['AI rate-con parser', 'Drag-to-assign', 'Color per truck', 'Day & week views'],
+    links:  [['Dispatch calendar', '#']],
+    primary:   { kind: 'video', src: '/calendar-dragdrop.mp4', alt: 'Dispatcher dragging a rate-con PDF onto the calendar' },
+    secondary: { kind: 'badge', text: 'Extracting Load Details From Rate Con' },
+  },
+  {
+    key:    'paperwork',
+    n:      '02',
+    kicker: 'Paperwork & billing',
+    Icon:   Receipt,
+    color:  '#f97316',
+    light:  '#fef0e6',
+    title:  'Verify the paperwork. Send the invoice.',
+    body:   'POD on one side, rate con on the other — release the load the moment it checks out. Then invoice one load or a whole batch; AI reads customer-specific billing rules so nothing bounces back.',
+    chips:  ['Side-by-side review', 'Release for invoicing', 'One-click or bulk', 'Customer billing rules'],
+    links:  [['Paperwork verification', '#'], ['Billing', '#']],
+    primary:   { kind: 'image', src: '/paperwork-verification.png', alt: 'Side-by-side POD and rate-con review for closeout' },
+    topBadge:  { title: 'Ready to release', sub: '42 loads · $28,496' },
+    secondary: { kind: 'invoicebar' },
+  },
+  {
+    key:    'payroll',
+    n:      '03',
+    kicker: 'Payroll & insight',
+    Icon:   Wallet,
+    color:  '#1e8e3e',
+    light:  '#e6f4ea',
+    title:  'Close out payroll Friday. Know your numbers.',
+    body:   'Driver events roll straight into the weekly payroll page — adjust and finalize in minutes. Then see performance by truck, driver, and lane, so you know exactly what is making money.',
+    chips:  ['Auto-filled payroll', 'Finalize Friday', 'Asset & driver reports', 'Revenue over time'],
+    links:  [['Payroll', '#'], ['Dashboard & reports', '#']],
+    primary:   { kind: 'image', src: '/weekly-dashboard.png', alt: 'Revenue by truck, customer, and over time' },
+    secondary: {
+      kind:         'image',
+      src:          '/payroll-week.png',
+      alt:          'Weekly driver pay table',
+      widthPct:     72,
+      bottomOffset: -16,
+      overlay:      { kind: 'finalizepay', label: 'Finalize weekly pay', amount: '$1,825' },
+    },
+  },
 ];
 
-function AiPill() {
+/** BareFrame — rounded image/video card with no browser chrome.
+ *  Hero uses Frame (with traffic-light dots + URL bar); the Features
+ *  section uses bare frames so the product screenshots feel like
+ *  in-context evidence rather than miniature browser windows.
+ *  Adds .feat-frame-shadow so the hover-zoom rule in globals.css
+ *  applies — children scale to 1.4× on hover and lift z to come
+ *  forward of neighboring overlays. */
+function BareFrame({ children }: { children: React.ReactNode }) {
   return (
-    <span
-      className="font-display"
+    <div
+      className="feat-frame-shadow"
       style={{
-        display:      'inline-flex',
-        alignItems:   'center',
-        gap:          7,
-        alignSelf:    'flex-start',
-        whiteSpace:   'nowrap',
-        marginTop:    22,
-        fontSize:     12.5,
-        fontWeight:   600,
-        color:        '#7c3aed',
-        background:   '#f3e8fd',
-        padding:      '6px 13px',
-        borderRadius: 999,
-      }}
-    >
-      <span style={{ width: 6, height: 6, borderRadius: 999, background: '#7c3aed' }} />
-      AI powered
-    </span>
+        background:   '#fff',
+        borderRadius: 16,
+        overflow:     'hidden',
+        border:       '1px solid #e8eaed',
+        display:      'block',
+      }}>
+      {children}
+    </div>
   );
 }
 
-function FeatureCard({ feature }: { feature: Feature }) {
+/** Static "AI is working" overlay badge for group 01. Purple sparkle
+ *  + non-animated 62% progress bar. The on-page motion in the
+ *  prototype was a hand-waved indeterminate; in production we
+ *  keep it deliberately still so it doesn't compete with the
+ *  autoplaying calendar video behind it. */
+function AiBadge({ text }: { text: string }) {
   return (
     <div
       style={{
-        background:    '#fff',
-        border:        '1px solid #e8eaed',
-        borderRadius:  24,
-        padding:       '34px 32px',
-        height:        '100%',
-        display:       'flex',
-        flexDirection: 'column',
-        transition:    'box-shadow .25s, transform .25s',
-      }}
-    >
-      <span
-        style={{
-          width:        52,
-          height:       52,
-          borderRadius: 15,
-          display:      'grid',
-          placeItems:   'center',
-          background:   feature.light,
-          flex:         'none',
-        }}
-      >
-        <feature.Icon size={22} style={{ color: feature.color }} strokeWidth={2} />
+        display:      'inline-flex',
+        alignItems:   'center',
+        gap:          12,
+        background:   '#fff',
+        border:       '1px solid #e8eaed',
+        borderRadius: 14,
+        boxShadow:    'var(--shadow-3)',
+        padding:      '12px 15px',
+        maxWidth:     320,
+      }}>
+      <span style={{
+        position:     'relative',
+        width:        36, height: 36,
+        borderRadius: 999,
+        background:   '#f3e8fd',
+        display:      'grid',
+        placeItems:   'center',
+        flex:         'none',
+      }}>
+        <span style={{
+          position:     'absolute',
+          inset:        3,
+          borderRadius: 999,
+          border:       '2.5px solid rgba(124,58,237,.35)',
+        }} />
+        <Sparkles size={14} style={{ color: '#7c3aed', position: 'relative' }} strokeWidth={2.4} />
       </span>
-      <span
-        className="font-mono"
-        style={{
-          display:        'block',
-          fontSize:       12,
-          fontWeight:     600,
-          color:          '#5f6368',
-          letterSpacing:  '0.1em',
-          marginTop:      24,
-        }}
-      >
-        {feature.n}
+      <div style={{ minWidth: 0 }}>
+        <div className="font-display" style={{ fontWeight: 700, fontSize: 13.5, lineHeight: 1.32, color: '#202124' }}>{text}</div>
+        <div style={{ marginTop: 8, height: 5, width: 132, maxWidth: '100%', borderRadius: 999, background: '#f3e8fd', overflow: 'hidden' }}>
+          <span style={{ display: 'block', height: '100%', width: '62%', borderRadius: 999, background: '#7c3aed' }} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Top-corner "Ready to release · N loads · $X" status chip for
+ *  group 02. White card, green check, two text lines. */
+function StatusChip({ title, sub }: { title: string; sub: string }) {
+  return (
+    <div style={{
+      display:      'flex',
+      alignItems:   'center',
+      gap:          11,
+      background:   '#fff',
+      border:       '1px solid #e8eaed',
+      borderRadius: 14,
+      boxShadow:    'var(--shadow-3)',
+      padding:      '12px 15px',
+    }}>
+      <span style={{
+        width: 30, height: 30,
+        borderRadius: 999,
+        background: '#1e8e3e',
+        display: 'grid', placeItems: 'center',
+        flex: 'none',
+      }}>
+        <Check size={16} strokeWidth={3} style={{ color: '#fff' }} />
       </span>
+      <div>
+        <div className="font-display" style={{ fontWeight: 700, fontSize: 13.5, color: '#202124', whiteSpace: 'nowrap' }}>{title}</div>
+        <div style={{ fontSize: 11.5, color: '#5f6368', whiteSpace: 'nowrap' }}>{sub}</div>
+      </div>
+    </div>
+  );
+}
+
+/** Bulk invoice action bar mockup — selection count + total +
+ *  Generate / Send buttons. Floats over the closeout screenshot
+ *  in group 02, sized to ~86% width (max 460px) and centered. */
+function InvoiceBar() {
+  return (
+    <div style={{
+      display:      'flex',
+      alignItems:   'center',
+      gap:          14,
+      background:   '#fff',
+      border:       '1px solid #e8eaed',
+      borderRadius: 14,
+      boxShadow:    'var(--shadow-3)',
+      padding:      '12px 14px',
+    }}>
+      <span style={{
+        width: 30, height: 30,
+        borderRadius: 999,
+        background: '#1e8e3e',
+        display: 'grid', placeItems: 'center',
+        flex: 'none',
+      }}>
+        <Check size={16} strokeWidth={3} style={{ color: '#fff' }} />
+      </span>
+      <div style={{ lineHeight: 1.16 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: '#5f6368', whiteSpace: 'nowrap' }}>4 loads selected</div>
+        <div className="font-display" style={{ fontWeight: 800, fontSize: 17, color: '#202124', letterSpacing: '-.02em' }}>$3,423.00</div>
+      </div>
+      <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
+        <button type="button" className="font-display" style={{
+          display: 'inline-flex', alignItems: 'center', gap: 7,
+          fontWeight: 600, fontSize: 13.5, lineHeight: 1,
+          borderRadius: 999, padding: '11px 16px',
+          background: '#fff', color: '#3c4043',
+          border: '1px solid #dadce0',
+          whiteSpace: 'nowrap', cursor: 'default',
+        }}>
+          Generate invoice
+        </button>
+        <button type="button" className="font-display" style={{
+          display: 'inline-flex', alignItems: 'center', gap: 7,
+          fontWeight: 600, fontSize: 13.5, lineHeight: 1,
+          borderRadius: 999, padding: '11px 16px',
+          background: '#1e8e3e', color: '#fff',
+          border: '1px solid transparent',
+          whiteSpace: 'nowrap', cursor: 'default',
+        }}>
+          <Send size={13} style={{ color: '#fff' }} />
+          Send invoices
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Floating Finalize-weekly-pay pill for group 03. Green CTA over
+ *  the bottom-left of the smaller payroll-week screenshot. */
+function FinalizePay({ label, amount }: { label: string; amount: string }) {
+  return (
+    <button type="button" className="font-display" style={{
+      display: 'inline-flex', alignItems: 'center', gap: 10,
+      background: '#1e8e3e', color: '#fff',
+      border: 'none', borderRadius: 999,
+      padding: '12px 18px',
+      boxShadow: 'var(--shadow-3)',
+      cursor: 'default',
+      whiteSpace: 'nowrap',
+    }}>
+      <span style={{
+        width: 22, height: 22, borderRadius: 999,
+        background: 'rgba(255,255,255,.22)',
+        display: 'grid', placeItems: 'center',
+        flex: 'none',
+      }}>
+        <Check size={14} strokeWidth={3} style={{ color: '#fff' }} />
+      </span>
+      <span style={{ fontWeight: 600, fontSize: 14 }}>{label}</span>
+      <span style={{
+        fontWeight: 800, fontSize: 14,
+        paddingLeft: 10,
+        borderLeft: '1px solid rgba(255,255,255,.32)',
+      }}>{amount}</span>
+    </button>
+  );
+}
+
+/** Learn-more pill links. First link in each group is filled with
+ *  the group's accent (white text); subsequent links are outline
+ *  (white bg, accent text). The arrow slides +3px on hover via the
+ *  `.learn-link .learn-arrow` rule in globals.css. Placeholder
+ *  hrefs (#) for now — wire to detail routes when those land. */
+function LearnLinks({ group }: { group: FeatureGroup }) {
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 26 }}>
+      {group.links.map(([label, href], i) => {
+        const primary = i === 0;
+        return (
+          <a
+            key={label}
+            href={href}
+            className="learn-link font-display"
+            style={{
+              display:      'inline-flex',
+              alignItems:   'center',
+              gap:          8,
+              fontWeight:   600,
+              fontSize:     14,
+              padding:      '11px 18px',
+              borderRadius: 999,
+              border:       '1px solid',
+              background:   primary ? group.color : '#fff',
+              color:        primary ? '#fff' : group.color,
+              borderColor:  primary ? 'transparent' : '#dadce0',
+              textDecoration: 'none',
+              whiteSpace:   'nowrap',
+            }}>
+            {label}
+            <span className="learn-arrow">
+              <ArrowRight size={15} style={{ color: primary ? '#fff' : group.color }} strokeWidth={2.4} />
+            </span>
+          </a>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Copy column for a feature group — icon tile + kicker, title,
+ *  body, chips, learn-more links. The "big" flag bumps the heading
+ *  size for the editorial layout (vs the not-shipped panels variant
+ *  in the prototype). */
+function GroupCopy({ group }: { group: FeatureGroup }) {
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <span style={{
+          width: 46, height: 46,
+          borderRadius: 13,
+          display: 'grid', placeItems: 'center',
+          background: group.light,
+          flex: 'none',
+        }}>
+          <group.Icon size={22} style={{ color: group.color }} strokeWidth={2} />
+        </span>
+        <span
+          className="font-mono"
+          style={{
+            fontSize: 12,
+            fontWeight: 600,
+            color: group.color,
+            letterSpacing: '0.12em',
+            textTransform: 'uppercase',
+          }}>
+          {group.kicker}
+        </span>
+      </div>
       <h3
         className="font-display"
         style={{
-          fontWeight:    700,
-          fontSize:      21,
-          lineHeight:    1.2,
-          margin:        '8px 0 0',
+          fontWeight: 800,
+          fontSize: 'clamp(26px, 2.5vw, 33px)',
+          lineHeight: 1.12,
+          margin: '22px 0 0',
+          maxWidth: 460,
           letterSpacing: '-0.022em',
-          color:         '#202124',
-        }}
-      >
-        {feature.title}
+          color: '#202124',
+        }}>
+        {group.title}
       </h3>
-      <p style={{ fontSize: 15.5, lineHeight: 1.65, color: '#5f6368', margin: '12px 0 0' }}>
-        {feature.body}
+      <p style={{ fontSize: 17.5, lineHeight: 1.65, color: '#5f6368', margin: '14px 0 0', maxWidth: 480 }}>
+        {group.body}
       </p>
-      {feature.ai && <AiPill />}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 9, marginTop: 22 }}>
+        {group.chips.map(c => (
+          <span
+            key={c}
+            style={{
+              whiteSpace: 'nowrap',
+              fontSize: 13,
+              fontWeight: 500,
+              color: '#3c4043',
+              background: '#f8f9fa',
+              border: '1px solid #e8eaed',
+              padding: '7px 14px',
+              borderRadius: 999,
+            }}>
+            {c}
+          </span>
+        ))}
+      </div>
+      <LearnLinks group={group} />
+    </div>
+  );
+}
+
+/** Visual column — primary frame plus the group's overlay mockups
+ *  (status chip top, AI badge / invoice bar / secondary image
+ *  bottom). When the row is flipped (group 02), the overlay anchors
+ *  swap sides so they stay near the visual's outer edge instead of
+ *  colliding with the copy column. Reflow rules in globals.css
+ *  drop the overlays in-flow at <880px. */
+function GroupVisual({ group, flip }: { group: FeatureGroup; flip: boolean }) {
+  const off = -10;
+  const sec = group.secondary;
+  // Reserve extra padding below the primary so the floating overlay
+  // doesn't get clipped by the parent grid row.
+  const pad = !sec ? 0 : sec.kind === 'badge' ? 34 : sec.kind === 'invoicebar' ? 30 : 44;
+  return (
+    <div style={{ position: 'relative', paddingBottom: pad }}>
+      <BareFrame>
+        {group.primary.kind === 'video' ? (
+          <HeroVideo
+            src={group.primary.src}
+            width={1968}
+            height={1080}
+            ariaLabel={group.primary.alt ?? ''}
+          />
+        ) : (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={group.primary.src}
+            alt={group.primary.alt ?? ''}
+            style={{ display: 'block', width: '100%', height: 'auto', background: '#f8f9fa' }}
+          />
+        )}
+      </BareFrame>
+
+      {group.topBadge && (
+        <div
+          className="group-topbadge"
+          style={{
+            position: 'absolute',
+            top: -16,
+            zIndex: 4,
+            right: flip ? -14 : 'auto',
+            left:  flip ? 'auto' : -14,
+          }}>
+          <StatusChip title={group.topBadge.title} sub={group.topBadge.sub} />
+        </div>
+      )}
+
+      {sec && sec.kind === 'badge' && (
+        <div
+          className="group-secondary"
+          style={{
+            position: 'absolute',
+            bottom: 22,
+            zIndex: 3,
+            right: flip ? 'auto' : -14,
+            left:  flip ? -14    : 'auto',
+          }}>
+          <AiBadge text={sec.text} />
+        </div>
+      )}
+
+      {sec && sec.kind === 'invoicebar' && (
+        <div
+          className="group-secondary"
+          style={{
+            position: 'absolute',
+            bottom: 16,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            width: '86%',
+            maxWidth: 460,
+            zIndex: 3,
+          }}>
+          <InvoiceBar />
+        </div>
+      )}
+
+      {sec && sec.kind === 'image' && (
+        <div
+          className="group-secondary"
+          style={{
+            position: 'absolute',
+            width: `${sec.widthPct}%`,
+            bottom: sec.bottomOffset,
+            zIndex: 2,
+            right: flip ? 'auto' : off,
+            left:  flip ? off    : 'auto',
+          }}>
+          <BareFrame>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={sec.src}
+              alt={sec.alt ?? ''}
+              style={{ display: 'block', width: '100%', height: 'auto', background: '#f8f9fa' }}
+            />
+          </BareFrame>
+          {sec.overlay?.kind === 'finalizepay' && (
+            <div style={{ position: 'absolute', bottom: -16, left: -12, zIndex: 4 }}>
+              <FinalizePay label={sec.overlay.label} amount={sec.overlay.amount} />
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -596,120 +974,51 @@ function Features() {
         // distinct third tone alongside the white hero and the gray
         // TrustBand / HowItWorks / Story, so the "Built by a carrier"
         // section reads as its own block instead of flowing visually
-        // out of the hero. The feature cards inside are #fff, so the
-        // bg only shows in the gutters between cards — no impact on
-        // the icon-tile contrast inside each card.
+        // out of the hero.
         background:    '#e8f0fe',
         borderTop:     '1px solid #d2e3fc',
         borderBottom:  '1px solid #d2e3fc',
       }}>
       <div className={WRAP}>
-        <Reveal style={{ maxWidth: 720 }}>
+        <Reveal style={{ maxWidth: 760 }}>
           <SectionLabel>FleetCal MVP features</SectionLabel>
           <SectionTitle>
             Built by a carrier, <span style={{ color: 'var(--gc-blue)' }}>for carriers.</span>
           </SectionTitle>
           <SectionSub>
-            Everything a small fleet needs to dispatch, verify, invoice, and pay. In one
-            focused tool. No bloat, no enterprise pricing.
+            Everything a small fleet needs to dispatch, verify, invoice, and pay — three connected
+            areas, one focused tool. No bloat, no enterprise pricing.
           </SectionSub>
         </Reveal>
 
-        <div
-          className="grid gap-6 mt-12 sm:mt-14 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"
-        >
-          {FEATURES.map((f, i) => (
-            <Reveal key={f.n} delay={(i % 3) * 80}>
-              <FeatureCard feature={f} />
-            </Reveal>
-          ))}
-
-          {/* Wide 7th — Know your numbers */}
-          <Reveal style={{ gridColumn: '1 / -1' }}>
-            <div
-              style={{
-                background:   '#fff',
-                border:       '1px solid #e8eaed',
-                borderRadius: 28,
-                padding:      '38px 40px',
-                transition:   'box-shadow .25s, transform .25s',
-              }}
-            >
-              <div style={{ display: 'flex', gap: 24, alignItems: 'flex-start' }}>
-                <span
+        {/* Editorial heroes — vertical stack of three groups,
+            alternating sides at >880px and stacking to single-column
+            at narrow. Visual column is always the wider one (1.45fr
+            vs 0.9fr) so the product screenshot/video carries the
+            section's weight; the copy stays disciplined to ~480px. */}
+        <div style={{ display: 'grid', gap: 100, marginTop: 76 }}>
+          {FEATURE_GROUPS.map((group, i) => {
+            const flip = i % 2 === 1;
+            return (
+              <Reveal key={group.key}>
+                <div
+                  className="feat-row"
                   style={{
-                    width:        52,
-                    height:       52,
-                    borderRadius: 15,
-                    display:      'grid',
-                    placeItems:   'center',
-                    background:   '#fce8e6',
-                    flex:         'none',
-                  }}
-                >
-                  <BarChart3 size={22} style={{ color: '#ea4335' }} strokeWidth={2} />
-                </span>
-                <div>
-                  <span
-                    className="font-mono"
-                    style={{
-                      display:        'block',
-                      fontSize:       12,
-                      fontWeight:     600,
-                      color:          '#5f6368',
-                      letterSpacing:  '0.1em',
-                    }}
-                  >
-                    07
-                  </span>
-                  <h3
-                    className="font-display"
-                    style={{
-                      fontWeight:    700,
-                      fontSize:      24,
-                      margin:        '6px 0 0',
-                      letterSpacing: '-0.022em',
-                      color:         '#202124',
-                    }}
-                  >
-                    Know your numbers
-                  </h3>
-                  <p
-                    style={{
-                      fontSize:   16,
-                      lineHeight: 1.65,
-                      color:      '#5f6368',
-                      margin:     '10px 0 0',
-                      maxWidth:   720,
-                    }}
-                  >
-                    Weekly performance by truck and driver, expense tracking, and custom
-                    load reports. See which lanes, customers, and assets are actually
-                    making you money.
-                  </p>
+                    display:             'grid',
+                    gridTemplateColumns: flip ? '1.45fr 0.9fr' : '0.9fr 1.45fr',
+                    gap:                 56,
+                    alignItems:          'center',
+                  }}>
+                  <div style={{ order: flip ? 2 : 1 }}>
+                    <GroupCopy group={group} />
+                  </div>
+                  <div style={{ order: flip ? 1 : 2 }}>
+                    <GroupVisual group={group} flip={flip} />
+                  </div>
                 </div>
-              </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 24, paddingLeft: 76 }}>
-                {['Asset performance', 'Driver performance', 'Expense tracking', 'Custom load reports'].map(c => (
-                  <span
-                    key={c}
-                    style={{
-                      whiteSpace:   'nowrap',
-                      fontSize:     13.5,
-                      fontWeight:   500,
-                      color:        '#3c4043',
-                      background:   '#f8f9fa',
-                      border:       '1px solid #e8eaed',
-                      padding:      '9px 16px',
-                      borderRadius: 999,
-                    }}
-                  >
-                    {c}
-                  </span>
-                ))}
-              </div>
-            </div>
-          </Reveal>
+              </Reveal>
+            );
+          })}
         </div>
       </div>
     </section>
