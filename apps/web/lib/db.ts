@@ -290,7 +290,11 @@ export async function deleteDispatcher(id: number): Promise<void> {
 export async function searchEvents(_orgId: string, query: string): Promise<CalendarEvent[]> {
   if (!query || query.length < 2) return [];
   try {
-    const { loads } = await railway.searchLoads(query.trim(), 20);
+    // Request the API's full ceiling (50). The calendar dropdown
+    // displays 25 with a "See all N" footer to /search when more
+    // exist, so we need enough headroom to surface the true count
+    // and let the user scroll through ~25 without re-querying.
+    const { loads } = await railway.searchLoads(query.trim(), 50);
     return loads as CalendarEvent[];
   } catch (err) {
     console.error('searchEvents:', err);

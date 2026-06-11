@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { ChevronLeft, ChevronRight, CheckCircle2, Loader2, Menu, Search, X, Trash2, RotateCcw, SlidersHorizontal, Eye, Container, Truck } from 'lucide-react';
 import { OrganizationSwitcher, UserButton, useUser } from '@clerk/nextjs';
 import { useCalendarStore } from '@/store/useCalendarStore';
@@ -73,6 +74,7 @@ export default function CalendarToolbar() {
   } = useCalendarStore();
 
   const { user } = useUser();
+  const router = useRouter();
   const currentUserName = user?.fullName ?? user?.firstName ?? 'Unknown';
 
   const [searchOpen,         setSearchOpen]         = useState(false);
@@ -162,8 +164,14 @@ export default function CalendarToolbar() {
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
   }, [q, orgId]);
 
-  // Merge DB results with in-memory events (DB results win, deduped by id)
-  const searchResults = q.length < 1 ? [] : (() => {
+  // Merge DB results with in-memory events (DB results win, deduped by id).
+  // Display the first SEARCH_DISPLAY_LIMIT inside a scrollable dropdown;
+  // when totalCount exceeds that, show a "See all N" footer that
+  // routes to the full /search page. Previously this slice(0, 10)
+  // silently truncated and dispatchers couldn't tell whether their
+  // query was narrow or whether 30 more matches were hidden.
+  const SEARCH_DISPLAY_LIMIT = 25;
+  const allSearchResults = q.length < 1 ? [] : (() => {
     const inMemory = events.filter(ev =>
       ev.title.toLowerCase().includes(q) ||
       (ev.loadNum    ?? '').toLowerCase().includes(q) ||
@@ -173,8 +181,13 @@ export default function CalendarToolbar() {
     );
     const merged = new Map(dbResults.map(e => [e.id, e]));
     inMemory.forEach(e => { if (!merged.has(e.id)) merged.set(e.id, e); });
-    return Array.from(merged.values()).slice(0, 10);
+    return Array.from(merged.values());
   })();
+  const searchResults = allSearchResults.slice(0, SEARCH_DISPLAY_LIMIT);
+  // hasMore is true whenever the server hit its limit OR the merged
+  // set exceeded the display cap. Either case means there are more
+  // matches than what's visible in the dropdown.
+  const hasMore = allSearchResults.length > SEARCH_DISPLAY_LIMIT || dbResults.length >= 50;
 
   const handleSelectResult = (eventId: string, start: string) => {
     const [y, m, d] = start.split('T')[0].split('-').map(Number);
@@ -439,7 +452,7 @@ export default function CalendarToolbar() {
           </div>
 
           {searchOpen && q.length > 0 && (
-            <div className="absolute right-0 overflow-hidden"
+            <div className="absolute right-0 overflow-hidden flex flex-col"
               style={{ top: 'calc(100% + 6px)', minWidth: 320, borderRadius: 10, boxShadow: 'var(--shadow-3)', border: '1px solid var(--gc-border-light)', background: 'var(--gc-surface)', zIndex: 100 }}>
               {searchLoading && searchResults.length === 0 ? (
                 <div className="flex items-center gap-2 px-4 py-3 text-sm" style={{ color: 'var(--gc-text-3)' }}>
@@ -448,7 +461,15 @@ export default function CalendarToolbar() {
                 </div>
               ) : searchResults.length === 0 ? (
                 <div className="px-4 py-3 text-sm" style={{ color: 'var(--gc-text-3)' }}>No loads found</div>
-              ) : searchResults.map(ev => {
+              ) : (
+                <>
+                {/* Scrollable result list — caps the dropdown at ~6 rows
+                    visible without dominating the viewport. Beyond that
+                    the user scrolls inside the box, and the See all
+                    footer below routes to the full /search page when the
+                    underlying set has even more matches than fit here. */}
+                <div className="overflow-y-auto" style={{ maxHeight: 380 }}>
+                {searchResults.map(ev => {
                 const asset = assets.find(a => a.id === ev.assetId);
                 // Status pill: distinguish active / cancelled-keep-load /
                 // fully-deleted. cancel-keep-load drops the event row
@@ -504,6 +525,28 @@ export default function CalendarToolbar() {
                   </button>
                 );
               })}
+              </div>
+              {/* See all footer — only when the underlying set has
+                  more matches than the dropdown displays. Routes to
+                  the global /search page so the user gets the full
+                  list without round-tripping back to a smaller cap.
+                  Matches the GlobalSearchDropdown footer pattern in
+                  the top-bar search. */}
+              {hasMore && (
+                <button
+                  type="button"
+                  onClick={() => { setSearchOpen(false); router.push(`/search?q=${encodeURIComponent(q)}`); }}
+                  className="flex items-center justify-between gap-2 px-4 py-2.5 text-[12px] font-semibold transition-colors"
+                  style={{ background: 'var(--gc-surface)', color: 'var(--gc-blue)', borderTop: '1px solid var(--gc-border-light)' }}
+                  onMouseOver={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+                  onMouseOut={e => (e.currentTarget.style.background = 'var(--gc-surface)')}
+                >
+                  <span>See all results</span>
+                  <span style={{ color: 'var(--gc-text-3)' }}>{allSearchResults.length}{dbResults.length >= 50 ? '+' : ''} matches →</span>
+                </button>
+              )}
+              </>
+              )}
             </div>
           )}
         </div>
