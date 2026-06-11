@@ -2130,16 +2130,23 @@ export default function EventModal() {
         import('@/lib/db'),
         import('@/lib/railway'),
       ]);
+      // Skip the invoice fetch when the role can't read /v1/invoices —
+      // the endpoint 403s these requests, and the BillingCard / invoice
+      // UI in this modal is hidden in that case anyway. Was responsible
+      // for repeated forbidden entries in the api_errors dashboard
+      // every time a non-accounting dispatcher opened a load.
       const [docs, invRes] = await Promise.all([
         fetchLoadDocuments(ev.loadId!, orgId),
-        railway.listInvoices({ loadId: ev.loadId! }).catch(() => ({ invoices: [] })),
+        canDo('accounting.access')
+          ? railway.listInvoices({ loadId: ev.loadId! }).catch(() => ({ invoices: [] }))
+          : Promise.resolve({ invoices: [] }),
       ]);
       if (cancelled) return;
       setLoadDocuments(docs);
       setLoadInvoices(invRes.invoices);
     })();
     return () => { cancelled = true; };
-  }, [showPdfViewer, modalEventId, orgId, loadDocuments.length, loadInvoices.length, events]);
+  }, [showPdfViewer, modalEventId, orgId, loadDocuments.length, loadInvoices.length, events, canDo]);
 
   // When a doc gets selected, use the pre-fetched signed URL if we have one.
   useEffect(() => {

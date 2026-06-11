@@ -44,6 +44,26 @@ export interface FetchWithRetryOptions {
   onAttemptFailed?: (err: unknown, attempt: number, willRetry: boolean) => void;
 }
 
+/** Whether an error is worth retrying. 4xx (except 408 / 429) are
+ *  client errors — the request itself is wrong and won't get fixed
+ *  by trying again. Retrying a 403 just means logging 5 forbidden
+ *  entries in the api_errors dashboard every time a permission-less
+ *  user lands on a page. 5xx, 408, 429, network errors, and unknown
+ *  shapes (which we treat as "could be transient") all still retry. */
+function shouldRetry(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return true;
+  const e = err as { status?: number; statusCode?: number; name?: string };
+  // AbortError — caller cancelled. The outer signal check will throw,
+  // but defensively don't waste a retry.
+  if (e.name === 'AbortError') return false;
+  const status = e.status ?? e.statusCode;
+  if (status === undefined) return true;        // network error / unknown
+  if (status >= 500) return true;                // server error
+  if (status === 408 || status === 429) return true; // worth retrying
+  if (status >= 400) return false;               // other 4xx — deterministic
+  return true;                                   // 2xx/3xx never reach catch
+}
+
 export async function fetchWithRetry<T>(
   fn: () => Promise<T>,
   opts: FetchWithRetryOptions = {},
@@ -62,7 +82,7 @@ export async function fetchWithRetry<T>(
       return await fn();
     } catch (err) {
       lastErr = err;
-      const willRetry = i < attempts - 1;
+      const willRetry = i < attempts - 1 && shouldRetry(err);
       opts.onAttemptFailed?.(err, i + 1, willRetry);
       if (!willRetry) break;
       // Wait, but interruptibly. If the signal fires during the

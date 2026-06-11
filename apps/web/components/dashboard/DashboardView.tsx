@@ -621,8 +621,15 @@ export default function DashboardView() {
     finalizedWeeks:  number;
     totalWeeks:      number;
   } | null>(null);
+  // Skip the entire fetch when the role can't read /v1/payroll/records.
+  // Without this gate, every dashboard view by a non-payroll role fires
+  // a GET that the API 403s — was responsible for hundreds of forbidden
+  // entries per user per day in the api_errors dashboard. Same pattern
+  // as DriversModal's "Skip when the role can't read payroll" useEffect.
+  const canViewPayroll = can('payroll.access');
   useEffect(() => {
     if (!dbReady) return;
+    if (!canViewPayroll) { setPayrollData({ total: 0, finalizedWeeks: 0, totalWeeks: 0 }); return; }
     let cancelled = false;
     (async () => {
       try {
@@ -711,7 +718,7 @@ export default function DashboardView() {
       }
     })();
     return () => { cancelled = true; };
-  }, [dbReady, periodIso, loadSummaries]);
+  }, [dbReady, periodIso, loadSummaries, canViewPayroll]);
   // Convenience selectors for the tile + cost-bar consumers.
   const payrollTotal = payrollData?.total ?? null;
   const payrollBadge: { text: string; color: string } | undefined = (() => {
