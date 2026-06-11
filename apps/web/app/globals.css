@@ -71,7 +71,7 @@
   transition: transform .4s cubic-bezier(.2,.7,.3,1), box-shadow .4s;
 }
 .feat-frame-shadow:hover {
-  transform: scale(1.4);
+  transform: scale(1.25);
   box-shadow: 0 44px 90px -26px rgba(26,35,50,.42), 0 14px 36px -12px rgba(26,35,50,.24);
   position: relative;
   z-index: 6;
