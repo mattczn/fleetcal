@@ -15,6 +15,7 @@ import { railway } from '@/lib/railway';
 import { buildCreateLoadBody, splitForUpdate, buildEventByIdUpdate } from '@/lib/loadFieldSplit';
 import { DUMMY_ASSETS, DUMMY_DRIVERS, DUMMY_EVENTS, DEMO_BASE_DATE } from '@/lib/dummy-data';
 import { localDateStr, todayAtNoon } from '@/lib/time-utils';
+import { errorToast } from '@/lib/errorToast';
 
 // ─── Self-echo suppression ──────────────────────────────────────────────
 //
@@ -1523,7 +1524,11 @@ export const useCalendarStore = create<CalendarStore>()(
             );
           }
         })
-        .catch((err) => console.error('addEvent (non-revenue):', err));
+        .catch((err) => {
+          console.error('addEvent (non-revenue):', err);
+          set((state) => ({ events: state.events.filter((e) => e.id !== tempId) }));
+          errorToast(err, 'Event did not save');
+        });
       return;
     }
 
@@ -1536,7 +1541,14 @@ export const useCalendarStore = create<CalendarStore>()(
     railway.createLoad({ load, events: [evBody] })
       .then((res) => {
         const created = res.loads[0];
-        if (!created) return;
+        if (!created) {
+          // 2xx but no row in the response — server contract violation.
+          // Treat as a save failure: drop the optimistic event so the
+          // calendar doesn't show a ghost load, and tell the user.
+          set((state) => ({ events: state.events.filter((e) => e.id !== tempId) }));
+          errorToast(new Error('Server returned no load row'), 'Load did not save');
+          return;
+        }
         // Remove temp AND any prior insertion of the real id (defensive
         // against realtime/refetch racing with the .then swap). Carries
         // over the joined fields the server returned (loadId, internalLoadId, etc.).
@@ -1562,7 +1574,16 @@ export const useCalendarStore = create<CalendarStore>()(
           );
         }
       })
-      .catch((err) => console.error('addEvent (revenue):', err));
+      .catch((err) => {
+        // POST /v1/loads failed — rollback the optimistic event so the
+        // calendar matches reality, then surface the server's reason.
+        // This is what saves the dispatcher from "I saved it" / "no it's
+        // gone" mysteries when the API rejects (type errors, FK
+        // violations, validation, 5xx, network drop, etc.).
+        console.error('addEvent (revenue):', err);
+        set((state) => ({ events: state.events.filter((e) => e.id !== tempId) }));
+        errorToast(err, 'Load did not save');
+      });
   },
 
   updateEvent: (id, updates) => {
@@ -1707,7 +1728,19 @@ export const useCalendarStore = create<CalendarStore>()(
           }
         }
       })
-      .catch((err) => console.error('updateEvent:', err));
+      .catch((err) => {
+        // PATCH /v1/loads or PATCH /v1/loads/:id/events/:id failed.
+        // Roll the local event back to the snapshot taken at the top of
+        // updateEvent so the calendar stops showing the unsaved edit,
+        // and tell the user it didn't save.
+        console.error('updateEvent:', err);
+        if (prevEvent) {
+          set((state) => ({
+            events: state.events.map((e) => (e.id === id ? prevEvent : e)),
+          }));
+        }
+        errorToast(err, 'Changes did not save');
+      });
   },
 
   cancelEventKeepLoad: (id, auditEntry) => {
