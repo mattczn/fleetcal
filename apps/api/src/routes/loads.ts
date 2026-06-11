@@ -1282,7 +1282,18 @@ loads.patch("/:id", requireCapability("loads.edit"), async (c) => {
   if ("dispatcher"   in body) update.dispatcher     = body.dispatcher   ?? null;
   if ("loadPrice"    in body) update.load_price     = body.loadPrice    ?? null;
   if ("commodity"    in body) update.commodity      = body.commodity    ?? null;
-  if ("weight"       in body) update.weight         = body.weight       ?? null;
+  if ("weight"       in body) {
+    // loads.weight is `integer` — round decimal values (some brokers print
+    // "33,309.6") and coerce numeric strings. See appLoadToLoadInsert for
+    // the same logic on the CREATE path.
+    const w = body.weight as unknown;
+    if (w == null || w === '') {
+      update.weight = null;
+    } else {
+      const n = typeof w === 'number' ? w : Number(String(w).replace(/,/g, ''));
+      update.weight = Number.isFinite(n) && n >= 0 ? Math.round(n) : null;
+    }
+  }
   if ("rateConPdf"   in body) update.rate_con_pdf   = body.rateConPdf   ?? null;
   if ("refNums"      in body) update.ref_nums       = body.refNums?.length ? JSON.stringify(body.refNums) : null;
   if ("notes"         in body) update.notes          = body.notes         ?? null;

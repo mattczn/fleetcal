@@ -226,6 +226,19 @@ export function appLoadToEventInsert(
  * For new loads, omit `loadId` — the DB generates the uuid and the trigger
  * allocates `internal_load_id`.
  */
+/** Coerce a weight value to a non-negative integer for `loads.weight`
+ *  (column type is `integer`). Brokers sometimes print "33,309.6" or
+ *  similar — the AI parser passes it straight through, which Postgres
+ *  rejects with `invalid input syntax for type integer`. We round
+ *  instead of failing the whole load insert. Returns null for
+ *  unparseable / blank input. */
+function coerceWeightToInt(v: unknown): number | null {
+  if (v == null || v === '') return null;
+  const n = typeof v === 'number' ? v : Number(String(v).replace(/,/g, ''));
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.round(n);
+}
+
 export function appLoadToLoadInsert(
   load: Partial<Load>,
   orgId: string,
@@ -241,7 +254,7 @@ export function appLoadToLoadInsert(
     created_by_name:  load.createdByName   ?? null,
     load_price:       load.loadPrice       ?? null,
     commodity:        load.commodity       ?? null,
-    weight:           load.weight          ?? null,
+    weight:           coerceWeightToInt(load.weight),
     rate_con_pdf:     load.rateConPdf      ?? null,
     accessorials:     (load.accessorials ?? null) as unknown as Json | null,
     ref_nums:         load.refNums?.length ? JSON.stringify(load.refNums) : null,
