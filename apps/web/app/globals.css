@@ -69,6 +69,13 @@
 .feat-frame-shadow {
   box-shadow: var(--shadow-soft);
   transition: transform .4s cubic-bezier(.2,.7,.3,1), box-shadow .4s;
+  /* Per-element transform-origin so a frame on the right side of the
+   * viewport grows LEFTWARD (anchored at its right edge) instead of
+   * pushing its right edge off-screen, and vice versa for left-side
+   * frames. Set inline via style={{ ['--feat-origin']: 'right center' }}.
+   * Defaults to center so any frame that doesn't set it stays
+   * symmetric. */
+  transform-origin: var(--feat-origin, center);
 }
 .feat-frame-shadow:hover {
   transform: scale(1.25);

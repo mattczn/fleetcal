@@ -83,15 +83,17 @@ const WRAP = 'mx-auto w-full max-w-[1600px] px-5 sm:px-6 md:px-8 lg:px-12';
 
 /** Mac-style browser frame around a product placeholder. Real
  *  screenshots drop into the `<children>` slot once shipped. */
-function Frame({ url = 'app.fleetcal.com/calendar', children }: { url?: string; children: React.ReactNode }) {
+function Frame({ url = 'app.fleetcal.com/calendar', children, className, style }: { url?: string; children: React.ReactNode; className?: string; style?: React.CSSProperties }) {
   return (
     <div
+      className={className}
       style={{
         background:   '#fff',
         borderRadius: 16,
         boxShadow:    'var(--shadow-soft)',
         overflow:     'hidden',
         border:       '1px solid #e8eaed',
+        ...style,
       }}
     >
       <div
@@ -356,7 +358,17 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
 
         <Reveal delay={140}>
           <div style={{ position: 'relative' }}>
-            <Frame url="fleetcal.app/calendar">
+            <Frame
+              url="fleetcal.app/calendar"
+              className="feat-frame-shadow"
+              // Hero visual sits on the right half of the lg grid
+              // (`grid-cols-[1fr_1.4fr]`), so anchor the hover scale
+              // to the right edge — the frame grows leftward into
+              // the safe area instead of pushing its right edge off
+              // the viewport.
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              style={{ ['--feat-origin' as any]: 'right center' }}
+            >
               {/* Hero screencast — dispatcher dragging a rate-con PDF
                   onto the calendar and FleetCal's AI extracts the
                   customer, rate, stops, and times. HeroVideo (client
@@ -583,7 +595,16 @@ const FEATURE_GROUPS: ReadonlyArray<FeatureGroup> = [
  *  Adds .feat-frame-shadow so the hover-zoom rule in globals.css
  *  applies — children scale to 1.4× on hover and lift z to come
  *  forward of neighboring overlays. */
-function BareFrame({ children }: { children: React.ReactNode }) {
+function BareFrame({ children, origin = 'center' }: { children: React.ReactNode; origin?: 'left' | 'right' | 'center' }) {
+  // Translate the high-level side into a CSS transform-origin pair
+  // and feed it through the --feat-origin custom property the hover
+  // rule in globals.css reads. Keeps the scale anchored to whichever
+  // edge is closer to the viewport edge so the opposite edge grows
+  // inward instead of being clipped off-screen.
+  const cssOrigin =
+    origin === 'left'  ? 'left center'  :
+    origin === 'right' ? 'right center' :
+                         'center';
   return (
     <div
       className="feat-frame-shadow"
@@ -593,6 +614,8 @@ function BareFrame({ children }: { children: React.ReactNode }) {
         overflow:     'hidden',
         border:       '1px solid #e8eaed',
         display:      'block',
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ['--feat-origin' as any]: cssOrigin,
       }}>
       {children}
     </div>
@@ -893,9 +916,15 @@ function GroupVisual({ group, flip }: { group: FeatureGroup; flip: boolean }) {
   // Reserve extra padding below the primary so the floating overlay
   // doesn't get clipped by the parent grid row.
   const pad = !sec ? 0 : sec.kind === 'badge' ? 34 : sec.kind === 'invoicebar' ? 30 : 44;
+  // Anchor the hover scale toward whichever side of the screen the
+  // visual column sits on. flip=true → visual on the LEFT half, grow
+  // rightward (origin: left). flip=false → visual on the RIGHT half,
+  // grow leftward (origin: right). Without this the larger side of
+  // the scaled frame would clip off the viewport edge.
+  const frameOrigin: 'left' | 'right' = flip ? 'left' : 'right';
   return (
     <div style={{ position: 'relative', paddingBottom: pad }}>
-      <BareFrame>
+      <BareFrame origin={frameOrigin}>
         {group.primary.kind === 'video' ? (
           <HeroVideo
             src={group.primary.src}
@@ -972,7 +1001,7 @@ function GroupVisual({ group, flip }: { group: FeatureGroup; flip: boolean }) {
             right: flip ? 'auto' : off,
             left:  flip ? off    : 'auto',
           }}>
-          <BareFrame>
+          <BareFrame origin={frameOrigin}>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={sec.src}
@@ -999,7 +1028,7 @@ function GroupVisual({ group, flip }: { group: FeatureGroup; flip: boolean }) {
             right: flip ? 'auto' : off,
             left:  flip ? off    : 'auto',
           }}>
-          <BareFrame>
+          <BareFrame origin={frameOrigin}>
             <HeroVideo
               src={sec.src}
               width={1968}
