@@ -537,8 +537,8 @@ const FEATURE_GROUPS: ReadonlyArray<FeatureGroup> = [
     Icon:   Calendar,
     color:  '#1a73e8',
     light:  '#e8f0fe',
-    title:  'See the whole fleet. Dispatch in one drag.',
-    body:   'Every truck gets its own column. Drop a rate-con PDF and AI fills in the stops, rate, and instructions — then drag the load onto a driver. The calendar is your entire dispatch desk.',
+    title:  'Find the gaps. Fill the trucks.',
+    body:   "See every truck's schedule in its own column on a live calendar. Empty space means it's time to start booking loads. Drop a rate-con PDF and AI fills in the load details and maps the stops. Drag and drop to assign loads to drivers and trucks.",
     chips:  ['AI rate-con parser', 'Drag-to-assign', 'Color per truck', 'Day & week views'],
     links:  [['Dispatch calendar', '#']],
     // Static calendar screenshot is the hero; the rate-con drag-drop
