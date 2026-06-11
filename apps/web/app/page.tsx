@@ -1,7 +1,8 @@
+import { Fragment } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { auth } from '@clerk/nextjs/server';
-import { Calendar, Receipt, Send, Wallet, Check, Play, Sparkles, ArrowRight } from 'lucide-react';
+import { Calendar, Receipt, Send, Wallet, Check, Play, Sparkles, ArrowRight, FileText } from 'lucide-react';
 import PricingCards from '@/components/marketing/PricingCards';
 import MarketingNav from '@/components/marketing/MarketingNav';
 import FaqAccordion from '@/components/marketing/FaqAccordion';
@@ -1105,11 +1106,25 @@ function Features() {
 }
 
 function HowItWorks() {
-  const steps: ReadonlyArray<[string, string, string]> = [
-    ['01', 'Drop the rate-con',  'Upload the PDF. FleetCal reads the customer, rate, stops and times.'],
-    ['02', 'Dispatch the load',  'Assign a truck and driver on the calendar. Status flips automatically.'],
-    ['03', 'Verify the POD',     'Driver uploads paperwork from the app. Review it in the closeout queue.'],
-    ['04', 'Invoice & pay',      'Send the invoice, mark it paid, and payroll totals are already waiting.'],
+  // 5-step connected flow. Order is intentional: Pay (04) before
+  // Invoice (05) — reverses the hero's "Send the invoice. Pay the
+  // driver." line per the founder's framing of the actual close-out
+  // sequence ("payroll runs Friday; invoice goes when the broker is
+  // ready"). Each step gets its own accent color so the flow reads
+  // as a journey across modules rather than four identical chunks.
+  const steps: ReadonlyArray<{
+    n:     string;
+    title: string;
+    body:  string;
+    Icon:  React.ComponentType<{ size?: number; style?: React.CSSProperties; strokeWidth?: number }>;
+    color: string;
+    light: string;
+  }> = [
+    { n: '01', title: 'Drop the rate-con', body: 'Upload the PDF. FleetCal reads the customer, rate, stops and times.', Icon: FileText, color: '#1a73e8', light: '#e8f0fe' },
+    { n: '02', title: 'Dispatch the load', body: 'Assign a truck and driver on the calendar. Status flips automatically.', Icon: Calendar, color: '#7c3aed', light: '#f3e8fd' },
+    { n: '03', title: 'Verify the POD',    body: 'Driver uploads paperwork from the app. Review it in the closeout queue.', Icon: Check,    color: '#1e8e3e', light: '#e6f4ea' },
+    { n: '04', title: 'Pay the driver',    body: 'Driver events auto-populate the weekly payroll page. Adjust and finalize every Friday.', Icon: Wallet, color: '#f97316', light: '#fef0e6' },
+    { n: '05', title: 'Invoice',           body: 'Send the invoice one at a time or in bulk, mark it paid, and the load is closed.', Icon: Send,   color: '#0891b2', light: '#e0f7fa' },
   ];
   return (
     <section
@@ -1129,46 +1144,56 @@ function HowItWorks() {
             One flow,{' '}
             <span style={{ color: 'var(--gc-blue)' }}>start to finish.</span>
           </SectionTitle>
-          <SectionSub>The same path every load takes, without a single spreadsheet or re-keyed number.</SectionSub>
+          <SectionSub>The same path every load takes — without a single spreadsheet or re-keyed number.</SectionSub>
         </Reveal>
-        <div
-          className="grid gap-6 sm:gap-5 mt-10 sm:mt-12 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4"
-        >
-          {steps.map(([n, t, b], i) => (
-            <Reveal key={n} delay={i * 90}>
-              <div>
-                <div
-                  className="font-display"
-                  style={{
-                    fontWeight:   800,
-                    fontSize:     18,
-                    color:        '#fff',
-                    width:        44,
-                    height:       44,
-                    borderRadius: 999,
-                    background:   'var(--gc-blue)',
-                    display:      'grid',
-                    placeItems:   'center',
-                    boxShadow:    'var(--shadow-1)',
-                  }}
-                >
-                  {n}
+        <div className="how-flow">
+          {steps.map((s, i) => (
+            <Fragment key={s.n}>
+              <Reveal delay={i * 90} className="how-cell">
+                <div className="how-card">
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{
+                      width:        48,
+                      height:       48,
+                      borderRadius: 14,
+                      display:      'grid',
+                      placeItems:   'center',
+                      background:   s.light,
+                      flex:         'none',
+                    }}>
+                      <s.Icon size={22} style={{ color: s.color }} strokeWidth={2} />
+                    </span>
+                    <span
+                      className="font-mono"
+                      style={{
+                        fontSize:       13,
+                        fontWeight:     600,
+                        color:          '#5f6368',
+                        letterSpacing:  '0.12em',
+                      }}>
+                      {s.n}
+                    </span>
+                  </div>
+                  <h3
+                    className="font-display"
+                    style={{
+                      fontWeight:    700,
+                      fontSize:      19,
+                      margin:        '20px 0 0',
+                      letterSpacing: '-0.022em',
+                      color:         '#202124',
+                    }}>
+                    {s.title}
+                  </h3>
+                  <p style={{ fontSize: 15, lineHeight: 1.6, color: '#5f6368', margin: '10px 0 0' }}>{s.body}</p>
                 </div>
-                <h3
-                  className="font-display"
-                  style={{
-                    fontWeight:    700,
-                    fontSize:      19,
-                    margin:        '20px 0 0',
-                    letterSpacing: '-0.022em',
-                    color:         '#202124',
-                  }}
-                >
-                  {t}
-                </h3>
-                <p style={{ fontSize: 15, lineHeight: 1.6, color: '#5f6368', margin: '10px 0 0' }}>{b}</p>
-              </div>
-            </Reveal>
+              </Reveal>
+              {i < steps.length - 1 && (
+                <div className="how-conn" aria-hidden="true">
+                  <ArrowRight size={20} style={{ color: '#5f6368' }} strokeWidth={2} />
+                </div>
+              )}
+            </Fragment>
           ))}
         </div>
       </div>
@@ -1212,67 +1237,93 @@ function Story() {
         scrollMarginTop: 68,
       }}
     >
-      <div
-        className={`${WRAP} grid items-center gap-10 lg:gap-[72px] grid-cols-1 lg:grid-cols-[1fr_1.1fr]`}
-      >
+      {/* Editorial two-column. Founder card sits in the narrower
+          left column under the title; paragraphs + decorative big-
+          blue opening quote sit in the wider right. Old layout had
+          the signature inline at the bottom of the paragraph block;
+          relocating it into a card on the left elevates the
+          attribution from a footer note to part of the section's
+          opening composition. */}
+      <div className={`${WRAP} story-grid`}>
         <Reveal>
           <SectionLabel>Built by carriers</SectionLabel>
           <SectionTitle>
             Made by people who&apos;ve actually{' '}
             <span style={{ color: 'var(--gc-blue)' }}>run a dispatch desk.</span>
           </SectionTitle>
-        </Reveal>
-        <Reveal delay={100}>
           <div
             style={{
-              fontSize:   17.5,
-              lineHeight: 1.85,
-              color:      '#3c4043',
-              display:    'grid',
-              gap:        20,
-            }}
-          >
-            <p>
-              FleetCal is built on years of industry experience and a deep understanding
-              of the workflows dispatchers run every day. We tried enterprise TMS products
-              like Alvys and RoseRocket, but they&apos;re weighed down by bloat that pulls
-              dispatchers away from what actually matters. They treat loads like another
-              row in a spreadsheet. We treat loads as the core unit of dispatch, organized
-              in a calendar so you can see at a glance which trucks are moving and which
-              need attention.
-            </p>
-            <p>
-              As we grew our fleet from 3 to 15 trucks, we couldn&apos;t find tools that
-              gave us real visibility into our bottom line. We wanted certainty that
-              invoices were getting paid. We wanted certainty that every asset was
-              earning every day.
-            </p>
-            <p>
-              FleetCal&apos;s philosophy is practical software for the people who actually
-              run the business: owners, dispatchers, and owner-operators. Simple workflows.
-              Powerful fundamentals. Everything in one ecosystem, from rate con to invoice.
-            </p>
-            {/* Signature block. Uses the same left-blue-rule treatment
-                the old pull-quote did so it carries the same visual
-                weight in the layout, but reframed as an attribution
-                rather than a free-floating quote. */}
-            <div
-              className="font-display"
-              style={{
-                borderLeft:  '3px solid var(--gc-blue)',
-                paddingLeft: 20,
-                marginTop:   4,
-              }}
-            >
-              <div style={{ fontWeight: 700, fontSize: 17, color: '#202124' }}>
-                Matt Curzon
+              marginTop:    30,
+              padding:      '24px 26px',
+              background:   '#fff',
+              border:       '1px solid #e8eaed',
+              borderRadius: 24,
+              boxShadow:    'var(--shadow-card)',
+            }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 15 }}>
+              <div
+                className="font-display"
+                style={{
+                  width:        56,
+                  height:       56,
+                  borderRadius: 999,
+                  flex:         'none',
+                  background:   'var(--gc-blue)',
+                  color:        '#fff',
+                  display:      'grid',
+                  placeItems:   'center',
+                  fontWeight:   800,
+                  fontSize:     19,
+                  letterSpacing: '0.02em',
+                  boxShadow:    'var(--shadow-1)',
+                }}>
+                MC
               </div>
-              <div style={{ fontSize: 14.5, color: '#5f6368', marginTop: 2 }}>
-                Founder &amp; Operator, Curzon Trucking LLC
+              <div>
+                <div className="font-display" style={{ fontWeight: 700, fontSize: 17, color: '#202124' }}>
+                  Matt Curzon
+                </div>
+                <div style={{ fontSize: 14.5, color: '#5f6368', marginTop: 2 }}>
+                  Founder &amp; Operator, Curzon Trucking LLC
+                </div>
+                <div style={{ fontSize: 14.5, color: '#5f6368' }}>
+                  Salt Lake City, UT
+                </div>
               </div>
-              <div style={{ fontSize: 14.5, color: '#5f6368' }}>
-                Salt Lake City, UT
-              </div>
+            </div>
+          </div>
+        </Reveal>
+        <Reveal delay={100}>
+          <div style={{ position: 'relative' }}>
+            {/* Decorative opening quote mark — purely visual, sits
+                behind the lead paragraph in pale brand blue. Marked
+                aria-hidden so screen readers skip it. */}
+            <span
+              className="font-display story-quote"
+              aria-hidden="true">
+              &ldquo;
+            </span>
+            <div style={{ position: 'relative', fontSize: 17.5, lineHeight: 1.85, color: '#3c4043', display: 'grid', gap: 20 }}>
+              <p style={{ fontSize: 20, lineHeight: 1.7, color: '#202124' }}>
+                FleetCal is built on years of industry experience and a deep understanding
+                of the workflows dispatchers run every day. We tried enterprise TMS products
+                like Alvys and RoseRocket, but they&apos;re weighed down by bloat that pulls
+                dispatchers away from what actually matters. They treat loads like another
+                row in a spreadsheet. We treat loads as the core unit of dispatch, organized
+                in a calendar so you can see at a glance which trucks are moving and which
+                need attention.
+              </p>
+              <p>
+                As we grew our fleet from 3 to 15 trucks, we couldn&apos;t find tools that
+                gave us real visibility into our bottom line. We wanted certainty that
+                invoices were getting paid. We wanted certainty that every asset was
+                earning every day.
+              </p>
+              <p>
+                FleetCal&apos;s philosophy is practical software for the people who actually
+                run the business: owners, dispatchers, and owner-operators. Simple workflows.
+                Powerful fundamentals. Everything in one ecosystem, from rate con to invoice.
+              </p>
             </div>
           </div>
         </Reveal>

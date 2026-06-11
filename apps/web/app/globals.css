@@ -124,6 +124,83 @@
   }
 }
 
+/* ── Landing /how-it-works — connected step flow ─────────────────────
+ * 5 cards in a row at desktop, 2-up at <=880px, 1-up at <=560px.
+ * Muted right-arrow connectors between cards (hidden when the flow
+ * wraps so they don't sit awkwardly at end-of-row). Hover lifts a
+ * card 3px with the card shadow so the flow feels interactive. */
+.how-flow {
+  display: flex;
+  align-items: stretch;
+  margin-top: 56px;
+}
+.how-cell {
+  flex: 1;
+  min-width: 0;
+}
+.how-card {
+  height: 100%;
+  background: #fff;
+  border: 1px solid var(--gc-border-light);
+  border-radius: 20px;
+  padding: 26px 24px;
+  transition: box-shadow .25s, transform .25s;
+}
+.how-card:hover {
+  box-shadow: var(--shadow-card);
+  transform: translateY(-3px);
+}
+.how-conn {
+  flex: none;
+  width: 40px;
+  display: grid;
+  place-items: center;
+  align-self: center;
+  opacity: .36;
+}
+@media (max-width: 880px) {
+  .how-flow { flex-wrap: wrap; gap: 16px; }
+  .how-cell { flex: 1 1 calc(50% - 8px); }
+  .how-conn { display: none; }
+}
+@media (max-width: 560px) {
+  .how-cell { flex: 1 1 100%; }
+}
+
+/* ── Landing /story — editorial two-column with decorative quote ──
+ * Founder card sits in the narrower left column; story paragraphs +
+ * giant pale-blue opening quotation mark sit in the wider right.
+ * The quote is purely decorative — pointer-events off, behind the
+ * text via negative z-index, and scaled down at narrow widths so
+ * it doesn't overflow the paragraph block on mobile. */
+.story-grid {
+  display: grid;
+  grid-template-columns: 0.82fr 1.18fr;
+  gap: 72px;
+  align-items: start;
+}
+.story-quote {
+  position: absolute;
+  top: -48px;
+  left: -6px;
+  font-size: 132px;
+  line-height: 1;
+  color: var(--gc-blue-light);
+  font-weight: 800;
+  pointer-events: none;
+  z-index: 0;
+}
+@media (max-width: 880px) {
+  .story-grid {
+    grid-template-columns: 1fr;
+    gap: 36px;
+  }
+  .story-quote {
+    top: -32px;
+    font-size: 92px;
+  }
+}
+
 @theme inline {
   --font-sans: var(--font-jakarta);
 }
