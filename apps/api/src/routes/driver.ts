@@ -897,6 +897,12 @@ interface AuditEntry {
   loadConfirmed?:    boolean;
 }
 
+/** Same 60s dedup window as the shared auditLog.ts helpers. The driver
+ *  app retries on network blip and can fire the same status flip 2-3
+ *  times in a burst; without this we get triplicate "Status changed
+ *  scheduled → picked_up" entries at identical timestamps. */
+const DRIVER_AUDIT_DEDUP_WINDOW_MS = 60_000;
+
 async function appendAudit(
   eventId: string,
   orgId:   string,
@@ -910,6 +916,24 @@ async function appendAudit(
     .maybeSingle();
   if (error) { console.error("[driver/appendAudit] read:", error); return; }
   const existing = ((data as { audit_log: AuditEntry[] | null } | null)?.audit_log) ?? [];
+
+  // Dedup: scan last 10 entries; skip when one within the window has the
+  // same semantic content (everything except changedAt).
+  const candidateMs = Date.parse(entry.changedAt ?? "");
+  if (Number.isFinite(candidateMs)) {
+    const tail = existing.slice(-10);
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const candidateContent = JSON.stringify({ ...entry, changedAt: undefined });
+    for (let i = tail.length - 1; i >= 0; i--) {
+      const prev = tail[i];
+      const prevMs = Date.parse(prev.changedAt ?? "");
+      if (!Number.isFinite(prevMs)) continue;
+      if (Math.abs(candidateMs - prevMs) > DRIVER_AUDIT_DEDUP_WINDOW_MS) continue;
+      const prevContent = JSON.stringify({ ...prev, changedAt: undefined });
+      if (prevContent === candidateContent) return;
+    }
+  }
+
   const next = [...existing, entry];
   const { error: writeErr } = await supabase
     .from("events")
