@@ -1894,6 +1894,24 @@ export default function EventModal() {
   const [endDate,    setEndDate]    = useState('');
   const [endTime,    setEndTime]    = useState('17:00');
 
+  // Pre-flight check: pickup datetime must be on or before delivery
+  // datetime. Mirrors the server-side validation at POST /v1/loads
+  // (events[0]: start must be <= end). String comparison works because
+  // the naive YYYY-MM-DDTHH:mm format is lex-sortable.
+  //
+  // The DatePicker on the end-date field uses min={startDate}, which
+  // catches same-or-later-day, but a same-DAY load with pickup 14:00
+  // and delivery 08:00 slips through that. This check covers it.
+  //
+  // Surfaced as an inline red banner under the date row (rendered in
+  // the form below) AND blocks doSave from firing the POST, so the
+  // user sees the problem before clicking Save instead of after a 400
+  // round trip.
+  const dateOrderError = (startDate && startTime && endDate && endTime &&
+    `${startDate}T${startTime}` > `${endDate}T${endTime}`)
+    ? 'Delivery is before pickup. Fix the start / end before saving.'
+    : null;
+
   // Inline "switch the partner field too?" suggestions for edit mode.
   // When the user picks a driver that's preferred on a different
   // asset (or vice versa), we surface a small inline chip below the
@@ -2986,6 +3004,12 @@ export default function EventModal() {
   const doSave = async (opts?: { skipGeocodeCheck?: boolean }) => {
     if (!title.trim() || !startDate || !endDate) return;
 
+    // Block save if pickup is after delivery — the API enforces this
+    // and a 400 would surface as a save-failure toast (and rollback
+    // the optimistic update). Catching it here keeps the user in the
+    // modal with the inline banner instead.
+    if (dateOrderError) return;
+
     // Capability gate — match the API's enforcement so a read-only
     // role (e.g. maintenance opening a revenue load) can't trigger a
     // PATCH that the server will 403. Without this, the local Zustand
@@ -3863,6 +3887,7 @@ export default function EventModal() {
 
   const handleBatchSave = (opts?: { skipGeocodeCheck?: boolean }) => {
     if (!title.trim() || !startDate || !endDate) return;
+    if (dateOrderError) return;
     if (brokerMatch.status === 'new') { setBrokerSaveBlocked(true); return; }
     if (!opts?.skipGeocodeCheck && stops.some(s => s.geocodeStatus === 'failed')) {
       setGeocodeBlock('batch');
@@ -5335,6 +5360,21 @@ export default function EventModal() {
                 </div>
               </Field>
             </div>
+
+            {/* Date-order error — blocks save with an inline red banner
+                when pickup ends up after delivery (catches same-day
+                time-of-day inversions that DatePicker's min={startDate}
+                can't see). Matches the conflict-banner style at the top
+                of this modal. */}
+            {dateOrderError && (
+              <div className="flex items-center gap-2 px-3 py-2 rounded-md"
+                style={{ background: '#fef2f2', border: '1px solid #fca5a5' }}>
+                <AlertTriangle size={14} style={{ color: '#dc2626', flexShrink: 0 }} />
+                <span className="text-sm font-medium" style={{ color: '#991b1b' }}>
+                  {dateOrderError}
+                </span>
+              </div>
+            )}
 
             {/* Driver / Asset row.
                 Driver on the LEFT, Asset on the RIGHT — drivers are
