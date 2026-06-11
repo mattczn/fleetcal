@@ -1061,13 +1061,11 @@ function Features() {
       }}>
       <div className={WRAP}>
         <Reveal style={{ maxWidth: 760 }}>
-          <SectionLabel>FleetCal MVP features</SectionLabel>
           <SectionTitle>
             Built by a carrier, <span style={{ color: 'var(--gc-blue)' }}>for carriers.</span>
           </SectionTitle>
           <SectionSub>
-            Everything a small fleet needs to dispatch, verify, invoice, and pay — three connected
-            areas, one focused tool. No bloat, no enterprise pricing.
+            The whole back office of a small carrier, without the bloat or the enterprise price tag.
           </SectionSub>
         </Reveal>
 
