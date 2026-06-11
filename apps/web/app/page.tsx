@@ -569,13 +569,13 @@ const FEATURE_GROUPS: ReadonlyArray<FeatureGroup> = [
   {
     key:    'payroll',
     n:      '03',
-    kicker: 'Payroll & insight',
+    kicker: 'Payroll and Insights',
     Icon:   Wallet,
     color:  '#1e8e3e',
     light:  '#e6f4ea',
-    title:  'Close out payroll Friday. Know your numbers.',
+    title:  'Close the Week. Track Performance.',
     body:   'Driver events roll straight into the weekly payroll page — adjust and finalize in minutes. Then see performance by truck, driver, and lane, so you know exactly what is making money.',
-    chips:  ['Auto-filled payroll', 'Finalize Friday', 'Asset & driver reports', 'Revenue over time'],
+    chips:  ['Auto-filled payroll', 'Bonus & adjustment', 'Revenue by truck', 'Revenue by lane'],
     links:  [['Payroll', '#'], ['Dashboard & reports', '#']],
     primary:   { kind: 'image', src: '/weekly-dashboard.png', alt: 'Revenue by truck, customer, and over time' },
     secondary: {
