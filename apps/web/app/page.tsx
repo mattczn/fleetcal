@@ -499,14 +499,21 @@ interface FeatureGroup {
   links:     ReadonlyArray<readonly [string, string]>;
   /** Bare-frame primary media (rounded card, no browser chrome). */
   primary:   { kind: 'video' | 'image'; src: string; alt?: string };
-  /** Optional top-corner status chip (group 02). */
-  topBadge?: { title: string; sub: string };
-  /** Optional secondary overlay — AI badge, invoice bar, or a
-   *  smaller bare-frame image with its own overlay button. */
+  /** Optional top-of-frame badge. `chip` is the green check + title +
+   *  sub variant (group 02 "Ready to release"); `ai` is the purple
+   *  sparkle + progress-bar variant with the sparkle on the trailing
+   *  edge (group 01 "Extracting Load Details"). */
+  topBadge?:
+    | { kind: 'chip'; title: string; sub: string }
+    | { kind: 'ai'; text: string };
+  /** Optional secondary overlay — AI badge, invoice bar, a smaller
+   *  bare-frame image with its own overlay button, or a video frame
+   *  overlapping the primary (group 01). */
   secondary?:
     | { kind: 'badge'; text: string }
     | { kind: 'invoicebar' }
-    | { kind: 'image'; src: string; alt?: string; widthPct: number; bottomOffset: number; overlay?: { kind: 'finalizepay'; label: string; amount: string } };
+    | { kind: 'image'; src: string; alt?: string; widthPct: number; bottomOffset: number; overlay?: { kind: 'finalizepay'; label: string; amount: string } }
+    | { kind: 'video'; src: string; alt?: string; widthPct: number; bottomOffset: number };
 }
 
 const FEATURE_GROUPS: ReadonlyArray<FeatureGroup> = [
@@ -521,8 +528,15 @@ const FEATURE_GROUPS: ReadonlyArray<FeatureGroup> = [
     body:   'Every truck gets its own column. Drop a rate-con PDF and AI fills in the stops, rate, and instructions — then drag the load onto a driver. The calendar is your entire dispatch desk.',
     chips:  ['AI rate-con parser', 'Drag-to-assign', 'Color per truck', 'Day & week views'],
     links:  [['Dispatch calendar', '#']],
-    primary:   { kind: 'video', src: '/calendar-dragdrop.mp4', alt: 'Dispatcher dragging a rate-con PDF onto the calendar' },
-    secondary: { kind: 'badge', text: 'Extracting Load Details From Rate Con' },
+    // Static calendar screenshot is the hero; the rate-con drag-drop
+    // video plays underneath as a smaller overlapping frame (~45%
+    // width). The AI extraction badge floats over the TOP of the
+    // calendar screenshot with the sparkle on the right edge — reads
+    // as a status indicator on the live screen rather than a load
+    // detail tooltip.
+    primary:   { kind: 'image', src: '/calendar-view.png', alt: 'FleetCal dispatch calendar with one column per truck' },
+    topBadge:  { kind: 'ai', text: 'Extracting Load Details' },
+    secondary: { kind: 'video', src: '/calendar-dragdrop.mp4', alt: 'Dispatcher dragging a rate-con PDF onto the calendar', widthPct: 45, bottomOffset: -16 },
   },
   {
     key:    'paperwork',
@@ -536,7 +550,7 @@ const FEATURE_GROUPS: ReadonlyArray<FeatureGroup> = [
     chips:  ['Side-by-side review', 'Release for invoicing', 'One-click or bulk', 'Customer billing rules'],
     links:  [['Paperwork verification', '#'], ['Billing', '#']],
     primary:   { kind: 'image', src: '/paperwork-verification.png', alt: 'Side-by-side POD and rate-con review for closeout' },
-    topBadge:  { title: 'Ready to release', sub: '42 loads · $28,496' },
+    topBadge:  { kind: 'chip', title: 'Ready to release', sub: '42 loads · $28,496' },
     secondary: { kind: 'invoicebar' },
   },
   {
@@ -589,8 +603,40 @@ function BareFrame({ children }: { children: React.ReactNode }) {
  *  + non-animated 62% progress bar. The on-page motion in the
  *  prototype was a hand-waved indeterminate; in production we
  *  keep it deliberately still so it doesn't compete with the
- *  autoplaying calendar video behind it. */
-function AiBadge({ text }: { text: string }) {
+ *  autoplaying calendar video behind it.
+ *
+ *  iconPosition flips the sparkle to the trailing edge. Used for
+ *  the top-of-frame variant in group 01 where the badge sits over
+ *  the calendar screenshot's header bar — the right-edge sparkle
+ *  reads as "AI status indicator" rather than a leading bullet. */
+function AiBadge({ text, iconPosition = 'left' }: { text: string; iconPosition?: 'left' | 'right' }) {
+  const icon = (
+    <span style={{
+      position:     'relative',
+      width:        36, height: 36,
+      borderRadius: 999,
+      background:   '#f3e8fd',
+      display:      'grid',
+      placeItems:   'center',
+      flex:         'none',
+    }}>
+      <span style={{
+        position:     'absolute',
+        inset:        3,
+        borderRadius: 999,
+        border:       '2.5px solid rgba(124,58,237,.35)',
+      }} />
+      <Sparkles size={14} style={{ color: '#7c3aed', position: 'relative' }} strokeWidth={2.4} />
+    </span>
+  );
+  const content = (
+    <div style={{ minWidth: 0 }}>
+      <div className="font-display" style={{ fontWeight: 700, fontSize: 13.5, lineHeight: 1.32, color: '#202124' }}>{text}</div>
+      <div style={{ marginTop: 8, height: 5, width: 132, maxWidth: '100%', borderRadius: 999, background: '#f3e8fd', overflow: 'hidden' }}>
+        <span style={{ display: 'block', height: '100%', width: '62%', borderRadius: 999, background: '#7c3aed' }} />
+      </div>
+    </div>
+  );
   return (
     <div
       style={{
@@ -604,29 +650,7 @@ function AiBadge({ text }: { text: string }) {
         padding:      '12px 15px',
         maxWidth:     320,
       }}>
-      <span style={{
-        position:     'relative',
-        width:        36, height: 36,
-        borderRadius: 999,
-        background:   '#f3e8fd',
-        display:      'grid',
-        placeItems:   'center',
-        flex:         'none',
-      }}>
-        <span style={{
-          position:     'absolute',
-          inset:        3,
-          borderRadius: 999,
-          border:       '2.5px solid rgba(124,58,237,.35)',
-        }} />
-        <Sparkles size={14} style={{ color: '#7c3aed', position: 'relative' }} strokeWidth={2.4} />
-      </span>
-      <div style={{ minWidth: 0 }}>
-        <div className="font-display" style={{ fontWeight: 700, fontSize: 13.5, lineHeight: 1.32, color: '#202124' }}>{text}</div>
-        <div style={{ marginTop: 8, height: 5, width: 132, maxWidth: '100%', borderRadius: 999, background: '#f3e8fd', overflow: 'hidden' }}>
-          <span style={{ display: 'block', height: '100%', width: '62%', borderRadius: 999, background: '#7c3aed' }} />
-        </div>
-      </div>
+      {iconPosition === 'left' ? (<>{icon}{content}</>) : (<>{content}{icon}</>)}
     </div>
   );
 }
@@ -899,7 +923,11 @@ function GroupVisual({ group, flip }: { group: FeatureGroup; flip: boolean }) {
             right: flip ? -14 : 'auto',
             left:  flip ? 'auto' : -14,
           }}>
-          <StatusChip title={group.topBadge.title} sub={group.topBadge.sub} />
+          {group.topBadge.kind === 'chip' ? (
+            <StatusChip title={group.topBadge.title} sub={group.topBadge.sub} />
+          ) : (
+            <AiBadge text={group.topBadge.text} iconPosition="right" />
+          )}
         </div>
       )}
 
@@ -957,6 +985,28 @@ function GroupVisual({ group, flip }: { group: FeatureGroup; flip: boolean }) {
               <FinalizePay label={sec.overlay.label} amount={sec.overlay.amount} />
             </div>
           )}
+        </div>
+      )}
+
+      {sec && sec.kind === 'video' && (
+        <div
+          className="group-secondary"
+          style={{
+            position: 'absolute',
+            width: `${sec.widthPct}%`,
+            bottom: sec.bottomOffset,
+            zIndex: 2,
+            right: flip ? 'auto' : off,
+            left:  flip ? off    : 'auto',
+          }}>
+          <BareFrame>
+            <HeroVideo
+              src={sec.src}
+              width={1968}
+              height={1080}
+              ariaLabel={sec.alt ?? ''}
+            />
+          </BareFrame>
         </div>
       )}
     </div>
