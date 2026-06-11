@@ -778,6 +778,16 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   // includedDocIds set.
   const handleDeleteDoc = async (docId: string) => {
     if (!loadId) return;
+    // The virtual canonical rate_con row uses a sentinel id, not a real
+    // uuid — there's nothing to DELETE on the server. Bail before the
+    // request fires (avoids the 500 from `invalid input syntax for type
+    // uuid` that would otherwise hit api_errors). To remove the actual
+    // canonical rate_con, the user clears it from the EventModal's
+    // rate-con field instead.
+    if (docId === RATE_CON_PRIMARY_SENTINEL) {
+      console.warn('[ReviewQueue] refusing to DELETE the virtual rate_con sentinel');
+      return;
+    }
     try {
       // Suppress the realtime echo from popping the conflict banner
       // on the dispatcher who just deleted.

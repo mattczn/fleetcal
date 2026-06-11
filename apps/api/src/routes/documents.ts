@@ -283,6 +283,15 @@ documents.delete("/:id", requireCapability("loads.edit"), async (c) => {
   const orgId = c.get("orgId");
   const docId = c.req.param("id");
 
+  // Validate UUID format up front so we return a clean 400 instead of
+  // letting Postgres surface "invalid input syntax for type uuid" as a
+  // 500. Clients sometimes pass sentinel placeholder ids by accident
+  // (e.g. `__rate_con_primary__` from the closeout ReviewQueue) — a
+  // clear validation error is friendlier than a 500 in api_errors.
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(docId)) {
+    return c.json({ error: "invalid_id", detail: `Not a valid document id: ${docId}` } satisfies ApiErrorResponse, 400);
+  }
+
   const { data, error: fetchErr } = await supabase
     .from("load_documents")
     .select("storage_path, kind, file_name, event_id")
