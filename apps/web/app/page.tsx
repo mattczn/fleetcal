@@ -539,7 +539,7 @@ const FEATURE_GROUPS: ReadonlyArray<FeatureGroup> = [
     light:  '#e8f0fe',
     title:  'Find the gaps. Fill the trucks.',
     body:   "See every truck's schedule in its own column on a live calendar. Empty space means it's time to start booking loads. Drop a rate-con PDF and AI fills in the load details and maps the stops. Drag and drop to assign loads to drivers and trucks.",
-    chips:  ['AI rate-con parser', 'Drag-to-assign', 'Color per truck', 'Day & week views'],
+    chips:  ['Color per truck', 'Unassigned load queue', 'AI rate-con parser', 'Drag-to-assign'],
     links:  [['Dispatch calendar', '#']],
     // Static calendar screenshot is the hero; the rate-con drag-drop
     // video plays underneath as a smaller overlapping frame (~45%
