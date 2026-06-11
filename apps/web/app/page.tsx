@@ -715,7 +715,7 @@ function StatusChip({ title, sub }: { title: string; sub: string }) {
  *  in group 02, sized to ~86% width (max 460px) and centered. */
 function InvoiceBar() {
   return (
-    <div style={{
+    <div className="invoice-bar" style={{
       display:      'flex',
       alignItems:   'center',
       gap:          14,
@@ -1011,7 +1011,7 @@ function GroupVisual({ group, flip }: { group: FeatureGroup; flip: boolean }) {
             />
           </BareFrame>
           {sec.overlay?.kind === 'finalizepay' && (
-            <div style={{ position: 'absolute', bottom: -16, left: -12, zIndex: 4 }}>
+            <div className="finalize-wrap" style={{ position: 'absolute', bottom: -16, left: -12, zIndex: 4 }}>
               <FinalizePay label={sec.overlay.label} amount={sec.overlay.amount} />
             </div>
           )}
@@ -1074,7 +1074,7 @@ function Features() {
             at narrow. Visual column is always the wider one (1.45fr
             vs 0.9fr) so the product screenshot/video carries the
             section's weight; the copy stays disciplined to ~480px. */}
-        <div style={{ display: 'grid', gap: 100, marginTop: 76 }}>
+        <div className="feat-groups" style={{ display: 'grid', gap: 100, marginTop: 76 }}>
           {FEATURE_GROUPS.map((group, i) => {
             const flip = i % 2 === 1;
             return (

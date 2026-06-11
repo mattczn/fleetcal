@@ -102,10 +102,32 @@
     transform: none;
   }
 }
+/* Disable the hover-scale on touch devices. Tapping a frame on a
+ * phone triggers a brief :hover that snaps it to 1.25× and back —
+ * jarring on a touchscreen. Honors the `hover: none` media query
+ * so it only fires on actual touch-only devices, not on a desktop
+ * with a hover-capable pointer (which would catch this rule too
+ * if we used max-width). */
+@media (hover: none) {
+  .feat-frame-shadow:hover {
+    transform: none;
+    box-shadow: var(--shadow-soft);
+    z-index: auto;
+  }
+}
 /* Editorial-heroes layout collapse — at narrow widths the alternating
  * grids stack to a single column and overlays drop to in-flow so the
  * floating offsets don't clip off-screen on phones. */
 @media (max-width: 880px) {
+  /* Tighter section padding + reduced inter-group gap so the stacked
+   * layout doesn't read as huge whitespace gaps between cards. */
+  #features {
+    padding: 64px 0 56px !important;
+  }
+  .feat-groups {
+    gap: 56px !important;
+    margin-top: 40px !important;
+  }
   .feat-row {
     grid-template-columns: 1fr !important;
     gap: 32px !important;
@@ -121,6 +143,37 @@
     margin-top: 14px;
     left: auto !important;
     right: auto !important;
+  }
+  /* The FinalizePay overlay is positioned absolutely inside the
+   * group-secondary wrapper. Once that wrapper drops to static, the
+   * absolute child would anchor to whichever ancestor IS positioned
+   * (the row root) and float somewhere unintended. Reset it. */
+  .finalize-wrap {
+    position: static !important;
+    margin-top: 12px;
+  }
+}
+@media (max-width: 560px) {
+  /* On the smallest viewports trim the section even further so the
+   * features don't dominate the scroll and give the chips/learn-
+   * links a tighter top-to-bottom rhythm. */
+  #features {
+    padding: 48px 0 44px !important;
+  }
+  .feat-groups {
+    gap: 44px !important;
+    margin-top: 32px !important;
+  }
+  /* Invoice-bar mockup at narrow widths: the "Generate / Send" pill
+   * buttons + selection count + total can't all fit on a single row
+   * under ~400px. Allow wrap so the actions fall to a new line
+   * under the count/total. */
+  .invoice-bar {
+    flex-wrap: wrap;
+  }
+  .invoice-bar > div:last-child {
+    margin-left: 0 !important;
+    flex: 1 1 100%;
   }
 }
 
