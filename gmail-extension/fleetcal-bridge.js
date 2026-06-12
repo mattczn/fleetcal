@@ -15,5 +15,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     sendResponse({ ok: true });
     return false;
   }
+  if (msg && msg.type === "createFromPdf" && msg.pdfBase64) {
+    window.postMessage(
+      { source: "fleetcal-ext", type: "createFromPdf", pdfBase64: msg.pdfBase64 },
+      window.location.origin
+    );
+    sendResponse({ ok: true });
+    return false;
+  }
   return false;
 });

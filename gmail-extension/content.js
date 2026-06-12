@@ -261,6 +261,7 @@
       const acct = panel.dataset.account, thread = panel.dataset.thread;
       if (btn.dataset.fc === "link")   void doLink(panel, acct, thread, btn.dataset.loadid, "manual-pick");
       if (btn.dataset.fc === "unlink") void doUnlink(panel, acct, thread, subjectEl, signature);
+      if (btn.dataset.fc === "create") void doCreate(panel);
       if (btn.dataset.fc === "manual") {
         const val = panel.querySelector(".fc-manual-input")?.value.trim();
         if (val) void doManualLink(panel, acct, thread, val);
@@ -356,12 +357,17 @@
 
   function renderNotFound(panel, refs, account, threadId) {
     const searched = refs.length ? `<div class="fc-row fc-muted">Searched: ${refs.map(escapeHtml).join(", ")}</div>` : "";
+    // Offer to create the load from the rate-con PDF (opens the in-app
+    // review flow on your FleetCal calendar tab).
+    const create = detectPdfAttachments().length
+      ? `<div class="fc-row"><button type="button" class="fc-btn-go" data-fc="create">Create load from rate con →</button></div>`
+      : "";
     const manual = (account && threadId)
       ? `<div class="fc-row"><input class="fc-manual-input" placeholder="link to load # / ref" />
-           <button type="button" class="fc-btn-go" data-fc="manual">Link</button></div>`
+           <button type="button" class="fc-btn-link" data-fc="manual">link existing</button></div>`
       : "";
     setPanelBody(panel,
-      `<div class="fc-row fc-warn">⚠ Not in FleetCal</div>${searched}${manual}`);
+      `<div class="fc-row fc-warn">⚠ Not in FleetCal</div>${searched}${create}${manual}`);
   }
 
   // ── Link actions ────────────────────────────────────────────────────────
@@ -395,6 +401,27 @@
   }
   function manualInput() {
     return `<div class="fc-row"><input class="fc-manual-input" placeholder="link to load # / ref" /><button type="button" class="fc-btn-go" data-fc="manual">Link</button></div>`;
+  }
+
+  // Create a new load from the rate-con PDF: fetch it, hand it to the
+  // FleetCal calendar tab, which runs the AI parse + opens the review modal.
+  async function doCreate(panel) {
+    const pdfs = detectPdfAttachments();
+    if (!pdfs.length) { setPanelBody(panel, `<div class="fc-row fc-warn">No PDF attachment found.</div>`); return; }
+    setPanelBody(panel, `<div class="fc-row fc-muted">Sending rate con to FleetCal…</div>`);
+    try {
+      const b64 = await fetchPdfBase64(pdfs[0].url);
+      const resp = await sendMsg({ type: "createLoad", pdfBase64: b64 }).catch(() => null);
+      if (resp && resp.ok) {
+        setPanelBody(panel,
+          `<div class="fc-row fc-ok">✓ Opened in FleetCal — review &amp; save.</div>
+           <div class="fc-row fc-muted">It links to this thread once saved (re-open this email to confirm).</div>`);
+      } else {
+        setPanelBody(panel, `<div class="fc-row fc-warn">⚠ ${escapeHtml(resp?.error || "Couldn't start the load")}</div>`);
+      }
+    } catch (e) {
+      setPanelBody(panel, `<div class="fc-row fc-warn">⚠ ${escapeHtml(String(e?.message || e))}</div>`);
+    }
   }
 
   function removePanel() {

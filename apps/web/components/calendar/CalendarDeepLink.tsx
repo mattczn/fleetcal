@@ -17,7 +17,7 @@
  */
 import { useCallback, useEffect, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { useCalendarStore } from '@/store/useCalendarStore';
+import { useCalendarStore, type BatchItem } from '@/store/useCalendarStore';
 import { railway } from '@/lib/railway';
 import { dayAtNoon } from '@/lib/time-utils';
 
@@ -55,17 +55,49 @@ export default function CalendarDeepLink() {
     void openEvent(eventId, params.get('date'));
   }, [dbReady, params, openEvent]);
 
-  // Path 2 — in-place open from the extension bridge (no reload).
+  // Start a new load from a rate-con PDF handed over by the extension —
+  // runs the same AI parse + opens the batch review modal the in-app
+  // "drop a rate-con" flow uses (AssetSidebar.handleBatchFiles), so the
+  // user reviews + creates in the normal UI.
+  const createFromPdf = useCallback(async (base64: string) => {
+    const store = useCalendarStore.getState();
+    const dataUrl = `data:application/pdf;base64,${base64}`;
+    let parsed: Record<string, unknown> = {};
+    try {
+      const res = await fetch('/api/parse-ratecon', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          data: base64,
+          enabledFields: Object.keys(store.fieldSettings || {}).filter((k) => store.fieldSettings[k]),
+          customInstructions: store.promptInstructions,
+          promptVariables: store.promptVariables,
+          customers: store.customers.map((c) => ({ name: c.name, aliases: c.aliases ?? [], parseHints: c.parseHints })),
+        }),
+      });
+      const json = await res.json();
+      parsed = json && !json.error ? json : {};
+    } catch { parsed = {}; }
+    const item: BatchItem = { rateConPdf: dataUrl, parsed };
+    store.startBatch([item]);
+    store.openCreateModal();
+  }, []);
+
+  // Path 2 — messages from the extension bridge (no reload).
   useEffect(() => {
     function onMessage(e: MessageEvent) {
       if (e.origin !== window.location.origin) return;           // same-origin only
       const d = e.data;
-      if (!d || d.source !== 'fleetcal-ext' || d.type !== 'openEvent' || !d.eventId) return;
-      void openEvent(String(d.eventId), d.date ? String(d.date) : null);
+      if (!d || d.source !== 'fleetcal-ext') return;
+      if (d.type === 'openEvent' && d.eventId) {
+        void openEvent(String(d.eventId), d.date ? String(d.date) : null);
+      } else if (d.type === 'createFromPdf' && d.pdfBase64) {
+        void createFromPdf(String(d.pdfBase64));
+      }
     }
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [openEvent]);
+  }, [openEvent, createFromPdf]);
 
   return null;
 }

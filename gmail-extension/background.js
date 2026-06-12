@@ -48,8 +48,43 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     searchPdf(msg.pdfBase64).then(sendResponse).catch((err) => sendResponse({ ok: false, error: errStr(err) }));
     return true;
   }
+  if (msg?.type === "createLoad") {
+    createLoadFromPdf(msg.pdfBase64).then(sendResponse).catch((err) => sendResponse({ ok: false, error: errStr(err) }));
+    return true;
+  }
   return false;
 });
+
+// Hand a rate-con PDF to the FleetCal calendar tab to start a new load in
+// the in-app review flow. Requires a FleetCal calendar tab to be open (the
+// create/review modal only lives there).
+async function createLoadFromPdf(pdfBase64) {
+  let tabs = [];
+  try { tabs = await chrome.tabs.query({}); } catch { /* ignore */ }
+  const calTab = tabs.find((t) => {
+    try {
+      const u = new URL(t.url);
+      return normHost(u.hostname) === "fleetcal.app" && u.pathname.startsWith("/calendar");
+    } catch { return false; }
+  });
+  if (!calTab) return { ok: false, error: "Open your FleetCal calendar tab first, then try again." };
+
+  await chrome.tabs.update(calTab.id, { active: true });
+  if (calTab.windowId != null) {
+    try { await chrome.windows.update(calTab.windowId, { focused: true }); } catch { /* ignore */ }
+  }
+  const delivered = await new Promise((resolve) => {
+    try {
+      chrome.tabs.sendMessage(calTab.id, { type: "createFromPdf", pdfBase64 }, (resp) => {
+        if (chrome.runtime.lastError) return resolve(false);
+        resolve(!!(resp && resp.ok));
+      });
+    } catch { resolve(false); }
+  });
+  return delivered
+    ? { ok: true }
+    : { ok: false, error: "Couldn't reach the calendar tab — refresh it and retry." };
+}
 
 // Send a rate-con PDF (base64) to the backend, which AI-extracts its
 // reference numbers and searches. Returns { ok, refs, matches }.
