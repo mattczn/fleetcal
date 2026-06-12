@@ -66,12 +66,14 @@
     const refTrigger  = emailHasLabel(subjectEl, LABEL_NAME) || hasLabelled || hasAlphaRef;
 
     // Rate-con PDF attachments are a trigger too — the load number is often
-    // ONLY inside the document. Gate on a freight-ish subject/filename so we
-    // don't AI-parse every random PDF.
+    // ONLY inside the document. A freight-ish SUBJECT alone fires the trigger
+    // (so an attachment-only email still reaches the PDF step even before the
+    // attachment chip has lazy-loaded); a PDF with a freight-ish filename
+    // also counts.
     const pdfs = detectPdfAttachments();
-    const hay  = (subject + " " + pdfs.map((p) => p.filename).join(" ")).toLowerCase();
-    const pdfishCtx = /rate.?con|rate conf|confirmation|load tender|load conf|carrier|dispatch|new load|tender|\bbol\b|shipment|pickup|delivery|rate sheet/.test(hay);
-    const pdfTrigger = pdfs.length > 0 && pdfishCtx;
+    const FREIGHTY = /rate.?con|rate conf|confirmation|load tender|load conf|carrier|dispatch|new load|tender|\bbol\b|shipment|pickup|delivery|rate sheet/;
+    const pdfTrigger = FREIGHTY.test(subject.toLowerCase())
+      || (pdfs.length > 0 && FREIGHTY.test(pdfs.map((p) => p.filename).join(" ").toLowerCase()));
 
     // 1) Already linked? Resolve instantly. Keyed on (account, thread) since
     //    Gmail thread ids are per-mailbox. Works even on no-ref replies.
@@ -102,12 +104,19 @@
       }
     }
 
-    // 4) No text match → read the rate-con PDF (AI extracts its refs).
-    if (pdfs.length) {
+    // 4) No text match → read the rate-con PDF. Gmail lazy-loads attachment
+    //    chips, so poll a couple seconds for them to appear before giving up.
+    let pdfsNow = pdfs;
+    for (let i = 0; i < 6 && !pdfsNow.length; i++) {
+      await sleep(400);
+      if (stale(sig)) return;
+      pdfsNow = detectPdfAttachments();
+    }
+    if (pdfsNow.length) {
       const p0 = document.getElementById(PANEL_ID);
       if (!p0 || p0.dataset[PANEL_KEY] !== sig) return;
       setPanelBody(p0, `<div class="fc-row fc-muted">Reading the rate con…</div>`);
-      const pdfResp = await searchPdfs(pdfs);
+      const pdfResp = await searchPdfs(pdfsNow);
       if (stale(sig)) return;
       const live = document.getElementById(PANEL_ID);
       if (!live || live.dataset[PANEL_KEY] !== sig) return;
@@ -149,11 +158,17 @@
       if (i1 < 0 || i2 < 0) continue;
       const mime = dl.slice(0, i1);
       const filename = dl.slice(i1 + 1, i2);
-      const url = dl.slice(i2 + 1);
+      let url = dl.slice(i2 + 1);
+      // Gmail sometimes prefixes the real URL (".../mail/u/0/https://...") —
+      // the fetchable URL starts at the LAST https://.
+      const h = url.lastIndexOf("https://");
+      if (h > 0) url = url.slice(h);
       if (/pdf/i.test(mime) || /\.pdf$/i.test(filename)) out.push({ filename, url });
     }
     return out;
   }
+
+  function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
   // Fetch the attachment (same-origin mail.google.com, cookies included) and
   // base64-encode it for the backend's Claude document block.
