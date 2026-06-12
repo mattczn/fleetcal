@@ -77,9 +77,12 @@
       loads:   new Map(),       // loadId -> { ref:CalendarRef, linked:bool }
       pdfs:    new Map(),       // url   -> { state, refs, primaryRef, filename, matched }
       linking: new Set(),       // loadIds with a setLink in flight (de-dupe)
-      textDone: false,
+      searchedRefs: new Set(),  // text refs already searched (de-dupe)
+      busy: 0,                  // in-flight searches (drives the "scanning" hint)
+      allowExpand: false,       // ok to force-expand the thread (load email / Scan)
+      expanded: false,          // have we force-expanded the thread's messages?
       untriggered: false,       // didn't look like a load email → show "Scan" button
-      watching: false,          // have we started searching? (gates PDF re-checks)
+      watching: false,          // have we started searching? (gates re-checks)
       open: false,              // is the popover showing?
       userToggled: false,       // user clicked the icon → stop auto-opening
     };
@@ -115,11 +118,33 @@
     // shows on EVERY open email now (so you can link any of them).
     if (iconEl) { placeIcon(); if (rec.open) positionPanel(); }
 
-    // Only watch for newly-loaded attachments once we've started searching
-    // (auto-triggered, linked, or you hit "Scan").
+    // Only watch once we've started searching (auto-triggered, linked, Scan).
     if (!rec.watching) return;
-    const fresh = detectPdfAttachments().filter((p) => !rec.pdfs.has(p.url));
-    if (fresh.length) void searchNewPdfs(fresh);
+
+    // Gmail collapses middle messages in long threads — their bodies +
+    // attachments aren't in the DOM until expanded. Force-expand once so the
+    // whole thread renders and nothing stays hidden.
+    if (rec.allowExpand && !rec.expanded && expandThread()) rec.expanded = true;
+
+    // Re-search as later messages render: new attachments AND new text refs
+    // (a load number in a message that wasn't rendered when we first looked).
+    const newPdf = detectPdfAttachments().some((p) => !rec.pdfs.has(p.url));
+    const { refs: nowRefs } = extractRefs(`${subject}\n${readBody()}`);
+    const newRef = nowRefs.some((r) => !rec.searchedRefs.has(r));
+    if (newPdf || newRef) {
+      rec.refs = [...new Set([...rec.refs, ...nowRefs])];
+      void runSearch();   // idempotent — dedupes refs + attachments already done
+    }
+  }
+
+  // Force-render every message in the thread. Gmail's conversation toolbar has
+  // an "Expand all" toggle that expands collapsed individual messages AND the
+  // super-collapsed middle cluster. Clicking it flips the label to "Collapse
+  // all", so it's naturally one-shot. Returns true if it clicked.
+  function expandThread() {
+    const btn = document.querySelector('[aria-label="Expand all"]');
+    if (btn && btn.offsetParent !== null) { btn.click(); return true; }
+    return false;
   }
 
   // First pass for an email: existing links, trigger check, and — if it looks
@@ -136,6 +161,9 @@
     rec.trigger = emailHasLabel(subjectEl, LABEL_NAME) || hasLabelled || hasAlphaRef
       || FREIGHTY.test(subject.toLowerCase())
       || (pdfs0.length > 0 && FREIGHTY.test(pdfs0.map((p) => p.filename).join(" ").toLowerCase()));
+    // Only force-expand the thread for emails that look like loads (where a
+    // hidden rate con matters) — not every linked/incidental thread.
+    rec.allowExpand = rec.trigger;
 
     renderRec();   // show the icon right away on any email
 
@@ -161,36 +189,51 @@
     }
   }
 
-  // Search this email for loads: text refs (cheap) + every rate con present,
-  // then scan() keeps watching for attachments that load later.
+  // Search this email for loads: text refs (cheap) + every rate con present.
+  // Idempotent — refs and attachments already searched are skipped — so it's
+  // safe to call again each time a collapsed message renders.
   async function runSearch() {
     if (!rec) return;
-    const sig = rec.sig;
     rec.untriggered = false;
     rec.watching = true;
 
-    // Re-read refs (the body may have grown since first open).
+    // Expand collapsed messages so the whole thread is in the DOM, then read.
+    if (rec.allowExpand && !rec.expanded && expandThread()) rec.expanded = true;
     const subject = rec.subjectEl.textContent.trim();
     const { refs } = extractRefs(`${subject}\n${readBody()}`);
     rec.refs = [...new Set([...rec.refs, ...refs])];
 
-    if (rec.refs.length && !rec.textDone) {
-      rec.textDone = true;
-      const resp = await sendMsg({ type: "search", refs: rec.refs }).catch(() => null);
-      if (stale(sig)) return;
-      if (resp && resp.ok) { for (const l of exactLoadsFrom(resp.matches)) await addExact(l); }
-    }
+    await searchTextRefs(rec.refs);
 
     const present = detectPdfAttachments();
     if (present.length) await searchNewPdfs(present);
     else renderRec();
   }
 
+  // Search the given text refs (only ones not searched yet) and auto-link
+  // exact matches. Capped per email — a fully-expanded long thread carries a
+  // lot of noise numbers (phones, dates, tracking), and each is an API call.
+  const MAX_SEARCHED_REFS = 30;
+  async function searchTextRefs(refs) {
+    const room = MAX_SEARCHED_REFS - rec.searchedRefs.size;
+    if (room <= 0) return;
+    const fresh = refs.filter((r) => !rec.searchedRefs.has(r)).slice(0, room);
+    if (!fresh.length) return;
+    fresh.forEach((r) => rec.searchedRefs.add(r));
+    const sig = rec.sig;
+    rec.busy++; renderRec();
+    const resp = await sendMsg({ type: "search", refs: fresh }).catch(() => null);
+    rec.busy--;
+    if (stale(sig)) return;
+    if (resp && resp.ok) { for (const l of exactLoadsFrom(resp.matches)) await addExact(l); }
+    renderRec();
+  }
+
   // User asked us to check a non-triggered email for a load number.
   async function doScanNow() {
     if (!rec) return;
     rec.open = true;
-    rec.textDone = false;     // force a fresh text search
+    rec.allowExpand = true;   // an explicit scan may expand the thread
     renderRec();              // shows the "Scanning…" hint
     await runSearch();
   }
@@ -562,8 +605,7 @@
     const unmatched = unmatchedPdfs();
     // "pending" only means a search is actually in flight (we're watching).
     const pending = rec.watching && (
-      [...rec.pdfs.values()].some((p) => p.state === "pending")
-      || (rec.refs.length > 0 && !rec.textDone));
+      rec.busy > 0 || [...rec.pdfs.values()].some((p) => p.state === "pending"));
 
     // Status drives the icon badge + the one-time auto-open.
     let status = "none";
