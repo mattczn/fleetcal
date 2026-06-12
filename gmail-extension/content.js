@@ -217,7 +217,9 @@
   }
 
   function loadLabel(load) {
-    return load.internalLoadId != null ? `#${load.internalLoadId}` : (load.loadNum || "load");
+    // Show the broker's load number (what you'd recognize from the email),
+    // falling back to the internal id only if there's no load number.
+    return load.loadNum || (load.internalLoadId != null ? `#${load.internalLoadId}` : "load");
   }
 
   // A linked thread — the persistent ✓ state. Shows the calendar link + unlink.
