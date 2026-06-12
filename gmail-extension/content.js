@@ -80,6 +80,7 @@
       searchedRefs: new Set(),  // refs the AI extracted + searched (for display)
       lastText: "",             // last email text sent for AI extraction
       textCalls: 0,             // AI text extractions so far (cap per email)
+      linkError: null,          // last setLink failure reason (if any)
       busy: 0,                  // in-flight searches (drives the "scanning" hint)
       allowExpand: false,       // ok to force-expand the thread (load email / Scan)
       expanded: false,          // have we force-expanded the thread's messages?
@@ -182,9 +183,15 @@
       for (const l of linked) if (l && l.loadId) rec.loads.set(l.loadId, { ref: l, linked: true });
     }
 
-    // Auto-search only when it looks like a load (or is already linked).
-    // Otherwise show the "Scan for a load number" button and wait.
-    if (rec.trigger || rec.loads.size) {
+    // Already linked? Show it instantly and STOP. Re-searching a linked
+    // thread on every open is the "reprocessing" you felt — and it's wasteful
+    // since the link is the answer. The panel offers "Check for new loads" to
+    // re-scan on demand (e.g. after creating more loads from a chain).
+    if (rec.loads.size > 0) { renderRec(); return; }
+
+    // Not linked yet → auto-search if it looks like a load; otherwise wait
+    // behind the "Scan for a load number" button.
+    if (rec.trigger) {
       await runSearch();
     } else {
       rec.untriggered = true;
@@ -303,9 +310,18 @@
     if ((entry && entry.linked) || rec.linking.has(loadId)) return;
     if (!rec.account || !rec.threadId) return;
     rec.linking.add(loadId);
-    const resp = await sendMsg({ type: "setLink", account: rec.account, threadId: rec.threadId, loadId, source: source || "auto" }).catch(() => null);
+    const resp = await sendMsg({ type: "setLink", account: rec.account, threadId: rec.threadId, loadId, source: source || "auto" })
+      .catch((e) => ({ ok: false, error: String((e && e.message) || e) }));
     rec.linking.delete(loadId);
-    if (resp && resp.ok && resp.load) rec.loads.set(loadId, { ref: resp.load, linked: true, via: entry ? entry.via : null });
+    if (resp && resp.ok && resp.load) {
+      rec.loads.set(loadId, { ref: resp.load, linked: true, via: entry ? entry.via : null });
+      rec.linkError = null;
+    } else {
+      // Linking didn't persist — surface why (commonly the link table
+      // migration isn't applied / the API isn't redeployed). Without this it
+      // silently re-searches on every open.
+      rec.linkError = (resp && resp.error) || "Couldn't save the link";
+    }
     renderRec();
   }
 
@@ -664,6 +680,19 @@
         ? `<button type="button" class="fc-btn-link" data-fc="unlinkone" data-loadid="${escapeHtml(ref.loadId)}">unlink</button>`
         : (rec.account ? "" : `<span class="fc-via">set account to link</span>`);
       html += `<div class="fc-row fc-ok">✓ ${linked ? "Linked" : "In system"} ${link}${broker}${viaTxt} ${tail}</div>`;
+    }
+
+    // A link didn't save — usually the link-table migration isn't applied or
+    // the API isn't redeployed. Surfacing it explains the "re-scans every
+    // time" behaviour (the link never persists).
+    if (rec.linkError) {
+      html += `<div class="fc-row fc-warn">⚠ Link didn't save: ${escapeHtml(rec.linkError)}</div>`;
+    }
+
+    // Already-linked thread we didn't re-search — let the user re-check for
+    // more loads on demand (e.g. after creating the rest of a chain).
+    if (loads.length && !rec.watching && !pending) {
+      html += `<div class="fc-row"><button type="button" class="fc-btn-link" data-fc="scan">Check for new loads</button></div>`;
     }
 
     if (unmatched.length) {
