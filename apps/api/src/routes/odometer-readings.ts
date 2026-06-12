@@ -230,6 +230,95 @@ odoApiKey.post("/import", requireApiKey("odometer.import"), bulkImportHandler);
 odoClerk.use("*", requireModule("fuel"), requireCapability("fuel.access"));
 odoClerk.post("/import", bulkImportHandler);
 
+// ── PATCH /v1/odometer-readings/:id ───────────────────────────────────
+//
+// Edit a single reading. Body accepts any of:
+//   { odometerMiles?: number | null,
+//     trueOdometerMiles?: number | null,
+//     capturedAt?: string /* ISO */ }
+//
+// Used by the OdometerChart's manage-readings UI to correct a bad row
+// (e.g. an ELD that reported a 200,000-mile jump on first install).
+// Bigserial id so we validate numeric, not uuid.
+odoClerk.patch("/:id", async (c) => {
+  const orgId = c.get("orgId");
+  const idStr = c.req.param("id");
+  const idNum = Number(idStr);
+  if (!Number.isFinite(idNum) || idNum <= 0) {
+    return c.json({ error: "invalid_id", detail: `Not a valid reading id: ${idStr}` } satisfies ApiErrorResponse, 400);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const body = (await c.req.json().catch(() => null)) as any;
+  if (!body || typeof body !== "object") {
+    return c.json({ error: "bad_request", detail: "body required" } satisfies ApiErrorResponse, 400);
+  }
+  const update: Record<string, unknown> = {};
+  if ("odometerMiles" in body) {
+    const v = body.odometerMiles;
+    if (v != null && (typeof v !== "number" || !Number.isFinite(v) || v < 0)) {
+      return c.json({ error: "bad_request", detail: "odometerMiles must be a non-negative number or null" } satisfies ApiErrorResponse, 400);
+    }
+    update.odometer_miles = v;
+  }
+  if ("trueOdometerMiles" in body) {
+    const v = body.trueOdometerMiles;
+    if (v != null && (typeof v !== "number" || !Number.isFinite(v) || v < 0)) {
+      return c.json({ error: "bad_request", detail: "trueOdometerMiles must be a non-negative number or null" } satisfies ApiErrorResponse, 400);
+    }
+    update.true_odometer_miles = v;
+  }
+  if ("capturedAt" in body) {
+    const v = body.capturedAt;
+    if (typeof v !== "string" || Number.isNaN(Date.parse(v))) {
+      return c.json({ error: "bad_request", detail: "capturedAt must be an ISO timestamp" } satisfies ApiErrorResponse, 400);
+    }
+    update.captured_at = v;
+  }
+  if (Object.keys(update).length === 0) {
+    return c.json({ error: "bad_request", detail: "no editable fields in body" } satisfies ApiErrorResponse, 400);
+  }
+
+  const { data, error } = await supabase
+    .from("motive_odometer_readings")
+    .update(update)
+    .eq("id", idNum)
+    .eq("org_id", orgId)
+    .select("id, captured_at, located_at, odometer_miles, true_odometer_miles, source")
+    .maybeSingle();
+  if (error) {
+    console.error("[PATCH /v1/odometer-readings/:id]", error);
+    return c.json({ error: "update_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  }
+  if (!data) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+  return c.json({ reading: data });
+});
+
+// ── DELETE /v1/odometer-readings/:id ──────────────────────────────────
+//
+// Soft delete is overkill for these — they're idempotently regenerable
+// from the Motive cron snapshot if needed. Plain DELETE.
+odoClerk.delete("/:id", async (c) => {
+  const orgId = c.get("orgId");
+  const idStr = c.req.param("id");
+  const idNum = Number(idStr);
+  if (!Number.isFinite(idNum) || idNum <= 0) {
+    return c.json({ error: "invalid_id", detail: `Not a valid reading id: ${idStr}` } satisfies ApiErrorResponse, 400);
+  }
+
+  const { error, count } = await supabase
+    .from("motive_odometer_readings")
+    .delete({ count: "exact" })
+    .eq("id", idNum)
+    .eq("org_id", orgId);
+  if (error) {
+    console.error("[DELETE /v1/odometer-readings/:id]", error);
+    return c.json({ error: "delete_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  }
+  if (count === 0) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+  return c.body(null, 204);
+});
+
 export { odoApiKey, odoClerk };
 
 const odometerReadings = odoClerk;

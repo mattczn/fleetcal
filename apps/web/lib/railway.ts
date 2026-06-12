@@ -949,12 +949,37 @@ class RailwayClient {
     return this.req<{
       vehicleId: number;
       readings: Array<{
+        id:                  number;
         captured_at:         string;
         located_at:          string | null;
         odometer_miles:      number | null;
         true_odometer_miles: number | null;
+        source:              string | null;
       }>;
     }>('GET', `/v1/movements/odometer?${qs.toString()}`);
+  }
+  /** Edit one odometer reading. Used by OdometerChart's manage UI to
+   *  correct bad readings (e.g. a fresh-install ELD that reported a
+   *  200,000-mile jump on day one). */
+  updateOdometerReading(id: number, body: {
+    odometerMiles?:     number | null;
+    trueOdometerMiles?: number | null;
+    capturedAt?:        string;
+  }) {
+    return this.req<{ reading: {
+      id:                  number;
+      captured_at:         string;
+      located_at:          string | null;
+      odometer_miles:      number | null;
+      true_odometer_miles: number | null;
+      source:              string | null;
+    } }>('PATCH', `/v1/odometer-readings/${id}`, body);
+  }
+  /** Delete one odometer reading. Reading is idempotently regenerable
+   *  from the next Motive cron snapshot so a plain DELETE is fine — no
+   *  soft-delete column on this table. */
+  deleteOdometerReading(id: number) {
+    return this.req<void>('DELETE', `/v1/odometer-readings/${id}`);
   }
   /** Manually fire the daily odometer snapshot for this org. */
   snapshotOdometer() {

@@ -464,10 +464,13 @@ movements.get("/odometer", async (c) => {
   const vehicleIdNum = Number(vehicleIdStr);
   if (!Number.isFinite(vehicleIdNum)) return c.json({ error: "vehicleId must be numeric" }, 400);
 
+  // `id` is needed by the OdometerChart's manage-readings UI so it can
+  // PATCH / DELETE a specific row. Source is included so the UI can
+  // mark Motive-cron rows distinctly from manual entries.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let q = (supabase as any)
     .from("motive_odometer_readings")
-    .select("captured_at, located_at, odometer_miles, true_odometer_miles")
+    .select("id, captured_at, located_at, odometer_miles, true_odometer_miles, source")
     .eq("org_id", orgId)
     .eq("vehicle_id", vehicleIdNum)
     .order("captured_at", { ascending: true });
