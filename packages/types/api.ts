@@ -179,6 +179,9 @@ export interface UpdateEventRequest {
   loadedMiles?:  number | null;
   eventNotes?:   string | null;
   priority?:     boolean;
+  /** Payroll defer marker — YYYY-MM-DD (Saturday weekStart) of the
+   *  week this load's pay should land in. null clears the defer. */
+  deferredToWeek?: string | null;
 }
 
 export interface UpdateEventResponse {

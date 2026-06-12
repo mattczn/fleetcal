@@ -52,6 +52,7 @@ const EVENT_LEVEL_KEYS = [
   'priority',
   'relayRole',
   'trailerDropoffAddress',
+  'deferredToWeek',
 ] as const;
 
 // ── Create ──────────────────────────────────────────────────────────────

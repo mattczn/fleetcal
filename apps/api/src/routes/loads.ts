@@ -69,7 +69,7 @@ const STOP_COLS =
 
 const EVENT_COLS =
   "id,asset_id,driver_id,driver_name,title,start,end,status,priority," +
-  "notes,driver_pay,loaded_miles,relay_role,event_kind,non_revenue_type,trailer_id," +
+  "notes,driver_pay,loaded_miles,deferred_to_week,relay_role,event_kind,non_revenue_type,trailer_id," +
   "trailer_type,deleted_at,load_id,created_at,updated_at," +
   "confirmed_at,confirmed_by,confirm_reminder_sent_at," +
   "trailer_dropoff_lat,trailer_dropoff_lng,trailer_dropoff_at,trailer_dropoff_address";
@@ -1450,6 +1450,11 @@ loads.patch("/:id/events/:eventId", requireCapability("loads.edit"), async (c) =
   if ("loadedMiles" in body) update.loaded_miles = body.loadedMiles ?? null;
   if ("eventNotes"  in body) update.notes        = body.eventNotes  ?? null;
   if ("priority"    in body) update.priority     = body.priority    ?? false;
+  if ("deferredToWeek" in body) {
+    // YYYY-MM-DD (Saturday weekStart) or null. PostgREST accepts both;
+    // the column is `date` so we don't need to coerce the format.
+    update.deferred_to_week = body.deferredToWeek ?? null;
+  }
   if ("trailerDropoffAddress" in body)
     update.trailer_dropoff_address = (body.trailerDropoffAddress as string | null | undefined) ?? null;
 
