@@ -59,6 +59,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 // the in-app review flow. Requires a FleetCal calendar tab to be open (the
 // create/review modal only lives there).
 async function createLoadFromPdf(pdfBase64) {
+  // Stage first so every delivery path has a fallback: the bridge's
+  // deliverPendingCreate reads this from storage on a fresh /calendar load.
+  try { await chrome.storage.local.set({ pendingCreatePdf: { pdfBase64, ts: Date.now() } }); }
+  catch (e) { return { ok: false, error: "Couldn't stage the rate con: " + errStr(e) }; }
+
   let tabs = [];
   try { tabs = await chrome.tabs.query({}); } catch { /* ignore */ }
   const calTab = tabs.find((t) => {
@@ -67,11 +72,10 @@ async function createLoadFromPdf(pdfBase64) {
       return normHost(u.hostname) === "fleetcal.app" && u.pathname.startsWith("/calendar");
     } catch { return false; }
   });
-  // No calendar tab open → stage the PDF and open one. The bridge content
-  // script picks it up from storage once the calendar app is ready.
+  const appBase = await getAppBase();
+
+  // No calendar tab open → open one; the bridge picks up the staged PDF.
   if (!calTab) {
-    await chrome.storage.local.set({ pendingCreatePdf: { pdfBase64, ts: Date.now() } });
-    const appBase = await getAppBase();
     await chrome.tabs.create({ url: appBase + "/calendar" });
     return { ok: true, opening: true };
   }
@@ -80,6 +84,8 @@ async function createLoadFromPdf(pdfBase64) {
   if (calTab.windowId != null) {
     try { await chrome.windows.update(calTab.windowId, { focused: true }); } catch { /* ignore */ }
   }
+
+  // Try in-place delivery via the bridge (no reload).
   const delivered = await new Promise((resolve) => {
     try {
       chrome.tabs.sendMessage(calTab.id, { type: "createFromPdf", pdfBase64 }, (resp) => {
@@ -88,9 +94,18 @@ async function createLoadFromPdf(pdfBase64) {
       });
     } catch { resolve(false); }
   });
-  return delivered
-    ? { ok: true }
-    : { ok: false, error: "Couldn't reach the calendar tab — refresh it and retry." };
+  if (delivered) {
+    // Page handled it inline (doesn't read storage) — drop the staged copy so
+    // a future reload doesn't re-fire it.
+    try { await chrome.storage.local.remove("pendingCreatePdf"); } catch { /* ignore */ }
+    return { ok: true };
+  }
+
+  // Bridge unreachable (commonly an orphaned content script after an extension
+  // reload). Reload the tab to /calendar; the fresh bridge delivers the staged
+  // PDF from storage. This self-heals instead of erroring.
+  await chrome.tabs.update(calTab.id, { url: appBase + "/calendar" });
+  return { ok: true, reloading: true };
 }
 
 function getAppBase() {

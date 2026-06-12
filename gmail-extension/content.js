@@ -496,13 +496,23 @@
     setPanelBody(panel, `<div class="fc-row fc-muted">Sending rate con to FleetCal…</div>`);
     try {
       const b64 = await fetchPdfBase64(pdfs[0].url);
-      const resp = await sendMsg({ type: "createLoad", pdfBase64: b64 }).catch(() => null);
+      // Keep the real failure reason — don't collapse it to a generic message.
+      const resp = await sendMsg({ type: "createLoad", pdfBase64: b64 })
+        .catch((e) => ({ ok: false, error: String((e && e.message) || e) }));
       if (resp && resp.ok) {
+        const note = resp.reloading
+          ? `<div class="fc-row fc-muted">Reloading your calendar to open the review…</div>`
+          : `<div class="fc-row fc-muted">It links to this thread once saved (re-open this email to confirm).</div>`;
         setPanelBody(panel,
-          `<div class="fc-row fc-ok">✓ Opened in FleetCal — review &amp; save.</div>
-           <div class="fc-row fc-muted">It links to this thread once saved (re-open this email to confirm).</div>`);
+          `<div class="fc-row fc-ok">✓ Opened in FleetCal — review &amp; save.</div>${note}`);
       } else {
-        setPanelBody(panel, `<div class="fc-row fc-warn">⚠ ${escapeHtml(resp?.error || "Couldn't start the load")}</div>`);
+        let msg = (resp && resp.error) || "Couldn't start the load";
+        // The usual cause: the extension was reloaded but a tab wasn't
+        // refreshed, orphaning a content script.
+        if (/context invalidated|establish connection|Receiving end|orphan/i.test(msg)) {
+          msg = "Extension was reloaded — refresh this Gmail tab (and your FleetCal tab) and retry.";
+        }
+        setPanelBody(panel, `<div class="fc-row fc-warn">⚠ ${escapeHtml(msg)}</div>`);
       }
     } catch (e) {
       setPanelBody(panel, `<div class="fc-row fc-warn">⚠ ${escapeHtml(String(e?.message || e))}</div>`);
