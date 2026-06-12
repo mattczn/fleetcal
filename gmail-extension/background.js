@@ -40,18 +40,32 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 // from the URL itself) is the match pattern, so this follows whatever
 // app URL the extension is configured with.
 async function openInFleetcalTab(url) {
-  let pattern;
-  try { pattern = new URL(url).origin + "/*"; } catch { pattern = null; }
-  const tabs = pattern ? await chrome.tabs.query({ url: pattern }) : [];
-  if (tabs.length) {
-    const tab = tabs[0];
-    await chrome.tabs.update(tab.id, { url, active: true });
-    if (tab.windowId != null) {
-      try { await chrome.windows.update(tab.windowId, { focused: true }); } catch { /* ignore */ }
+  let wantHost = null;
+  try { wantHost = normHost(new URL(url).hostname); } catch { /* ignore */ }
+
+  // Query ALL tabs and match by normalized hostname (www-insensitive) so
+  // an existing fleetcal.app / www.fleetcal.app tab is reused regardless
+  // of the exact origin pattern. Reading tab.url requires the "tabs"
+  // permission — if a tab's url is undefined here, that permission isn't
+  // granted (accept it on chrome://extensions after the reload).
+  let tabs = [];
+  try { tabs = await chrome.tabs.query({}); } catch { /* ignore */ }
+  const match = wantHost && tabs.find((t) => {
+    try { return normHost(new URL(t.url).hostname) === wantHost; } catch { return false; }
+  });
+
+  if (match) {
+    await chrome.tabs.update(match.id, { url, active: true });
+    if (match.windowId != null) {
+      try { await chrome.windows.update(match.windowId, { focused: true }); } catch { /* ignore */ }
     }
   } else {
     await chrome.tabs.create({ url });
   }
+}
+
+function normHost(h) {
+  return String(h || "").replace(/^www\./, "").toLowerCase();
 }
 
 async function handleSearch(refs) {
