@@ -48,6 +48,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     searchPdf(msg.pdfBase64).then(sendResponse).catch((err) => sendResponse({ ok: false, error: errStr(err) }));
     return true;
   }
+  if (msg?.type === "searchText") {
+    searchText(msg.text).then(sendResponse).catch((err) => sendResponse({ ok: false, error: errStr(err) }));
+    return true;
+  }
   if (msg?.type === "createLoad") {
     createLoadsFromPdfs([msg.pdfBase64]).then(sendResponse).catch((err) => sendResponse({ ok: false, error: errStr(err) }));
     return true;
@@ -132,6 +136,20 @@ async function searchPdf(pdfBase64) {
     method: "POST",
     headers: { ...(botKey ? { "x-bot-key": botKey } : {}), "content-type": "application/json" },
     body: JSON.stringify({ pdfBase64 }),
+  });
+  let data = {};
+  try { data = await res.json(); } catch { /* ignore */ }
+  return { ok: res.ok, ...data };
+}
+
+// AI-extract the primary load number(s) from email text + search them.
+async function searchText(text) {
+  const { apiBase, botKey } = await getConfig();
+  if (!apiBase) return { ok: false, error: "Not configured." };
+  const res = await fetch(`${apiBase}/v1/bot/loads/search-text`, {
+    method: "POST",
+    headers: { ...(botKey ? { "x-bot-key": botKey } : {}), "content-type": "application/json" },
+    body: JSON.stringify({ text }),
   });
   let data = {};
   try { data = await res.json(); } catch { /* ignore */ }

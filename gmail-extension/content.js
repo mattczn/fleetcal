@@ -77,7 +77,9 @@
       loads:   new Map(),       // loadId -> { ref:CalendarRef, linked:bool }
       pdfs:    new Map(),       // url   -> { state, refs, primaryRef, filename, matched }
       linking: new Set(),       // loadIds with a setLink in flight (de-dupe)
-      searchedRefs: new Set(),  // text refs already searched (de-dupe)
+      searchedRefs: new Set(),  // refs the AI extracted + searched (for display)
+      lastText: "",             // last email text sent for AI extraction
+      textCalls: 0,             // AI text extractions so far (cap per email)
       busy: 0,                  // in-flight searches (drives the "scanning" hint)
       allowExpand: false,       // ok to force-expand the thread (load email / Scan)
       expanded: false,          // have we force-expanded the thread's messages?
@@ -126,16 +128,17 @@
     // whole thread renders and nothing stays hidden.
     if (rec.allowExpand && !rec.expanded && expandThread()) rec.expanded = true;
 
-    // Re-search as later messages render: new attachments AND new text refs
-    // (a load number in a message that wasn't rendered when we first looked).
+    // Re-search as later messages render: new attachments, or the body text
+    // changed (a later message brought in a load number / a rate con).
     const newPdf = detectPdfAttachments().some((p) => !rec.pdfs.has(p.url));
-    const { refs: nowRefs } = extractRefs(`${subject}\n${readBody()}`);
-    const newRef = nowRefs.some((r) => !rec.searchedRefs.has(r));
-    if (newPdf || newRef) {
-      rec.refs = [...new Set([...rec.refs, ...nowRefs])];
-      void runSearch();   // idempotent — dedupes refs + attachments already done
-    }
+    const text = `${subject}\n${readBody()}`.slice(0, 8000);
+    const textChanged = text !== rec.lastText && rec.textCalls < MAX_TEXT_CALLS;
+    if (newPdf || textChanged) void runSearch();   // idempotent (dedupes)
   }
+
+  // Cap AI text extractions per email (initial collapsed view + one after the
+  // thread expands is the usual case).
+  const MAX_TEXT_CALLS = 4;
 
   // Force-render every message in the thread. Gmail's conversation toolbar has
   // an "Expand all" toggle that expands collapsed individual messages AND the
@@ -189,9 +192,9 @@
     }
   }
 
-  // Search this email for loads: text refs (cheap) + every rate con present.
-  // Idempotent — refs and attachments already searched are skipped — so it's
-  // safe to call again each time a collapsed message renders.
+  // Search this email for loads: AI-extract the primary load number(s) from
+  // the text + every rate con present. Idempotent — re-reads are deduped — so
+  // it's safe to call again each time a collapsed message renders.
   async function runSearch() {
     if (!rec) return;
     rec.untriggered = false;
@@ -199,33 +202,33 @@
 
     // Expand collapsed messages so the whole thread is in the DOM, then read.
     if (rec.allowExpand && !rec.expanded && expandThread()) rec.expanded = true;
-    const subject = rec.subjectEl.textContent.trim();
-    const { refs } = extractRefs(`${subject}\n${readBody()}`);
-    rec.refs = [...new Set([...rec.refs, ...refs])];
 
-    await searchTextRefs(rec.refs);
+    await searchEmailText();
 
     const present = detectPdfAttachments();
     if (present.length) await searchNewPdfs(present);
     else renderRec();
   }
 
-  // Search the given text refs (only ones not searched yet) and auto-link
-  // exact matches. Capped per email — a fully-expanded long thread carries a
-  // lot of noise numbers (phones, dates, tracking), and each is an API call.
-  const MAX_SEARCHED_REFS = 30;
-  async function searchTextRefs(refs) {
-    const room = MAX_SEARCHED_REFS - rec.searchedRefs.size;
-    if (room <= 0) return;
-    const fresh = refs.filter((r) => !rec.searchedRefs.has(r)).slice(0, room);
-    if (!fresh.length) return;
-    fresh.forEach((r) => rec.searchedRefs.add(r));
+  // Let the AI pull the PRIMARY load number(s) out of the email text — so a
+  // stray MC / DOT / phone never becomes a search and never wrong-links.
+  // Skipped when the text is unchanged or the per-email call cap is hit.
+  async function searchEmailText() {
+    if (!rec) return;
+    const subject = rec.subjectEl.textContent.trim();
+    const text = `${subject}\n${readBody()}`.slice(0, 8000);
+    if (text === rec.lastText || rec.textCalls >= MAX_TEXT_CALLS) return;
+    rec.lastText = text;
+    rec.textCalls++;
     const sig = rec.sig;
     rec.busy++; renderRec();
-    const resp = await sendMsg({ type: "search", refs: fresh }).catch(() => null);
+    const resp = await sendMsg({ type: "searchText", text }).catch(() => null);
     rec.busy--;
     if (stale(sig)) return;
-    if (resp && resp.ok) { for (const { load, ref } of exactLoadsFrom(resp.matches)) await addExact(load, ref); }
+    if (resp && resp.ok) {
+      for (const r of (resp.refs || [])) rec.searchedRefs.add(r);   // for display
+      for (const { load, ref } of exactLoadsFrom(resp.matches)) await addExact(load, ref);
+    }
     renderRec();
   }
 
@@ -628,7 +631,7 @@
 
     // Header refs.
     const refsEl = panel.querySelector(".fc-refs");
-    if (refsEl) refsEl.textContent = rec.refs.length ? rec.refs.join(" · ") : "";
+    if (refsEl) { const s = [...rec.searchedRefs]; refsEl.textContent = s.length ? s.join(" · ") : ""; }
 
     // Untriggered email (didn't look like a load, nothing linked, not yet
     // scanned) → offer to scan it + a manual link box.

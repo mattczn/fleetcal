@@ -260,82 +260,126 @@ botLoads.get("/search", async (c) => {
   return c.json({ loads } satisfies ListLoadsResponse);
 });
 
-// ── POST /search-pdf — find a load from a rate-con PDF ──────────────────
-// For New Load emails whose load number is ONLY in the attached rate con
-// (nothing in the subject/body). Claude (Haiku) pulls the candidate
-// reference numbers out of the PDF; we search each. Returns the same
-// { matches: [{ ref, loads }] } shape the extension's text search uses.
-botLoads.post("/search-pdf", async (c) => {
-  const orgId = c.get("orgId");
-  let body: { pdfBase64?: string };
-  try { body = await c.req.json(); } catch { return c.json({ error: "bad_json" }, 400); }
-  const base64 = (body.pdfBase64 || "").trim();
-  if (!base64) return c.json({ error: "pdfBase64 required" }, 400);
-
-  // Content-hash cache: the same rate con lands in every dispatcher's inbox,
-  // so AI-extract it once per unique PDF (org-wide), not once per mailbox.
-  const hash = createHash("sha256").update(Buffer.from(base64, "base64")).digest("hex");
-
+// Cache (per org, by content hash) → AI-extract on miss → search each ref.
+// The cache means the same rate con / email is AI-read once org-wide, not
+// once per mailbox or per re-open. Returns { refs, matches, cached }.
+async function cachedExtractAndSearch(
+  orgId: string,
+  hash: string,
+  extract: () => Promise<string[]>,
+): Promise<{ refs: string[]; matches: Array<{ ref: string; loads: Load[] }>; cached: boolean }> {
   let refs: string[] = [];
-  let cacheHit = false;
-  try {
-    const { data: cached } = await sb
-      .from("pdf_extractions")
-      .select("refs")
-      .eq("org_id", orgId)
-      .eq("pdf_sha256", hash)
-      .maybeSingle();
-    if (cached && Array.isArray(cached.refs)) {
-      refs = cached.refs as string[];
-      cacheHit = true;
-    } else {
-      refs = await extractRefsFromPdf(base64);
-      // Best-effort store — don't fail the request if the cache write errors.
-      await sb.from("pdf_extractions")
-        .upsert({ org_id: orgId, pdf_sha256: hash, refs } as Record<string, unknown>,
-                { onConflict: "org_id,pdf_sha256" });
-    }
-  } catch (err) {
-    console.error("[POST /v1/bot/loads/search-pdf] extraction failed:", err);
-    return c.json({ error: "extract_failed", refs: [], matches: [] }, 200);
+  let cached = false;
+  const { data: hit } = await sb
+    .from("pdf_extractions").select("refs")
+    .eq("org_id", orgId).eq("pdf_sha256", hash).maybeSingle();
+  if (hit && Array.isArray(hit.refs)) {
+    refs = hit.refs as string[];
+    cached = true;
+  } else {
+    refs = await extract();
+    // Best-effort store — don't fail the request if the cache write errors.
+    await sb.from("pdf_extractions")
+      .upsert({ org_id: orgId, pdf_sha256: hash, refs } as Record<string, unknown>,
+              { onConflict: "org_id,pdf_sha256" });
   }
-
   const matches: Array<{ ref: string; loads: Load[] }> = [];
   for (const ref of refs) {
     if (ref.trim().length < 2) continue;
     const loads = await findLoadsByQuery(orgId, ref.trim(), 5);
     if (loads.length) matches.push({ ref, loads });
   }
-  return c.json({ refs, matches, cached: cacheHit });
+  return { refs, matches, cached };
+}
+
+// ── POST /search-pdf — AI-extract the load number(s) from a rate con ─────
+botLoads.post("/search-pdf", async (c) => {
+  const orgId = c.get("orgId");
+  let body: { pdfBase64?: string };
+  try { body = await c.req.json(); } catch { return c.json({ error: "bad_json" }, 400); }
+  const base64 = (body.pdfBase64 || "").trim();
+  if (!base64) return c.json({ error: "pdfBase64 required" }, 400);
+  const hash = createHash("sha256").update(Buffer.from(base64, "base64")).digest("hex");
+  try {
+    return c.json(await cachedExtractAndSearch(orgId, hash, () => extractRefsFromPdf(base64)));
+  } catch (err) {
+    console.error("[POST /v1/bot/loads/search-pdf] extraction failed:", err);
+    return c.json({ error: "extract_failed", refs: [], matches: [] }, 200);
+  }
 });
 
-// Claude reference-number extraction from a rate-con PDF. Cheap (Haiku,
-// small JSON out). Returns the most-likely-primary identifiers first.
+// ── POST /search-text — AI-extract the load number(s) from email text ────
+// The same primary-only extraction applied to subject + body, so a stray MC /
+// DOT / phone in the email text no longer produces wrong matches.
+botLoads.post("/search-text", async (c) => {
+  const orgId = c.get("orgId");
+  let body: { text?: string };
+  try { body = await c.req.json(); } catch { return c.json({ error: "bad_json" }, 400); }
+  const text = (body.text || "").trim();
+  if (text.length < 4) return c.json({ refs: [], matches: [], cached: false });
+  const hash = createHash("sha256").update("text:" + text).digest("hex");
+  try {
+    return c.json(await cachedExtractAndSearch(orgId, hash, () => extractRefsFromText(text)));
+  } catch (err) {
+    console.error("[POST /v1/bot/loads/search-text] extraction failed:", err);
+    return c.json({ error: "extract_failed", refs: [], matches: [] }, 200);
+  }
+});
+
+// The one prompt both extractors share. The whole point: pull the PRIMARY
+// load identifier(s) a carrier types into their TMS to find THIS shipment —
+// and nothing else. Carrier identity (MC/DOT/SCAC), contact numbers, weights,
+// dates, money, etc. are the "fluff" that wrongly matched loads before.
+const EXTRACT_PROMPT =
+  "You are extracting the LOAD / ORDER / REFERENCE number(s) a carrier types " +
+  "into their TMS to find THIS freight shipment, from a rate confirmation / " +
+  "load tender (or the email about it).\n\n" +
+  "Return ONLY primary load identifiers: the broker's load number, order " +
+  "number, reference number, PO number, BOL number, shipment id, pro number, " +
+  "or confirmation number that IDENTIFIES THE LOAD.\n\n" +
+  "Do NOT return:\n" +
+  "- carrier identity: MC number, USDOT/DOT number, SCAC, EIN / Tax ID\n" +
+  "- contact numbers: phone, fax, cell\n" +
+  "- shipment attributes: weight, pieces, pallet/skid count, temperature, " +
+  "dimensions, miles, rate or any dollar amount\n" +
+  "- dates, times, zip codes, addresses, person/company names\n\n" +
+  "If it covers multiple DISTINCT loads, return each load's primary " +
+  "identifier. Return ONLY a JSON array of strings (raw identifiers, no " +
+  "labels), most-likely primary FIRST. If none, return []. No prose.";
+
+function parseRefArray(text: string): string[] {
+  const m = text.match(/\[[\s\S]*\]/);
+  if (!m) return [];
+  try {
+    const arr = JSON.parse(m[0]);
+    return Array.isArray(arr) ? arr.map((x) => String(x).trim()).filter(Boolean).slice(0, 8) : [];
+  } catch { return []; }
+}
+
+// AI extraction from a rate-con PDF. Cheap (Haiku). Primary identifier first.
 async function extractRefsFromPdf(base64: string): Promise<string[]> {
   const docBlock: DocumentBlockParam = {
     type: "document",
     source: { type: "base64", media_type: "application/pdf", data: base64 },
   };
-  const prompt =
-    "This is a freight rate confirmation / load tender PDF. Extract EVERY " +
-    "identifier a carrier would use to find this load: load number, " +
-    "reference number, order number, PO number, BOL number, shipment id, " +
-    "confirmation number, pro number. Return ONLY a JSON array of strings " +
-    "(the raw identifiers, no labels), most-likely primary first. If none, " +
-    "return []. No prose.";
-  const textBlock: TextBlockParam = { type: "text", text: prompt };
+  const textBlock: TextBlockParam = { type: "text", text: EXTRACT_PROMPT };
   const resp = await ANTHROPIC_CLIENT.messages.create({
     model:      "claude-haiku-4-5-20251001",
     max_tokens: 256,
     messages:   [{ role: "user", content: [docBlock, textBlock] as ContentBlockParam[] }],
   });
-  const text = resp.content[0]?.type === "text" ? resp.content[0].text : "";
-  const m = text.match(/\[[\s\S]*\]/);
-  if (!m) return [];
-  try {
-    const arr = JSON.parse(m[0]);
-    return Array.isArray(arr) ? arr.map((x) => String(x)).filter(Boolean).slice(0, 12) : [];
-  } catch { return []; }
+  return parseRefArray(resp.content[0]?.type === "text" ? resp.content[0].text : "");
+}
+
+// AI extraction from email text (subject + body). Same prompt, no document.
+async function extractRefsFromText(emailText: string): Promise<string[]> {
+  const prompt = `${EXTRACT_PROMPT}\n\n--- EMAIL ---\n${emailText.slice(0, 8000)}`;
+  const resp = await ANTHROPIC_CLIENT.messages.create({
+    model:      "claude-haiku-4-5-20251001",
+    max_tokens: 256,
+    messages:   [{ role: "user", content: prompt }],
+  });
+  return parseRefArray(resp.content[0]?.type === "text" ? resp.content[0].text : "");
 }
 
 export default botLoads;
