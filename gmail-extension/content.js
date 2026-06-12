@@ -232,8 +232,8 @@
        <div class="fc-row"><button type="button" class="fc-btn-link" data-fc="unlink">unlink</button></div>`);
   }
 
-  // Search results. One match → auto-link + show linked. Several → let the
-  // user pick which to link. None → not-found + manual link.
+  // Search results. A found load AUTO-LINKS — no manual step. Only the
+  // not-found case asks for input (attachment-only emails).
   async function renderSearch(panel, refs, resp, account, threadId) {
     if (!resp || !resp.ok) {
       setPanelBody(panel, `<div class="fc-row fc-warn">⚠ ${escapeHtml(resp?.error || "Search failed")}</div>`);
@@ -250,24 +250,35 @@
 
     if (found.length === 0) { renderNotFound(panel, refs, account, threadId); return; }
 
-    // Single confident match → auto-link if we can identify the thread.
-    if (found.length === 1 && account && threadId && found[0].load.loadId) {
-      const ok = await doLink(panel, account, threadId, found[0].load.loadId, "auto");
-      if (ok) return; // doLink re-rendered as linked
+    // Auto-link the (best/first) match. The bot search already collapses
+    // relay legs to one row per load, so a single load = one entry.
+    const primary = found[0].load;
+    if (account && threadId && primary.loadId) {
+      await doLink(panel, account, threadId, primary.loadId, "auto");
+      // doLink re-renders as ✓ Linked on success, or an error otherwise.
+      // If the email referenced more than one distinct load, note the rest.
+      if (found.length > 1) {
+        const extras = found.slice(1).map(({ load }) => {
+          const href = calendarHref(load);
+          return href ? `<div class="fc-row fc-muted">also matched <a class="fc-link" href="${href}" target="_blank" rel="noopener">${escapeHtml(loadLabel(load))}</a></div>` : "";
+        }).join("");
+        if (extras) panel.querySelector(".fc-body")?.insertAdjacentHTML("beforeend", extras);
+      }
+      return;
     }
 
-    // Otherwise list matches; each gets a "link" button (if linkable).
-    const canLink = !!(account && threadId);
+    // Can't link (no account/thread detected) — still show status, and hint
+    // how to enable auto-linking.
     const rows = found.map(({ load, ref }) => {
       const href = calendarHref(load);
       const link = href ? `<a class="fc-link" href="${href}" target="_blank" rel="noopener">open ${loadLabel(load)} on calendar →</a>` : `<span>${loadLabel(load)}</span>`;
       const broker = load.broker ? ` · ${escapeHtml(load.broker)}` : "";
-      const linkBtn = (canLink && load.loadId)
-        ? ` <button type="button" class="fc-btn-link" data-fc="link" data-loadid="${escapeHtml(load.loadId)}">link this thread</button>`
-        : "";
-      return `<div class="fc-row fc-ok">✓ In system ${link}<span class="fc-via">via ${escapeHtml(ref)}${broker}</span>${linkBtn}</div>`;
+      return `<div class="fc-row fc-ok">✓ In system ${link}<span class="fc-via">via ${escapeHtml(ref)}${broker}</span></div>`;
     });
-    setPanelBody(panel, rows.join(""));
+    const hint = !account
+      ? `<div class="fc-row fc-muted">Set your Gmail account in the extension to auto-link this thread.</div>`
+      : "";
+    setPanelBody(panel, rows.join("") + hint);
   }
 
   function renderNotFound(panel, refs, account, threadId) {
