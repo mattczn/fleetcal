@@ -44,8 +44,27 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     threadLink("DELETE", msg).then(sendResponse).catch((err) => sendResponse({ ok: false, error: errStr(err) }));
     return true;
   }
+  if (msg?.type === "searchPdf") {
+    searchPdf(msg.pdfBase64).then(sendResponse).catch((err) => sendResponse({ ok: false, error: errStr(err) }));
+    return true;
+  }
   return false;
 });
+
+// Send a rate-con PDF (base64) to the backend, which AI-extracts its
+// reference numbers and searches. Returns { ok, refs, matches }.
+async function searchPdf(pdfBase64) {
+  const { apiBase, botKey } = await getConfig();
+  if (!apiBase) return { ok: false, error: "Not configured." };
+  const res = await fetch(`${apiBase}/v1/bot/loads/search-pdf`, {
+    method: "POST",
+    headers: { ...(botKey ? { "x-bot-key": botKey } : {}), "content-type": "application/json" },
+    body: JSON.stringify({ pdfBase64 }),
+  });
+  let data = {};
+  try { data = await res.json(); } catch { /* ignore */ }
+  return { ok: res.ok, ...data };
+}
 
 const LINK_PATH = "/v1/bot/email-thread";
 

@@ -4,11 +4,15 @@
  */
 
 import { Hono } from "hono";
+import Anthropic from "@anthropic-ai/sdk";
+import type { DocumentBlockParam, TextBlockParam, ContentBlockParam } from "@anthropic-ai/sdk/resources/messages.js";
 import { joinEventLoadToApp, type ListLoadsResponse, type ApiErrorResponse, type Load, type LoadStatus, LOAD_STATUSES, type Stop, type StopType } from "@fleetcal/types";
 import { supabase } from "../lib/supabase.js";
+import { env } from "../lib/env.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 
 const botLoads = new Hono<{ Variables: AuthVariables }>();
+const ANTHROPIC_CLIENT = new Anthropic({ apiKey: env.anthropicApiKey });
 
 const EVENT_COLS =
   "id,asset_id,driver_id,driver_name,title,start,end,status,priority," +
@@ -135,44 +139,26 @@ botLoads.get("/", async (c) => {
 });
 
 // GET /v1/bot/loads/search — search by load number or driver name
-botLoads.get("/search", async (c) => {
-  const orgId = c.get("orgId");
-  const url = new URL(c.req.url);
-  const q = (url.searchParams.get("q") ?? "").trim();
-  const limitParam = url.searchParams.get("limit");
-  const limit = Math.min(Number(limitParam ?? 20) || 20, 50);
-
-  if (q.length < 2) return c.json({ loads: [] } satisfies ListLoadsResponse);
-
+// Core load search by a single query string. Matches load_num,
+// internal_load_id, broker, ref_nums (the broker's reference numbers),
+// and event title / driver_name. Returns one row per load (pickup leg
+// for relays). Shared by GET /search and POST /search-pdf.
+async function findLoadsByQuery(orgId: string, q: string, limit: number): Promise<Load[]> {
   const isNumeric = /^\d+$/.test(q);
-
-  // Escape PostgREST .or() control chars (% , ( )) before interpolation —
-  // an unescaped comma/paren lets the caller inject extra filter terms.
-  // Same guard as the loads /search endpoint (loads.ts). The numeric
-  // internal_load_id branch is already gated by the isNumeric regex.
+  // Escape PostgREST .or() control chars (% , ( )).
   const qEsc = q.replace(/[%,()]/g, "\\$&");
 
-  // Load-side matches: load_num, internal_load_id, broker
   const loadOrParts = [`load_num.ilike.%${qEsc}%`, `broker.ilike.%${qEsc}%`];
   if (isNumeric) loadOrParts.push(`internal_load_id.eq.${q}`);
 
   const { data: matchedLoads } = await supabase
-    .from("loads")
-    .select("id")
-    .eq("org_id", orgId)
-    .is("deleted_at", null)
+    .from("loads").select("id").eq("org_id", orgId).is("deleted_at", null)
     .or(loadOrParts.join(","));
 
-  // ref_nums match — the broker's reference numbers (Order #, PO #, BOL,
-  // etc.) live in the ref_nums jsonb array. The Gmail reconciliation
-  // extension keys off exactly these, so the bot search must include
-  // them. PostgREST .or() can't take a ::text cast, so this is a
+  // ref_nums (jsonb) — PostgREST .or() can't take a ::text cast, so a
   // separate query (same approach as loads.ts /search).
   const { data: refMatches } = await supabase
-    .from("loads")
-    .select("id")
-    .eq("org_id", orgId)
-    .is("deleted_at", null)
+    .from("loads").select("id").eq("org_id", orgId).is("deleted_at", null)
     .filter("ref_nums::text", "ilike", `%${qEsc}%`);
 
   const loadIds = [...new Set([
@@ -180,26 +166,17 @@ botLoads.get("/search", async (c) => {
     ...((refMatches   ?? []) as Array<{ id: string }>).map((r) => r.id),
   ])];
 
-  // Event-side matches: title, driver_name
   const { data: matchedEvents } = await supabase
-    .from("events")
-    .select("id")
-    .eq("org_id", orgId)
-    .is("deleted_at", null)
+    .from("events").select("id").eq("org_id", orgId).is("deleted_at", null)
     .or(`title.ilike.%${qEsc}%,driver_name.ilike.%${qEsc}%`);
-
   const eventIds = new Set(((matchedEvents ?? []) as Array<{ id: string }>).map((r) => r.id));
 
-  // Fetch full event rows for all matches
   let evQ = supabase
     .from("events")
     .select(`${EVENT_COLS}, load:loads(${LOAD_COLS})`)
-    .eq("org_id", orgId)
-    .is("deleted_at", null)
-    .order("start", { ascending: false })
-    .limit(limit);
+    .eq("org_id", orgId).is("deleted_at", null)
+    .order("start", { ascending: false }).limit(limit);
 
-  const allIds = [...new Set([...loadIds, ...Array.from(eventIds)])];
   if (loadIds.length && eventIds.size) {
     evQ = evQ.or(`id.in.(${Array.from(eventIds).join(",")}),load_id.in.(${loadIds.join(",")})`);
   } else if (loadIds.length) {
@@ -207,14 +184,11 @@ botLoads.get("/search", async (c) => {
   } else if (eventIds.size) {
     evQ = evQ.in("id", Array.from(eventIds));
   } else {
-    return c.json({ loads: [] } satisfies ListLoadsResponse);
+    return [];
   }
 
   const { data: events, error } = await evQ;
-  if (error) {
-    console.error("[GET /v1/bot/loads/search] query failed:", error);
-    return c.json({ error: "search_failed", detail: error.message } satisfies ApiErrorResponse, 500);
-  }
+  if (error) { console.error("[bot findLoadsByQuery] failed:", error); return []; }
 
   const result: Load[] = (events ?? []).map((e) => {
     const ev = e as Record<string, unknown> & { load?: Record<string, unknown>[] | Record<string, unknown> | null };
@@ -224,11 +198,7 @@ botLoads.get("/search", async (c) => {
     return joined;
   });
 
-  // dedupe relay legs — one row per loadId. For a relay, prefer the
-  // PICKUP leg: the Gmail reconciliation extension deep-links to this
-  // event on the calendar, and "open the load" should land on the
-  // pickup, not the delivery. (events were ordered start-desc, so the
-  // delivery leg would otherwise win.)
+  // dedupe relay legs — one per loadId, preferring the pickup leg.
   const byLoad = new Map<string, Load>();
   for (const l of result) {
     const key = l.loadId ?? l.id;
@@ -236,9 +206,75 @@ botLoads.get("/search", async (c) => {
     if (!existing) { byLoad.set(key, l); continue; }
     if (l.relayRole === "pickup" && existing.relayRole !== "pickup") byLoad.set(key, l);
   }
-  const deduped = [...byLoad.values()];
+  return [...byLoad.values()];
+}
 
-  return c.json({ loads: deduped } satisfies ListLoadsResponse);
+botLoads.get("/search", async (c) => {
+  const orgId = c.get("orgId");
+  const url = new URL(c.req.url);
+  const q = (url.searchParams.get("q") ?? "").trim();
+  const limit = Math.min(Number(url.searchParams.get("limit") ?? 20) || 20, 50);
+  if (q.length < 2) return c.json({ loads: [] } satisfies ListLoadsResponse);
+  const loads = await findLoadsByQuery(orgId, q, limit);
+  return c.json({ loads } satisfies ListLoadsResponse);
 });
+
+// ── POST /search-pdf — find a load from a rate-con PDF ──────────────────
+// For New Load emails whose load number is ONLY in the attached rate con
+// (nothing in the subject/body). Claude (Haiku) pulls the candidate
+// reference numbers out of the PDF; we search each. Returns the same
+// { matches: [{ ref, loads }] } shape the extension's text search uses.
+botLoads.post("/search-pdf", async (c) => {
+  const orgId = c.get("orgId");
+  let body: { pdfBase64?: string };
+  try { body = await c.req.json(); } catch { return c.json({ error: "bad_json" }, 400); }
+  const base64 = (body.pdfBase64 || "").trim();
+  if (!base64) return c.json({ error: "pdfBase64 required" }, 400);
+
+  let refs: string[] = [];
+  try {
+    refs = await extractRefsFromPdf(base64);
+  } catch (err) {
+    console.error("[POST /v1/bot/loads/search-pdf] extraction failed:", err);
+    return c.json({ error: "extract_failed", refs: [], matches: [] }, 200);
+  }
+
+  const matches: Array<{ ref: string; loads: Load[] }> = [];
+  for (const ref of refs) {
+    if (ref.trim().length < 2) continue;
+    const loads = await findLoadsByQuery(orgId, ref.trim(), 5);
+    if (loads.length) matches.push({ ref, loads });
+  }
+  return c.json({ refs, matches });
+});
+
+// Claude reference-number extraction from a rate-con PDF. Cheap (Haiku,
+// small JSON out). Returns the most-likely-primary identifiers first.
+async function extractRefsFromPdf(base64: string): Promise<string[]> {
+  const docBlock: DocumentBlockParam = {
+    type: "document",
+    source: { type: "base64", media_type: "application/pdf", data: base64 },
+  };
+  const prompt =
+    "This is a freight rate confirmation / load tender PDF. Extract EVERY " +
+    "identifier a carrier would use to find this load: load number, " +
+    "reference number, order number, PO number, BOL number, shipment id, " +
+    "confirmation number, pro number. Return ONLY a JSON array of strings " +
+    "(the raw identifiers, no labels), most-likely primary first. If none, " +
+    "return []. No prose.";
+  const textBlock: TextBlockParam = { type: "text", text: prompt };
+  const resp = await ANTHROPIC_CLIENT.messages.create({
+    model:      "claude-haiku-4-5-20251001",
+    max_tokens: 256,
+    messages:   [{ role: "user", content: [docBlock, textBlock] as ContentBlockParam[] }],
+  });
+  const text = resp.content[0]?.type === "text" ? resp.content[0].text : "";
+  const m = text.match(/\[[\s\S]*\]/);
+  if (!m) return [];
+  try {
+    const arr = JSON.parse(m[0]);
+    return Array.isArray(arr) ? arr.map((x) => String(x)).filter(Boolean).slice(0, 12) : [];
+  } catch { return []; }
+}
 
 export default botLoads;

@@ -65,9 +65,16 @@
     const hasAlphaRef = refs.some((r) => /[A-Z]/.test(r));
     const refTrigger  = emailHasLabel(subjectEl, LABEL_NAME) || hasLabelled || hasAlphaRef;
 
+    // Rate-con PDF attachments are a trigger too — the load number is often
+    // ONLY inside the document. Gate on a freight-ish subject/filename so we
+    // don't AI-parse every random PDF.
+    const pdfs = detectPdfAttachments();
+    const hay  = (subject + " " + pdfs.map((p) => p.filename).join(" ")).toLowerCase();
+    const pdfishCtx = /rate.?con|rate conf|confirmation|load tender|load conf|carrier|dispatch|new load|tender|\bbol\b|shipment|pickup|delivery|rate sheet/.test(hay);
+    const pdfTrigger = pdfs.length > 0 && pdfishCtx;
+
     // 1) Already linked? Resolve instantly. Keyed on (account, thread) since
-    //    Gmail thread ids are per-mailbox. Works even on no-ref replies in
-    //    the same conversation.
+    //    Gmail thread ids are per-mailbox. Works even on no-ref replies.
     if (account && threadId) {
       const link = await sendMsg({ type: "getLink", account, threadId }).catch(() => null);
       if (stale(sig)) return;
@@ -77,25 +84,89 @@
       }
     }
 
-    // 2) Not linked + doesn't look like a load email → stay silent.
-    if (!refTrigger) { removePanel(); return; }
+    // 2) Nothing to go on → stay silent.
+    if (!refTrigger && !pdfTrigger) { removePanel(); return; }
 
     const panel = renderPanel(subjectEl, sig, refs, account, threadId);
 
-    // 2a) Load email but no ref in the text (number only in the PDF, etc.)
-    //     — offer a manual link.
-    if (!refs.length) { renderNotFound(panel, [], account, threadId); return; }
+    // 3) Try the text refs first (cheap, no AI).
+    if (refs.length) {
+      setPanelBody(panel, `<div class="fc-row fc-muted">Searching FleetCal…</div>`);
+      const resp = await sendMsg({ type: "search", refs }).catch(() => ({ ok: false, error: "Extension was reloaded — refresh this Gmail tab." }));
+      if (stale(sig)) return;
+      const live = document.getElementById(PANEL_ID);
+      if (!live || live.dataset[PANEL_KEY] !== sig) return;
+      if (resp && resp.ok && (resp.matches || []).some((m) => m.loads.length)) {
+        await renderSearch(live, refs, resp, account, threadId);
+        return;
+      }
+    }
 
-    // 2b) Search by the extracted refs; auto-link a single confident match.
-    setPanelBody(panel, `<div class="fc-row fc-muted">Searching FleetCal…</div>`);
-    const resp = await sendMsg({ type: "search", refs }).catch(() => ({ ok: false, error: "Extension was reloaded — refresh this Gmail tab." }));
-    if (stale(sig)) return;
-    const live = document.getElementById(PANEL_ID);
-    if (!live || live.dataset[PANEL_KEY] !== sig) return;
-    await renderSearch(live, refs, resp, account, threadId);
+    // 4) No text match → read the rate-con PDF (AI extracts its refs).
+    if (pdfs.length) {
+      const p0 = document.getElementById(PANEL_ID);
+      if (!p0 || p0.dataset[PANEL_KEY] !== sig) return;
+      setPanelBody(p0, `<div class="fc-row fc-muted">Reading the rate con…</div>`);
+      const pdfResp = await searchPdfs(pdfs);
+      if (stale(sig)) return;
+      const live = document.getElementById(PANEL_ID);
+      if (!live || live.dataset[PANEL_KEY] !== sig) return;
+      if (pdfResp && pdfResp.ok && (pdfResp.matches || []).some((m) => m.loads.length)) {
+        await renderSearch(live, pdfResp.refs || [], pdfResp, account, threadId);
+        return;
+      }
+      renderNotFound(live, (pdfResp && pdfResp.refs) || refs, account, threadId);
+      return;
+    }
+
+    // 5) Text refs but no match, no PDF → not found.
+    const liveF = document.getElementById(PANEL_ID);
+    if (!liveF || liveF.dataset[PANEL_KEY] !== sig) return;
+    renderNotFound(liveF, refs, account, threadId);
   }
 
   const stale = (sig) => sig !== handledSig;
+
+  // Fetch + parse the first rate-con PDF that yields a result.
+  async function searchPdfs(pdfs) {
+    for (const pdf of pdfs.slice(0, 2)) {
+      try {
+        const b64 = await fetchPdfBase64(pdf.url);
+        const resp = await sendMsg({ type: "searchPdf", pdfBase64: b64 }).catch(() => null);
+        if (resp) return resp; // return first response (matched or not) for display
+      } catch { /* try next attachment */ }
+    }
+    return null;
+  }
+
+  // Gmail attachment chips carry download_url = "mime:filename:url".
+  function detectPdfAttachments() {
+    const out = [];
+    for (const el of document.querySelectorAll("[download_url]")) {
+      const dl = el.getAttribute("download_url") || "";
+      const i1 = dl.indexOf(":");
+      const i2 = dl.indexOf(":", i1 + 1);
+      if (i1 < 0 || i2 < 0) continue;
+      const mime = dl.slice(0, i1);
+      const filename = dl.slice(i1 + 1, i2);
+      const url = dl.slice(i2 + 1);
+      if (/pdf/i.test(mime) || /\.pdf$/i.test(filename)) out.push({ filename, url });
+    }
+    return out;
+  }
+
+  // Fetch the attachment (same-origin mail.google.com, cookies included) and
+  // base64-encode it for the backend's Claude document block.
+  async function fetchPdfBase64(url) {
+    const res = await fetch(url, { credentials: "include" });
+    if (!res.ok) throw new Error("attachment fetch " + res.status);
+    const buf = await res.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let bin = "";
+    const CH = 0x8000;
+    for (let i = 0; i < bytes.length; i += CH) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+    return btoa(bin);
+  }
 
   // ── Label detection ────────────────────────────────────────────────────
   // Applied labels render as chips (div.at[title="…"] + a .av text node) in
