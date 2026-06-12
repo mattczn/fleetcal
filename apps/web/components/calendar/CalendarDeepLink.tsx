@@ -87,6 +87,11 @@ export default function CalendarDeepLink() {
   // Create one OR MANY loads from rate-con PDFs — a broker can send several
   // rate cons (distinct loads) on one email chain, and the review modal's
   // batch mode handles them all at once. Each PDF becomes one BatchItem.
+  //
+  // Drives the SAME batch-processing overlay (BatchNotification) the in-app
+  // drop-a-rate-con flow uses, so the user sees "Processing rate con N of M /
+  // AI is extracting load details…" the moment the calendar opens — the
+  // review modal only pops once parsing's done, which is otherwise dead air.
   const createFromPdfs = useCallback(async (list: string[]) => {
     const pdfs = (list || []).filter(Boolean);
     if (!pdfs.length) return;
@@ -98,10 +103,23 @@ export default function CalendarDeepLink() {
     // Ack so the bridge stops polling + clears the staged PDFs.
     window.postMessage({ source: 'fleetcal-ext-app', type: 'createAck' }, window.location.origin);
 
-    const items = await Promise.all(pdfs.map(parseOne));
-    const store = useCalendarStore.getState();
-    store.startBatch(items);
-    store.openCreateModal();
+    const get = useCalendarStore.getState;
+    // Show the overlay immediately (before the first parse round-trips).
+    get().setBatchParseState(0, pdfs.length);
+    const items: BatchItem[] = [];
+    for (let i = 0; i < pdfs.length; i++) {
+      if (get().batchCancelRequested) { get().clearBatch(); return; }   // user cancelled
+      items.push(await parseOne(pdfs[i]));                              // sequential → real progress
+      get().setBatchParseState(i + 1, pdfs.length);
+    }
+    if (get().batchCancelRequested) { get().clearBatch(); return; }
+
+    const wasMinimized = get().batchMinimized;   // user clicked "Keep Working"
+    get().setBatchParseState(0, 0);              // hide the overlay
+    if (items.length) {
+      get().startBatch(items);
+      if (!wasMinimized) get().openCreateModal();
+    }
   }, [parseOne]);
 
   // Path 2 — messages from the extension bridge (no reload).
