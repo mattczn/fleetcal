@@ -78,7 +78,8 @@
       pdfs:    new Map(),       // url   -> { state, refs, primaryRef, filename, matched }
       linking: new Set(),       // loadIds with a setLink in flight (de-dupe)
       textDone: false,
-      quiet: false,
+      untriggered: false,       // didn't look like a load email → show "Scan" button
+      watching: false,          // have we started searching? (gates PDF re-checks)
       open: false,              // is the popover showing?
       userToggled: false,       // user clicked the icon → stop auto-opening
     };
@@ -106,21 +107,24 @@
     }
 
     if (!rec) return;
-    // Keep refs fresh (Gmail recycles DOM); never go quiet on a load email.
+    // Keep refs fresh (Gmail recycles DOM).
     rec.subjectEl = subjectEl; rec.account = account; rec.threadId = threadId;
-    if (rec.quiet) return;
 
     // The conversation toolbar can render after we first drew — keep the icon
-    // anchored there as it appears, and the popover pinned under it.
+    // anchored there as it appears, and the popover pinned under it. The icon
+    // shows on EVERY open email now (so you can link any of them).
     if (iconEl) { placeIcon(); if (rec.open) positionPanel(); }
 
-    // New attachments rendered since last pass (a later thread message just
-    // loaded its rate con) → search them. This is how all N loads get found.
+    // Only watch for newly-loaded attachments once we've started searching
+    // (auto-triggered, linked, or you hit "Scan").
+    if (!rec.watching) return;
     const fresh = detectPdfAttachments().filter((p) => !rec.pdfs.has(p.url));
     if (fresh.length) void searchNewPdfs(fresh);
   }
 
-  // First pass for an email: existing links, trigger check, text + PDF search.
+  // First pass for an email: existing links, trigger check, and — if it looks
+  // like a load (or is already linked) — the text + PDF search. The icon shows
+  // on EVERY email; an email that doesn't auto-trigger gets a "Scan" button.
   async function reconcile() {
     const { sig, account, threadId, subjectEl } = rec;
     const subject = subjectEl.textContent.trim();
@@ -133,7 +137,10 @@
       || FREIGHTY.test(subject.toLowerCase())
       || (pdfs0.length > 0 && FREIGHTY.test(pdfs0.map((p) => p.filename).join(" ").toLowerCase()));
 
-    // 1) Loads already linked to this thread (array — a thread can have many).
+    renderRec();   // show the icon right away on any email
+
+    // Loads already linked to this thread (array — a thread can have many).
+    // Runs on EVERY email so a reply in a linked thread resolves instantly.
     if (account && threadId) {
       const link = await sendMsg({ type: "getLink", account, threadId }).catch(() => null);
       if (stale(sig)) return;
@@ -141,23 +148,48 @@
       for (const l of linked) if (l && l.loadId) rec.loads.set(l.loadId, { ref: l, linked: true });
     }
 
-    // 2) Doesn't look like a load email and nothing linked → stay quiet.
-    if (!rec.trigger && rec.loads.size === 0) { removeUI(); rec.quiet = true; return; }
+    // Auto-search only when it looks like a load (or is already linked).
+    // Otherwise show the "Scan for a load number" button and wait.
+    if (rec.trigger || rec.loads.size) {
+      await runSearch();
+    } else {
+      rec.untriggered = true;
+      renderRec();
+    }
+  }
 
-    renderRec();
+  // Search this email for loads: text refs (cheap) + every rate con present,
+  // then scan() keeps watching for attachments that load later.
+  async function runSearch() {
+    if (!rec) return;
+    const sig = rec.sig;
+    rec.untriggered = false;
+    rec.watching = true;
 
-    // 3) Text refs (cheap, no AI). Auto-links any exact match.
-    if (refs.length && !rec.textDone) {
+    // Re-read refs (the body may have grown since first open).
+    const subject = rec.subjectEl.textContent.trim();
+    const { refs } = extractRefs(`${subject}\n${readBody()}`);
+    rec.refs = [...new Set([...rec.refs, ...refs])];
+
+    if (rec.refs.length && !rec.textDone) {
       rec.textDone = true;
-      const resp = await sendMsg({ type: "search", refs }).catch(() => null);
+      const resp = await sendMsg({ type: "search", refs: rec.refs }).catch(() => null);
       if (stale(sig)) return;
       if (resp && resp.ok) { for (const l of exactLoadsFrom(resp.matches)) await addExact(l); }
     }
 
-    // 4) Search every rate con present now (then scan() keeps watching for more).
     const present = detectPdfAttachments();
     if (present.length) await searchNewPdfs(present);
     else renderRec();
+  }
+
+  // User asked us to check a non-triggered email for a load number.
+  async function doScanNow() {
+    if (!rec) return;
+    rec.open = true;
+    rec.textDone = false;     // force a fresh text search
+    renderRec();              // shows the "Scanning…" hint
+    await runSearch();
   }
 
   // Search each NOT-yet-seen PDF on its own — every rate con is potentially a
@@ -423,6 +455,7 @@
     e.preventDefault();
     const fc = btn.dataset.fc;
     if (fc === "close")     { if (rec) { rec.open = false; rec.userToggled = true; } applyPanelVisibility(); }
+    if (fc === "scan")      void doScanNow();
     if (fc === "link")      void linkOne(btn.dataset.loadid, "manual-pick");
     if (fc === "unlinkone") void doUnlinkOne(btn.dataset.loadid);
     if (fc === "createone") void doCreateFromUrls([btn.dataset.url]);
@@ -507,8 +540,10 @@
 
     const loads = [...rec.loads.values()];
     const unmatched = unmatchedPdfs();
-    const pending = [...rec.pdfs.values()].some((p) => p.state === "pending")
-      || (rec.refs.length > 0 && !rec.textDone);
+    // "pending" only means a search is actually in flight (we're watching).
+    const pending = rec.watching && (
+      [...rec.pdfs.values()].some((p) => p.state === "pending")
+      || (rec.refs.length > 0 && !rec.textDone));
 
     // Status drives the icon badge + the one-time auto-open.
     let status = "none";
@@ -517,13 +552,28 @@
     else if (loads.length) status = "linked";
     setIconStatus(status, unmatched.length || loads.length || 0);
 
-    // Auto-open once when there's something to act on (rate cons to create),
-    // unless the user has already toggled the panel themselves.
-    if (status === "action" && !rec.userToggled && !rec.open) rec.open = true;
+    // Auto-open once when there's something to act on (rate cons to create) OR
+    // the thread is already linked — so a linked load surfaces on its own.
+    // Respect the user once they've toggled the panel.
+    if ((status === "action" || status === "linked") && !rec.userToggled && !rec.open) rec.open = true;
 
     // Header refs.
     const refsEl = panel.querySelector(".fc-refs");
     if (refsEl) refsEl.textContent = rec.refs.length ? rec.refs.join(" · ") : "";
+
+    // Untriggered email (didn't look like a load, nothing linked, not yet
+    // scanned) → offer to scan it + a manual link box.
+    if (rec.untriggered && loads.length === 0 && rec.pdfs.size === 0 && !pending) {
+      let h = `<div class="fc-row fc-muted">No load number detected in this email.</div>
+        <div class="fc-row"><button type="button" class="fc-btn-go" data-fc="scan">Scan for a load number →</button></div>`;
+      if (rec.account && rec.threadId) {
+        h += `<div class="fc-row"><input class="fc-manual-input" placeholder="or link a load # / ref" />
+             <button type="button" class="fc-btn-link" data-fc="manual">link</button></div>`;
+      }
+      setPanelBody(panel, h);
+      applyPanelVisibility();
+      return;
+    }
 
     let html = "";
 
