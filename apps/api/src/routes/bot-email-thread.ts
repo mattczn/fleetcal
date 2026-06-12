@@ -92,10 +92,13 @@ botEmailThread.get("/", async (c) => {
 // ── POST — link this thread to a load (upsert) ──────────────────────────
 botEmailThread.post("/", async (c) => {
   const orgId = c.get("orgId");
-  const body = await c.req.json<{ account?: string; threadId?: string; loadId?: string; source?: string; linkedBy?: string }>();
+  const body = await c.req.json<{ account?: string; threadId?: string; loadId?: string; source?: string; linkedBy?: string; legacyThreadId?: string }>();
   const account = (body.account ?? "").trim().toLowerCase();
   const threadId = (body.threadId ?? "").trim();
   const loadId = (body.loadId ?? "").trim();
+  // Gmail's internal hex id for the thread (data-legacy-thread-id) — what the
+  // inbox-list rows expose, used to badge linked rows. Optional.
+  const legacyThreadId = (body.legacyThreadId ?? "").trim() || null;
   if (!account || !threadId || !loadId) return c.json({ error: "account, threadId, loadId required" }, 400);
 
   // Validate the load belongs to this org before linking.
@@ -107,13 +110,14 @@ botEmailThread.post("/", async (c) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     .upsert(
       {
-        org_id:        orgId,
-        gmail_account: account,
-        thread_id:     threadId,
-        load_id:       loadId,
-        linked_by:     body.linkedBy ?? account,
-        source:        body.source ?? "manual",
-        updated_at:    new Date().toISOString(),
+        org_id:           orgId,
+        gmail_account:    account,
+        thread_id:        threadId,
+        load_id:          loadId,
+        legacy_thread_id: legacyThreadId,
+        linked_by:        body.linkedBy ?? account,
+        source:           body.source ?? "manual",
+        updated_at:       new Date().toISOString(),
       } as any,
       { onConflict: "org_id,gmail_account,thread_id,load_id" },
     );
@@ -122,6 +126,32 @@ botEmailThread.post("/", async (c) => {
     return c.json({ error: "link_failed", detail: error.message }, 500);
   }
   return c.json({ ok: true, linked: true, load: ref });
+});
+
+// ── POST /linked — which of these inbox threads are linked? ──────────────
+// The extension sends the legacy (hex) thread ids of the visible inbox rows;
+// we return the subset that has a link, so it can stamp a ✓ on those rows.
+botEmailThread.post("/linked", async (c) => {
+  const orgId = c.get("orgId");
+  const body = await c.req.json<{ account?: string; legacyIds?: string[] }>();
+  const account = (body.account ?? "").trim().toLowerCase();
+  const ids = Array.isArray(body.legacyIds)
+    ? [...new Set(body.legacyIds.map((x) => String(x).trim()).filter(Boolean))].slice(0, 200)
+    : [];
+  if (!account || !ids.length) return c.json({ ok: true, linked: [] });
+
+  const { data, error } = await sb.from("email_thread_links")
+    .select("legacy_thread_id")
+    .eq("org_id", orgId)
+    .eq("gmail_account", account)
+    .in("legacy_thread_id", ids);
+  if (error) {
+    console.error("[POST /v1/bot/email-thread/linked] failed:", error);
+    return c.json({ ok: false, linked: [] }, 200);
+  }
+  const linked = [...new Set(((data ?? []) as Array<{ legacy_thread_id: string | null }>)
+    .map((r) => r.legacy_thread_id).filter(Boolean))];
+  return c.json({ ok: true, linked });
 });
 
 // ── DELETE — unlink one load (loadId given) or the whole thread ──────────

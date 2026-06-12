@@ -35,7 +35,8 @@
 
   function start() {
     scan();
-    const obs = new MutationObserver(debounce(scan, 400));
+    void markInboxRows();
+    const obs = new MutationObserver(debounce(() => { scan(); void markInboxRows(); }, 400));
     obs.observe(document.body, { childList: true, subtree: true });
 
     // Close the popover on an outside click; keep it pinned under the icon as
@@ -56,6 +57,11 @@
   let iconEl  = null;
   let panelEl = null;
 
+  // Inbox-row ✓: which thread legacy ids are linked, and which we've already
+  // asked the backend about (avoids re-querying every scroll).
+  const linkedLegacyIds  = new Set();
+  const checkedLegacyIds = new Set();
+
   // ── Reconciliation engine ────────────────────────────────────────────────
   // A Gmail THREAD can carry MANY loads — a broker emails several weekday rate
   // cons (distinct loads) on one chain. So we don't lock after the first hit;
@@ -72,6 +78,7 @@
   function newRec(sig, account, threadId, subjectEl) {
     return {
       sig, account, threadId, subjectEl,
+      legacyId: getLegacyThreadId(),   // Gmail hex thread id (for inbox badges)
       refs: [],                 // text refs found in subject/body
       trigger: false,           // does this look like a load email?
       loads:   new Map(),       // loadId -> { ref:CalendarRef, linked:bool }
@@ -181,6 +188,15 @@
         ? (Array.isArray(link.loads) ? link.loads : (link.load ? [link.load] : []))
         : [];
       for (const l of linked) if (l && l.loadId) rec.loads.set(l.loadId, { ref: l, linked: true });
+
+      // Backfill the legacy id on existing links (made before we stored it) so
+      // they show a ✓ in the inbox. Fire-and-forget upsert; idempotent.
+      if (rec.legacyId && linked.length) {
+        linkedLegacyIds.add(rec.legacyId);
+        for (const l of linked) if (l && l.loadId) {
+          void sendMsg({ type: "setLink", account, threadId, loadId: l.loadId, legacyThreadId: rec.legacyId, source: "backfill" }).catch(() => {});
+        }
+      }
     }
 
     // Already linked? Show it instantly and STOP. Re-searching a linked
@@ -310,12 +326,13 @@
     if ((entry && entry.linked) || rec.linking.has(loadId)) return;
     if (!rec.account || !rec.threadId) return;
     rec.linking.add(loadId);
-    const resp = await sendMsg({ type: "setLink", account: rec.account, threadId: rec.threadId, loadId, source: source || "auto" })
+    const resp = await sendMsg({ type: "setLink", account: rec.account, threadId: rec.threadId, loadId, legacyThreadId: rec.legacyId, source: source || "auto" })
       .catch((e) => ({ ok: false, error: String((e && e.message) || e) }));
     rec.linking.delete(loadId);
     if (resp && resp.ok && resp.load) {
       rec.loads.set(loadId, { ref: resp.load, linked: true, via: entry ? entry.via : null });
       rec.linkError = null;
+      if (rec.legacyId) linkedLegacyIds.add(rec.legacyId);   // badge the inbox row
     } else {
       // Linking didn't persist — surface why (commonly the link table
       // migration isn't applied / the API isn't redeployed). Without this it
@@ -750,6 +767,8 @@
     if (!loadId || !rec) return;
     await sendMsg({ type: "unlink", account: rec.account, threadId: rec.threadId, loadId }).catch(() => null);
     rec.loads.delete(loadId);
+    // If the thread has no links left, drop its inbox ✓.
+    if (rec.legacyId && rec.loads.size === 0) linkedLegacyIds.delete(rec.legacyId);
     renderRec();
   }
 
@@ -829,6 +848,73 @@
     let seg = (location.hash || "").split("/").pop() || "";
     seg = seg.split("?")[0];   // drop ?projector=…&messagePartId=… (attachment view)
     return seg.length >= 10 ? decodeURIComponent(seg) : null;
+  }
+
+  // Gmail's internal thread id in HEX (matches inbox rows' data-legacy-thread-id),
+  // read from the OPEN conversation. The URL hash gives the FMfcg… permalink,
+  // which the inbox rows don't expose — so we link on the permalink but also
+  // store this hex id to badge the inbox. Prefer conversation-only attributes
+  // so we don't accidentally grab an inbox row's id in a split layout.
+  function toHexId(v) {
+    if (!v) return null;
+    const s = String(v).trim();
+    if (/^[0-9a-f]{12,}$/i.test(s)) return s.toLowerCase();       // already hex
+    const m = s.match(/(\d{15,})/);                                // thread-f:<decimal>
+    if (m) { try { return BigInt(m[1]).toString(16); } catch { /* ignore */ } }
+    return null;
+  }
+  function getLegacyThreadId() {
+    const sources = [
+      ["[data-thread-perm-id]",    "data-thread-perm-id"],
+      ["[data-legacy-message-id]", "data-legacy-message-id"],
+      ["[data-legacy-thread-id]",  "data-legacy-thread-id"],
+      ["[data-thread-id]",         "data-thread-id"],
+    ];
+    for (const [sel, attr] of sources) {
+      const el = document.querySelector(sel);
+      const hex = el && toHexId(el.getAttribute(attr));
+      if (hex) return hex;
+    }
+    return null;
+  }
+
+  // ── Inbox list: ✓ on rows whose thread is linked in FleetCal ─────────────
+  async function markInboxRows() {
+    const rows = document.querySelectorAll("tr.zA[data-legacy-thread-id]");
+    if (!rows.length) return;
+    const account = getAccount();
+    if (!account) return;
+
+    // Ask the backend about ids we haven't checked yet (cap the batch).
+    const fresh = [];
+    rows.forEach((tr) => {
+      const id = tr.getAttribute("data-legacy-thread-id");
+      if (id && !checkedLegacyIds.has(id)) fresh.push(id);
+    });
+    if (fresh.length) {
+      const batch = [...new Set(fresh)].slice(0, 200);
+      batch.forEach((id) => checkedLegacyIds.add(id));   // optimistic; avoids re-query
+      const resp = await sendMsg({ type: "linkedThreads", account, legacyIds: batch }).catch(() => null);
+      if (resp && resp.ok && Array.isArray(resp.linked)) resp.linked.forEach((id) => linkedLegacyIds.add(id));
+    }
+
+    // Reconcile the badge on every row (rows recycle as you scroll).
+    document.querySelectorAll("tr.zA[data-legacy-thread-id]").forEach((tr) => {
+      const id = tr.getAttribute("data-legacy-thread-id");
+      const linked = id && linkedLegacyIds.has(id);
+      const existing = tr.querySelector(".fc-row-check");
+      if (linked && !existing) addRowCheck(tr);
+      else if (!linked && existing) existing.remove();
+    });
+  }
+
+  function addRowCheck(tr) {
+    const chk = document.createElement("span");
+    chk.className = "fc-row-check";
+    chk.title = "In FleetCal";
+    chk.textContent = "✓";
+    const subj = tr.querySelector("span.bog") || tr.querySelector(".y6") || tr.querySelector("td.xY");
+    if (subj) subj.insertAdjacentElement("beforebegin", chk);
   }
 
   // The active Gmail account (email). Config override wins; otherwise pull it

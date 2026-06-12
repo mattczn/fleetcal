@@ -52,6 +52,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     searchText(msg.text).then(sendResponse).catch((err) => sendResponse({ ok: false, error: errStr(err) }));
     return true;
   }
+  if (msg?.type === "linkedThreads") {
+    linkedThreads(msg.account, msg.legacyIds || []).then(sendResponse).catch((err) => sendResponse({ ok: false, error: errStr(err) }));
+    return true;
+  }
   if (msg?.type === "createLoad") {
     createLoadsFromPdfs([msg.pdfBase64]).then(sendResponse).catch((err) => sendResponse({ ok: false, error: errStr(err) }));
     return true;
@@ -170,11 +174,12 @@ async function threadLink(method, msg) {
   if (method === "POST") {
     headers["content-type"] = "application/json";
     body = JSON.stringify({
-      account:  msg.account,
-      threadId: msg.threadId,
-      loadId:   msg.loadId,
-      source:   msg.source || "auto",
-      linkedBy: msg.account,
+      account:        msg.account,
+      threadId:       msg.threadId,
+      loadId:         msg.loadId,
+      legacyThreadId: msg.legacyThreadId || null,
+      source:         msg.source || "auto",
+      linkedBy:       msg.account,
     });
   } else {
     const params = { account: msg.account || "", threadId: msg.threadId || "" };
@@ -182,6 +187,20 @@ async function threadLink(method, msg) {
     url += `?${new URLSearchParams(params).toString()}`;
   }
   const res = await fetch(url, { method, headers, body });
+  let data = {};
+  try { data = await res.json(); } catch { /* ignore */ }
+  return { ok: res.ok, ...data };
+}
+
+// Ask which of these inbox-row thread ids (Gmail legacy hex ids) are linked.
+async function linkedThreads(account, legacyIds) {
+  const { apiBase, botKey } = await getConfig();
+  if (!apiBase) return { ok: false, linked: [] };
+  const res = await fetch(`${apiBase}${LINK_PATH}/linked`, {
+    method: "POST",
+    headers: { ...(botKey ? { "x-bot-key": botKey } : {}), "content-type": "application/json" },
+    body: JSON.stringify({ account, legacyIds }),
+  });
   let data = {};
   try { data = await res.json(); } catch { /* ignore */ }
   return { ok: res.ok, ...data };
