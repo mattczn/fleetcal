@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "FleetCal Load Reconciliation",
+  "version": "0.2.0",
+  "description": "On a 'New Load' Gmail email, extracts reference/load numbers and tells you whether the load is already in FleetCal.",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://mail.google.com/*",
+    "https://fleetcalapi-production.up.railway.app/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "FleetCal settings"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://mail.google.com/*"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}

@@ -152,8 +152,8 @@ botLoads.get("/search", async (c) => {
   // internal_load_id branch is already gated by the isNumeric regex.
   const qEsc = q.replace(/[%,()]/g, "\\$&");
 
-  // Load-side matches: load_num, internal_load_id
-  const loadOrParts = [`load_num.ilike.%${qEsc}%`];
+  // Load-side matches: load_num, internal_load_id, broker
+  const loadOrParts = [`load_num.ilike.%${qEsc}%`, `broker.ilike.%${qEsc}%`];
   if (isNumeric) loadOrParts.push(`internal_load_id.eq.${q}`);
 
   const { data: matchedLoads } = await supabase
@@ -163,7 +163,22 @@ botLoads.get("/search", async (c) => {
     .is("deleted_at", null)
     .or(loadOrParts.join(","));
 
-  const loadIds = ((matchedLoads ?? []) as Array<{ id: string }>).map((r) => r.id);
+  // ref_nums match — the broker's reference numbers (Order #, PO #, BOL,
+  // etc.) live in the ref_nums jsonb array. The Gmail reconciliation
+  // extension keys off exactly these, so the bot search must include
+  // them. PostgREST .or() can't take a ::text cast, so this is a
+  // separate query (same approach as loads.ts /search).
+  const { data: refMatches } = await supabase
+    .from("loads")
+    .select("id")
+    .eq("org_id", orgId)
+    .is("deleted_at", null)
+    .filter("ref_nums::text", "ilike", `%${qEsc}%`);
+
+  const loadIds = [...new Set([
+    ...((matchedLoads ?? []) as Array<{ id: string }>).map((r) => r.id),
+    ...((refMatches   ?? []) as Array<{ id: string }>).map((r) => r.id),
+  ])];
 
   // Event-side matches: title, driver_name
   const { data: matchedEvents } = await supabase
