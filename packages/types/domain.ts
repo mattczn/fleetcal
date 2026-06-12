@@ -914,8 +914,11 @@ export interface Load {
   factoringCompany?: string; // legacy column
   invoiceNum?: string; // legacy column
   paymentStatus?: string; // legacy column
-  /** Payroll deferral — weekStart (YYYY-MM-DD) this load's driver pay is deferred to. */
-  deferredToWeek?: string;
+  /** Payroll deferral — weekStart (YYYY-MM-DD) this load's driver pay is
+   *  deferred to. Pass null to the update path to CLEAR the defer
+   *  (undefined would get JSON.stringify'd out of the request body and
+   *  the server would treat the field as untouched). */
+  deferredToWeek?: string | null;
 
   // State
   dispatched?: boolean; // legacy column

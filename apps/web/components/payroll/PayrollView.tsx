@@ -673,7 +673,11 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
 
   async function handleUndoDeferLoad(load: CalendarEvent) {
     setDeferring(true);
-    await updateEvent(load.id, { deferredToWeek: undefined });
+    // null (not undefined) — undefined gets stripped by JSON.stringify so
+    // the body would arrive as {} and the API would 400 "no allowed
+    // fields supplied". null serializes through and the handler maps it
+    // to SQL NULL via `body.deferredToWeek ?? null`.
+    await updateEvent(load.id, { deferredToWeek: null });
     setDeferring(false);
     setUndoDeferLoadId(null);
   }
