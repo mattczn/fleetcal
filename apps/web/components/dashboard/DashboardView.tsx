@@ -751,20 +751,26 @@ export default function DashboardView() {
   // many with miles=null, which is why the tile under-counted
   // badly (e.g. 156 mi for a whole week of operation).
   const [eldMiles, setEldMiles] = useState<number | null>(null);
+  // Per-asset breakdown from the same odometer-summary call. Keys are
+  // stringified asset ids; values are miles deltas (max - min over the
+  // period for that asset's readings). Used by the Revenue by Truck
+  // card to show miles next to each row when the truck has an ELD.
+  const [eldMilesByAsset, setEldMilesByAsset] = useState<Record<string, number>>({});
   useEffect(() => {
     if (!dbReady) return;
     let cancelled = false;
     (async () => {
       try {
         // captured_at is timestamptz — needs real UTC ISO.
-        const { totalMiles } = await fetchWithRetry(
+        const { totalMiles, perAsset } = await fetchWithRetry(
           () => railway.odometerSummary(periodIso.fromUtc, periodIso.toUtc),
         );
         if (cancelled) return;
         setEldMiles(totalMiles);
+        setEldMilesByAsset(perAsset ?? {});
       } catch (err) {
         console.error('[DashboardView] odometerSummary failed:', err);
-        if (!cancelled) setEldMiles(0);
+        if (!cancelled) { setEldMiles(0); setEldMilesByAsset({}); }
       }
     })();
     return () => { cancelled = true; };
@@ -958,18 +964,26 @@ export default function DashboardView() {
         }
         const fuel    = fuelByAsset.get(asset.id) ?? 0;
         const payroll = payrollByAsset.get(asset.id) ?? 0;
+        // ELD miles from motive_odometer_readings — only meaningful for
+        // trucks with a Motive vehicle linked. Asset id key is stringified
+        // to match the server's Record<string, number> serialization.
+        // Undefined for non-ELD trucks; the UI renders an em-dash there.
+        const eldMiles = asset.motiveVehicleId
+          ? (eldMilesByAsset[String(asset.id)] ?? 0)
+          : null;
         return {
           asset,
           revenue,
           loads,
           miles: 0,
+          eldMiles,
           fuel,
           payroll,
           net: revenue - fuel - payroll,
         };
       })
       .sort((a, b) => b.revenue - a.revenue);
-  }, [assets, filtered, unassignedAssetId, pStart, pEnd, fuelByAsset, payrollByAsset]);
+  }, [assets, filtered, unassignedAssetId, pStart, pEnd, fuelByAsset, payrollByAsset, eldMilesByAsset]);
 
 
   // ── Sortable weekly loads list ──
@@ -1450,7 +1464,7 @@ export default function DashboardView() {
               ) : (
                 <>
                   <div className="space-y-3">
-                    {revenueByAsset.map(({ asset, revenue, loads, fuel, payroll, net }) => {
+                    {revenueByAsset.map(({ asset, revenue, loads, fuel, payroll, net, eldMiles }) => {
                       const showOverlays = showPayrollOverlay || showFuelOverlay;
                       // Inside the bar: margin (asset color) | payroll (purple) | fuel (red).
                       // Each segment is its share of maxAssetRev so widths are
@@ -1571,6 +1585,17 @@ export default function DashboardView() {
                                 {net >= 0 ? fmt(net) : `−${fmt(-net)}`} margin
                               </div>
                             ) : null}
+                          </div>
+                          {/* ELD miles for trucks with a Motive vehicle
+                              linked. Sourced from the same per-asset
+                              odometer aggregate that powers the fleet
+                              Total Miles tile. Em-dash when the asset
+                              isn't ELD-equipped so the column stays
+                              aligned across rows. */}
+                          <div className="text-xs shrink-0 text-right tabular-nums"
+                            style={{ color: eldMiles == null ? 'var(--gc-text-3)' : 'var(--gc-text-1)', minWidth: 70 }}
+                            title={eldMiles == null ? 'No ELD linked to this truck' : `ELD miles this period: ${Math.round(eldMiles).toLocaleString()}`}>
+                            {eldMiles == null ? '—' : `${Math.round(eldMiles).toLocaleString()} mi`}
                           </div>
                           <div className="text-xs shrink-0 text-right" style={{ color: 'var(--gc-text-3)', minWidth: 60 }}>
                             {loadsLabel}
