@@ -46,10 +46,19 @@
     const existing = document.getElementById(PANEL_ID);
     if (existing && existing.dataset[PANEL_KEY] === signature) return; // already done this email
 
-    if (!emailHasLabel(subjectEl, LABEL_NAME)) { removePanel(); return; }
-
     const body = readBody();
-    const refs = extractRefs(`${subject}\n${body}`);
+    const { refs, hasLabelled } = extractRefs(`${subject}\n${body}`);
+
+    // Trigger gate. Two independent signals, either one fires:
+    //   1. A reading-pane label chip matching LABEL_NAME (works on Gmail
+    //      layouts that render applied labels inside the open email).
+    //   2. A *labelled* load reference — a number next to "Load #", "Ref",
+    //      "Order", "PRO", "BOL", etc. Many Gmail layouts (incl. this one)
+    //      DON'T show the label in the reading pane, only on the list row,
+    //      which we can't reliably tie to the open email — so this is the
+    //      practical trigger for rate-con emails.
+    // If neither holds, this isn't a load email → stay silent.
+    if (!emailHasLabel(subjectEl, LABEL_NAME) && !hasLabelled) { removePanel(); return; }
 
     const panel = renderPanel(subjectEl, signature, refs);
     if (!refs.length) {
@@ -72,9 +81,15 @@
   // scope to the conversation pane ([role="main"]) — which is the open email
   // when you're reading one — and scan it for a chip matching the label.
   function emailHasLabel(subjectEl, want) {
-    const scope = subjectEl.closest('[role="main"]') || document.body;
-    const candidates = scope.querySelectorAll("[title], .at, .av, .ar");
+    // Scan the whole document for a label chip, but SKIP inbox-list rows
+    // (tr.zA) — those carry labels for background threads and would
+    // false-positive. What's left is reading-pane label chips, which only
+    // exist on Gmail layouts that show applied labels inside the open
+    // email. (On layouts that don't — like the one this was tested on —
+    // this returns false and the labelled-ref trigger takes over.)
+    const candidates = document.querySelectorAll("[title], .at, .av, .ar");
     for (const el of candidates) {
+      if (el.closest("tr.zA")) continue;
       const t = (el.getAttribute("title") || el.textContent || "").trim().toLowerCase();
       if (t === want) return true;
     }
@@ -102,17 +117,21 @@
     const out = [];
     const push = (raw) => {
       const tok = raw.replace(/\s+/g, "").toUpperCase().replace(/[-.]+$/, "");
-      if (tok.length < 4 || tok.length > 24) return;
-      if (seen.has(tok)) return;
+      if (tok.length < 4 || tok.length > 24) return false;
+      if (seen.has(tok)) return false;
       seen.add(tok);
       out.push(tok);
+      return true;
     };
 
+    // Labelled pass first — a number next to load/ref/order/etc. Its
+    // presence is also the panel's trigger (see scan), so track it.
+    let hasLabelled = false;
     let m;
-    while ((m = LABELLED.exec(text)) !== null) push(m[1]);
+    while ((m = LABELLED.exec(text)) !== null) { if (push(m[1])) hasLabelled = true; }
     while ((m = STANDALONE.exec(text)) !== null && out.length < MAX_REFS * 2) push(m[1]);
 
-    return out.slice(0, MAX_REFS);
+    return { refs: out.slice(0, MAX_REFS), hasLabelled };
   }
 
   // ── Panel rendering ───────────────────────────────────────────────────
