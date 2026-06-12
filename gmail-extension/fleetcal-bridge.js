@@ -25,3 +25,33 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   return false;
 });
+
+// On a freshly-opened calendar page, deliver a PDF staged by the background
+// (the "Create load" flow when no calendar tab was open). Poll-post until the
+// app acks, since the React listener may mount after this script runs. Only
+// on /calendar — other FleetCal pages ignore it. Clears the stage on ack.
+(function deliverPendingCreate() {
+  if (!location.pathname.startsWith("/calendar")) return;
+  chrome.storage.local.get("pendingCreatePdf", (res) => {
+    const p = res && res.pendingCreatePdf;
+    if (!p || !p.pdfBase64) return;
+    if (Date.now() - (p.ts || 0) > 60000) { chrome.storage.local.remove("pendingCreatePdf"); return; }
+
+    let acked = false, tries = 0;
+    function onAck(e) {
+      if (e.source !== window || !e.data || e.data.source !== "fleetcal-ext-app" || e.data.type !== "createAck") return;
+      acked = true;
+      window.removeEventListener("message", onAck);
+      chrome.storage.local.remove("pendingCreatePdf");
+    }
+    window.addEventListener("message", onAck);
+    const timer = setInterval(() => {
+      if (acked || tries++ > 30) {                 // ~21s max
+        clearInterval(timer);
+        if (!acked) window.removeEventListener("message", onAck);
+        return;
+      }
+      window.postMessage({ source: "fleetcal-ext", type: "createFromPdf", pdfBase64: p.pdfBase64 }, window.location.origin);
+    }, 700);
+  });
+})();

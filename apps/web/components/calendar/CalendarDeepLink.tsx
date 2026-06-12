@@ -59,7 +59,16 @@ export default function CalendarDeepLink() {
   // runs the same AI parse + opens the batch review modal the in-app
   // "drop a rate-con" flow uses (AssetSidebar.handleBatchFiles), so the
   // user reviews + creates in the normal UI.
+  const lastCreate = useRef(0);
   const createFromPdf = useCallback(async (base64: string) => {
+    // The bridge re-posts on a poll until it sees the ack, so ignore rapid
+    // duplicates but allow a genuinely new create later.
+    const now = performance.now();
+    if (now - lastCreate.current < 3000) return;
+    lastCreate.current = now;
+    // Ack so the bridge stops polling + clears the staged PDF.
+    window.postMessage({ source: 'fleetcal-ext-app', type: 'createAck' }, window.location.origin);
+
     const store = useCalendarStore.getState();
     const dataUrl = `data:application/pdf;base64,${base64}`;
     let parsed: Record<string, unknown> = {};

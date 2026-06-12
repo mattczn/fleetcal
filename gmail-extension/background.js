@@ -67,7 +67,14 @@ async function createLoadFromPdf(pdfBase64) {
       return normHost(u.hostname) === "fleetcal.app" && u.pathname.startsWith("/calendar");
     } catch { return false; }
   });
-  if (!calTab) return { ok: false, error: "Open your FleetCal calendar tab first, then try again." };
+  // No calendar tab open → stage the PDF and open one. The bridge content
+  // script picks it up from storage once the calendar app is ready.
+  if (!calTab) {
+    await chrome.storage.local.set({ pendingCreatePdf: { pdfBase64, ts: Date.now() } });
+    const appBase = await getAppBase();
+    await chrome.tabs.create({ url: appBase + "/calendar" });
+    return { ok: true, opening: true };
+  }
 
   await chrome.tabs.update(calTab.id, { active: true });
   if (calTab.windowId != null) {
@@ -84,6 +91,14 @@ async function createLoadFromPdf(pdfBase64) {
   return delivered
     ? { ok: true }
     : { ok: false, error: "Couldn't reach the calendar tab — refresh it and retry." };
+}
+
+function getAppBase() {
+  return new Promise((resolve) => {
+    chrome.storage.sync.get(["appBase"], (cfg) => {
+      resolve((cfg.appBase || "https://fleetcal.app").replace(/\/+$/, ""));
+    });
+  });
 }
 
 // Send a rate-con PDF (base64) to the backend, which AI-extracts its
