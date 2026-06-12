@@ -146,8 +146,14 @@ botLoads.get("/search", async (c) => {
 
   const isNumeric = /^\d+$/.test(q);
 
+  // Escape PostgREST .or() control chars (% , ( )) before interpolation —
+  // an unescaped comma/paren lets the caller inject extra filter terms.
+  // Same guard as the loads /search endpoint (loads.ts). The numeric
+  // internal_load_id branch is already gated by the isNumeric regex.
+  const qEsc = q.replace(/[%,()]/g, "\\$&");
+
   // Load-side matches: load_num, internal_load_id
-  const loadOrParts = [`load_num.ilike.%${q}%`];
+  const loadOrParts = [`load_num.ilike.%${qEsc}%`];
   if (isNumeric) loadOrParts.push(`internal_load_id.eq.${q}`);
 
   const { data: matchedLoads } = await supabase
@@ -165,7 +171,7 @@ botLoads.get("/search", async (c) => {
     .select("id")
     .eq("org_id", orgId)
     .is("deleted_at", null)
-    .or(`title.ilike.%${q}%,driver_name.ilike.%${q}%`);
+    .or(`title.ilike.%${qEsc}%,driver_name.ilike.%${qEsc}%`);
 
   const eventIds = new Set(((matchedEvents ?? []) as Array<{ id: string }>).map((r) => r.id));
 

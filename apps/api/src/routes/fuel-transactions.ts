@@ -381,7 +381,10 @@ fuelTxClerk.get("/", async (c) => {
   if (from) query = query.gte("transaction_date", from);
   if (to)   query = query.lte("transaction_date", to);
   if (q && q.trim().length >= 2) {
-    const term = q.trim();
+    // Escape PostgREST .or() control chars (% , ( )) before interpolation —
+    // an unescaped comma/paren lets the caller inject extra filter terms.
+    // Same guard as the loads /search endpoint (loads.ts).
+    const term = q.trim().replace(/[%,()]/g, "\\$&");
     query = query.or(
       `driver_name.ilike.%${term}%,location.ilike.%${term}%,matched_truck.ilike.%${term}%,provider_transaction_id.ilike.%${term}%`,
     );

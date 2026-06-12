@@ -1,9 +1,33 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { auth } from '@clerk/nextjs/server';
 
 const KEY = process.env.GOOGLE_MAPS_API_KEY ?? '';
 
+// Per-IP rate limit. This route proxies the paid Google Places/Timezone
+// APIs; before this it was unauthenticated AND unthrottled, so anyone
+// could loop it to burn quota (real $). Sign-in is now required, plus a
+// burst cap as defense against a single hijacked session.
+const RATE_WINDOW_MS = 60_000;
+const RATE_MAX       = 60; // 60 lookups/min/IP — generous for live typeahead
+const recentByIp = new Map<string, number[]>();
+function checkRate(ip: string): boolean {
+  const now = Date.now();
+  const fresh = (recentByIp.get(ip) ?? []).filter(ts => ts > now - RATE_WINDOW_MS);
+  if (fresh.length >= RATE_MAX) { recentByIp.set(ip, fresh); return false; }
+  fresh.push(now);
+  recentByIp.set(ip, fresh);
+  return true;
+}
+
 export async function GET(req: NextRequest) {
   if (!KEY) return NextResponse.json({ error: 'No Google API key' }, { status: 500 });
+
+  // Authenticated users only — geocoding is a logged-in editing flow.
+  const { userId } = await auth();
+  if (!userId) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+
+  const ip = req.headers.get('x-forwarded-for')?.split(',')[0].trim() || 'unknown';
+  if (!checkRate(ip)) return NextResponse.json({ error: 'rate_limited' }, { status: 429 });
 
   const input    = req.nextUrl.searchParams.get('input');
   const place_id = req.nextUrl.searchParams.get('place_id');
