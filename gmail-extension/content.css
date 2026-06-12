@@ -48,3 +48,36 @@
   text-decoration: none;
 }
 #fleetcal-panel .fc-link:hover { text-decoration: underline; }
+
+#fleetcal-panel .fc-btn-link {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: #1a73e8;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+}
+#fleetcal-panel .fc-manual-input {
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 7px;
+  border: 1px solid #bfdbfe;
+  border-radius: 5px;
+  flex: 1;
+  min-width: 120px;
+  background: #fff;
+}
+#fleetcal-panel .fc-btn-go {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 12px;
+  border: 0;
+  border-radius: 5px;
+  background: #1a73e8;
+  color: #fff;
+  cursor: pointer;
+}

@@ -32,8 +32,52 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       .catch((err) => sendResponse({ ok: false, error: String(err && err.message || err) }));
     return true;
   }
+  if (msg?.type === "getLink") {
+    threadLink("GET", msg).then(sendResponse).catch((err) => sendResponse({ ok: false, error: errStr(err) }));
+    return true;
+  }
+  if (msg?.type === "setLink") {
+    threadLink("POST", msg).then(sendResponse).catch((err) => sendResponse({ ok: false, error: errStr(err) }));
+    return true;
+  }
+  if (msg?.type === "unlink") {
+    threadLink("DELETE", msg).then(sendResponse).catch((err) => sendResponse({ ok: false, error: errStr(err) }));
+    return true;
+  }
   return false;
 });
+
+const LINK_PATH = "/v1/bot/email-thread";
+
+// One helper for all three thread-link verbs. Returns the parsed JSON with
+// an `ok` flag merged in. account/threadId go in the query for GET/DELETE,
+// the body for POST.
+async function threadLink(method, msg) {
+  const { apiBase, botKey } = await getConfig();
+  if (!apiBase) return { ok: false, error: "Not configured." };
+  const headers = botKey ? { "x-bot-key": botKey } : {};
+  let url = `${apiBase}${LINK_PATH}`;
+  let body;
+  if (method === "POST") {
+    headers["content-type"] = "application/json";
+    body = JSON.stringify({
+      account:  msg.account,
+      threadId: msg.threadId,
+      loadId:   msg.loadId,
+      source:   msg.source || "auto",
+      linkedBy: msg.account,
+    });
+  } else {
+    const qs = new URLSearchParams({ account: msg.account || "", threadId: msg.threadId || "" });
+    url += `?${qs.toString()}`;
+  }
+  const res = await fetch(url, { method, headers, body });
+  let data = {};
+  try { data = await res.json(); } catch { /* ignore */ }
+  return { ok: res.ok, ...data };
+}
+
+function errStr(e) { return String((e && e.message) || e); }
 
 // Reuse an existing FleetCal tab if one is open: navigate it to the URL
 // and focus it. Otherwise open a new tab. The target's origin (derived
@@ -90,6 +134,7 @@ async function searchOne(apiBase, botKey, ref) {
     if (!res.ok) return { ref, loads: [], error: `HTTP ${res.status}` };
     const data = await res.json(); // { loads: Load[] }
     const loads = (data.loads || []).map((l) => ({
+      loadId:         l.loadId ?? l.load_id ?? null,   // uuid — needed to create a thread link
       internalLoadId: l.internalLoadId ?? l.internal_load_id ?? null,
       loadNum:        l.loadNum ?? l.load_num ?? null,
       broker:         l.broker ?? null,

@@ -19,15 +19,17 @@
   const BODY_SELECTOR    = ".a3s";    // a message body block (one per message)
   // --------------------------------------------------------------------------
 
-  const PANEL_ID    = "fleetcal-panel";
-  const PANEL_KEY   = "fleetcalKey";  // dataset key on the panel = current email signature
+  const PANEL_ID  = "fleetcal-panel";
+  const PANEL_KEY = "fleetcalKey";   // dataset on the panel = current email signature
 
-  let LABEL_NAME = "new load";        // matched case-insensitively, trimmed
-  let APP_BASE   = "https://fleetcal.app";
+  let LABEL_NAME  = "new load";      // matched case-insensitively, trimmed
+  let APP_BASE    = "https://fleetcal.app";
+  let CFG_ACCOUNT = "";              // optional gmail-account override (popup fallback)
 
-  chrome.storage.sync.get(["labelName", "appBase"], (cfg) => {
-    if (cfg.labelName) LABEL_NAME = String(cfg.labelName).trim().toLowerCase();
-    if (cfg.appBase)   APP_BASE   = String(cfg.appBase).replace(/\/+$/, "");
+  chrome.storage.sync.get(["labelName", "appBase", "gmailAccount"], (cfg) => {
+    if (cfg.labelName)    LABEL_NAME  = String(cfg.labelName).trim().toLowerCase();
+    if (cfg.appBase)      APP_BASE    = String(cfg.appBase).replace(/\/+$/, "");
+    if (cfg.gmailAccount) CFG_ACCOUNT = String(cfg.gmailAccount).trim().toLowerCase();
     start();
   });
 
@@ -37,73 +39,63 @@
     obs.observe(document.body, { childList: true, subtree: true });
   }
 
+  // The email view currently handled — guards against the MutationObserver
+  // re-running the whole flow (incl. API calls) on every DOM mutation.
+  let handledSig = null;
+
   function scan() {
     const subjectEl = document.querySelector(SUBJECT_SELECTOR);
-    if (!subjectEl) { removePanel(); return; }            // no email open
+    if (!subjectEl) { removePanel(); handledSig = null; return; }    // no email open
 
-    const subject = subjectEl.textContent.trim();
-    const signature = subject.slice(0, 120);              // cheap per-email key
-    const existing = document.getElementById(PANEL_ID);
-    if (existing && existing.dataset[PANEL_KEY] === signature) return; // already done this email
+    const subject  = subjectEl.textContent.trim();
+    const threadId = getThreadId();
+    const account  = getAccount();
+    const sig = subject.slice(0, 120) + "|" + (threadId || "");
+    if (sig === handledSig) return;                                   // already handled
+    handledSig = sig;
+    void handle(subjectEl, subject, sig, account, threadId);
+  }
 
+  async function handle(subjectEl, subject, sig, account, threadId) {
     const body = readBody();
     const { refs, hasLabelled } = extractRefs(`${subject}\n${body}`);
-
-    // An alphanumeric ref (letters + digits, e.g. WE11117, L-204517) is
-    // a distinctive freight reference on its own — unlike a bare number,
-    // it's very unlikely to be a phone/date/amount. So it triggers even
-    // when it isn't sitting next to a "Load #"-style keyword (e.g. a
-    // subject like "Load Tender for WE11117").
+    // An alphanumeric ref (WE11117, L-204517) is a distinctive freight
+    // reference on its own — unlike a bare number it's unlikely to be a
+    // phone/date — so it triggers even without a "Load #"-style keyword.
     const hasAlphaRef = refs.some((r) => /[A-Z]/.test(r));
+    const refTrigger  = emailHasLabel(subjectEl, LABEL_NAME) || hasLabelled || hasAlphaRef;
 
-    // Trigger gate — any of:
-    //   1. A reading-pane label chip (Gmail layouts that show it inline).
-    //   2. A *labelled* load reference ("Load # 9431943", "Ref: …").
-    //   3. An alphanumeric reference anywhere (WE11117, L-204517).
-    // Gmail doesn't expose the applied label inside the open email on most
-    // layouts, so 2 + 3 are the practical triggers. If none hold, this
-    // isn't a load email → stay silent.
-    if (!emailHasLabel(subjectEl, LABEL_NAME) && !hasLabelled && !hasAlphaRef) {
-      removePanel();
-      return;
+    // 1) Already linked? Resolve instantly. Keyed on (account, thread) since
+    //    Gmail thread ids are per-mailbox. Works even on no-ref replies in
+    //    the same conversation.
+    if (account && threadId) {
+      const link = await sendMsg({ type: "getLink", account, threadId }).catch(() => null);
+      if (stale(sig)) return;
+      if (link && link.ok && link.linked && link.load) {
+        renderLinked(renderPanel(subjectEl, sig, refs, account, threadId), link.load);
+        return;
+      }
     }
 
-    const panel = renderPanel(subjectEl, signature, refs);
-    if (!refs.length) {
-      setPanelBody(panel, `<div class="fc-row fc-muted">No reference numbers detected in this email.</div>`);
-      return;
-    }
+    // 2) Not linked + doesn't look like a load email → stay silent.
+    if (!refTrigger) { removePanel(); return; }
 
-    setPanelBody(panel, `<div class="fc-row fc-muted">Searching FleetCal for ${refs.length} reference${refs.length === 1 ? "" : "s"}…</div>`);
+    const panel = renderPanel(subjectEl, sig, refs, account, threadId);
 
-    // Robust settle: never leave the panel spinning. Covers an orphaned
-    // content script (after the extension is reloaded without refreshing
-    // Gmail — sendMessage throws), a worker error (chrome.runtime.lastError),
-    // and a hung request (timeout).
-    let settled = false;
-    const finish = (fn) => {
-      if (settled) return; settled = true;
-      const live = document.getElementById(PANEL_ID);
-      if (!live || live.dataset[PANEL_KEY] !== signature) return;
-      fn(live);
-    };
-    const failWith = (m) => finish((live) =>
-      setPanelBody(live, `<div class="fc-row fc-warn">⚠ ${escapeHtml(m)}</div>`));
+    // 2a) Load email but no ref in the text (number only in the PDF, etc.)
+    //     — offer a manual link.
+    if (!refs.length) { renderNotFound(panel, [], account, threadId); return; }
 
-    const timer = setTimeout(() => failWith("Timed out. Reload the extension, then refresh Gmail."), 15000);
-    try {
-      chrome.runtime.sendMessage({ type: "search", refs }, (resp) => {
-        clearTimeout(timer);
-        if (chrome.runtime.lastError) {
-          return failWith("Extension was reloaded — refresh this Gmail tab.");
-        }
-        finish((live) => renderResult(live, refs, resp));
-      });
-    } catch {
-      clearTimeout(timer);
-      failWith("Extension was reloaded — refresh this Gmail tab.");
-    }
+    // 2b) Search by the extracted refs; auto-link a single confident match.
+    setPanelBody(panel, `<div class="fc-row fc-muted">Searching FleetCal…</div>`);
+    const resp = await sendMsg({ type: "search", refs }).catch(() => ({ ok: false, error: "Extension was reloaded — refresh this Gmail tab." }));
+    if (stale(sig)) return;
+    const live = document.getElementById(PANEL_ID);
+    if (!live || live.dataset[PANEL_KEY] !== sig) return;
+    await renderSearch(live, refs, resp, account, threadId);
   }
+
+  const stale = (sig) => sig !== handledSig;
 
   // ── Label detection ────────────────────────────────────────────────────
   // Applied labels render as chips (div.at[title="…"] + a .av text node) in
@@ -165,31 +157,46 @@
   }
 
   // ── Panel rendering ───────────────────────────────────────────────────
-  function renderPanel(subjectEl, signature, refs) {
+  function renderPanel(subjectEl, signature, refs, account, threadId) {
     removePanel();
     const panel = document.createElement("div");
     panel.id = PANEL_ID;
     panel.dataset[PANEL_KEY] = signature;
+    panel.dataset.account = account || "";
+    panel.dataset.thread  = threadId || "";
     panel.innerHTML = `
       <div class="fc-head">
         <span class="fc-logo">FleetCal</span>
         <span class="fc-refs">${refs.length ? refs.map(escapeHtml).join(" · ") : "—"}</span>
       </div>
       <div class="fc-body"></div>`;
-    // Route "open in FleetCal" clicks through the background worker so it
-    // can reuse an already-open FleetCal tab instead of spawning a new one.
-    // Modifier / middle clicks fall through to the anchor's native
-    // new-tab behavior.
+
+    // One delegated click handler for everything the panel does:
+    //  • a.fc-link        → open in FleetCal (reusing an existing tab)
+    //  • [data-fc=link]   → link this thread to a load
+    //  • [data-fc=unlink] → remove the link
+    //  • [data-fc=manual] → link by a typed load # / ref
     panel.addEventListener("click", (e) => {
       const a = e.target.closest("a.fc-link");
-      if (!a) return;
-      if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
+      if (a) {
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
+        e.preventDefault();
+        chrome.runtime.sendMessage({ type: "open", url: a.href });
+        return;
+      }
+      const btn = e.target.closest("[data-fc]");
+      if (!btn) return;
       e.preventDefault();
-      chrome.runtime.sendMessage({ type: "open", url: a.href });
+      const acct = panel.dataset.account, thread = panel.dataset.thread;
+      if (btn.dataset.fc === "link")   void doLink(panel, acct, thread, btn.dataset.loadid, "manual-pick");
+      if (btn.dataset.fc === "unlink") void doUnlink(panel, acct, thread, subjectEl, signature);
+      if (btn.dataset.fc === "manual") {
+        const val = panel.querySelector(".fc-manual-input")?.value.trim();
+        if (val) void doManualLink(panel, acct, thread, val);
+      }
     });
 
-    // Insert just above the subject's container so it sits at the top of the
-    // open email without overlapping the toolbar.
+    // Insert just above the subject's container.
     const host = subjectEl.closest("div") || subjectEl.parentElement;
     host.parentElement.insertBefore(panel, host);
     return panel;
@@ -200,48 +207,151 @@
     if (body) body.innerHTML = html;
   }
 
-  function renderResult(panel, refs, resp) {
+  // Calendar deep link for a load — its event (pickup leg for relays).
+  function calendarHref(load) {
+    if (load.eventId) {
+      return `${APP_BASE}/calendar?event=${encodeURIComponent(load.eventId)}` +
+        (load.start ? `&date=${encodeURIComponent(String(load.start).slice(0, 10))}` : "");
+    }
+    return load.internalLoadId != null ? `${APP_BASE}/loads/${load.internalLoadId}` : null;
+  }
+
+  function loadLabel(load) {
+    return load.internalLoadId != null ? `#${load.internalLoadId}` : (load.loadNum || "load");
+  }
+
+  // A linked thread — the persistent ✓ state. Shows the calendar link + unlink.
+  function renderLinked(panel, load) {
+    const href = calendarHref(load);
+    const link = href
+      ? `<a class="fc-link" href="${href}" target="_blank" rel="noopener">open ${loadLabel(load)} on calendar →</a>`
+      : `<span>${loadLabel(load)}</span>`;
+    const broker = load.broker ? `<span class="fc-via">${escapeHtml(load.broker)}</span>` : "";
+    setPanelBody(panel,
+      `<div class="fc-row fc-ok">✓ Linked ${link}${broker}</div>
+       <div class="fc-row"><button type="button" class="fc-btn-link" data-fc="unlink">unlink</button></div>`);
+  }
+
+  // Search results. One match → auto-link + show linked. Several → let the
+  // user pick which to link. None → not-found + manual link.
+  async function renderSearch(panel, refs, resp, account, threadId) {
     if (!resp || !resp.ok) {
       setPanelBody(panel, `<div class="fc-row fc-warn">⚠ ${escapeHtml(resp?.error || "Search failed")}</div>`);
       return;
     }
-    if (!resp.matches.length) {
-      setPanelBody(
-        panel,
-        `<div class="fc-row fc-warn">⚠ Not in FleetCal</div>
-         <div class="fc-row fc-muted">Searched: ${refs.map(escapeHtml).join(", ")}</div>`
-      );
-      return;
-    }
-    // De-dupe matched loads across refs (a ref + load_num may both hit the
-    // same load). Key by internalLoadId.
     const byLoad = new Map();
-    for (const match of resp.matches) {
+    for (const match of resp.matches || []) {
       for (const load of match.loads) {
-        const key = load.internalLoadId ?? `${load.loadNum}-${load.broker}`;
+        const key = load.loadId ?? load.internalLoadId ?? `${load.loadNum}-${load.broker}`;
         if (!byLoad.has(key)) byLoad.set(key, { load, ref: match.ref });
       }
     }
-    const rows = [...byLoad.values()].map(({ load, ref }) => {
-      const label = load.internalLoadId != null ? `#${load.internalLoadId}` : (load.loadNum || "load");
+    const found = [...byLoad.values()];
+
+    if (found.length === 0) { renderNotFound(panel, refs, account, threadId); return; }
+
+    // Single confident match → auto-link if we can identify the thread.
+    if (found.length === 1 && account && threadId && found[0].load.loadId) {
+      const ok = await doLink(panel, account, threadId, found[0].load.loadId, "auto");
+      if (ok) return; // doLink re-rendered as linked
+    }
+
+    // Otherwise list matches; each gets a "link" button (if linkable).
+    const canLink = !!(account && threadId);
+    const rows = found.map(({ load, ref }) => {
+      const href = calendarHref(load);
+      const link = href ? `<a class="fc-link" href="${href}" target="_blank" rel="noopener">open ${loadLabel(load)} on calendar →</a>` : `<span>${loadLabel(load)}</span>`;
       const broker = load.broker ? ` · ${escapeHtml(load.broker)}` : "";
-      // Open the load on the CALENDAR (its event — pickup leg for relays),
-      // not the load-detail page. Falls back to the load page if the bot
-      // result somehow lacks the event id.
-      const href = load.eventId
-        ? `${APP_BASE}/calendar?event=${encodeURIComponent(load.eventId)}` +
-          (load.start ? `&date=${encodeURIComponent(String(load.start).slice(0, 10))}` : "")
-        : (load.internalLoadId != null ? `${APP_BASE}/loads/${load.internalLoadId}` : null);
-      const link = href
-        ? `<a class="fc-link" href="${href}" target="_blank" rel="noopener">open ${label} on calendar →</a>`
-        : `<span>${label}</span>`;
-      return `<div class="fc-row fc-ok">✓ In system ${link}<span class="fc-via">via ${escapeHtml(ref)}${broker}</span></div>`;
+      const linkBtn = (canLink && load.loadId)
+        ? ` <button type="button" class="fc-btn-link" data-fc="link" data-loadid="${escapeHtml(load.loadId)}">link this thread</button>`
+        : "";
+      return `<div class="fc-row fc-ok">✓ In system ${link}<span class="fc-via">via ${escapeHtml(ref)}${broker}</span>${linkBtn}</div>`;
     });
     setPanelBody(panel, rows.join(""));
   }
 
+  function renderNotFound(panel, refs, account, threadId) {
+    const searched = refs.length ? `<div class="fc-row fc-muted">Searched: ${refs.map(escapeHtml).join(", ")}</div>` : "";
+    const manual = (account && threadId)
+      ? `<div class="fc-row"><input class="fc-manual-input" placeholder="link to load # / ref" />
+           <button type="button" class="fc-btn-go" data-fc="manual">Link</button></div>`
+      : "";
+    setPanelBody(panel,
+      `<div class="fc-row fc-warn">⚠ Not in FleetCal</div>${searched}${manual}`);
+  }
+
+  // ── Link actions ────────────────────────────────────────────────────────
+  async function doLink(panel, account, threadId, loadId, source) {
+    const resp = await sendMsg({ type: "setLink", account, threadId, loadId, source }).catch(() => null);
+    if (resp && resp.ok && resp.linked && resp.load) { renderLinked(panel, resp.load); return true; }
+    setPanelBody(panel, `<div class="fc-row fc-warn">⚠ ${escapeHtml(resp?.error || "Link failed")}</div>`);
+    return false;
+  }
+
+  async function doUnlink(panel, account, threadId, subjectEl, signature) {
+    setPanelBody(panel, `<div class="fc-row fc-muted">Unlinking…</div>`);
+    await sendMsg({ type: "unlink", account, threadId }).catch(() => null);
+    // Re-run the flow so it falls back to a fresh search.
+    handledSig = null;
+    scan();
+    void subjectEl; void signature;
+  }
+
+  async function doManualLink(panel, account, threadId, value) {
+    setPanelBody(panel, `<div class="fc-row fc-muted">Looking up "${escapeHtml(value)}"…</div>`);
+    const resp = await sendMsg({ type: "search", refs: [value] }).catch(() => null);
+    const loads = [];
+    for (const match of (resp && resp.matches) || []) for (const l of match.loads) loads.push(l);
+    if (loads.length === 1 && loads[0].loadId) { await doLink(panel, account, threadId, loads[0].loadId, "manual"); return; }
+    if (loads.length === 0) { setPanelBody(panel, `<div class="fc-row fc-warn">No load found for "${escapeHtml(value)}".</div>${manualInput()}`); return; }
+    // Multiple — list them with link buttons.
+    const rows = loads.map((l) =>
+      `<div class="fc-row fc-ok">${escapeHtml(loadLabel(l))}${l.broker ? ` · ${escapeHtml(l.broker)}` : ""} <button type="button" class="fc-btn-link" data-fc="link" data-loadid="${escapeHtml(l.loadId || "")}">link</button></div>`);
+    setPanelBody(panel, rows.join(""));
+  }
+  function manualInput() {
+    return `<div class="fc-row"><input class="fc-manual-input" placeholder="link to load # / ref" /><button type="button" class="fc-btn-go" data-fc="manual">Link</button></div>`;
+  }
+
   function removePanel() {
     document.getElementById(PANEL_ID)?.remove();
+  }
+
+  // ── thread + account identity ────────────────────────────────────────────
+  // Gmail puts the open thread's id as the last segment of the URL hash:
+  //   #inbox/FMfcgz…   #label/New+Load/FMfcg…   #search/…/FMfcg…
+  // It's an opaque, per-mailbox id — as long as we use the same value when
+  // we link and when we look up, the format doesn't matter. Folder names
+  // ("inbox") are short, so require a minimum length.
+  function getThreadId() {
+    const seg = (location.hash || "").split("/").pop() || "";
+    return seg.length >= 10 ? decodeURIComponent(seg) : null;
+  }
+
+  // The active Gmail account (email). Config override wins; otherwise pull it
+  // from an aria-label (the account switcher reads "Google Account: … (you@x)").
+  function getAccount() {
+    if (CFG_ACCOUNT) return CFG_ACCOUNT;
+    for (const el of document.querySelectorAll('[aria-label*="@"]')) {
+      const m = (el.getAttribute("aria-label") || "").match(/[\w.+-]+@[\w.-]+\.\w+/);
+      if (m) return m[0].toLowerCase();
+    }
+    return null;
+  }
+
+  // Promise wrapper around sendMessage that surfaces orphaned-context errors
+  // (extension reloaded without refreshing Gmail) instead of hanging.
+  function sendMsg(msg) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("timeout")), 15000);
+      try {
+        chrome.runtime.sendMessage(msg, (resp) => {
+          clearTimeout(timer);
+          if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+          resolve(resp);
+        });
+      } catch (e) { clearTimeout(timer); reject(e); }
+    });
   }
 
   // ── utils ──────────────────────────────────────────────────────────────

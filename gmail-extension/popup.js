@@ -1,5 +1,5 @@
 const $ = (id) => document.getElementById(id);
-const FIELDS = ["apiBase", "botKey", "appBase", "labelName"];
+const FIELDS = ["apiBase", "botKey", "appBase", "labelName", "gmailAccount"];
 
 const DEFAULTS = {
   apiBase:   "https://fleetcalapi-production.up.railway.app",
