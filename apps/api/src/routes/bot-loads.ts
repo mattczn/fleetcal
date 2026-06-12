@@ -4,6 +4,7 @@
  */
 
 import { Hono } from "hono";
+import { createHash } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
 import type { DocumentBlockParam, TextBlockParam, ContentBlockParam } from "@anthropic-ai/sdk/resources/messages.js";
 import { joinEventLoadToApp, type ListLoadsResponse, type ApiErrorResponse, type Load, type LoadStatus, LOAD_STATUSES, type Stop, type StopType } from "@fleetcal/types";
@@ -13,6 +14,9 @@ import type { AuthVariables } from "../middleware/clerk.js";
 
 const botLoads = new Hono<{ Variables: AuthVariables }>();
 const ANTHROPIC_CLIENT = new Anthropic({ apiKey: env.anthropicApiKey });
+// pdf_extractions isn't in the generated Database types yet.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const sb = supabase as any;
 
 const EVENT_COLS =
   "id,asset_id,driver_id,driver_name,title,start,end,status,priority," +
@@ -231,9 +235,29 @@ botLoads.post("/search-pdf", async (c) => {
   const base64 = (body.pdfBase64 || "").trim();
   if (!base64) return c.json({ error: "pdfBase64 required" }, 400);
 
+  // Content-hash cache: the same rate con lands in every dispatcher's inbox,
+  // so AI-extract it once per unique PDF (org-wide), not once per mailbox.
+  const hash = createHash("sha256").update(Buffer.from(base64, "base64")).digest("hex");
+
   let refs: string[] = [];
+  let cacheHit = false;
   try {
-    refs = await extractRefsFromPdf(base64);
+    const { data: cached } = await sb
+      .from("pdf_extractions")
+      .select("refs")
+      .eq("org_id", orgId)
+      .eq("pdf_sha256", hash)
+      .maybeSingle();
+    if (cached && Array.isArray(cached.refs)) {
+      refs = cached.refs as string[];
+      cacheHit = true;
+    } else {
+      refs = await extractRefsFromPdf(base64);
+      // Best-effort store — don't fail the request if the cache write errors.
+      await sb.from("pdf_extractions")
+        .upsert({ org_id: orgId, pdf_sha256: hash, refs } as Record<string, unknown>,
+                { onConflict: "org_id,pdf_sha256" });
+    }
   } catch (err) {
     console.error("[POST /v1/bot/loads/search-pdf] extraction failed:", err);
     return c.json({ error: "extract_failed", refs: [], matches: [] }, 200);
@@ -245,7 +269,7 @@ botLoads.post("/search-pdf", async (c) => {
     const loads = await findLoadsByQuery(orgId, ref.trim(), 5);
     if (loads.length) matches.push({ ref, loads });
   }
-  return c.json({ refs, matches });
+  return c.json({ refs, matches, cached: cacheHit });
 });
 
 // Claude reference-number extraction from a rate-con PDF. Cheap (Haiku,
