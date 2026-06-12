@@ -23,6 +23,7 @@ import { captureErrors } from "./middleware/captureErrors.js";
 import loadsRoute from "./routes/loads.js";
 import closeoutRoute from "./routes/closeout.js";
 import botLoadsRoute from "./routes/bot-loads.js";
+import botEmailThreadRoute from "./routes/bot-email-thread.js";
 import eventsRoute from "./routes/events.js";
 import documentsRoute from "./routes/documents.js";
 import notificationsRoute from "./routes/notifications.js";
@@ -235,6 +236,7 @@ authed.route("/reports", reportsRoute);
 const bot = new Hono<{ Variables: AuthVariables }>();
 bot.use("*", botAuth);
 bot.route("/loads", botLoadsRoute);
+bot.route("/email-thread", botEmailThreadRoute);
 app.route("/v1/bot", bot);
 
 // ── Driver routes (Supabase-JWT auth, scoped to one driver) ─────────────
