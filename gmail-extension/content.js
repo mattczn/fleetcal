@@ -39,113 +39,144 @@
     obs.observe(document.body, { childList: true, subtree: true });
   }
 
-  // The email view currently handled — guards against the MutationObserver
-  // re-running the whole flow (incl. API calls) on every DOM mutation.
+  // Per-email tracking. Gmail loads thread messages + their attachments
+  // progressively, so we don't process once-and-lock; we keep watching and
+  // search each attachment as it appears (until something matches).
+  const FREIGHTY = /rate.?con|rate conf|confirmation|load tender|load conf|carrier|dispatch|new load|tender|\bbol\b|shipment|pickup|delivery|rate sheet/;
   let handledSig = null;
+  let emailState = "idle";          // idle | pending | searching | open | found | linked | quiet
+  let searchedPdfUrls = new Set();  // PDFs already sent for this email
+  let ctx = null;                   // { subjectEl, subject, sig, account, threadId, refs }
+
+  const stale = (sig) => sig !== handledSig;
+  function panelLive(sig) {
+    const p = document.getElementById(PANEL_ID);
+    return p && p.dataset[PANEL_KEY] === sig ? p : null;
+  }
 
   function scan() {
     const subjectEl = document.querySelector(SUBJECT_SELECTOR);
-    if (!subjectEl) { removePanel(); handledSig = null; return; }    // no email open
+    if (!subjectEl) { removePanel(); handledSig = null; emailState = "idle"; return; }
 
     const subject  = subjectEl.textContent.trim();
     const threadId = getThreadId();
     const account  = getAccount();
     const sig = subject.slice(0, 120) + "|" + (threadId || "");
-    if (sig === handledSig) return;                                   // already handled
-    handledSig = sig;
-    void handle(subjectEl, subject, sig, account, threadId);
+
+    if (sig !== handledSig) {
+      handledSig = sig;
+      emailState = "pending";
+      searchedPdfUrls = new Set();
+      ctx = { subjectEl, subject, sig, account, threadId, refs: [] };
+      void handle();
+      return;
+    }
+
+    // Same email. Keep the element ref fresh (Gmail recycles DOM). Once
+    // we've resolved positively or while a request is in flight, do nothing.
+    if (ctx) { ctx.subjectEl = subjectEl; ctx.account = account; ctx.threadId = threadId; }
+    if (emailState !== "open") return;
+
+    // Watch for newly-loaded attachments (later messages in the thread) and
+    // search them — this is what catches a rate con on a message that wasn't
+    // rendered when the email first opened.
+    const fresh = detectPdfAttachments().filter((p) => !searchedPdfUrls.has(p.url));
+    if (fresh.length) void runPdfSearch(fresh);
   }
 
-  async function handle(subjectEl, subject, sig, account, threadId) {
+  async function handle() {
+    const { subjectEl, subject, sig, account, threadId } = ctx;
     const body = readBody();
     const { refs, hasLabelled } = extractRefs(`${subject}\n${body}`);
-    // An alphanumeric ref (WE11117, L-204517) is a distinctive freight
-    // reference on its own — unlike a bare number it's unlikely to be a
-    // phone/date — so it triggers even without a "Load #"-style keyword.
+    ctx.refs = refs;
     const hasAlphaRef = refs.some((r) => /[A-Z]/.test(r));
     const refTrigger  = emailHasLabel(subjectEl, LABEL_NAME) || hasLabelled || hasAlphaRef;
-
-    // Rate-con PDF attachments are a trigger too — the load number is often
-    // ONLY inside the document. A freight-ish SUBJECT alone fires the trigger
-    // (so an attachment-only email still reaches the PDF step even before the
-    // attachment chip has lazy-loaded); a PDF with a freight-ish filename
-    // also counts.
-    const pdfs = detectPdfAttachments();
-    const FREIGHTY = /rate.?con|rate conf|confirmation|load tender|load conf|carrier|dispatch|new load|tender|\bbol\b|shipment|pickup|delivery|rate sheet/;
+    const pdfs0 = detectPdfAttachments();
     const pdfTrigger = FREIGHTY.test(subject.toLowerCase())
-      || (pdfs.length > 0 && FREIGHTY.test(pdfs.map((p) => p.filename).join(" ").toLowerCase()));
+      || (pdfs0.length > 0 && FREIGHTY.test(pdfs0.map((p) => p.filename).join(" ").toLowerCase()));
 
-    // 1) Already linked? Resolve instantly. Keyed on (account, thread) since
-    //    Gmail thread ids are per-mailbox. Works even on no-ref replies.
+    // 1) Already linked? Resolve instantly (per account+thread).
     if (account && threadId) {
       const link = await sendMsg({ type: "getLink", account, threadId }).catch(() => null);
       if (stale(sig)) return;
       if (link && link.ok && link.linked && link.load) {
         renderLinked(renderPanel(subjectEl, sig, refs, account, threadId), link.load);
+        emailState = "linked";
         return;
       }
     }
 
-    // 2) Nothing to go on → stay silent.
-    if (!refTrigger && !pdfTrigger) { removePanel(); return; }
+    // 2) Doesn't look like a load email → stay quiet (and stop watching).
+    if (!refTrigger && !pdfTrigger) { removePanel(); emailState = "quiet"; return; }
 
     const panel = renderPanel(subjectEl, sig, refs, account, threadId);
 
-    // 3) Try the text refs first (cheap, no AI).
+    // 3) Text refs first (cheap, no AI).
     if (refs.length) {
       setPanelBody(panel, `<div class="fc-row fc-muted">Searching FleetCal…</div>`);
       const resp = await sendMsg({ type: "search", refs }).catch(() => ({ ok: false, error: "Extension was reloaded — refresh this Gmail tab." }));
       if (stale(sig)) return;
-      const live = document.getElementById(PANEL_ID);
-      if (!live || live.dataset[PANEL_KEY] !== sig) return;
+      const live = panelLive(sig);
+      if (!live) return;
       if (resp && resp.ok && (resp.matches || []).some((m) => m.loads.length)) {
         await renderSearch(live, refs, resp, account, threadId);
+        emailState = "found";
         return;
       }
     }
 
-    // 4) No text match → read the rate-con PDF. Gmail lazy-loads attachment
-    //    chips, so poll a couple seconds for them to appear before giving up.
-    let pdfsNow = pdfs;
-    for (let i = 0; i < 6 && !pdfsNow.length; i++) {
-      await sleep(400);
-      if (stale(sig)) return;
-      pdfsNow = detectPdfAttachments();
-    }
-    if (pdfsNow.length) {
-      const p0 = document.getElementById(PANEL_ID);
-      if (!p0 || p0.dataset[PANEL_KEY] !== sig) return;
-      setPanelBody(p0, `<div class="fc-row fc-muted">Reading the rate con…</div>`);
-      const pdfResp = await searchPdfs(pdfsNow);
-      if (stale(sig)) return;
-      const live = document.getElementById(PANEL_ID);
-      if (!live || live.dataset[PANEL_KEY] !== sig) return;
-      if (pdfResp && pdfResp.ok && (pdfResp.matches || []).some((m) => m.loads.length)) {
-        await renderSearch(live, pdfResp.refs || [], pdfResp, account, threadId);
-        return;
-      }
-      renderNotFound(live, (pdfResp && pdfResp.refs) || refs, account, threadId);
-      return;
-    }
-
-    // 5) Text refs but no match, no PDF → not found.
-    const liveF = document.getElementById(PANEL_ID);
-    if (!liveF || liveF.dataset[PANEL_KEY] !== sig) return;
-    renderNotFound(liveF, refs, account, threadId);
+    // 4) Search any rate-con PDF that's loaded now; then keep watching (the
+    //    one we want may be on a thread message that hasn't rendered yet).
+    emailState = "open";
+    const pdfsNow = detectPdfAttachments();
+    if (pdfsNow.length) { await runPdfSearch(pdfsNow); return; }
+    const liveF = panelLive(sig);
+    if (liveF) renderNotFound(liveF, refs, account, threadId);
   }
 
-  const stale = (sig) => sig !== handledSig;
+  // Search the given (not-yet-tried) PDFs. Auto-links on a match; otherwise
+  // leaves the email "open" so later-loading attachments still get checked.
+  async function runPdfSearch(pdfs) {
+    if (!ctx) return;
+    const { sig, account, threadId, refs, subjectEl } = ctx;
+    emailState = "searching";
+    pdfs = pdfs.slice(0, 4);
+    pdfs.forEach((p) => searchedPdfUrls.add(p.url));
+
+    const live0 = panelLive(sig) || renderPanel(subjectEl, sig, refs || [], account, threadId);
+    setPanelBody(live0, `<div class="fc-row fc-muted">Reading the rate con…</div>`);
+
+    const pdfResp = await searchPdfs(pdfs);
+    if (stale(sig)) return;
+    const live = panelLive(sig);
+    if (!live) { emailState = "open"; return; }
+
+    if (pdfResp && pdfResp.ok && (pdfResp.matches || []).some((m) => m.loads.length)) {
+      await renderSearch(live, pdfResp.refs || [], pdfResp, account, threadId);
+      emailState = "found";
+      return;
+    }
+    renderNotFound(live, (pdfResp && pdfResp.refs) || refs || [], account, threadId);
+    emailState = "open"; // keep watching for more attachments
+  }
 
   // Fetch + parse the first rate-con PDF that yields a result.
+  // Try each attachment; return the FIRST that yields a match. If none match,
+  // return the last valid response so the panel can show what was read. Caps
+  // at 4 so a heavily-attached email can't fan out endlessly.
   async function searchPdfs(pdfs) {
-    for (const pdf of pdfs.slice(0, 2)) {
+    let last = null;
+    for (const pdf of pdfs.slice(0, 4)) {
       try {
         const b64 = await fetchPdfBase64(pdf.url);
         const resp = await sendMsg({ type: "searchPdf", pdfBase64: b64 }).catch(() => null);
-        if (resp) return resp; // return first response (matched or not) for display
+        if (resp) {
+          last = resp;
+          if (resp.ok && (resp.matches || []).some((m) => m.loads.length)) return resp;
+        }
       } catch { /* try next attachment */ }
     }
-    return null;
+    return last;
   }
 
   // Gmail attachment chips carry download_url = "mime:filename:url".
