@@ -67,12 +67,12 @@
   }
 
   // ── Label detection ────────────────────────────────────────────────────
-  // Applied labels render as chips in the conversation header near the
-  // subject. Walk up a few ancestors from the subject and scan that subtree
-  // for a chip whose title/text equals the label.
+  // Applied labels render as chips (div.at[title="…"] + a .av text node) in
+  // the open conversation. They're NOT close to the subject in the DOM, so we
+  // scope to the conversation pane ([role="main"]) — which is the open email
+  // when you're reading one — and scan it for a chip matching the label.
   function emailHasLabel(subjectEl, want) {
-    let scope = subjectEl;
-    for (let i = 0; i < 4 && scope.parentElement; i++) scope = scope.parentElement;
+    const scope = subjectEl.closest('[role="main"]') || document.body;
     const candidates = scope.querySelectorAll("[title], .at, .av, .ar");
     for (const el of candidates) {
       const t = (el.getAttribute("title") || el.textContent || "").trim().toLowerCase();
