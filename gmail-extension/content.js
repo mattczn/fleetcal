@@ -37,7 +37,24 @@
     scan();
     const obs = new MutationObserver(debounce(scan, 400));
     obs.observe(document.body, { childList: true, subtree: true });
+
+    // Close the popover on an outside click; keep it pinned under the icon as
+    // the page scrolls / resizes.
+    document.addEventListener("mousedown", (e) => {
+      if (!rec || !rec.open) return;
+      if (panelEl && panelEl.contains(e.target)) return;
+      if (iconEl && iconEl.contains(e.target)) return;
+      rec.open = false; rec.userToggled = true;
+      applyPanelVisibility();
+    }, true);
+    const reflow = () => { if (rec && rec.open) positionPanel(); };
+    window.addEventListener("scroll", reflow, true);
+    window.addEventListener("resize", reflow);
   }
+
+  // Live UI elements (persist across Gmail re-renders so listeners survive).
+  let iconEl  = null;
+  let panelEl = null;
 
   // ── Reconciliation engine ────────────────────────────────────────────────
   // A Gmail THREAD can carry MANY loads — a broker emails several weekday rate
@@ -62,18 +79,19 @@
       linking: new Set(),       // loadIds with a setLink in flight (de-dupe)
       textDone: false,
       quiet: false,
+      open: false,              // is the popover showing?
+      userToggled: false,       // user clicked the icon → stop auto-opening
     };
   }
 
   const stale = (sig) => sig !== handledSig;
   function panelLive(sig) {
-    const p = document.getElementById(PANEL_ID);
-    return p && p.dataset[PANEL_KEY] === sig ? p : null;
+    return panelEl && panelEl.dataset[PANEL_KEY] === sig ? panelEl : null;
   }
 
   function scan() {
     const subjectEl = document.querySelector(SUBJECT_SELECTOR);
-    if (!subjectEl) { removePanel(); handledSig = null; rec = null; return; }
+    if (!subjectEl) { removeUI(); handledSig = null; rec = null; return; }
 
     const subject  = subjectEl.textContent.trim();
     const threadId = getThreadId();
@@ -91,6 +109,10 @@
     // Keep refs fresh (Gmail recycles DOM); never go quiet on a load email.
     rec.subjectEl = subjectEl; rec.account = account; rec.threadId = threadId;
     if (rec.quiet) return;
+
+    // The conversation toolbar can render after we first drew — keep the icon
+    // anchored there as it appears, and the popover pinned under it.
+    if (iconEl) { placeIcon(); if (rec.open) positionPanel(); }
 
     // New attachments rendered since last pass (a later thread message just
     // loaded its rate con) → search them. This is how all N loads get found.
@@ -120,7 +142,7 @@
     }
 
     // 2) Doesn't look like a load email and nothing linked → stay quiet.
-    if (!rec.trigger && rec.loads.size === 0) { removePanel(); rec.quiet = true; return; }
+    if (!rec.trigger && rec.loads.size === 0) { removeUI(); rec.quiet = true; return; }
 
     renderRec();
 
@@ -312,52 +334,143 @@
     return { refs: out.slice(0, MAX_REFS), hasLabelled };
   }
 
-  // ── Panel rendering ───────────────────────────────────────────────────
-  function renderPanel(subjectEl, signature, refs, account, threadId) {
-    removePanel();
-    const panel = document.createElement("div");
-    panel.id = PANEL_ID;
-    panel.dataset[PANEL_KEY] = signature;
-    panel.dataset.account = account || "";
-    panel.dataset.thread  = threadId || "";
-    panel.innerHTML = `
-      <div class="fc-head">
-        <span class="fc-logo">FleetCal</span>
-        <span class="fc-refs">${refs.length ? refs.map(escapeHtml).join(" · ") : "—"}</span>
-      </div>
-      <div class="fc-body"></div>`;
+  // ── Panel UI: a toolbar icon + a toggleable popover ───────────────────────
+  // FleetCal lives as an icon in the open conversation's top-right toolbar
+  // (beside Print / Pop-out). Click it to show/hide the reconciliation
+  // popover; a status dot on the icon gives state at a glance without opening.
+  const ICON_SVG =
+    '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" ' +
+    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>' +
+    '<path d="m9 16 2 2 4-4"/></svg>';
 
-    // One delegated click handler for everything the panel does:
-    //  • a.fc-link        → open in FleetCal (reusing an existing tab)
-    //  • [data-fc=link]   → link this thread to a load
-    //  • [data-fc=unlink] → remove the link
-    //  • [data-fc=manual] → link by a typed load # / ref
-    panel.addEventListener("click", (e) => {
-      const a = e.target.closest("a.fc-link");
-      if (a) {
-        if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
-        e.preventDefault();
-        chrome.runtime.sendMessage({ type: "open", url: a.href });
-        return;
+  // Gmail's conversation toolbar buttons carry stable aria-labels — anchor to
+  // one so we sit in the same row as Print / In-new-window.
+  function findToolbarAnchor() {
+    const labels = ["Print all", "In new window", "Show in a new window", "Collapse all", "Expand all"];
+    for (const lbl of labels) {
+      const el = document.querySelector(`[aria-label="${lbl}"]`);
+      if (el && el.offsetParent !== null) return el;
+    }
+    return null;
+  }
+
+  // Place the icon in the toolbar (just left of the anchor), or — if the
+  // toolbar isn't there — beside the subject as a fallback.
+  function placeIcon() {
+    if (!iconEl) return;
+    const anchor = findToolbarAnchor();
+    if (anchor) {
+      if (iconEl.parentElement !== anchor.parentElement || iconEl.nextElementSibling !== anchor) {
+        anchor.parentElement.insertBefore(iconEl, anchor);
       }
-      const btn = e.target.closest("[data-fc]");
-      if (!btn) return;
+      return;
+    }
+    if (iconEl.isConnected) return;
+    const subj = document.querySelector(SUBJECT_SELECTOR);
+    if (subj) {
+      const host = subj.closest("div") || subj.parentElement;
+      host?.parentElement?.insertBefore(iconEl, host);
+    }
+  }
+
+  function ensureIcon() {
+    if (!iconEl) {
+      iconEl = document.createElement("div");
+      iconEl.id = "fleetcal-icon";
+      iconEl.className = "fc-icon";
+      iconEl.setAttribute("role", "button");
+      iconEl.setAttribute("tabindex", "0");
+      iconEl.setAttribute("aria-label", "FleetCal — load reconciliation");
+      iconEl.title = "FleetCal";
+      iconEl.innerHTML = ICON_SVG + '<span class="fc-badge" hidden></span>';
+      const toggle = (e) => { e.preventDefault(); e.stopPropagation(); togglePanel(); };
+      iconEl.addEventListener("click", toggle);
+      iconEl.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") toggle(e); });
+    }
+    placeIcon();
+    return iconEl;
+  }
+
+  function ensurePanel() {
+    if (!panelEl) {
+      panelEl = document.createElement("div");
+      panelEl.id = PANEL_ID;
+      panelEl.className = "fc-pop";
+      panelEl.hidden = true;
+      panelEl.innerHTML =
+        '<div class="fc-head"><span class="fc-logo">FleetCal</span>' +
+        '<span class="fc-refs"></span>' +
+        '<button type="button" class="fc-close" data-fc="close" aria-label="Close">✕</button></div>' +
+        '<div class="fc-body"></div>';
+      panelEl.addEventListener("click", onPanelClick);
+      document.body.appendChild(panelEl);
+    }
+    return panelEl;
+  }
+
+  // One delegated click handler for everything the popover does.
+  function onPanelClick(e) {
+    const a = e.target.closest("a.fc-link");
+    if (a) {
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
       e.preventDefault();
-      const fc = btn.dataset.fc;
-      if (fc === "link")     void linkOne(btn.dataset.loadid, "manual-pick");
-      if (fc === "unlinkone") void doUnlinkOne(btn.dataset.loadid);
-      if (fc === "createone") void doCreateFromUrls([btn.dataset.url]);
-      if (fc === "createall") void doCreateFromUrls(unmatchedPdfs().map((u) => u.url));
-      if (fc === "manual") {
-        const val = panel.querySelector(".fc-manual-input")?.value.trim();
-        if (val) void doManualLink(val);
-      }
-    });
+      chrome.runtime.sendMessage({ type: "open", url: a.href });
+      return;
+    }
+    const btn = e.target.closest("[data-fc]");
+    if (!btn) return;
+    e.preventDefault();
+    const fc = btn.dataset.fc;
+    if (fc === "close")     { if (rec) { rec.open = false; rec.userToggled = true; } applyPanelVisibility(); }
+    if (fc === "link")      void linkOne(btn.dataset.loadid, "manual-pick");
+    if (fc === "unlinkone") void doUnlinkOne(btn.dataset.loadid);
+    if (fc === "createone") void doCreateFromUrls([btn.dataset.url]);
+    if (fc === "createall") void doCreateFromUrls(unmatchedPdfs().map((u) => u.url));
+    if (fc === "manual") {
+      const val = panelEl.querySelector(".fc-manual-input")?.value.trim();
+      if (val) void doManualLink(val);
+    }
+  }
 
-    // Insert just above the subject's container.
-    const host = subjectEl.closest("div") || subjectEl.parentElement;
-    host.parentElement.insertBefore(panel, host);
+  // Ensure both icon + panel exist; returns the panel element.
+  function ensureUI() {
+    ensureIcon();
+    const panel = ensurePanel();
+    panel.dataset[PANEL_KEY] = rec.sig;
+    panel.dataset.account = rec.account || "";
+    panel.dataset.thread  = rec.threadId || "";
     return panel;
+  }
+
+  function togglePanel() {
+    if (!rec) return;
+    rec.open = !rec.open;
+    rec.userToggled = true;
+    applyPanelVisibility();
+  }
+
+  function applyPanelVisibility() {
+    if (!panelEl) return;
+    const open = !!(rec && rec.open);
+    panelEl.hidden = !open;
+    if (iconEl) iconEl.classList.toggle("fc-open", open);
+    if (open) positionPanel();
+  }
+
+  // Pin the popover under the icon, its right edge aligned to the icon's,
+  // clamped into the viewport.
+  function positionPanel() {
+    if (!panelEl || !iconEl || !iconEl.isConnected) return;
+    const r = iconEl.getBoundingClientRect();
+    panelEl.style.top   = `${Math.round(r.bottom + 6)}px`;
+    panelEl.style.right = `${Math.max(8, Math.round(window.innerWidth - r.right))}px`;
+    panelEl.style.left  = "auto";
+  }
+
+  function removeUI() {
+    if (iconEl)  { iconEl.remove();  iconEl = null; }
+    if (panelEl) { panelEl.remove(); panelEl = null; }
   }
 
   function setPanelBody(panel, html) {
@@ -389,15 +502,28 @@
   // thread's attachments are still loading.
   function renderRec() {
     if (!rec) return;
-    const panel = panelLive(rec.sig) || renderPanel(rec.subjectEl, rec.sig, rec.refs, rec.account, rec.threadId);
+    const panel = ensureUI();
     if (!panel) return;
-    panel.dataset.account = rec.account || "";
-    panel.dataset.thread  = rec.threadId || "";
 
     const loads = [...rec.loads.values()];
     const unmatched = unmatchedPdfs();
     const pending = [...rec.pdfs.values()].some((p) => p.state === "pending")
       || (rec.refs.length > 0 && !rec.textDone);
+
+    // Status drives the icon badge + the one-time auto-open.
+    let status = "none";
+    if (pending) status = "scan";
+    else if (unmatched.length) status = "action";
+    else if (loads.length) status = "linked";
+    setIconStatus(status, unmatched.length || loads.length || 0);
+
+    // Auto-open once when there's something to act on (rate cons to create),
+    // unless the user has already toggled the panel themselves.
+    if (status === "action" && !rec.userToggled && !rec.open) rec.open = true;
+
+    // Header refs.
+    const refsEl = panel.querySelector(".fc-refs");
+    if (refsEl) refsEl.textContent = rec.refs.length ? rec.refs.join(" · ") : "";
 
     let html = "";
 
@@ -440,6 +566,20 @@
     }
 
     setPanelBody(panel, html);
+    applyPanelVisibility();
+  }
+
+  // Reflect status on the icon's badge dot: blue=scanning, amber=action
+  // needed (rate cons to create), green=linked/in-system, hidden=nothing.
+  function setIconStatus(status, count) {
+    if (!iconEl) return;
+    const badge = iconEl.querySelector(".fc-badge");
+    if (!badge) return;
+    iconEl.classList.remove("fc-st-scan", "fc-st-action", "fc-st-linked");
+    if (status === "none") { badge.hidden = true; badge.textContent = ""; return; }
+    iconEl.classList.add(status === "scan" ? "fc-st-scan" : status === "action" ? "fc-st-action" : "fc-st-linked");
+    badge.hidden = false;
+    badge.textContent = status === "scan" ? "" : String(count || "");
   }
 
   // ── Link / unlink / create actions ───────────────────────────────────────
@@ -510,9 +650,6 @@
     }
   }
 
-  function removePanel() {
-    document.getElementById(PANEL_ID)?.remove();
-  }
 
   // ── thread + account identity ────────────────────────────────────────────
   // Gmail puts the open thread's id as the last segment of the URL hash:

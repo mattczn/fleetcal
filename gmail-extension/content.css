@@ -1,51 +1,147 @@
+/* FleetCal Gmail panel — styled to match the FleetCal web app palette.
+   Two injected pieces:
+     #fleetcal-icon  — a toolbar button in the open conversation (top-right)
+     #fleetcal-panel — a popover toggled by the icon
+*/
+#fleetcal-icon,
 #fleetcal-panel {
-  font: 13px/1.4 -apple-system, "Segoe UI", Roboto, sans-serif;
-  margin: 8px 16px 4px;
-  border: 1px solid #d2e3fc;
-  background: #e8f0fe;
-  border-radius: 10px;
-  overflow: hidden;
+  --fc-blue:        #1a73e8;
+  --fc-blue-hover:  #1765cc;
+  --fc-surface:     #ffffff;
+  --fc-bg:          #f8f9fa;
+  --fc-border:      #dadce0;
+  --fc-border-light:#e8eaed;
+  --fc-t1:          #202124;
+  --fc-t2:          #3c4043;
+  --fc-t3:          #5f6368;
+  --fc-green:       #137333;
+  --fc-amber:       #e37400;
+  --fc-red:         #b3261e;
+  --fc-hover:       rgba(32,33,36,0.059);
+  --fc-shadow:      0 4px 8px 3px rgba(60,64,67,.15), 0 1px 3px rgba(60,64,67,.3);
 }
+
+/* ── Toolbar icon ───────────────────────────────────────────────────────── */
+#fleetcal-icon {
+  box-sizing: border-box !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  position: relative;
+  width: 30px !important;
+  height: 30px !important;
+  margin: 0 4px !important;
+  border-radius: 8px !important;
+  background: var(--fc-blue) !important;
+  color: #fff !important;
+  cursor: pointer;
+  vertical-align: middle !important;
+  flex: 0 0 auto;
+  -webkit-font-smoothing: antialiased;
+}
+#fleetcal-icon:hover { background: var(--fc-blue-hover) !important; }
+#fleetcal-icon.fc-open { box-shadow: 0 0 0 2px rgba(26,115,232,.40); }
+#fleetcal-icon svg { display: block; }
+
+#fleetcal-icon .fc-badge {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  background: var(--fc-t3);
+  color: #fff;
+  font: 600 9px/15px -apple-system, "Segoe UI", Roboto, sans-serif;
+  text-align: center;
+  border: 1.5px solid #fff;
+}
+#fleetcal-icon.fc-st-action .fc-badge { background: var(--fc-amber); }
+#fleetcal-icon.fc-st-linked .fc-badge { background: var(--fc-green); }
+#fleetcal-icon.fc-st-scan   .fc-badge {
+  background: var(--fc-blue);
+  min-width: 10px; height: 10px; top: -2px; right: -2px;
+  animation: fc-pulse 1.2s ease-in-out infinite;
+}
+@keyframes fc-pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+
+/* ── Popover panel ──────────────────────────────────────────────────────── */
+#fleetcal-panel.fc-pop {
+  position: fixed;
+  z-index: 9999;
+  width: 340px;
+  max-width: calc(100vw - 16px);
+  max-height: 70vh;
+  overflow: auto;
+  background: var(--fc-surface);
+  color: var(--fc-t1);
+  border: 1px solid var(--fc-border);
+  border-radius: 12px;
+  box-shadow: var(--fc-shadow);
+  font: 13px/1.45 -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+}
+#fleetcal-panel[hidden] { display: none; }
+
 #fleetcal-panel .fc-head {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 7px 12px;
-  background: #d2e3fc;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--fc-border-light);
+  position: sticky;
+  top: 0;
+  background: var(--fc-surface);
 }
 #fleetcal-panel .fc-logo {
-  font-weight: 800;
+  font-weight: 700;
   letter-spacing: -0.01em;
-  color: #1558d6;
+  color: var(--fc-blue);
 }
 #fleetcal-panel .fc-refs {
+  flex: 1;
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   font-size: 11.5px;
-  color: #3c4043;
+  color: var(--fc-t3);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-#fleetcal-panel .fc-body { padding: 6px 12px 8px; }
+#fleetcal-panel .fc-close {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  color: var(--fc-t3);
+  font-size: 12px;
+  line-height: 1;
+  padding: 5px;
+  border-radius: 6px;
+}
+#fleetcal-panel .fc-close:hover { background: var(--fc-hover); color: var(--fc-t1); }
+
+#fleetcal-panel .fc-body { padding: 8px 12px 12px; }
 #fleetcal-panel .fc-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  padding: 3px 0;
+  padding: 4px 0;
 }
-#fleetcal-panel .fc-ok    { color: #137333; font-weight: 600; }
-#fleetcal-panel .fc-warn  { color: #b3261e; font-weight: 600; }
-#fleetcal-panel .fc-muted { color: #5f6368; font-weight: 400; }
+#fleetcal-panel .fc-ok    { color: var(--fc-green); font-weight: 600; }
+#fleetcal-panel .fc-warn  { color: var(--fc-red);   font-weight: 600; }
+#fleetcal-panel .fc-muted { color: var(--fc-t3);    font-weight: 400; }
 #fleetcal-panel .fc-via {
-  color: #5f6368;
+  color: var(--fc-t3);
   font-weight: 400;
   font-size: 11.5px;
 }
 #fleetcal-panel .fc-link {
-  color: #1a73e8;
+  color: var(--fc-blue);
   font-weight: 600;
   text-decoration: none;
+  cursor: pointer;
 }
 #fleetcal-panel .fc-link:hover { text-decoration: underline; }
 
@@ -53,31 +149,38 @@
   background: none;
   border: 0;
   padding: 0;
-  color: #1a73e8;
+  color: var(--fc-blue);
   font: inherit;
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 600;
   cursor: pointer;
   text-decoration: underline;
-}
-#fleetcal-panel .fc-manual-input {
-  font: inherit;
-  font-size: 12px;
-  padding: 4px 7px;
-  border: 1px solid #bfdbfe;
-  border-radius: 5px;
-  flex: 1;
-  min-width: 120px;
-  background: #fff;
 }
 #fleetcal-panel .fc-btn-go {
   font: inherit;
   font-size: 12px;
   font-weight: 600;
-  padding: 4px 12px;
+  padding: 6px 12px;
   border: 0;
-  border-radius: 5px;
-  background: #1a73e8;
+  border-radius: 8px;
+  background: var(--fc-blue);
   color: #fff;
   cursor: pointer;
+}
+#fleetcal-panel .fc-btn-go:hover { background: var(--fc-blue-hover); }
+#fleetcal-panel .fc-manual-input {
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 8px;
+  border: 1px solid var(--fc-border);
+  border-radius: 8px;
+  flex: 1;
+  min-width: 120px;
+  background: var(--fc-surface);
+  color: var(--fc-t1);
+}
+#fleetcal-panel .fc-manual-input:focus {
+  outline: none;
+  border-color: var(--fc-blue);
+  box-shadow: 0 0 0 2px rgba(26,115,232,.20);
 }
