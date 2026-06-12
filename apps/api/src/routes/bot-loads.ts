@@ -209,8 +209,11 @@ async function findLoadsByQuery(orgId: string, q: string, limit: number): Promis
   const qn = normRef(q);
   const isExact = (load: Load): boolean => {
     if (!qn) return false;
+    // Broker-facing identifiers only: the load number or a stored ref number.
+    // NOT internal_load_id — it's FleetCal's sequential id, which a stray
+    // number in an email (phone, date, tracking #) collides with, producing
+    // wrong auto-links in the Gmail extension. (It stays searchable above.)
     if (load.loadNum && normRef(load.loadNum) === qn) return true;
-    if (load.internalLoadId != null && normRef(String(load.internalLoadId)) === qn) return true;
     if (Array.isArray(load.refNums) && load.refNums.some((r) => normRef(r?.value) === qn)) return true;
     return false;
   };

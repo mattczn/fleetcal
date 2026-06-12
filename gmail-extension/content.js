@@ -225,7 +225,7 @@
     const resp = await sendMsg({ type: "search", refs: fresh }).catch(() => null);
     rec.busy--;
     if (stale(sig)) return;
-    if (resp && resp.ok) { for (const l of exactLoadsFrom(resp.matches)) await addExact(l); }
+    if (resp && resp.ok) { for (const { load, ref } of exactLoadsFrom(resp.matches)) await addExact(load, ref); }
     renderRec();
   }
 
@@ -264,7 +264,7 @@
       entry.primaryRef = entry.refs[0] || null;
       const exact = exactLoadsFrom(resp && resp.matches);
       entry.matched = exact.length > 0;
-      for (const l of exact) await addExact(l);
+      for (const { load, ref } of exact) await addExact(load, ref);
       renderRec();
     }
   }
@@ -276,15 +276,17 @@
     const out = [];
     const seen = new Set();
     for (const m of matches || []) for (const l of m.loads || []) {
-      if (l.loadId && !seen.has(l.loadId) && isExactMatch(l, m.ref)) { seen.add(l.loadId); out.push(l); }
+      if (l.loadId && !seen.has(l.loadId) && isExactMatch(l, m.ref)) { seen.add(l.loadId); out.push({ load: l, ref: m.ref }); }
     }
     return out;
   }
 
-  // Record an exact-match load and auto-link it to the thread.
-  async function addExact(load) {
+  // Record an exact-match load (and the ref that found it) and auto-link it.
+  async function addExact(load, via) {
     if (!load.loadId) return;
-    if (!rec.loads.has(load.loadId)) rec.loads.set(load.loadId, { ref: load, linked: false });
+    const existing = rec.loads.get(load.loadId);
+    if (!existing) rec.loads.set(load.loadId, { ref: load, linked: false, via: via || null });
+    else if (via && !existing.via) existing.via = via;
     if (rec.account && rec.threadId) await linkOne(load.loadId, "auto");
     renderRec();
   }
@@ -300,7 +302,7 @@
     rec.linking.add(loadId);
     const resp = await sendMsg({ type: "setLink", account: rec.account, threadId: rec.threadId, loadId, source: source || "auto" }).catch(() => null);
     rec.linking.delete(loadId);
-    if (resp && resp.ok && resp.load) rec.loads.set(loadId, { ref: resp.load, linked: true });
+    if (resp && resp.ok && resp.load) rec.loads.set(loadId, { ref: resp.load, linked: true, via: entry ? entry.via : null });
     renderRec();
   }
 
@@ -558,10 +560,13 @@
     if (body) body.innerHTML = html;
   }
 
-  // Calendar deep link for a load — its event (pickup leg for relays).
+  // Calendar deep link for a load — its event (pickup leg for relays). The
+  // linked ref carries eventId; a raw search/PDF result carries it as `id`.
+  // Only fall back to the load-detail page when there's genuinely no event.
   function calendarHref(load) {
-    if (load.eventId) {
-      return `${APP_BASE}/calendar?event=${encodeURIComponent(load.eventId)}` +
+    const eventId = load.eventId ?? load.id ?? null;
+    if (eventId) {
+      return `${APP_BASE}/calendar?event=${encodeURIComponent(eventId)}` +
         (load.start ? `&date=${encodeURIComponent(String(load.start).slice(0, 10))}` : "");
     }
     return load.internalLoadId != null ? `${APP_BASE}/loads/${load.internalLoadId}` : null;
@@ -586,8 +591,10 @@
     if (l.exact === true || l.matchExact === true) return true;
     const q = normRef(ref);
     if (!q) return false;
+    // Match the broker-facing load number ONLY. NOT internal_load_id — that's
+    // FleetCal's sequential id, which a stray number in the email (a phone,
+    // a date, a tracking #) collides with and wrongly auto-links.
     if (l.loadNum != null && normRef(l.loadNum) === q) return true;
-    if (l.internalLoadId != null && normRef(String(l.internalLoadId)) === q) return true;
     return false;
   }
 
@@ -639,16 +646,21 @@
 
     let html = "";
 
-    for (const { ref, linked } of loads) {
+    for (const { ref, linked, via } of loads) {
       const href = calendarHref(ref);
       const link = href
         ? `<a class="fc-link" href="${href}" target="_blank" rel="noopener">open ${escapeHtml(loadLabel(ref))} on calendar →</a>`
         : `<span>${escapeHtml(loadLabel(ref))}</span>`;
       const broker = ref.broker ? `<span class="fc-via">${escapeHtml(ref.broker)}</span>` : "";
+      // Show WHICH searched ref matched, but only when it differs from the
+      // load number (i.e. matched on a ref number) — so a surprising link is
+      // obvious and you can unlink it.
+      const viaTxt = (via && normRef(via) !== normRef(ref.loadNum))
+        ? `<span class="fc-via">via ${escapeHtml(via)}</span>` : "";
       const tail = linked
         ? `<button type="button" class="fc-btn-link" data-fc="unlinkone" data-loadid="${escapeHtml(ref.loadId)}">unlink</button>`
         : (rec.account ? "" : `<span class="fc-via">set account to link</span>`);
-      html += `<div class="fc-row fc-ok">✓ ${linked ? "Linked" : "In system"} ${link}${broker} ${tail}</div>`;
+      html += `<div class="fc-row fc-ok">✓ ${linked ? "Linked" : "In system"} ${link}${broker}${viaTxt} ${tail}</div>`;
     }
 
     if (unmatched.length) {
@@ -665,9 +677,16 @@
 
     if (pending) html += `<div class="fc-row fc-muted">Scanning the thread…</div>`;
 
-    if (!html) {
-      html = `<div class="fc-row fc-warn">⚠ Not in FleetCal</div>`
-        + (rec.refs.length ? `<div class="fc-row fc-muted">Searched: ${rec.refs.map(escapeHtml).join(", ")}</div>` : "");
+    if (!html && !pending) html = `<div class="fc-row fc-warn">⚠ Not in FleetCal</div>`;
+
+    // Always show exactly what we searched — so weird extracted numbers (and
+    // any wrong match they produced) are visible. Capped so a long expanded
+    // thread doesn't overflow the panel.
+    const searched = [...rec.searchedRefs];
+    if (searched.length) {
+      const shown = searched.slice(0, 12).map(escapeHtml).join(", ");
+      const more = searched.length > 12 ? ` +${searched.length - 12} more` : "";
+      html += `<div class="fc-row fc-muted">Searched: ${shown}${more}</div>`;
     }
 
     // Manual-link escape hatch — link a load whose number FleetCal stores
