@@ -224,14 +224,19 @@ botLoads.get("/search", async (c) => {
     return joined;
   });
 
-  // dedupe relay legs — keep one per loadId
-  const seen = new Set<string>();
-  const deduped = result.filter((l) => {
+  // dedupe relay legs — one row per loadId. For a relay, prefer the
+  // PICKUP leg: the Gmail reconciliation extension deep-links to this
+  // event on the calendar, and "open the load" should land on the
+  // pickup, not the delivery. (events were ordered start-desc, so the
+  // delivery leg would otherwise win.)
+  const byLoad = new Map<string, Load>();
+  for (const l of result) {
     const key = l.loadId ?? l.id;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+    const existing = byLoad.get(key);
+    if (!existing) { byLoad.set(key, l); continue; }
+    if (l.relayRole === "pickup" && existing.relayRole !== "pickup") byLoad.set(key, l);
+  }
+  const deduped = [...byLoad.values()];
 
   return c.json({ loads: deduped } satisfies ListLoadsResponse);
 });

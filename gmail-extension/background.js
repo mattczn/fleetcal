@@ -52,6 +52,10 @@ async function searchOne(apiBase, botKey, ref) {
       internalLoadId: l.internalLoadId ?? l.internal_load_id ?? null,
       loadNum:        l.loadNum ?? l.load_num ?? null,
       broker:         l.broker ?? null,
+      // event id + start drive the calendar deep link (pickup leg for
+      // relays — the bot search returns that leg).
+      eventId:        l.id ?? null,
+      start:          l.start ?? null,
     }));
     return { ref, loads };
   } catch (err) {

@@ -183,9 +183,15 @@
     const rows = [...byLoad.values()].map(({ load, ref }) => {
       const label = load.internalLoadId != null ? `#${load.internalLoadId}` : (load.loadNum || "load");
       const broker = load.broker ? ` · ${escapeHtml(load.broker)}` : "";
-      const href = load.internalLoadId != null ? `${APP_BASE}/loads/${load.internalLoadId}` : null;
+      // Open the load on the CALENDAR (its event — pickup leg for relays),
+      // not the load-detail page. Falls back to the load page if the bot
+      // result somehow lacks the event id.
+      const href = load.eventId
+        ? `${APP_BASE}/calendar?event=${encodeURIComponent(load.eventId)}` +
+          (load.start ? `&date=${encodeURIComponent(String(load.start).slice(0, 10))}` : "")
+        : (load.internalLoadId != null ? `${APP_BASE}/loads/${load.internalLoadId}` : null);
       const link = href
-        ? `<a class="fc-link" href="${href}" target="_blank" rel="noopener">open ${label} →</a>`
+        ? `<a class="fc-link" href="${href}" target="_blank" rel="noopener">open ${label} on calendar →</a>`
         : `<span>${label}</span>`;
       return `<div class="fc-row fc-ok">✓ In system ${link}<span class="fc-via">via ${escapeHtml(ref)}${broker}</span></div>`;
     });

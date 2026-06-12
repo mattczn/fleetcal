@@ -1,5 +1,6 @@
 'use client';
 
+import { Suspense } from 'react';
 import AssetSidebar from '@/components/sidebar/AssetSidebar';
 import CalendarView from '@/components/calendar';
 import CalendarSkeleton from '@/components/calendar/CalendarSkeleton';
@@ -8,6 +9,7 @@ import CalendarToolbar from '@/components/toolbar/CalendarToolbar';
 import EventModal from '@/components/calendar/EventModal';
 import BatchNotification from '@/components/calendar/BatchNotification';
 import DataLoader from '@/components/DataLoader';
+import CalendarDeepLink from '@/components/calendar/CalendarDeepLink';
 import OnboardingController from '@/components/onboarding/OnboardingController';
 import EldSync from '@/components/EldSync';
 import RealtimeSync from '@/components/RealtimeSync';
@@ -44,6 +46,9 @@ export default function CalendarPage() {
       <EventModal />
       <BatchNotification />
       <OnboardingController />
+      {/* Opens ?event=…&date=… deep links (Gmail extension "open in
+          FleetCal"). Suspense boundary required for useSearchParams. */}
+      <Suspense fallback={null}><CalendarDeepLink /></Suspense>
     </div>
   );
 }
