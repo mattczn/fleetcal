@@ -152,12 +152,19 @@ async function findLoadsByQuery(orgId: string, q: string, limit: number): Promis
   // Escape PostgREST .or() control chars (% , ( )).
   const qEsc = q.replace(/[%,()]/g, "\\$&");
 
-  const loadOrParts = [`load_num.ilike.%${qEsc}%`, `broker.ilike.%${qEsc}%`];
-  if (isNumeric) loadOrParts.push(`internal_load_id.eq.${q}`);
-
   const { data: matchedLoads } = await supabase
     .from("loads").select("id").eq("org_id", orgId).is("deleted_at", null)
-    .or(loadOrParts.join(","));
+    .or(`load_num.ilike.%${qEsc}%,broker.ilike.%${qEsc}%`);
+
+  // internal_load_id is an INTEGER column. Comparing it to a leading-zero
+  // broker order number (".eq.0015997") makes Postgres coerce the string to
+  // 15997 and match a completely unrelated load. Compare as text so only a
+  // true match counts (and a real FleetCal id search still works).
+  const { data: idMatches } = isNumeric
+    ? await supabase
+        .from("loads").select("id").eq("org_id", orgId).is("deleted_at", null)
+        .filter("internal_load_id::text", "eq", q)
+    : { data: [] as Array<{ id: string }> };
 
   // ref_nums (jsonb) — PostgREST .or() can't take a ::text cast, so a
   // separate query (same approach as loads.ts /search).
@@ -167,6 +174,7 @@ async function findLoadsByQuery(orgId: string, q: string, limit: number): Promis
 
   const loadIds = [...new Set([
     ...((matchedLoads ?? []) as Array<{ id: string }>).map((r) => r.id),
+    ...((idMatches     ?? []) as Array<{ id: string }>).map((r) => r.id),
     ...((refMatches   ?? []) as Array<{ id: string }>).map((r) => r.id),
   ])];
 
@@ -194,23 +202,49 @@ async function findLoadsByQuery(orgId: string, q: string, limit: number): Promis
   const { data: events, error } = await evQ;
   if (error) { console.error("[bot findLoadsByQuery] failed:", error); return []; }
 
-  const result: Load[] = (events ?? []).map((e) => {
+  // Does this load's OWN identity actually equal the query? A substring/jsonb
+  // ilike (or a coincidental id) can surface unrelated loads — only an exact
+  // hit on the load number, internal id, or a stored ref number is safe to
+  // auto-link. Caller decides what to do with fuzzy (matchExact=false) hits.
+  const qn = normRef(q);
+  const isExact = (load: Load): boolean => {
+    if (!qn) return false;
+    if (load.loadNum && normRef(load.loadNum) === qn) return true;
+    if (load.internalLoadId != null && normRef(String(load.internalLoadId)) === qn) return true;
+    if (Array.isArray(load.refNums) && load.refNums.some((r) => normRef(r?.value) === qn)) return true;
+    return false;
+  };
+
+  const result: Array<Load & { matchExact?: boolean }> = (events ?? []).map((e) => {
     const ev = e as Record<string, unknown> & { load?: Record<string, unknown>[] | Record<string, unknown> | null };
     const loadRow = Array.isArray(ev.load) ? (ev.load[0] ?? null) : (ev.load ?? null);
-    const joined = joinEventLoadToApp(ev, loadRow);
+    const joined = joinEventLoadToApp(ev, loadRow) as Load & { matchExact?: boolean };
     joined.stops = [];
+    joined.matchExact = isExact(joined);
     return joined;
   });
 
-  // dedupe relay legs — one per loadId, preferring the pickup leg.
-  const byLoad = new Map<string, Load>();
+  // dedupe relay legs — one per loadId, preferring the pickup leg. An exact
+  // hit on either leg makes the load exact.
+  const byLoad = new Map<string, Load & { matchExact?: boolean }>();
   for (const l of result) {
     const key = l.loadId ?? l.id;
     const existing = byLoad.get(key);
     if (!existing) { byLoad.set(key, l); continue; }
-    if (l.relayRole === "pickup" && existing.relayRole !== "pickup") byLoad.set(key, l);
+    if (l.matchExact) existing.matchExact = true;
+    if (l.relayRole === "pickup" && existing.relayRole !== "pickup") {
+      l.matchExact = l.matchExact || existing.matchExact;
+      byLoad.set(key, l);
+    }
   }
-  return [...byLoad.values()];
+  // Exact matches first so callers can trust loads[0].
+  return [...byLoad.values()].sort((a, b) => Number(b.matchExact) - Number(a.matchExact));
+}
+
+// Normalize a reference for exact comparison: upper-case, strip spaces and
+// dashes. Keeps leading zeros (so "0015997" ≠ "15997").
+function normRef(s: unknown): string {
+  return String(s ?? "").toUpperCase().replace(/[\s-]/g, "");
 }
 
 botLoads.get("/search", async (c) => {

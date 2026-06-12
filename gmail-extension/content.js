@@ -352,8 +352,12 @@
        <div class="fc-row"><button type="button" class="fc-btn-link" data-fc="unlink">unlink</button></div>`);
   }
 
-  // Search results. A found load AUTO-LINKS — no manual step. Only the
-  // not-found case asks for input (attachment-only emails).
+  const isExactMatch = (l) => !!l && (l.exact === true || l.matchExact === true);
+
+  // Search results. An EXACT match (the load's own number/ref equals what we
+  // searched) auto-links. A merely-fuzzy match — a substring or coincidental
+  // id hit on an unrelated load — must NOT auto-link; we treat that as "not
+  // confidently found" and surface it only as a manual suggestion.
   async function renderSearch(panel, refs, resp, account, threadId) {
     if (!resp || !resp.ok) {
       setPanelBody(panel, `<div class="fc-row fc-warn">⚠ ${escapeHtml(resp?.error || "Search failed")}</div>`);
@@ -367,18 +371,22 @@
       }
     }
     const found = [...byLoad.values()];
+    const exact = found.filter(({ load }) => isExactMatch(load));
 
-    if (found.length === 0) { renderNotFound(panel, refs, account, threadId); return; }
+    // No exact match → don't link anything. Show not-found + the loose
+    // candidates (if any) as optional manual links, and the Create option.
+    if (exact.length === 0) { renderNoExact(panel, refs, found, account, threadId); return; }
 
-    // Auto-link the (best/first) match. The bot search already collapses
-    // relay legs to one row per load, so a single load = one entry.
-    const primary = found[0].load;
+    // Auto-link the first exact match. The bot search collapses relay legs to
+    // one row per load, so a single load = one entry.
+    const primary = exact[0].load;
     if (account && threadId && primary.loadId) {
       await doLink(panel, account, threadId, primary.loadId, "auto");
-      // doLink re-renders as ✓ Linked on success, or an error otherwise.
-      // If the email referenced more than one distinct load, note the rest.
-      if (found.length > 1) {
-        const extras = found.slice(1).map(({ load }) => {
+      // doLink re-renders as ✓ Linked on success. Note any other distinct
+      // loads referenced (exact first, then fuzzy) — as links, not auto-links.
+      const others = [...exact.slice(1), ...found.filter(({ load }) => !isExactMatch(load))];
+      if (others.length) {
+        const extras = others.map(({ load }) => {
           const href = calendarHref(load);
           return href ? `<div class="fc-row fc-muted">also matched <a class="fc-link" href="${href}" target="_blank" rel="noopener">${escapeHtml(loadLabel(load))}</a></div>` : "";
         }).join("");
@@ -388,8 +396,8 @@
     }
 
     // Can't link (no account/thread detected) — still show status, and hint
-    // how to enable auto-linking.
-    const rows = found.map(({ load, ref }) => {
+    // how to enable auto-linking. Only the exact matches count as "in system".
+    const rows = exact.map(({ load, ref }) => {
       const href = calendarHref(load);
       const link = href ? `<a class="fc-link" href="${href}" target="_blank" rel="noopener">open ${loadLabel(load)} on calendar →</a>` : `<span>${loadLabel(load)}</span>`;
       const broker = load.broker ? ` · ${escapeHtml(load.broker)}` : "";
@@ -399,6 +407,37 @@
       ? `<div class="fc-row fc-muted">Set your Gmail account in the extension to auto-link this thread.</div>`
       : "";
     setPanelBody(panel, rows.join("") + hint);
+  }
+
+  // Searched, but nothing's number actually matched (only loose/coincidental
+  // hits, or no hits). This is almost always a genuinely new load — so the
+  // primary action is Create. Any loose candidates are offered as one-click
+  // manual links in case the right load is named differently in FleetCal.
+  function renderNoExact(panel, refs, found, account, threadId) {
+    const searched = refs.length ? `<div class="fc-row fc-muted">Searched: ${refs.map(escapeHtml).join(", ")}</div>` : "";
+    let possible = "";
+    if (found.length) {
+      const rows = found.slice(0, 4).map(({ load, ref }) => {
+        const label = escapeHtml(loadLabel(load));
+        const via = ref ? `<span class="fc-via">via ${escapeHtml(ref)}</span>` : "";
+        if (account && threadId && load.loadId) {
+          return `<div class="fc-row fc-muted">maybe <button type="button" class="fc-btn-link" data-fc="link" data-loadid="${escapeHtml(load.loadId)}">${label}</button>${via}</div>`;
+        }
+        const href = calendarHref(load);
+        const lk = href ? `<a class="fc-link" href="${href}" target="_blank" rel="noopener">${label}</a>` : label;
+        return `<div class="fc-row fc-muted">maybe ${lk}${via}</div>`;
+      }).join("");
+      possible = `<div class="fc-row fc-muted">No exact match. Possible:</div>${rows}`;
+    }
+    const create = detectPdfAttachments().length
+      ? `<div class="fc-row"><button type="button" class="fc-btn-go" data-fc="create">Create load from rate con →</button></div>`
+      : "";
+    const manual = (account && threadId)
+      ? `<div class="fc-row"><input class="fc-manual-input" placeholder="link to load # / ref" />
+           <button type="button" class="fc-btn-link" data-fc="manual">link existing</button></div>`
+      : "";
+    setPanelBody(panel,
+      `<div class="fc-row fc-warn">⚠ Not in FleetCal</div>${searched}${possible}${create}${manual}`);
   }
 
   function renderNotFound(panel, refs, account, threadId) {

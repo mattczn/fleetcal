@@ -234,6 +234,9 @@ async function searchOne(apiBase, botKey, ref) {
       // relays — the bot search returns that leg).
       eventId:        l.id ?? null,
       start:          l.start ?? null,
+      // Did the load's OWN number/ref equal the searched ref? Only exact
+      // hits are safe to auto-link (substring/coincidence matches aren't).
+      exact:          l.matchExact === true,
     }));
     return { ref, loads };
   } catch (err) {
