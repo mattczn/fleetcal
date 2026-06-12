@@ -84,28 +84,51 @@ function errStr(e) { return String((e && e.message) || e); }
 // from the URL itself) is the match pattern, so this follows whatever
 // app URL the extension is configured with.
 async function openInFleetcalTab(url) {
-  let wantHost = null;
-  try { wantHost = normHost(new URL(url).hostname); } catch { /* ignore */ }
+  let target = null;
+  try { target = new URL(url); } catch { /* ignore */ }
+  const wantHost = target ? normHost(target.hostname) : null;
+  const eventId  = target?.searchParams.get("event");
+  const date     = target?.searchParams.get("date");
 
-  // Query ALL tabs and match by normalized hostname (www-insensitive) so
-  // an existing fleetcal.app / www.fleetcal.app tab is reused regardless
-  // of the exact origin pattern. Reading tab.url requires the "tabs"
-  // permission — if a tab's url is undefined here, that permission isn't
-  // granted (accept it on chrome://extensions after the reload).
+  // Query ALL tabs and match by normalized hostname (www-insensitive). Reading
+  // tab.url requires the "tabs" permission — if undefined here, accept that
+  // permission on chrome://extensions after the reload.
   let tabs = [];
   try { tabs = await chrome.tabs.query({}); } catch { /* ignore */ }
   const match = wantHost && tabs.find((t) => {
     try { return normHost(new URL(t.url).hostname) === wantHost; } catch { return false; }
   });
 
-  if (match) {
-    await chrome.tabs.update(match.id, { url, active: true });
-    if (match.windowId != null) {
-      try { await chrome.windows.update(match.windowId, { focused: true }); } catch { /* ignore */ }
-    }
-  } else {
-    await chrome.tabs.create({ url });
+  if (!match) { await chrome.tabs.create({ url }); return; }
+
+  // Focus the existing tab.
+  await chrome.tabs.update(match.id, { active: true });
+  if (match.windowId != null) {
+    try { await chrome.windows.update(match.windowId, { focused: true }); } catch { /* ignore */ }
   }
+
+  // If it's already on the calendar, open the event IN-PLACE via the bridge
+  // content script — no full page reload. From any other page, navigate
+  // (you're changing pages anyway).
+  const onCalendar = (() => { try { return new URL(match.url).pathname.startsWith("/calendar"); } catch { return false; } })();
+  if (eventId && onCalendar) {
+    const delivered = await sendOpenEvent(match.id, eventId, date);
+    if (delivered) return;
+  }
+  await chrome.tabs.update(match.id, { url });
+}
+
+// Ask the bridge content script in the tab to open the event in-place.
+// Resolves false if the bridge isn't there (then the caller navigates).
+function sendOpenEvent(tabId, eventId, date) {
+  return new Promise((resolve) => {
+    try {
+      chrome.tabs.sendMessage(tabId, { type: "openEvent", eventId, date }, (resp) => {
+        if (chrome.runtime.lastError) return resolve(false);
+        resolve(!!(resp && resp.ok));
+      });
+    } catch { resolve(false); }
+  });
 }
 
 function normHost(h) {
