@@ -20,12 +20,39 @@ const SEARCH_PATH = "/v1/bot/loads/search";
 const CONCURRENCY = 4;
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg?.type !== "search") return false;
-  handleSearch(msg.refs || [])
-    .then(sendResponse)
-    .catch((err) => sendResponse({ ok: false, error: String(err && err.message || err) }));
-  return true; // keep the message channel open for the async reply
+  if (msg?.type === "search") {
+    handleSearch(msg.refs || [])
+      .then(sendResponse)
+      .catch((err) => sendResponse({ ok: false, error: String(err && err.message || err) }));
+    return true; // async reply
+  }
+  if (msg?.type === "open" && msg.url) {
+    openInFleetcalTab(msg.url)
+      .then(() => sendResponse({ ok: true }))
+      .catch((err) => sendResponse({ ok: false, error: String(err && err.message || err) }));
+    return true;
+  }
+  return false;
 });
+
+// Reuse an existing FleetCal tab if one is open: navigate it to the URL
+// and focus it. Otherwise open a new tab. The target's origin (derived
+// from the URL itself) is the match pattern, so this follows whatever
+// app URL the extension is configured with.
+async function openInFleetcalTab(url) {
+  let pattern;
+  try { pattern = new URL(url).origin + "/*"; } catch { pattern = null; }
+  const tabs = pattern ? await chrome.tabs.query({ url: pattern }) : [];
+  if (tabs.length) {
+    const tab = tabs[0];
+    await chrome.tabs.update(tab.id, { url, active: true });
+    if (tab.windowId != null) {
+      try { await chrome.windows.update(tab.windowId, { focused: true }); } catch { /* ignore */ }
+    }
+  } else {
+    await chrome.tabs.create({ url });
+  }
+}
 
 async function handleSearch(refs) {
   const { apiBase, botKey } = await getConfig();

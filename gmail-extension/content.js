@@ -146,6 +146,18 @@
         <span class="fc-refs">${refs.length ? refs.map(escapeHtml).join(" · ") : "—"}</span>
       </div>
       <div class="fc-body"></div>`;
+    // Route "open in FleetCal" clicks through the background worker so it
+    // can reuse an already-open FleetCal tab instead of spawning a new one.
+    // Modifier / middle clicks fall through to the anchor's native
+    // new-tab behavior.
+    panel.addEventListener("click", (e) => {
+      const a = e.target.closest("a.fc-link");
+      if (!a) return;
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
+      e.preventDefault();
+      chrome.runtime.sendMessage({ type: "open", url: a.href });
+    });
+
     // Insert just above the subject's container so it sits at the top of the
     // open email without overlapping the toolbar.
     const host = subjectEl.closest("div") || subjectEl.parentElement;
