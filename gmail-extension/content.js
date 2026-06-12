@@ -67,12 +67,34 @@
     }
 
     setPanelBody(panel, `<div class="fc-row fc-muted">Searching FleetCal for ${refs.length} reference${refs.length === 1 ? "" : "s"}…</div>`);
-    chrome.runtime.sendMessage({ type: "search", refs }, (resp) => {
-      // Panel may have been replaced if the user navigated mid-flight.
+
+    // Robust settle: never leave the panel spinning. Covers an orphaned
+    // content script (after the extension is reloaded without refreshing
+    // Gmail — sendMessage throws), a worker error (chrome.runtime.lastError),
+    // and a hung request (timeout).
+    let settled = false;
+    const finish = (fn) => {
+      if (settled) return; settled = true;
       const live = document.getElementById(PANEL_ID);
       if (!live || live.dataset[PANEL_KEY] !== signature) return;
-      renderResult(live, refs, resp);
-    });
+      fn(live);
+    };
+    const failWith = (m) => finish((live) =>
+      setPanelBody(live, `<div class="fc-row fc-warn">⚠ ${escapeHtml(m)}</div>`));
+
+    const timer = setTimeout(() => failWith("Timed out. Reload the extension, then refresh Gmail."), 15000);
+    try {
+      chrome.runtime.sendMessage({ type: "search", refs }, (resp) => {
+        clearTimeout(timer);
+        if (chrome.runtime.lastError) {
+          return failWith("Extension was reloaded — refresh this Gmail tab.");
+        }
+        finish((live) => renderResult(live, refs, resp));
+      });
+    } catch {
+      clearTimeout(timer);
+      failWith("Extension was reloaded — refresh this Gmail tab.");
+    }
   }
 
   // ── Label detection ────────────────────────────────────────────────────
