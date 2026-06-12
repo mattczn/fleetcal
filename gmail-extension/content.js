@@ -49,16 +49,24 @@
     const body = readBody();
     const { refs, hasLabelled } = extractRefs(`${subject}\n${body}`);
 
-    // Trigger gate. Two independent signals, either one fires:
-    //   1. A reading-pane label chip matching LABEL_NAME (works on Gmail
-    //      layouts that render applied labels inside the open email).
-    //   2. A *labelled* load reference — a number next to "Load #", "Ref",
-    //      "Order", "PRO", "BOL", etc. Many Gmail layouts (incl. this one)
-    //      DON'T show the label in the reading pane, only on the list row,
-    //      which we can't reliably tie to the open email — so this is the
-    //      practical trigger for rate-con emails.
-    // If neither holds, this isn't a load email → stay silent.
-    if (!emailHasLabel(subjectEl, LABEL_NAME) && !hasLabelled) { removePanel(); return; }
+    // An alphanumeric ref (letters + digits, e.g. WE11117, L-204517) is
+    // a distinctive freight reference on its own — unlike a bare number,
+    // it's very unlikely to be a phone/date/amount. So it triggers even
+    // when it isn't sitting next to a "Load #"-style keyword (e.g. a
+    // subject like "Load Tender for WE11117").
+    const hasAlphaRef = refs.some((r) => /[A-Z]/.test(r));
+
+    // Trigger gate — any of:
+    //   1. A reading-pane label chip (Gmail layouts that show it inline).
+    //   2. A *labelled* load reference ("Load # 9431943", "Ref: …").
+    //   3. An alphanumeric reference anywhere (WE11117, L-204517).
+    // Gmail doesn't expose the applied label inside the open email on most
+    // layouts, so 2 + 3 are the practical triggers. If none hold, this
+    // isn't a load email → stay silent.
+    if (!emailHasLabel(subjectEl, LABEL_NAME) && !hasLabelled && !hasAlphaRef) {
+      removePanel();
+      return;
+    }
 
     const panel = renderPanel(subjectEl, signature, refs);
     if (!refs.length) {
