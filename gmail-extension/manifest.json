@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "FleetCal Load Reconciliation",
-  "version": "0.17.0",
+  "version": "0.17.1",
   "description": "On a 'New Load' Gmail email, extracts reference/load numbers and tells you whether the load is already in FleetCal.",
   "permissions": ["storage", "tabs"],
   "host_permissions": [

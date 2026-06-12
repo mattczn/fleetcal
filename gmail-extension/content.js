@@ -144,7 +144,10 @@
     if (account && threadId) {
       const link = await sendMsg({ type: "getLink", account, threadId }).catch(() => null);
       if (stale(sig)) return;
-      const linked = (link && link.ok && Array.isArray(link.loads)) ? link.loads : [];
+      // New API returns loads[]; tolerate an older single-load response too.
+      const linked = (link && link.ok)
+        ? (Array.isArray(link.loads) ? link.loads : (link.load ? [link.load] : []))
+        : [];
       for (const l of linked) if (l && l.loadId) rec.loads.set(l.loadId, { ref: l, linked: true });
     }
 
@@ -224,12 +227,13 @@
   }
 
   // Pull the EXACT-match loads out of a search response's matches, deduped by
-  // loadId. (Fuzzy/coincidental hits are ignored — never auto-linked.)
+  // loadId. Exactness is judged against the ref that found each match.
+  // (Fuzzy/coincidental hits are ignored — never auto-linked.)
   function exactLoadsFrom(matches) {
     const out = [];
     const seen = new Set();
     for (const m of matches || []) for (const l of m.loads || []) {
-      if (isExactMatch(l) && l.loadId && !seen.has(l.loadId)) { seen.add(l.loadId); out.push(l); }
+      if (l.loadId && !seen.has(l.loadId) && isExactMatch(l, m.ref)) { seen.add(l.loadId); out.push(l); }
     }
     return out;
   }
@@ -526,7 +530,23 @@
     return load.loadNum || (load.internalLoadId != null ? `#${load.internalLoadId}` : "load");
   }
 
-  const isExactMatch = (l) => !!l && (l.exact === true || l.matchExact === true);
+  // Normalize a reference for exact comparison (upper-case, strip spaces/dashes;
+  // keep leading zeros so "0015997" ≠ "15997").
+  const normRef = (s) => String(s ?? "").toUpperCase().replace(/[\s-]/g, "");
+
+  // Is this load an EXACT match for the searched ref? Prefer the server's
+  // matchExact flag (it also covers a ref_nums hit), but fall back to a
+  // client-side check on the load number / internal id so auto-linking still
+  // works if the API hasn't been redeployed with the matchExact change.
+  function isExactMatch(l, ref) {
+    if (!l) return false;
+    if (l.exact === true || l.matchExact === true) return true;
+    const q = normRef(ref);
+    if (!q) return false;
+    if (l.loadNum != null && normRef(l.loadNum) === q) return true;
+    if (l.internalLoadId != null && normRef(String(l.internalLoadId)) === q) return true;
+    return false;
+  }
 
   // Draw the whole multi-load picture for the open email: every linked /
   // in-system load (each with its own calendar link + unlink), every rate con
@@ -653,7 +673,7 @@
         `<div class="fc-row fc-warn">No load found for "${escapeHtml(value)}".</div>`);
       return;
     }
-    const exact = loads.filter(isExactMatch);
+    const exact = loads.filter((l) => isExactMatch(l, value));
     const pick = exact[0] || (loads.length === 1 ? loads[0] : null);
     if (pick && pick.loadId) {
       if (!rec.loads.has(pick.loadId)) rec.loads.set(pick.loadId, { ref: pick, linked: false });
