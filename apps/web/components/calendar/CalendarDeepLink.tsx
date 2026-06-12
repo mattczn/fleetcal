@@ -59,16 +59,9 @@ export default function CalendarDeepLink() {
   // runs the same AI parse + opens the batch review modal the in-app
   // "drop a rate-con" flow uses (AssetSidebar.handleBatchFiles), so the
   // user reviews + creates in the normal UI.
-  const lastCreate = useRef(0);
-  const createFromPdf = useCallback(async (base64: string) => {
-    // The bridge re-posts on a poll until it sees the ack, so ignore rapid
-    // duplicates but allow a genuinely new create later.
-    const now = performance.now();
-    if (now - lastCreate.current < 3000) return;
-    lastCreate.current = now;
-    // Ack so the bridge stops polling + clears the staged PDF.
-    window.postMessage({ source: 'fleetcal-ext-app', type: 'createAck' }, window.location.origin);
-
+  // Parse one rate-con PDF into a review BatchItem (AI extract, same as the
+  // in-app drop-a-rate-con flow).
+  const parseOne = useCallback(async (base64: string): Promise<BatchItem> => {
     const store = useCalendarStore.getState();
     const dataUrl = `data:application/pdf;base64,${base64}`;
     let parsed: Record<string, unknown> = {};
@@ -87,10 +80,29 @@ export default function CalendarDeepLink() {
       const json = await res.json();
       parsed = json && !json.error ? json : {};
     } catch { parsed = {}; }
-    const item: BatchItem = { rateConPdf: dataUrl, parsed };
-    store.startBatch([item]);
-    store.openCreateModal();
+    return { rateConPdf: dataUrl, parsed };
   }, []);
+
+  const lastCreate = useRef(0);
+  // Create one OR MANY loads from rate-con PDFs — a broker can send several
+  // rate cons (distinct loads) on one email chain, and the review modal's
+  // batch mode handles them all at once. Each PDF becomes one BatchItem.
+  const createFromPdfs = useCallback(async (list: string[]) => {
+    const pdfs = (list || []).filter(Boolean);
+    if (!pdfs.length) return;
+    // The bridge re-posts on a poll until it sees the ack, so ignore rapid
+    // duplicates but allow a genuinely new create later.
+    const now = performance.now();
+    if (now - lastCreate.current < 3000) return;
+    lastCreate.current = now;
+    // Ack so the bridge stops polling + clears the staged PDFs.
+    window.postMessage({ source: 'fleetcal-ext-app', type: 'createAck' }, window.location.origin);
+
+    const items = await Promise.all(pdfs.map(parseOne));
+    const store = useCalendarStore.getState();
+    store.startBatch(items);
+    store.openCreateModal();
+  }, [parseOne]);
 
   // Path 2 — messages from the extension bridge (no reload).
   useEffect(() => {
@@ -100,13 +112,15 @@ export default function CalendarDeepLink() {
       if (!d || d.source !== 'fleetcal-ext') return;
       if (d.type === 'openEvent' && d.eventId) {
         void openEvent(String(d.eventId), d.date ? String(d.date) : null);
-      } else if (d.type === 'createFromPdf' && d.pdfBase64) {
-        void createFromPdf(String(d.pdfBase64));
+      } else if (d.type === 'createFromPdfs' && Array.isArray(d.pdfList)) {
+        void createFromPdfs((d.pdfList as unknown[]).map(String));
+      } else if (d.type === 'createFromPdf' && d.pdfBase64) {     // older bridge
+        void createFromPdfs([String(d.pdfBase64)]);
       }
     }
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [openEvent, createFromPdf]);
+  }, [openEvent, createFromPdfs]);
 
   return null;
 }

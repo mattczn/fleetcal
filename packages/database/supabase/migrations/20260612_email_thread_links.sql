@@ -21,9 +21,11 @@ CREATE TABLE IF NOT EXISTS email_thread_links (
   source        text,                                -- 'auto' (ref match) | 'manual' | 'create' | …
   created_at    timestamptz NOT NULL DEFAULT now(),
   updated_at    timestamptz NOT NULL DEFAULT now(),
-  -- One link per (mailbox, thread) within an org. Re-linking a thread to a
-  -- different load upserts this row.
-  UNIQUE (org_id, gmail_account, thread_id)
+  -- A thread can carry MORE THAN ONE load — e.g. a broker sends five weekday
+  -- rate cons (five distinct loads) on one email chain. So the link is per
+  -- (mailbox, thread, LOAD) and a thread fans out to many rows. Re-linking
+  -- the same (thread, load) upserts its row.
+  UNIQUE (org_id, gmail_account, thread_id, load_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_email_thread_links_lookup

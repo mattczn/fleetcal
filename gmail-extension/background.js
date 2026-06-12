@@ -49,7 +49,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
   if (msg?.type === "createLoad") {
-    createLoadFromPdf(msg.pdfBase64).then(sendResponse).catch((err) => sendResponse({ ok: false, error: errStr(err) }));
+    createLoadsFromPdfs([msg.pdfBase64]).then(sendResponse).catch((err) => sendResponse({ ok: false, error: errStr(err) }));
+    return true;
+  }
+  if (msg?.type === "createLoads") {
+    createLoadsFromPdfs(msg.pdfList || []).then(sendResponse).catch((err) => sendResponse({ ok: false, error: errStr(err) }));
     return true;
   }
   return false;
@@ -58,11 +62,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 // Hand a rate-con PDF to the FleetCal calendar tab to start a new load in
 // the in-app review flow. Requires a FleetCal calendar tab to be open (the
 // create/review modal only lives there).
-async function createLoadFromPdf(pdfBase64) {
+async function createLoadsFromPdfs(pdfList) {
+  const list = (pdfList || []).filter(Boolean);
+  if (!list.length) return { ok: false, error: "No rate con to create from." };
+
   // Stage first so every delivery path has a fallback: the bridge's
   // deliverPendingCreate reads this from storage on a fresh /calendar load.
-  try { await chrome.storage.local.set({ pendingCreatePdf: { pdfBase64, ts: Date.now() } }); }
-  catch (e) { return { ok: false, error: "Couldn't stage the rate con: " + errStr(e) }; }
+  try { await chrome.storage.local.set({ pendingCreatePdfs: { list, ts: Date.now() } }); }
+  catch (e) { return { ok: false, error: "Couldn't stage the rate cons: " + errStr(e) }; }
 
   let tabs = [];
   try { tabs = await chrome.tabs.query({}); } catch { /* ignore */ }
@@ -74,10 +81,10 @@ async function createLoadFromPdf(pdfBase64) {
   });
   const appBase = await getAppBase();
 
-  // No calendar tab open → open one; the bridge picks up the staged PDF.
+  // No calendar tab open → open one; the bridge picks up the staged list.
   if (!calTab) {
     await chrome.tabs.create({ url: appBase + "/calendar" });
-    return { ok: true, opening: true };
+    return { ok: true, opening: true, count: list.length };
   }
 
   await chrome.tabs.update(calTab.id, { active: true });
@@ -88,7 +95,7 @@ async function createLoadFromPdf(pdfBase64) {
   // Try in-place delivery via the bridge (no reload).
   const delivered = await new Promise((resolve) => {
     try {
-      chrome.tabs.sendMessage(calTab.id, { type: "createFromPdf", pdfBase64 }, (resp) => {
+      chrome.tabs.sendMessage(calTab.id, { type: "createFromPdfs", pdfList: list }, (resp) => {
         if (chrome.runtime.lastError) return resolve(false);
         resolve(!!(resp && resp.ok));
       });
@@ -97,15 +104,15 @@ async function createLoadFromPdf(pdfBase64) {
   if (delivered) {
     // Page handled it inline (doesn't read storage) — drop the staged copy so
     // a future reload doesn't re-fire it.
-    try { await chrome.storage.local.remove("pendingCreatePdf"); } catch { /* ignore */ }
-    return { ok: true };
+    try { await chrome.storage.local.remove("pendingCreatePdfs"); } catch { /* ignore */ }
+    return { ok: true, count: list.length };
   }
 
   // Bridge unreachable (commonly an orphaned content script after an extension
   // reload). Reload the tab to /calendar; the fresh bridge delivers the staged
-  // PDF from storage. This self-heals instead of erroring.
+  // list from storage. This self-heals instead of erroring.
   await chrome.tabs.update(calTab.id, { url: appBase + "/calendar" });
-  return { ok: true, reloading: true };
+  return { ok: true, reloading: true, count: list.length };
 }
 
 function getAppBase() {
@@ -152,8 +159,9 @@ async function threadLink(method, msg) {
       linkedBy: msg.account,
     });
   } else {
-    const qs = new URLSearchParams({ account: msg.account || "", threadId: msg.threadId || "" });
-    url += `?${qs.toString()}`;
+    const params = { account: msg.account || "", threadId: msg.threadId || "" };
+    if (msg.loadId) params.loadId = msg.loadId;   // DELETE one load (else whole thread)
+    url += `?${new URLSearchParams(params).toString()}`;
   }
   const res = await fetch(url, { method, headers, body });
   let data = {};

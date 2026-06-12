@@ -2,12 +2,14 @@
  * /v1/bot/email-thread — Gmail thread ↔ load links for the reconciliation
  * extension. Mounted under botAuth (org from the bot key; no Clerk).
  *
- *   GET    ?account=<email>&threadId=<id>   → { linked, load? }
+ *   GET    ?account=<email>&threadId=<id>            → { linked, loads:[…] }
  *   POST   { account, threadId, loadId, source?, linkedBy? } → { linked, load }
- *   DELETE ?account=<email>&threadId=<id>   → { ok }
+ *   DELETE ?account=<email>&threadId=<id>[&loadId=…] → { ok }
  *
- * Thread ids are per-mailbox, so every lookup/write is keyed on
- * (org_id, gmail_account, thread_id) — see the migration.
+ * A thread can carry MANY loads (a broker sends several rate cons on one
+ * chain), so GET returns every linked load and POST adds one without
+ * replacing the rest. Thread ids are per-mailbox, so every lookup/write is
+ * keyed on (org_id, gmail_account, thread_id[, load_id]) — see the migration.
  */
 import { Hono } from "hono";
 import { supabase } from "../lib/supabase.js";
@@ -62,26 +64,29 @@ async function resolveCalendarRef(orgId: string, loadId: string): Promise<Calend
   };
 }
 
-// ── GET — is this thread already linked? ────────────────────────────────
+// ── GET — every load linked to this thread ──────────────────────────────
 botEmailThread.get("/", async (c) => {
   const orgId = c.get("orgId");
   const account = (c.req.query("account") ?? "").trim().toLowerCase();
   const threadId = (c.req.query("threadId") ?? "").trim();
   if (!account || !threadId) return c.json({ error: "account and threadId required" }, 400);
 
-  const { data: link } = await sb.from("email_thread_links")
+  const { data: links } = await sb.from("email_thread_links")
     .select("load_id")
     .eq("org_id", orgId)
     .eq("gmail_account", account)
-    .eq("thread_id", threadId)
-    .maybeSingle();
-  const loadId = (link as { load_id: string } | null)?.load_id;
-  if (!loadId) return c.json({ linked: false });
+    .eq("thread_id", threadId);
+  const ids = ((links ?? []) as Array<{ load_id: string }>).map((r) => r.load_id);
+  if (!ids.length) return c.json({ ok: true, linked: false, loads: [] });
 
-  const ref = await resolveCalendarRef(orgId, loadId);
-  // Stale link (load deleted) — report unlinked so the extension can re-link.
-  if (!ref) return c.json({ linked: false, stale: true });
-  return c.json({ linked: true, load: ref });
+  // Resolve each (skip any whose load was deleted — a stale row).
+  const loads: CalendarRef[] = [];
+  for (const id of ids) {
+    const ref = await resolveCalendarRef(orgId, id);
+    if (ref) loads.push(ref);
+  }
+  // Back-compat: keep `load` = first for any older extension build.
+  return c.json({ ok: true, linked: loads.length > 0, loads, load: loads[0] ?? null });
 });
 
 // ── POST — link this thread to a load (upsert) ──────────────────────────
@@ -97,6 +102,7 @@ botEmailThread.post("/", async (c) => {
   const ref = await resolveCalendarRef(orgId, loadId);
   if (!ref) return c.json({ error: "load not found" }, 404);
 
+  // Add this (thread, load) link without disturbing the thread's other loads.
   const { error } = await sb.from("email_thread_links")
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     .upsert(
@@ -109,27 +115,31 @@ botEmailThread.post("/", async (c) => {
         source:        body.source ?? "manual",
         updated_at:    new Date().toISOString(),
       } as any,
-      { onConflict: "org_id,gmail_account,thread_id" },
+      { onConflict: "org_id,gmail_account,thread_id,load_id" },
     );
   if (error) {
     console.error("[POST /v1/bot/email-thread] upsert failed:", error);
     return c.json({ error: "link_failed", detail: error.message }, 500);
   }
-  return c.json({ linked: true, load: ref });
+  return c.json({ ok: true, linked: true, load: ref });
 });
 
-// ── DELETE — unlink ─────────────────────────────────────────────────────
+// ── DELETE — unlink one load (loadId given) or the whole thread ──────────
 botEmailThread.delete("/", async (c) => {
   const orgId = c.get("orgId");
   const account = (c.req.query("account") ?? "").trim().toLowerCase();
   const threadId = (c.req.query("threadId") ?? "").trim();
+  const loadId = (c.req.query("loadId") ?? "").trim();
   if (!account || !threadId) return c.json({ error: "account and threadId required" }, 400);
 
-  const { error } = await sb.from("email_thread_links")
+  let q = sb.from("email_thread_links")
     .delete()
     .eq("org_id", orgId)
     .eq("gmail_account", account)
     .eq("thread_id", threadId);
+  if (loadId) q = q.eq("load_id", loadId);   // one load; otherwise the whole thread
+
+  const { error } = await q;
   if (error) {
     console.error("[DELETE /v1/bot/email-thread] failed:", error);
     return c.json({ error: "unlink_failed", detail: error.message }, 500);
