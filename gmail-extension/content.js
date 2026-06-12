@@ -864,15 +864,22 @@
     return null;
   }
   function getLegacyThreadId() {
-    const sources = [
-      ["[data-thread-perm-id]",    "data-thread-perm-id"],
-      ["[data-legacy-message-id]", "data-legacy-message-id"],
-      ["[data-legacy-thread-id]",  "data-legacy-thread-id"],
-      ["[data-thread-id]",         "data-thread-id"],
-    ];
-    for (const [sel, attr] of sources) {
-      const el = document.querySelector(sel);
-      const hex = el && toHexId(el.getAttribute(attr));
+    // The open conversation's DOM also holds OTHER threads' ids (background
+    // rows, hovercards), so a document-wide query grabs the wrong one. The
+    // open thread's id lives on an ANCESTOR of the subject — read it there.
+    const subj = document.querySelector(SUBJECT_SELECTOR);
+    if (subj) {
+      let el = subj.closest("[data-legacy-thread-id]");
+      let hex = el && toHexId(el.getAttribute("data-legacy-thread-id"));
+      if (hex) return hex;
+      el = subj.closest("[data-thread-perm-id]") || subj.closest("[data-thread-id]");
+      hex = el && toHexId(el.getAttribute("data-thread-perm-id") || el.getAttribute("data-thread-id"));
+      if (hex) return hex;
+    }
+    // Fallback: the one VISIBLE thread-id element that isn't an inbox row.
+    for (const e of document.querySelectorAll("[data-legacy-thread-id]")) {
+      if (e.closest("tr.zA") || e.offsetParent === null) continue;
+      const hex = toHexId(e.getAttribute("data-legacy-thread-id"));
       if (hex) return hex;
     }
     return null;
