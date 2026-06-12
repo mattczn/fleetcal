@@ -817,11 +817,17 @@
   // ── thread + account identity ────────────────────────────────────────────
   // Gmail puts the open thread's id as the last segment of the URL hash:
   //   #inbox/FMfcgz…   #label/New+Load/FMfcg…   #search/…/FMfcg…
-  // It's an opaque, per-mailbox id — as long as we use the same value when
-  // we link and when we look up, the format doesn't matter. Folder names
+  // It's an opaque, per-mailbox id — as long as we use the same value when we
+  // link and when we look up, the format doesn't matter. Folder names
   // ("inbox") are short, so require a minimum length.
+  //
+  // Opening an attachment adds query junk to the hash
+  // (FMfcg…?projector=1&messagePartId=0.1). That made the SAME thread key two
+  // different ways → the link saved one way wasn't found the other → it looked
+  // like it re-processed every open. Strip anything from "?" on.
   function getThreadId() {
-    const seg = (location.hash || "").split("/").pop() || "";
+    let seg = (location.hash || "").split("/").pop() || "";
+    seg = seg.split("?")[0];   // drop ?projector=…&messagePartId=… (attachment view)
     return seg.length >= 10 ? decodeURIComponent(seg) : null;
   }
 
