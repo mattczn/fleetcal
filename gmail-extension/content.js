@@ -886,8 +886,15 @@
   }
 
   // ── Inbox list: ✓ on rows whose thread is linked in FleetCal ─────────────
+  // The data-legacy-thread-id attribute is on a child element of the row, not
+  // the <tr> itself, so read it via querySelector within the row.
+  function rowLegacyId(tr) {
+    const el = tr.querySelector("[data-legacy-thread-id]");
+    return el ? el.getAttribute("data-legacy-thread-id") : null;
+  }
+
   async function markInboxRows() {
-    const rows = document.querySelectorAll("tr.zA[data-legacy-thread-id]");
+    const rows = document.querySelectorAll("tr.zA");
     if (!rows.length) return;
     const account = getAccount();
     if (!account) return;
@@ -895,7 +902,7 @@
     // Ask the backend about ids we haven't checked yet (cap the batch).
     const fresh = [];
     rows.forEach((tr) => {
-      const id = tr.getAttribute("data-legacy-thread-id");
+      const id = rowLegacyId(tr);
       if (id && !checkedLegacyIds.has(id)) fresh.push(id);
     });
     if (fresh.length) {
@@ -906,8 +913,8 @@
     }
 
     // Reconcile the badge on every row (rows recycle as you scroll).
-    document.querySelectorAll("tr.zA[data-legacy-thread-id]").forEach((tr) => {
-      const id = tr.getAttribute("data-legacy-thread-id");
+    document.querySelectorAll("tr.zA").forEach((tr) => {
+      const id = rowLegacyId(tr);
       const linked = id && linkedLegacyIds.has(id);
       const existing = tr.querySelector(".fc-row-check");
       if (linked && !existing) addRowCheck(tr);
