@@ -131,6 +131,12 @@ export default function FleetWeekView() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshTick, setRefreshTick] = useState(0);
+  // Per-asset actual fuel spend for the week, derived from
+  // fuel_transactions joined to asset_id. Trucks without
+  // transactions in the window are absent from the map and fall
+  // back to the $/mi estimate so a partial roll-out (e.g. only some
+  // trucks on Mudflap) doesn't blank out the column for everyone.
+  const [fuelByAsset, setFuelByAsset] = useState<Map<number, number>>(new Map());
 
   useEffect(() => {
     if (visibleAssets.length === 0) { setRows([]); return; }
@@ -140,6 +146,15 @@ export default function FleetWeekView() {
 
     (async () => {
       try {
+        // Fuel pulled in parallel with the per-asset week-summary
+        // fetches. transactionDate is date-only, so request a 7-day
+        // window inclusive of weekStart through Friday. Limit is
+        // generous; small carriers run <100 transactions/week.
+        const weekEnd = shiftDayKey(weekStart, 6);
+        const fuelPromise = railway.listFuelTransactions({
+          from: weekStart, to: weekEnd, matchStatus: 'all', limit: 5000,
+        }).catch(() => ({ fuelTransactions: [] as Array<{ assetId?: number; totalCharged: number }> }));
+
         const results = await Promise.all(
           visibleAssets.map(async (a) => {
             try {
@@ -185,7 +200,13 @@ export default function FleetWeekView() {
             }
           }),
         );
-        if (!cancelled) { setRows(results); setLoading(false); }
+        const fuelRes = await fuelPromise;
+        const fuelMap = new Map<number, number>();
+        for (const tx of fuelRes.fuelTransactions) {
+          if (tx.assetId == null) continue; // unassigned — can't attribute
+          fuelMap.set(tx.assetId, (fuelMap.get(tx.assetId) ?? 0) + (tx.totalCharged ?? 0));
+        }
+        if (!cancelled) { setRows(results); setFuelByAsset(fuelMap); setLoading(false); }
       } catch (e) {
         if (!cancelled) { setError(e instanceof Error ? e.message : 'Failed to load'); setLoading(false); }
       }
@@ -218,14 +239,20 @@ export default function FleetWeekView() {
     if (k === sortKey) setSortDir((d) => d === 'asc' ? 'desc' : 'asc');
     else { setSortKey(k); setSortDir('desc'); }
   };
-  // Per-row derived values (fuel estimate, net, margin %). Pulled out
-  // of the sort closure so the table reads the same numbers it sorts on.
+  // Per-row derived values (fuel, net, margin %). Prefer ACTUAL fuel
+  // spend from fuel_transactions when the truck has transactions in
+  // the window; otherwise fall back to the user's $/mi estimate. The
+  // partial-coverage case (some trucks on Mudflap, others not) is
+  // the realistic one — mixing actual + estimate beats blanking out
+  // the trucks without data. fuelSource lets the cell badge itself.
   const derivedRows = useMemo(() => rows.map((r) => {
-    const fuelEst = r.totalMiles * fuelPerMile;
+    const actual = fuelByAsset.get(r.assetId);
+    const fuelEst = actual ?? (r.totalMiles * fuelPerMile);
+    const fuelSource: 'actual' | 'estimate' = actual != null ? 'actual' : 'estimate';
     const net = r.totalRevenue - r.totalDriverPay - fuelEst;
     const marginPct = r.totalRevenue > 0 ? net / r.totalRevenue : null;
-    return { ...r, fuelEst, net, marginPct };
-  }), [rows, fuelPerMile]);
+    return { ...r, fuelEst, fuelSource, net, marginPct };
+  }), [rows, fuelPerMile, fuelByAsset]);
 
   const sortedRows = useMemo(() => {
     const arr = [...derivedRows];
@@ -255,14 +282,23 @@ export default function FleetWeekView() {
   // ── Fleet totals (footer) ──────────────────────────────────────────────
   const fleetTotals = useMemo(() => {
     let totalRev = 0, totalPay = 0, totalLoads = 0, totalMi = 0, totalLoadedMi = 0;
+    let fuelActualSum = 0;     // sum of per-truck actuals (only)
+    let fuelEstSum    = 0;     // sum of per-truck estimates for trucks WITHOUT actuals
+    let trucksOnActual = 0;
+    let trucksOnEstimate = 0;
     for (const r of rows) {
       totalRev += r.totalRevenue;
       totalPay += r.totalDriverPay;
       totalLoads += r.loadCount;
       totalMi += r.totalMiles;
       totalLoadedMi += r.loadedMiles;
+      const actual = fuelByAsset.get(r.assetId);
+      if (actual != null) { fuelActualSum += actual; trucksOnActual++; }
+      else                { fuelEstSum    += r.totalMiles * fuelPerMile; trucksOnEstimate++; }
     }
-    const fuelEst = totalMi * fuelPerMile;
+    // Mixed-source fuel: actuals where we have them + estimates for
+    // the rest. Matches what the per-truck rows show.
+    const fuelEst = fuelActualSum + fuelEstSum;
     const net     = totalRev - totalPay - fuelEst;
     return {
       totalRevenue:   totalRev,
@@ -273,10 +309,14 @@ export default function FleetWeekView() {
       rpm:            totalMi > 0 ? totalRev / totalMi : null,
       driverPayPct:   totalRev > 0 ? totalPay / totalRev : null,
       fuelEst,
+      fuelActualSum,
+      fuelEstSum,
+      trucksOnActual,
+      trucksOnEstimate,
       net,
       marginPct:      totalRev > 0 ? net / totalRev : null,
     };
-  }, [rows, fuelPerMile]);
+  }, [rows, fuelPerMile, fuelByAsset]);
 
   // Largest revenue for the inline horizontal bars — visual comparison
   // without needing a separate chart library.
@@ -400,8 +440,14 @@ export default function FleetWeekView() {
         <div className="grid grid-cols-6 gap-3 mb-4">
           <KpiTile label="Revenue"      value={fmtMoney(fleetTotals.totalRevenue)} />
           <KpiTile label="Driver Pay"   value={fmtMoney(fleetTotals.totalDriverPay)} accent="#5e35b1" />
-          <KpiTile label="Fuel (est)"   value={fmtMoney(fleetTotals.fuelEst)}        accent="#ea4335"
-            sub={`${fleetTotals.totalMiles.toLocaleString()} mi × $${fuelPerMile.toFixed(2)}/mi`} />
+          <KpiTile label="Fuel"   value={fmtMoney(fleetTotals.fuelEst)}        accent="#ea4335"
+            sub={
+              fleetTotals.trucksOnActual > 0 && fleetTotals.trucksOnEstimate > 0
+                ? `${fleetTotals.trucksOnActual} actual + ${fleetTotals.trucksOnEstimate} est`
+                : fleetTotals.trucksOnActual > 0
+                  ? `${fleetTotals.trucksOnActual} truck${fleetTotals.trucksOnActual !== 1 ? 's' : ''} actual`
+                  : `${fleetTotals.totalMiles.toLocaleString()} mi × $${fuelPerMile.toFixed(2)}/mi`
+            } />
           <KpiTile label="Net"          value={fmtMoney(fleetTotals.net)}
             accent={fleetTotals.net >= 0 ? '#1e8e3e' : '#d93025'} />
           <KpiTile label="Margin"       value={fmtPct(fleetTotals.marginPct)}
@@ -430,7 +476,7 @@ export default function FleetWeekView() {
                   <Th label="Revenue"    sortKey="totalRevenue"   sort={{ sortKey, sortDir }} onSort={onSort} align="right" />
                   <Th label="Miles"      sortKey="totalMiles"     sort={{ sortKey, sortDir }} onSort={onSort} align="right" />
                   <Th label="Driver Pay" sortKey="totalDriverPay" sort={{ sortKey, sortDir }} onSort={onSort} align="right" />
-                  <Th label="Fuel (est)" sortKey="fuelEst"        sort={{ sortKey, sortDir }} onSort={onSort} align="right" />
+                  <Th label="Fuel"       sortKey="fuelEst"        sort={{ sortKey, sortDir }} onSort={onSort} align="right" />
                   <Th label="Net"        sortKey="net"            sort={{ sortKey, sortDir }} onSort={onSort} align="right" />
                   <Th label="Margin"     sortKey="marginPct"      sort={{ sortKey, sortDir }} onSort={onSort} align="right" />
                   <Th label="RPM"        sortKey="rpm"            sort={{ sortKey, sortDir }} onSort={onSort} align="right" />
@@ -470,7 +516,18 @@ export default function FleetWeekView() {
                       </td>
                       <td className="px-4 py-2.5 text-right tabular-nums" style={{ color: 'var(--gc-text-2)' }}>{fmtMiles(r.totalMiles)}</td>
                       <td className="px-4 py-2.5 text-right tabular-nums" style={{ color: 'var(--gc-text-2)' }}>{fmtMoney(r.totalDriverPay)}</td>
-                      <td className="px-4 py-2.5 text-right tabular-nums" style={{ color: 'var(--gc-text-2)' }}>{fmtMoney(r.fuelEst)}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums" style={{ color: 'var(--gc-text-2)' }}
+                        title={r.fuelSource === 'actual'
+                          ? `Actual fuel from fuel_transactions for this truck this week`
+                          : `Estimate: ${Math.round(r.totalMiles).toLocaleString()} mi × $${fuelPerMile.toFixed(2)}/mi (no fuel transactions logged for this truck this week)`}>
+                        <span className="inline-flex items-center gap-1.5">
+                          {r.fuelSource === 'estimate' && (
+                            <span className="text-[8.5px] font-bold uppercase px-1 py-0.5 rounded"
+                              style={{ background: '#fef3c7', color: '#92400e' }}>est</span>
+                          )}
+                          {fmtMoney(r.fuelEst)}
+                        </span>
+                      </td>
                       <td className="px-4 py-2.5 text-right tabular-nums"
                         style={{ color: r.net >= 0 ? '#1e8e3e' : '#d93025', fontWeight: 600 }}>{fmtMoney(r.net)}</td>
                       <td className="px-4 py-2.5 text-right tabular-nums"
@@ -501,10 +558,13 @@ export default function FleetWeekView() {
 
         {/* Footer note — attribution + math explainer */}
         <div className="mt-3 text-[11px] leading-relaxed" style={{ color: 'var(--gc-text-3)' }}>
-          Revenue + driver pay aggregated from loads whose pickup leg falls in this week. Miles include both loaded miles
-          (routed when available) and attributed deadhead from ELD movements linked to those loads. Fuel (est) = total
-          miles × your $/mi rate (saved to your browser, edit anytime). Net = revenue − driver pay − fuel (est). Margin =
-          net ÷ revenue. RPM = revenue ÷ total miles. Click any truck row to see the per-day breakdown on its timeline.
+          Revenue + driver pay aggregated from loads whose pickup leg falls in this week (relay legs pro-rated by routed
+          loaded miles per leg). Miles include both loaded miles (routed when available) and attributed deadhead from ELD
+          movements linked to those loads. Fuel uses each truck&apos;s actual fuel_transactions for the week when present;
+          trucks with no logged transactions fall back to (total miles × your $/mi rate, saved to your browser) — those
+          cells are tagged <span className="font-bold" style={{ background: '#fef3c7', color: '#92400e', padding: '0 4px', borderRadius: 3 }}>est</span>.
+          Net = revenue − driver pay − fuel. Margin = net ÷ revenue. RPM = revenue ÷ total miles. Click any truck row to
+          see the per-day breakdown on its timeline.
         </div>
       </div>
     </AppShell>
