@@ -41,7 +41,7 @@ interface WeekRow {
   driverPayPct: number | null;       // driver pay / revenue
 }
 
-type SortKey = 'name' | 'totalRevenue' | 'loadCount' | 'totalMiles' | 'totalDriverPay' | 'rpm' | 'driverPayPct';
+type SortKey = 'name' | 'totalRevenue' | 'loadCount' | 'totalMiles' | 'totalDriverPay' | 'rpm' | 'driverPayPct' | 'fuelEst' | 'net' | 'marginPct';
 
 // Saturday-anchored weekStart for the date string in the org's tz.
 // Matches the server's week boundary (timeline.ts shiftDayKey).
@@ -83,6 +83,14 @@ function fmtPct(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return '—';
   return `${Math.round(n * 100)}%`;
 }
+
+/** Localstorage key for the user-tunable fuel rate. Persisted per-
+ *  browser, not per-org — the input is a sensitivity dial, not
+ *  authoritative cost data (we don't have per-truck fuel economy
+ *  data, and the user reasonably wants different "what-if" rates
+ *  without saving each one). */
+const FUEL_RATE_KEY = 'fleetWeek.fuelPerMile';
+const DEFAULT_FUEL_RATE = 0.65; // $/mi — sensible mid-range default
 
 export default function FleetWeekView() {
   const router = useRouter();
@@ -186,6 +194,23 @@ export default function FleetWeekView() {
     return () => { cancelled = true; };
   }, [visibleAssets, weekStart, tz, refreshTick]);
 
+  // ── Fuel rate (user-tunable, persisted) ────────────────────────────────
+  // Loaded from localStorage on mount so the dispatcher's last value
+  // sticks across visits. Edits flush back immediately.
+  const [fuelPerMile, setFuelPerMile] = useState<number>(DEFAULT_FUEL_RATE);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const raw = window.localStorage.getItem(FUEL_RATE_KEY);
+    const parsed = raw ? Number(raw) : NaN;
+    if (Number.isFinite(parsed) && parsed >= 0) setFuelPerMile(parsed);
+  }, []);
+  const updateFuelRate = (v: number) => {
+    setFuelPerMile(v);
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(FUEL_RATE_KEY, String(v));
+    }
+  };
+
   // ── Sort ───────────────────────────────────────────────────────────────
   const [sortKey, setSortKey] = useState<SortKey>('totalRevenue');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
@@ -193,8 +218,17 @@ export default function FleetWeekView() {
     if (k === sortKey) setSortDir((d) => d === 'asc' ? 'desc' : 'asc');
     else { setSortKey(k); setSortDir('desc'); }
   };
+  // Per-row derived values (fuel estimate, net, margin %). Pulled out
+  // of the sort closure so the table reads the same numbers it sorts on.
+  const derivedRows = useMemo(() => rows.map((r) => {
+    const fuelEst = r.totalMiles * fuelPerMile;
+    const net = r.totalRevenue - r.totalDriverPay - fuelEst;
+    const marginPct = r.totalRevenue > 0 ? net / r.totalRevenue : null;
+    return { ...r, fuelEst, net, marginPct };
+  }), [rows, fuelPerMile]);
+
   const sortedRows = useMemo(() => {
-    const arr = [...rows];
+    const arr = [...derivedRows];
     arr.sort((a, b) => {
       let va: number | string;
       let vb: number | string;
@@ -206,6 +240,9 @@ export default function FleetWeekView() {
         case 'totalDriverPay': va = a.totalDriverPay; vb = b.totalDriverPay; break;
         case 'rpm':            va = a.rpm ?? -1; vb = b.rpm ?? -1; break;
         case 'driverPayPct':   va = a.driverPayPct ?? -1; vb = b.driverPayPct ?? -1; break;
+        case 'fuelEst':        va = a.fuelEst; vb = b.fuelEst; break;
+        case 'net':            va = a.net; vb = b.net; break;
+        case 'marginPct':      va = a.marginPct ?? -Infinity; vb = b.marginPct ?? -Infinity; break;
         default:               va = 0; vb = 0;
       }
       if (va < vb) return sortDir === 'asc' ? -1 : 1;
@@ -213,7 +250,7 @@ export default function FleetWeekView() {
       return 0;
     });
     return arr;
-  }, [rows, sortKey, sortDir]);
+  }, [derivedRows, sortKey, sortDir]);
 
   // ── Fleet totals (footer) ──────────────────────────────────────────────
   const fleetTotals = useMemo(() => {
@@ -225,16 +262,21 @@ export default function FleetWeekView() {
       totalMi += r.totalMiles;
       totalLoadedMi += r.loadedMiles;
     }
+    const fuelEst = totalMi * fuelPerMile;
+    const net     = totalRev - totalPay - fuelEst;
     return {
-      totalRevenue: totalRev,
+      totalRevenue:   totalRev,
       totalDriverPay: totalPay,
-      loadCount: totalLoads,
-      totalMiles: totalMi,
-      loadedMiles: totalLoadedMi,
-      rpm: totalMi > 0 ? totalRev / totalMi : null,
-      driverPayPct: totalRev > 0 ? totalPay / totalRev : null,
+      loadCount:      totalLoads,
+      totalMiles:     totalMi,
+      loadedMiles:    totalLoadedMi,
+      rpm:            totalMi > 0 ? totalRev / totalMi : null,
+      driverPayPct:   totalRev > 0 ? totalPay / totalRev : null,
+      fuelEst,
+      net,
+      marginPct:      totalRev > 0 ? net / totalRev : null,
     };
-  }, [rows]);
+  }, [rows, fuelPerMile]);
 
   // Largest revenue for the inline horizontal bars — visual comparison
   // without needing a separate chart library.
@@ -315,6 +357,28 @@ export default function FleetWeekView() {
             ))}
           </select>
 
+          {/* Fuel rate input — sensitivity dial. Drives the Fuel (est)
+              column, Net, and Margin. Saved to localStorage so the
+              dispatcher's last value sticks across sessions. */}
+          <label className="ml-2 flex items-center gap-1.5 px-2 py-1 rounded text-[11px]"
+            style={{ color: 'var(--gc-text-3)', border: '1px solid var(--gc-border)', background: 'var(--gc-surface)' }}
+            title="Fuel cost per mile — used to estimate fuel spend and compute Net + Margin">
+            <span style={{ color: 'var(--gc-text-2)', fontWeight: 600 }}>Fuel</span>
+            <span style={{ color: 'var(--gc-text-3)' }}>$</span>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={fuelPerMile}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                if (Number.isFinite(v) && v >= 0) updateFuelRate(v);
+              }}
+              className="text-[13px] font-semibold bg-transparent outline-none tabular-nums"
+              style={{ color: 'var(--gc-text-1)', width: 56, border: 'none' }} />
+            <span style={{ color: 'var(--gc-text-3)' }}>/ mi</span>
+          </label>
+
           <div className="ml-auto flex items-center gap-2">
             {relinkResult && (
               <span className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
@@ -332,12 +396,16 @@ export default function FleetWeekView() {
           </div>
         </div>
 
-        {/* Fleet KPI strip */}
-        <div className="grid grid-cols-5 gap-3 mb-4">
+        {/* Fleet KPI strip — revenue / costs / net at a glance */}
+        <div className="grid grid-cols-6 gap-3 mb-4">
           <KpiTile label="Revenue"      value={fmtMoney(fleetTotals.totalRevenue)} />
           <KpiTile label="Driver Pay"   value={fmtMoney(fleetTotals.totalDriverPay)} accent="#5e35b1" />
-          <KpiTile label="Loads"        value={fleetTotals.loadCount.toString()} />
-          <KpiTile label="Total Miles"  value={fmtMiles(fleetTotals.totalMiles)} />
+          <KpiTile label="Fuel (est)"   value={fmtMoney(fleetTotals.fuelEst)}        accent="#ea4335"
+            sub={`${fleetTotals.totalMiles.toLocaleString()} mi × $${fuelPerMile.toFixed(2)}/mi`} />
+          <KpiTile label="Net"          value={fmtMoney(fleetTotals.net)}
+            accent={fleetTotals.net >= 0 ? '#1e8e3e' : '#d93025'} />
+          <KpiTile label="Margin"       value={fmtPct(fleetTotals.marginPct)}
+            accent={(fleetTotals.marginPct ?? 0) >= 0 ? '#1e8e3e' : '#d93025'} />
           <KpiTile label="Fleet RPM"    value={fmtRpm(fleetTotals.rpm)} />
         </div>
 
@@ -362,8 +430,10 @@ export default function FleetWeekView() {
                   <Th label="Revenue"    sortKey="totalRevenue"   sort={{ sortKey, sortDir }} onSort={onSort} align="right" />
                   <Th label="Miles"      sortKey="totalMiles"     sort={{ sortKey, sortDir }} onSort={onSort} align="right" />
                   <Th label="Driver Pay" sortKey="totalDriverPay" sort={{ sortKey, sortDir }} onSort={onSort} align="right" />
+                  <Th label="Fuel (est)" sortKey="fuelEst"        sort={{ sortKey, sortDir }} onSort={onSort} align="right" />
+                  <Th label="Net"        sortKey="net"            sort={{ sortKey, sortDir }} onSort={onSort} align="right" />
+                  <Th label="Margin"     sortKey="marginPct"      sort={{ sortKey, sortDir }} onSort={onSort} align="right" />
                   <Th label="RPM"        sortKey="rpm"            sort={{ sortKey, sortDir }} onSort={onSort} align="right" />
-                  <Th label="Pay %"      sortKey="driverPayPct"   sort={{ sortKey, sortDir }} onSort={onSort} align="right" />
                 </tr>
               </thead>
               <tbody>
@@ -400,8 +470,12 @@ export default function FleetWeekView() {
                       </td>
                       <td className="px-4 py-2.5 text-right tabular-nums" style={{ color: 'var(--gc-text-2)' }}>{fmtMiles(r.totalMiles)}</td>
                       <td className="px-4 py-2.5 text-right tabular-nums" style={{ color: 'var(--gc-text-2)' }}>{fmtMoney(r.totalDriverPay)}</td>
-                      <td className="px-4 py-2.5 text-right tabular-nums" style={{ color: 'var(--gc-text-1)', fontWeight: 600 }}>{fmtRpm(r.rpm)}</td>
-                      <td className="px-4 py-2.5 text-right tabular-nums" style={{ color: 'var(--gc-text-2)' }}>{fmtPct(r.driverPayPct)}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums" style={{ color: 'var(--gc-text-2)' }}>{fmtMoney(r.fuelEst)}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums"
+                        style={{ color: r.net >= 0 ? '#1e8e3e' : '#d93025', fontWeight: 600 }}>{fmtMoney(r.net)}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums"
+                        style={{ color: (r.marginPct ?? 0) >= 0 ? '#1e8e3e' : '#d93025', fontWeight: 600 }}>{fmtPct(r.marginPct)}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums" style={{ color: 'var(--gc-text-1)' }}>{fmtRpm(r.rpm)}</td>
                     </tr>
                   );
                 })}
@@ -413,19 +487,24 @@ export default function FleetWeekView() {
                   <td className="px-4 py-2.5 text-right tabular-nums font-bold" style={{ color: 'var(--gc-text-1)' }}>{fmtMoney(fleetTotals.totalRevenue)}</td>
                   <td className="px-4 py-2.5 text-right tabular-nums font-bold" style={{ color: 'var(--gc-text-1)' }}>{fmtMiles(fleetTotals.totalMiles)}</td>
                   <td className="px-4 py-2.5 text-right tabular-nums font-bold" style={{ color: 'var(--gc-text-1)' }}>{fmtMoney(fleetTotals.totalDriverPay)}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums font-bold" style={{ color: 'var(--gc-text-1)' }}>{fmtMoney(fleetTotals.fuelEst)}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums font-bold"
+                    style={{ color: fleetTotals.net >= 0 ? '#1e8e3e' : '#d93025' }}>{fmtMoney(fleetTotals.net)}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums font-bold"
+                    style={{ color: (fleetTotals.marginPct ?? 0) >= 0 ? '#1e8e3e' : '#d93025' }}>{fmtPct(fleetTotals.marginPct)}</td>
                   <td className="px-4 py-2.5 text-right tabular-nums font-bold" style={{ color: 'var(--gc-text-1)' }}>{fmtRpm(fleetTotals.rpm)}</td>
-                  <td className="px-4 py-2.5 text-right tabular-nums font-bold" style={{ color: 'var(--gc-text-1)' }}>{fmtPct(fleetTotals.driverPayPct)}</td>
                 </tr>
               </tfoot>
             </table>
           )}
         </div>
 
-        {/* Footer note — attribution explainer */}
+        {/* Footer note — attribution + math explainer */}
         <div className="mt-3 text-[11px] leading-relaxed" style={{ color: 'var(--gc-text-3)' }}>
           Revenue + driver pay aggregated from loads whose pickup leg falls in this week. Miles include both loaded miles
-          (routed when available) and attributed deadhead from ELD movements linked to those loads. RPM = revenue ÷ total
-          miles. Pay % = driver pay ÷ revenue. Click any truck row to see the per-day breakdown on its timeline.
+          (routed when available) and attributed deadhead from ELD movements linked to those loads. Fuel (est) = total
+          miles × your $/mi rate (saved to your browser, edit anytime). Net = revenue − driver pay − fuel (est). Margin =
+          net ÷ revenue. RPM = revenue ÷ total miles. Click any truck row to see the per-day breakdown on its timeline.
         </div>
       </div>
     </AppShell>
@@ -452,12 +531,13 @@ function Th({ label, sortKey, sort, onSort, align }: {
   );
 }
 
-function KpiTile({ label, value, accent }: { label: string; value: string; accent?: string }) {
+function KpiTile({ label, value, accent, sub }: { label: string; value: string; accent?: string; sub?: string }) {
   return (
     <div className="rounded-xl px-4 py-3"
       style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border-light)' }}>
       <div className="text-[10.5px] font-semibold uppercase tracking-wide" style={{ color: 'var(--gc-text-3)' }}>{label}</div>
       <div className="text-[20px] font-semibold tabular-nums mt-0.5" style={{ color: accent ?? 'var(--gc-text-1)' }}>{value}</div>
+      {sub && <div className="text-[10px] mt-0.5" style={{ color: 'var(--gc-text-3)' }}>{sub}</div>}
     </div>
   );
 }
