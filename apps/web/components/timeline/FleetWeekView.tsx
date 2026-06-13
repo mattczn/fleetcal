@@ -30,10 +30,11 @@ interface WeekRow {
   assetName:    string;
   assetUnit:    string | null;
   assetColor:   string;
+  hasEld:       boolean;             // motiveVehicleId present → real miles
   loadCount:    number;
   totalRevenue: number;
   totalDriverPay: number;
-  totalMiles:   number;
+  totalMiles:   number;              // ELD-attributed when hasEld, else loadedMiles
   loadedMiles:  number;
   rpm:          number | null;       // revenue / total miles
   rpmLoaded:    number | null;       // revenue / loaded miles
@@ -91,6 +92,14 @@ function fmtPct(n: number | null | undefined): string {
  *  without saving each one). */
 const FUEL_RATE_KEY = 'fleetWeek.fuelPerMile';
 const DEFAULT_FUEL_RATE = 0.65; // $/mi — sensible mid-range default
+
+/** Localstorage key for the user-tunable deadhead-% estimate. Applied
+ *  ONLY to trucks without ELD integration — for those trucks
+ *  `loadedMiles` is all we have, so we add a deadhead allowance to get
+ *  a plausible total. ELD trucks already include attributed deadhead
+ *  from movement data, so this dial doesn't affect them. */
+const DEADHEAD_PCT_KEY = 'fleetWeek.deadheadPct';
+const DEFAULT_DEADHEAD_PCT = 0.15; // 15% — typical loaded-vs-total ratio for OTR
 
 export default function FleetWeekView() {
   const router = useRouter();
@@ -169,6 +178,7 @@ export default function FleetWeekView() {
                 assetName:      a.name,
                 assetUnit:      a.unit ?? null,
                 assetColor:     a.color ?? '#1a73e8',
+                hasEld:         Boolean(a.motiveVehicleId),
                 loadCount:      wt.loadCount,
                 totalRevenue:   wt.totalRevenue,
                 totalDriverPay: wt.totalDriverPay,
@@ -187,6 +197,7 @@ export default function FleetWeekView() {
                 assetName:      a.name,
                 assetUnit:      a.unit ?? null,
                 assetColor:     a.color ?? '#1a73e8',
+                hasEld:         Boolean(a.motiveVehicleId),
                 loadCount:      0,
                 totalRevenue:   0,
                 totalDriverPay: 0,
@@ -232,6 +243,21 @@ export default function FleetWeekView() {
     }
   };
 
+  // ── Deadhead % (for non-ELD trucks, user-tunable, persisted) ───────────
+  const [deadheadPct, setDeadheadPct] = useState<number>(DEFAULT_DEADHEAD_PCT);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const raw = window.localStorage.getItem(DEADHEAD_PCT_KEY);
+    const parsed = raw ? Number(raw) : NaN;
+    if (Number.isFinite(parsed) && parsed >= 0) setDeadheadPct(parsed);
+  }, []);
+  const updateDeadheadPct = (v: number) => {
+    setDeadheadPct(v);
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(DEADHEAD_PCT_KEY, String(v));
+    }
+  };
+
   // ── Sort ───────────────────────────────────────────────────────────────
   const [sortKey, setSortKey] = useState<SortKey>('totalRevenue');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
@@ -239,20 +265,30 @@ export default function FleetWeekView() {
     if (k === sortKey) setSortDir((d) => d === 'asc' ? 'desc' : 'asc');
     else { setSortKey(k); setSortDir('desc'); }
   };
-  // Per-row derived values (fuel, net, margin %). Prefer ACTUAL fuel
-  // spend from fuel_transactions when the truck has transactions in
-  // the window; otherwise fall back to the user's $/mi estimate. The
-  // partial-coverage case (some trucks on Mudflap, others not) is
-  // the realistic one — mixing actual + estimate beats blanking out
-  // the trucks without data. fuelSource lets the cell badge itself.
+  // Per-row derived values (effective miles, fuel, net, margin %).
+  //
+  // Miles: ELD trucks get real recorded miles (loaded + attributed
+  // deadhead from movement data). Non-ELD trucks only have routed
+  // loaded miles in our system — apply the deadhead-% dial to get a
+  // plausible total miles for the week.
+  //
+  // Fuel: prefer ACTUAL fuel_transactions spend when present;
+  // otherwise estimate via effectiveMiles × $/mi. Mixing actual +
+  // estimate is the realistic path for partial fuel-card coverage.
+  // milesSource / fuelSource let cells badge themselves.
   const derivedRows = useMemo(() => rows.map((r) => {
+    const effectiveMiles = r.hasEld
+      ? r.totalMiles
+      : r.loadedMiles * (1 + deadheadPct);
+    const milesSource: 'eld' | 'estimate' = r.hasEld ? 'eld' : 'estimate';
     const actual = fuelByAsset.get(r.assetId);
-    const fuelEst = actual ?? (r.totalMiles * fuelPerMile);
+    const fuelEst = actual ?? (effectiveMiles * fuelPerMile);
     const fuelSource: 'actual' | 'estimate' = actual != null ? 'actual' : 'estimate';
+    const rpm = effectiveMiles > 0 ? r.totalRevenue / effectiveMiles : null;
     const net = r.totalRevenue - r.totalDriverPay - fuelEst;
     const marginPct = r.totalRevenue > 0 ? net / r.totalRevenue : null;
-    return { ...r, fuelEst, fuelSource, net, marginPct };
-  }), [rows, fuelPerMile, fuelByAsset]);
+    return { ...r, effectiveMiles, milesSource, fuelEst, fuelSource, rpm, net, marginPct };
+  }), [rows, fuelPerMile, fuelByAsset, deadheadPct]);
 
   const sortedRows = useMemo(() => {
     const arr = [...derivedRows];
@@ -263,7 +299,7 @@ export default function FleetWeekView() {
         case 'name':           va = a.assetName.toLowerCase(); vb = b.assetName.toLowerCase(); break;
         case 'totalRevenue':   va = a.totalRevenue; vb = b.totalRevenue; break;
         case 'loadCount':      va = a.loadCount; vb = b.loadCount; break;
-        case 'totalMiles':     va = a.totalMiles; vb = b.totalMiles; break;
+        case 'totalMiles':     va = a.effectiveMiles; vb = b.effectiveMiles; break;
         case 'totalDriverPay': va = a.totalDriverPay; vb = b.totalDriverPay; break;
         case 'rpm':            va = a.rpm ?? -1; vb = b.rpm ?? -1; break;
         case 'driverPayPct':   va = a.driverPayPct ?? -1; vb = b.driverPayPct ?? -1; break;
@@ -280,8 +316,14 @@ export default function FleetWeekView() {
   }, [derivedRows, sortKey, sortDir]);
 
   // ── Fleet totals (footer) ──────────────────────────────────────────────
+  // Aggregates use the same effective-miles logic the per-row view
+  // uses, so the footer reconciles to the sum of the visible rows.
   const fleetTotals = useMemo(() => {
-    let totalRev = 0, totalPay = 0, totalLoads = 0, totalMi = 0, totalLoadedMi = 0;
+    let totalRev = 0, totalPay = 0, totalLoads = 0;
+    let effMi = 0;             // sum of effective miles (ELD or estimated)
+    let totalLoadedMi = 0;
+    let trucksOnEld = 0;
+    let trucksOnMilesEstimate = 0;
     let fuelActualSum = 0;     // sum of per-truck actuals (only)
     let fuelEstSum    = 0;     // sum of per-truck estimates for trucks WITHOUT actuals
     let trucksOnActual = 0;
@@ -290,11 +332,13 @@ export default function FleetWeekView() {
       totalRev += r.totalRevenue;
       totalPay += r.totalDriverPay;
       totalLoads += r.loadCount;
-      totalMi += r.totalMiles;
       totalLoadedMi += r.loadedMiles;
+      const truckEffMi = r.hasEld ? r.totalMiles : r.loadedMiles * (1 + deadheadPct);
+      effMi += truckEffMi;
+      if (r.hasEld) trucksOnEld++; else trucksOnMilesEstimate++;
       const actual = fuelByAsset.get(r.assetId);
       if (actual != null) { fuelActualSum += actual; trucksOnActual++; }
-      else                { fuelEstSum    += r.totalMiles * fuelPerMile; trucksOnEstimate++; }
+      else                { fuelEstSum    += truckEffMi * fuelPerMile; trucksOnEstimate++; }
     }
     // Mixed-source fuel: actuals where we have them + estimates for
     // the rest. Matches what the per-truck rows show.
@@ -304,19 +348,21 @@ export default function FleetWeekView() {
       totalRevenue:   totalRev,
       totalDriverPay: totalPay,
       loadCount:      totalLoads,
-      totalMiles:     totalMi,
+      totalMiles:     effMi,
       loadedMiles:    totalLoadedMi,
-      rpm:            totalMi > 0 ? totalRev / totalMi : null,
+      rpm:            effMi > 0 ? totalRev / effMi : null,
       driverPayPct:   totalRev > 0 ? totalPay / totalRev : null,
       fuelEst,
       fuelActualSum,
       fuelEstSum,
       trucksOnActual,
       trucksOnEstimate,
+      trucksOnEld,
+      trucksOnMilesEstimate,
       net,
       marginPct:      totalRev > 0 ? net / totalRev : null,
     };
-  }, [rows, fuelPerMile, fuelByAsset]);
+  }, [rows, fuelPerMile, fuelByAsset, deadheadPct]);
 
   // Largest revenue for the inline horizontal bars — visual comparison
   // without needing a separate chart library.
@@ -419,6 +465,27 @@ export default function FleetWeekView() {
             <span style={{ color: 'var(--gc-text-3)' }}>/ mi</span>
           </label>
 
+          {/* Deadhead % input — used ONLY for trucks without ELD. For
+              those trucks we have loaded miles but no movement data,
+              so we add this dial to estimate total weekly miles. */}
+          <label className="flex items-center gap-1.5 px-2 py-1 rounded text-[11px]"
+            style={{ color: 'var(--gc-text-3)', border: '1px solid var(--gc-border)', background: 'var(--gc-surface)' }}
+            title="Deadhead % — applied to loaded miles for trucks without ELD integration to estimate their total weekly miles. ELD-equipped trucks ignore this dial.">
+            <span style={{ color: 'var(--gc-text-2)', fontWeight: 600 }}>Deadhead</span>
+            <input
+              type="number"
+              step="1"
+              min="0"
+              value={Math.round(deadheadPct * 100)}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                if (Number.isFinite(v) && v >= 0) updateDeadheadPct(v / 100);
+              }}
+              className="text-[13px] font-semibold bg-transparent outline-none tabular-nums"
+              style={{ color: 'var(--gc-text-1)', width: 36, border: 'none', textAlign: 'right' }} />
+            <span style={{ color: 'var(--gc-text-3)' }}>%</span>
+          </label>
+
           <div className="ml-auto flex items-center gap-2">
             {relinkResult && (
               <span className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
@@ -514,12 +581,23 @@ export default function FleetWeekView() {
                           </strong>
                         </div>
                       </td>
-                      <td className="px-4 py-2.5 text-right tabular-nums" style={{ color: 'var(--gc-text-2)' }}>{fmtMiles(r.totalMiles)}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums" style={{ color: 'var(--gc-text-2)' }}
+                        title={r.milesSource === 'eld'
+                          ? `${Math.round(r.totalMiles).toLocaleString()} mi recorded by ELD (loaded + attributed deadhead)`
+                          : `Estimate: ${Math.round(r.loadedMiles).toLocaleString()} loaded mi × (1 + ${Math.round(deadheadPct * 100)}% deadhead). No ELD on this truck — total miles for the week are unknown.`}>
+                        <span className="inline-flex items-center gap-1.5">
+                          {r.milesSource === 'estimate' && (
+                            <span className="text-[8.5px] font-bold uppercase px-1 py-0.5 rounded"
+                              style={{ background: '#fef3c7', color: '#92400e' }}>est</span>
+                          )}
+                          {fmtMiles(r.effectiveMiles)}
+                        </span>
+                      </td>
                       <td className="px-4 py-2.5 text-right tabular-nums" style={{ color: 'var(--gc-text-2)' }}>{fmtMoney(r.totalDriverPay)}</td>
                       <td className="px-4 py-2.5 text-right tabular-nums" style={{ color: 'var(--gc-text-2)' }}
                         title={r.fuelSource === 'actual'
                           ? `Actual fuel from fuel_transactions for this truck this week`
-                          : `Estimate: ${Math.round(r.totalMiles).toLocaleString()} mi × $${fuelPerMile.toFixed(2)}/mi (no fuel transactions logged for this truck this week)`}>
+                          : `Estimate: ${Math.round(r.effectiveMiles).toLocaleString()} mi × $${fuelPerMile.toFixed(2)}/mi (no fuel transactions logged for this truck this week)`}>
                         <span className="inline-flex items-center gap-1.5">
                           {r.fuelSource === 'estimate' && (
                             <span className="text-[8.5px] font-bold uppercase px-1 py-0.5 rounded"
@@ -559,12 +637,13 @@ export default function FleetWeekView() {
         {/* Footer note — attribution + math explainer */}
         <div className="mt-3 text-[11px] leading-relaxed" style={{ color: 'var(--gc-text-3)' }}>
           Revenue + driver pay aggregated from loads whose pickup leg falls in this week (relay legs pro-rated by routed
-          loaded miles per leg). Miles include both loaded miles (routed when available) and attributed deadhead from ELD
-          movements linked to those loads. Fuel uses each truck&apos;s actual fuel_transactions for the week when present;
-          trucks with no logged transactions fall back to (total miles × your $/mi rate, saved to your browser) — those
-          cells are tagged <span className="font-bold" style={{ background: '#fef3c7', color: '#92400e', padding: '0 4px', borderRadius: 3 }}>est</span>.
-          Net = revenue − driver pay − fuel. Margin = net ÷ revenue. RPM = revenue ÷ total miles. Click any truck row to
-          see the per-day breakdown on its timeline.
+          loaded miles per leg). Miles for ELD-equipped trucks are actual ELD-recorded (loaded + attributed deadhead);
+          trucks without ELD use loaded miles × (1 + deadhead %) as an estimate — those cells are tagged{' '}
+          <span className="font-bold" style={{ background: '#fef3c7', color: '#92400e', padding: '0 4px', borderRadius: 3 }}>est</span>.
+          Fuel uses each truck&apos;s actual fuel_transactions for the week when present; trucks with no logged
+          transactions fall back to (effective miles × your $/mi rate). Both dials persist to your browser.
+          Net = revenue − driver pay − fuel. Margin = net ÷ revenue. RPM = revenue ÷ effective miles. Click any truck row
+          to see the per-day breakdown on its timeline.
         </div>
       </div>
     </AppShell>
