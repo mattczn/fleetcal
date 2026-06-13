@@ -588,8 +588,13 @@ function computeProfitability(
       const revenue   = loadRevenue * share;
       const isRelayLeg = relayShareByEventId.has(e.id);
       const driverPay = e.driverPay ?? 0;
-      const attributedMiles = acc.loadedMiles + acc.inboundDhMiles;
-      const rpmLoaded = acc.loadedMiles > 0 ? revenue / acc.loadedMiles : null;
+      // Loaded miles: prefer ELD-attributed (movement_links) when
+      // present, else fall back to the stored quoted miles on the
+      // event. Non-ELD trucks have no movement attribution and rely
+      // entirely on the fallback.
+      const loadedMiles = acc.loadedMiles > 0 ? acc.loadedMiles : (e.loadedMiles ?? 0);
+      const attributedMiles = loadedMiles + acc.inboundDhMiles;
+      const rpmLoaded = loadedMiles > 0 ? revenue / loadedMiles : null;
       const rpmAllIn  = attributedMiles  > 0 ? revenue / attributedMiles : null;
       const deadheadPct = attributedMiles > 0 ? acc.inboundDhMiles / attributedMiles : null;
       return {
@@ -598,7 +603,7 @@ function computeProfitability(
         revenue,
         driverPay,
         netToTruck:      revenue - driverPay,
-        loadedMiles:     acc.loadedMiles,
+        loadedMiles,
         inboundDhMiles:  acc.inboundDhMiles,
         attributedMiles,
         dwellMin:        acc.dwellMin,
@@ -1819,6 +1824,14 @@ timeline.get("/assets/:assetId/week-summary", async (c) => {
   }
 
   // ── Movement miles → load's start-day OR movement's own start-day ─
+  //
+  // Track which events got ELD-attributed loaded miles via movement
+  // links. Events NOT in this set fall back to events.loaded_miles
+  // (the stored quoted miles) in the post-pass below. This makes
+  // non-ELD trucks show their loaded miles instead of 0, without
+  // double-counting for ELD trucks where movement attribution is the
+  // more accurate source.
+  const eventsWithEldLoadedMiles = new Set<string>();
   for (const m of movementsList) {
     const miles = m.miles ?? 0;
     if (miles === 0) continue;
@@ -1839,6 +1852,7 @@ timeline.get("/assets/:assetId/week-summary", async (c) => {
         if (b) {
           if (loadDay && revenueEventIds.has(link.loaded_event_id!)) {
             b.loadedMiles += miles;
+            eventsWithEldLoadedMiles.add(link.loaded_event_id!);
           } else {
             b.unattributedMiles += miles;
           }
@@ -1865,6 +1879,24 @@ timeline.get("/assets/:assetId/week-summary", async (c) => {
         break;
       }
     }
+  }
+
+  // ── Loaded-miles fallback for events without ELD attribution ────
+  // Every load has a stored loaded_miles value (from the rate con /
+  // routing on save). For revenue events that didn't get ELD-attributed
+  // loaded miles via movement_links above, add the stored value to
+  // their bucket so non-ELD trucks (and pre-link ELD weeks) show their
+  // real loaded miles instead of 0.
+  for (const e of eventList) {
+    if (e.event_kind === "non_revenue") continue;
+    if (eventsWithEldLoadedMiles.has(e.id)) continue;
+    const quoted = e.loaded_miles ?? 0;
+    if (quoted === 0) continue;
+    const day = eventBucketDay.get(e.id);
+    if (!day) continue;
+    const b = buckets.get(day);
+    if (!b) continue;
+    b.loadedMiles += quoted;
   }
 
   // ── Materialize per-day summaries ───────────────────────────────
