@@ -2,7 +2,7 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { MVP_LAUNCH_DEFAULTS, TRAILER_CATEGORIES } from '@fleetcal/types';
+import { TRAILER_CATEGORIES } from '@fleetcal/types';
 import { Asset, CalendarEvent, Driver, Dispatcher, Customer, SavedLocation, Trailer } from '@/lib/types';
 import { buildDefaultFieldSettings, DEFAULT_SECTION_ORDER, FieldSection } from '@/lib/fields';
 import { CardFieldKey, DEFAULT_CARD_FIELDS } from '@/lib/cardFields';
@@ -696,7 +696,23 @@ export const useCalendarStore = create<CalendarStore>()(
   // accepted: new-org test cases are the common case for the launch
   // window, and Curzon's flash → full-nav transition is less jarring
   // than the inverse.
-  orgModules: { ...MVP_LAUNCH_DEFAULTS },
+  // Seed empty so isModuleEnabled returns TRUE for every module during
+  // the brief window before DataLoader hydrates the real flags from
+  // /v1/org-settings. Earlier this seeded MVP_LAUNCH_DEFAULTS (some
+  // modules explicitly false) — which redirected existing orgs like
+  // Curzon away from /timeline before hydration could correct it.
+  //
+  // The previous attempt at fixing this — making RequireCap wait for a
+  // modulesHydrated flag — caused a chicken-and-egg: DataLoader (which
+  // sets the flag) was rendered as a CHILD of RequireCap, so the gate
+  // never opened. Empty-seed sidesteps that entirely.
+  //
+  // Tradeoff: new orgs briefly see all modules ON before hydration
+  // narrows. The pre-launch comment chose the inverse tradeoff, but in
+  // practice the "all-on flash → narrow" is less disruptive than the
+  // "narrow flash → redirect" we just experienced — no navigation
+  // events fire, no data loss, just one render with extra nav items.
+  orgModules: {},
   modulesHydrated: false,
   hydrateOrgModules: (flags) =>
     set({ orgModules: flags ?? {}, modulesHydrated: true }),
