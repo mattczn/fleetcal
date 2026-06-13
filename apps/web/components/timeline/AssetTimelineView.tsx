@@ -694,6 +694,16 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
             Timeline
           </h1>
 
+          {/* Cross-link to the fleet-wide weekly comparison view. Hidden
+              on tablets/small screens because the timeline grid is the
+              primary use case there. */}
+          <Link href="/timeline/fleet"
+            className="hidden md:flex items-center gap-1.5 ml-2 px-2.5 py-1 rounded-md text-[11px] font-semibold uppercase tracking-wide transition-colors"
+            style={{ color: 'var(--gc-blue)', background: 'var(--gc-blue-tint)', border: '1px solid var(--gc-blue-tint)' }}
+            title="Compare every truck's weekly revenue side by side">
+            Fleet Week →
+          </Link>
+
           {/* Truck picker — pre-filled from URL, changeable inline. */}
           <div className="flex items-center gap-2 ml-2 px-2 py-1 rounded"
             style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)' }}>
