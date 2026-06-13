@@ -931,13 +931,25 @@
     if (subj) subj.insertAdjacentElement("beforebegin", chk);
   }
 
-  // The active Gmail account (email). Config override wins; otherwise pull it
-  // from an aria-label (the account switcher reads "Google Account: … (you@x)").
+  // The active Gmail account (the MAILBOX email). Config override wins.
+  // Prefer the account switcher ("Google Account: Name (you@x)") so we don't
+  // accidentally grab a sender's email from an inbox row — which would key
+  // links/lookups to the wrong account.
   function getAccount() {
     if (CFG_ACCOUNT) return CFG_ACCOUNT;
+    const emailIn = (el) => {
+      const m = (el && (el.getAttribute("aria-label") || "")).match(/[\w.+-]+@[\w.-]+\.\w+/);
+      return m ? m[0].toLowerCase() : null;
+    };
+    // The account-switcher button carries the mailbox address.
+    for (const el of document.querySelectorAll('[aria-label*="Google Account"], a[aria-label*="@"][href*="SignOutOptions"], [aria-label*="Account:"]')) {
+      const e = emailIn(el);
+      if (e) return e;
+    }
+    // Fallback: any aria-label email on the page.
     for (const el of document.querySelectorAll('[aria-label*="@"]')) {
-      const m = (el.getAttribute("aria-label") || "").match(/[\w.+-]+@[\w.-]+\.\w+/);
-      if (m) return m[0].toLowerCase();
+      const e = emailIn(el);
+      if (e) return e;
     }
     return null;
   }
