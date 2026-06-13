@@ -23,9 +23,10 @@ import { useCalendarStore } from '@/store/useCalendarStore';
  */
 export function useModules() {
   const flags = useCalendarStore((s) => s.orgModules);
+  const hydrated = useCalendarStore((s) => s.modulesHydrated);
   const enabled = useCallback(
     (module: OrgModule) => isModuleEnabled(module, flags),
     [flags],
   );
-  return { enabled, flags };
+  return { enabled, flags, hydrated };
 }

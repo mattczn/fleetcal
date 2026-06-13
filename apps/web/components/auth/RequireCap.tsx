@@ -45,17 +45,27 @@ export default function RequireCap({
 }) {
   const router = useRouter();
   const { can, isLoading } = usePermissions();
-  const { enabled } = useModules();
+  const { enabled, hydrated: modulesHydrated } = useModules();
   const capAllowed     = can(cap);
   const moduleAllowed  = module ? enabled(module) : true;
   const allowed        = capAllowed && moduleAllowed;
 
+  // Wait for BOTH Clerk membership AND org_settings.modules to finish
+  // loading before deciding to redirect. Without the modules check, an
+  // org whose flags differ from MVP_LAUNCH_DEFAULTS (e.g. Curzon
+  // explicitly enabled `performance`) would briefly see the seed-time
+  // default (`performance: false`) on first paint, fail the gate, and
+  // get bounced to /calendar before DataLoader's hydrate lands.
+  // Module check is skipped when the page didn't pass a `module`
+  // prop — those pages don't care about module state.
+  const stillLoading = isLoading || (module ? !modulesHydrated : false);
+
   useEffect(() => {
-    if (!isLoading && !allowed) {
+    if (!stillLoading && !allowed) {
       router.replace(fallback);
     }
-  }, [isLoading, allowed, router, fallback]);
+  }, [stillLoading, allowed, router, fallback]);
 
-  if (isLoading || !allowed) return null;
+  if (stillLoading || !allowed) return null;
   return <>{children}</>;
 }

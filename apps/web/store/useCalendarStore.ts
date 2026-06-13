@@ -343,6 +343,13 @@ interface CalendarStore extends ModalState {
    *  including the owner. Hydrated from /v1/org-settings on app
    *  boot. Empty map = all modules ON (the default). */
   orgModules: import('@fleetcal/types').OrgModuleFlags;
+  /** True once DataLoader has called hydrateOrgModules() at least
+   *  once. RequireCap reads this to avoid redirecting the user to
+   *  /calendar during the brief window where the store seed
+   *  (MVP_LAUNCH_DEFAULTS, with several flags=false) is still in
+   *  effect for an org that actually has them on (e.g. Curzon
+   *  navigating directly to /timeline). */
+  modulesHydrated: boolean;
   hydrateOrgModules: (flags: import('@fleetcal/types').OrgModuleFlags | undefined) => void;
 
   /** Per-org document-type configuration (kind → enabled + driver
@@ -690,8 +697,9 @@ export const useCalendarStore = create<CalendarStore>()(
   // window, and Curzon's flash → full-nav transition is less jarring
   // than the inverse.
   orgModules: { ...MVP_LAUNCH_DEFAULTS },
+  modulesHydrated: false,
   hydrateOrgModules: (flags) =>
-    set({ orgModules: flags ?? {} }),
+    set({ orgModules: flags ?? {}, modulesHydrated: true }),
 
   documentTypes: null,
   hydrateDocumentTypes: (types) =>
