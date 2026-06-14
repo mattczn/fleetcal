@@ -6455,11 +6455,26 @@ export default function EventModal() {
                         parts.push({ key: 'rcreate', node: <>Load split as {b('relay')}</> });
                       if (entry.relayRemoved)
                         parts.push({ key: 'rremove', node: <>{b('Relay')} removed, load merged</> });
-                      if (entry.loadDeleted)
+                      // Cancel entries carry mode in `loadCancelled`. Render
+                      // a single plain-English line and suppress the
+                      // generic status/deleted lines that would otherwise
+                      // duplicate the same event. The "remove-event" mode
+                      // used to render nothing at all — entry was saved,
+                      // user just couldn't see it.
+                      if (entry.loadCancelled) {
+                        const mode = entry.loadCancelled.mode;
+                        const label =
+                          mode === 'status'       ? <>Load {b('cancelled')} (kept on calendar)</> :
+                          mode === 'remove-event' ? <>Load {b('cancelled')} & removed from calendar</> :
+                          mode === 'permanent'    ? <>Load {b('cancelled')} & permanently deleted</> :
+                                                    <>Load {b('cancelled')}</>;
+                        parts.push({ key: 'cancelled', node: label });
+                      }
+                      if (entry.loadDeleted && !entry.loadCancelled)
                         parts.push({ key: 'ldel', node: <>{b('Load')} deleted</> });
                       if (entry.loadRestored)
                         parts.push({ key: 'lrest', node: <>{b('Load')} reinstated</> });
-                      if (entry.prevStatus !== undefined || entry.newStatus !== undefined)
+                      if ((entry.prevStatus !== undefined || entry.newStatus !== undefined) && !entry.loadCancelled)
                         parts.push({ key: 'status', node: <>{b('Status')} changed from {b(entry.prevStatus ?? '—')} to {b(entry.newStatus ?? '—')}</> });
                       if (entry.prevBillingStatus !== undefined || entry.newBillingStatus !== undefined)
                         parts.push({ key: 'bstatus', node: <>{b('Billing')} status changed from {b(entry.prevBillingStatus ?? '—')} to {b(entry.newBillingStatus ?? '—')}</> });
