@@ -683,7 +683,7 @@ function CheckoutForm({ onSuccess }: { onSuccess: () => void }) {
               Due today
             </div>
             <div className="text-[18px] font-bold" style={{ color: 'var(--gc-text-1)' }}>
-              {totals.totalDueNow.currencySymbol}{totals.totalDueNow.amountFormatted}
+              {totals?.totalDueNow?.currencySymbol ?? ''}{totals?.totalDueNow?.amountFormatted ?? ''}
             </div>
           </div>
           {prorationCredit && prorationCredit.amount > 0 && (
@@ -780,7 +780,7 @@ function CheckoutForm({ onSuccess }: { onSuccess: () => void }) {
         {submitting
           ? 'Processing…'
           : totals
-            ? `Pay ${totals.totalDueNow.currencySymbol}${totals.totalDueNow.amountFormatted}`
+            ? `Pay ${totals.totalDueNow?.currencySymbol ?? ''}${totals.totalDueNow?.amountFormatted ?? ''}`
             : 'Confirm'}
       </button>
     </form>
