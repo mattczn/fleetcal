@@ -11,8 +11,11 @@
  * if the truck isn't moving freight that day, capacity for a new load is
  * gone regardless of why.
  *
- * loads_last_7_days dedupes relay legs by relay_group_id and counts
- * revenue events only.
+ * loads_last_7_days counts revenue events with status in (delivered,
+ * released, tonu) whose `end` falls in the past 7 days, dedup'd by
+ * relay_group_id so a two-leg relay = 1 load. TONUs count because
+ * the broker paid a flat fee — that's revenue even though the load
+ * never moved.
  *
  * org_id defaults to Curzon Trucking prod; pass ?org_id=… to override.
  */
@@ -126,13 +129,20 @@ capacity.get("/", async (c) => {
     });
 
     // ── Loads completed in the past 7 days ───────────────────────────────
-    const pastStartNaive = `${addDays(today, -7)}T00:00`;
+    // Window: today + 6 prior days = exactly 7 calendar days, in org TZ.
+    // Status filter: only loads that actually shipped — delivered, released
+    // (delivered + paperwork closed), or tonu (broker cancelled but paid a
+    // flat fee, which is still revenue). Excludes cancelled, scheduled,
+    // confirmed, in_transit so the marketing number reflects deliveries
+    // that actually happened, not anything with an `end` in the past.
+    const pastStartNaive = `${addDays(today, -6)}T00:00`;
     const pastEndNaive   = `${today}T23:59`;
     const { data: pastRows } = await sb
       .from("events")
       .select("id, relay_group_id, event_kind")
       .eq("org_id", orgId)
       .is("deleted_at", null)
+      .in("status", ["delivered", "released", "tonu"])
       .gte("end", pastStartNaive)
       .lte("end", pastEndNaive);
     const pastEvents = ((pastRows ?? []) as Array<{
