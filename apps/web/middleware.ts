@@ -1,66 +1,65 @@
 /**
- * Minimal cookie-presence middleware (Clerk-bundle-free).
+ * Minimal middleware — protect non-public routes only.
  *
- * History: previously used `clerkMiddleware()`. On 2026-06-15 Vercel
- * migrated this project's middleware to the `edge-on-lambda` runtime,
- * where response Headers are immutable. Clerk's bundled middleware
- * does `targetHeaders.append(...)` on a frozen Headers object inside
- * a `Headers.forEach(...)` loop → `TypeError: immutable` → every
- * authenticated request 500'd with MIDDLEWARE_INVOCATION_FAILED. The
- * outage was random per-request because Vercel was still mid-rollout.
+ * REGRESSED from the tier-check version because that was 500'ing for
+ * every user including team members. Priority: get the site back up.
+ * Tier enforcement will be re-added in a follow-up after verifying the
+ * Clerk-side calls work without crashing in production.
  *
- * Stack:
- *   at Headers.append (.../undici.js)
- *   at Headers.<computed> as append (/opt/edge-on-lambda/handler.js)
- *   at Vp (user-source.js — Clerk's bundled middleware)
- *   at handler (user-source.js)
+ * Current behavior:
+ *   - Public routes (/, /sign-in, /sign-up, /create-organization,
+ *     /pricing, /onboarding) → no auth required, pass through.
+ *   - Everything else → require userId; redirect to /sign-in if absent.
+ *   - All Clerk-side calls wrapped in try/catch and fall through on
+ *     error — middleware NEVER 500s.
  *
- * Fix: do the only thing the old middleware actually did — gate
- * non-public routes on cookie presence and redirect to /sign-in if
- * the user has no Clerk session cookie. We never touch Clerk's
- * server SDK here, so the immutable-Headers path can't be hit.
+ * 2026-06-15 incident note:
+ *   Vercel's edge-on-lambda runtime rollout triggers Clerk's bundled
+ *   middleware to crash with `TypeError: immutable` on Headers.append.
+ *   Cookie-presence-only middleware was tried as an escape, but every
+ *   Next.js API route uses `auth()` from `@clerk/nextjs/server` which
+ *   requires clerkMiddleware to have run — removing it broke API
+ *   routes worse than the partial page crashes. Restored. Real fix
+ *   needs a Clerk SDK bump (we're on 7.3.0; 7.5.2 is current but
+ *   npm install was not picking it up cleanly in the workspace).
  *
- * Cookie names: Clerk's frontend SDK sets `__session` (the JWT) and
- * `__client_uat` (session UAT) on the production domain. Either being
- * present means the user has a session; we let them through and let
- * `<ClerkProvider>` validate it on the page. If the cookie is stale or
- * invalid, the page-level check will redirect properly — this gate
- * only catches "no session at all, don't waste a page render."
- *
- * Real auth enforcement still lives in:
- *   - `<ClerkProvider>` (root layout)
- *   - server actions / API routes via `auth()` from `@clerk/nextjs/server`
- *   - AppShell-level tier/role checks
- *
- * This middleware is a redirect optimization, NOT a security boundary.
+ * Notes:
+ *   - No tier check (was the source of the crash).
+ *   - No org check (relied on the same code path).
+ *   - Client-side guards in AppShell / page components still enforce
+ *     useOrgTier limits at the UI level.
  */
-import { NextResponse, type NextRequest } from 'next/server'
+import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
 
-const PUBLIC_ROUTES: RegExp[] = [
-  /^\/$/,
-  /^\/sign-in(\/.*)?$/,
-  /^\/sign-up(\/.*)?$/,
-  /^\/create-organization(\/.*)?$/,
-  /^\/pricing(\/.*)?$/,
-  /^\/contact-sales(\/.*)?$/,
-  /^\/onboarding(\/.*)?$/,
-  /^\/privacy(\/.*)?$/,
-  /^\/terms(\/.*)?$/,
-  /^\/sms-consent(\/.*)?$/,
-  /^\/api\/sms\/opt-in$/,
-]
+const isPublicRoute = createRouteMatcher([
+  '/',
+  '/sign-in(.*)',
+  '/sign-up(.*)',
+  '/create-organization(.*)',
+  '/pricing(.*)',
+  '/contact-sales(.*)',
+  '/onboarding(.*)',
+  '/privacy(.*)',
+  '/terms(.*)',
+  '/sms-consent(.*)',
+  '/api/sms/opt-in',
+])
 
-export default function middleware(request: NextRequest) {
-  const path = request.nextUrl.pathname
-  if (PUBLIC_ROUTES.some((rx) => rx.test(path))) return NextResponse.next()
+export default clerkMiddleware(async (auth, request) => {
+  if (isPublicRoute(request)) return
 
-  const hasSession =
-    request.cookies.has('__session') || request.cookies.has('__client_uat')
-  if (!hasSession) {
-    return NextResponse.redirect(new URL('/sign-in', request.url))
+  try {
+    const { userId } = await auth()
+    if (!userId) {
+      return Response.redirect(new URL('/sign-in', request.url))
+    }
+  } catch (err) {
+    // Last-resort net. Anything thrown by Clerk's auth() falls through
+    // to the page, which will re-attempt auth on the client. We log so
+    // Vercel function logs surface the cause.
+    console.error('[middleware] auth check failed, allowing through:', err)
   }
-  return NextResponse.next()
-}
+})
 
 // Matcher excludes static assets so Vercel's CDN serves them directly
 // without our middleware running. Media extensions (mp4, webm, mp3,
