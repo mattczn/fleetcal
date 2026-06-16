@@ -1101,10 +1101,11 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove, on
         )}
 
         {/* Mudflap fuel card — last 4 digits of the physical card
-            assigned to this truck. The Mudflap Carriers sync uses this
-            as the primary asset-link key, so once it's set every
-            transaction on that card auto-links here regardless of
-            what the driver types at the pump. */}
+            assigned to this truck. Gated on the fuel module since
+            the Mudflap Carriers sync is part of that module's
+            ingest path; orgs without fuel never see card UI
+            anywhere else either. */}
+        {showFuelLink && (
         <PField label="Mudflap card (last 4)">
           <input type="text" value={mudflapCardLast4}
             onChange={e => setMudflapCardLast4(e.target.value.replace(/[^0-9]/g, '').slice(0, 4))}
@@ -1116,6 +1117,7 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove, on
               blurBorder(e);
             }} />
         </PField>
+        )}
       </div>
 
       {/* Quick links to the truck-scoped views on the Fuel and
