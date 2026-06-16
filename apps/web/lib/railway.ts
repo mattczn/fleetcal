@@ -93,6 +93,15 @@ export function setRailwayTokenProvider(fn: () => Promise<string | null>) {
 
 /** Shape of one movement card returned by /v1/movements. Mirrors the
  *  API's response.byVehicle[vehicleId] entries. */
+export interface AssetActivityPeriod {
+  id:            number;
+  assetId:       number;
+  startDate:     string;
+  endDate:       string | null;
+  createdAt:     string;
+  createdByName: string | null;
+}
+
 export interface MovementCard {
   id:             number;
   vehicleId:      number;
@@ -696,6 +705,32 @@ class RailwayClient {
   hardDeleteAsset(id: number)                { return this.req<{ deleted: true; id: number }>('DELETE', `/v1/assets/${id}?hard=true`); }
   reorderAssets(ids: number[]) {
     return this.req<void>('POST', '/v1/assets/reorder', { ids } satisfies ReorderAssetsRequest);
+  }
+
+  // ── Asset activity periods ─────────────────────────────────────────────
+  // Multi-period model: an asset can have many discrete activity windows
+  // (out for engine rebuild March–April, back May–August, retired
+  // September). Default is one period per asset; "+ New activity period"
+  // creates more after the previous one is closed.
+  listAssetPeriods(assetId: number) {
+    return this.req<{ periods: AssetActivityPeriod[] }>(
+      'GET', `/v1/assets/${assetId}/periods`,
+    );
+  }
+  createAssetPeriod(assetId: number, body: { startDate: string; endDate?: string | null; createdByName?: string }) {
+    return this.req<{ period: AssetActivityPeriod }>(
+      'POST', `/v1/assets/${assetId}/periods`, body,
+    );
+  }
+  updateAssetPeriod(assetId: number, periodId: number, body: { startDate?: string; endDate?: string | null }) {
+    return this.req<{ period: AssetActivityPeriod }>(
+      'PATCH', `/v1/assets/${assetId}/periods/${periodId}`, body,
+    );
+  }
+  deleteAssetPeriod(assetId: number, periodId: number) {
+    return this.req<{ deleted: true; id: number }>(
+      'DELETE', `/v1/assets/${assetId}/periods/${periodId}`,
+    );
   }
 
   listDrivers()                              { return this.req<ListDriversResponse>('GET', '/v1/drivers'); }

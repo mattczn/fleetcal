@@ -31,6 +31,7 @@ import { formatHardDeleteError } from '@/lib/hardDeleteError';
 import { PRESET_COLORS } from '@/lib/asset-colors';
 import LoadHistorySection from './LoadHistorySection';
 import LifecycleEditor from './LifecycleEditor';
+import PeriodsEditor from './PeriodsEditor';
 import { isActiveOn, dateKeyOf } from '@/lib/lifecycle';
 import type { Asset, CalendarEvent, Driver } from '@/lib/types';
 
@@ -1149,21 +1150,19 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove, on
 
       </fieldset>
 
-      {/* Lifecycle editor — set/edit the active_from and retire date.
-          Bookkeeping fixes happen here; the Retire button below is the
-          one-tap "retire today" shortcut. Both write to the same
-          fields. Gated on assets.edit (not delete) because backdating
-          active_from is a correction, not a destructive action.
-          Note: writes through updateAsset directly (bypassing the
-          staged Save bar) since lifecycle has its own internal Save
-          UI and committing lifecycle changes shouldn't depend on
-          unrelated profile-field edits being clean. */}
-      <LifecycleEditor
-        activeFrom={asset.activeFrom}
-        activeTo={asset.activeTo}
+      {/* Activity periods — multi-period activity model.
+          Replaced LifecycleEditor. Default is one period per asset
+          (renders almost identically); "+ New activity period" appears
+          only when the current period is closed. The DB trigger keeps
+          activeFrom/activeTo in sync as a denormalized view of the
+          periods, so the rest of the app (calendar, picker, capacity,
+          etc.) keeps using those columns unchanged. The legacy
+          LifecycleEditor import is kept for DriversModal which still
+          uses the single-range model. */}
+      <PeriodsEditor
+        assetId={asset.id}
         accent={color}
         canEdit={canEdit}
-        onSave={(changes) => updateAsset(asset.id, changes)}
       />
 
       {/* Retire — gated on assets.delete. Underlying API now stamps
