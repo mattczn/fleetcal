@@ -110,27 +110,40 @@ async function fetchAllPages(
 
 // ── Asset lookup ───────────────────────────────────────────────────────
 interface AssetForMatch {
-  id:            number;
-  unit:          string | null;
-  vin:           string | null;
-  license_plate: string | null;
-  license_state: string | null;
+  id:                  number;
+  unit:                string | null;
+  vin:                 string | null;
+  license_plate:       string | null;
+  license_state:       string | null;
+  mudflap_card_last4:  string | null;
 }
 
 async function loadAssetsForMatch(orgId: string): Promise<AssetForMatch[]> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data, error } = await (supabase as any)
     .from("assets")
-    .select("id, unit, vin, license_plate, license_state")
+    .select("id, unit, vin, license_plate, license_state, mudflap_card_last4")
     .eq("org_id", orgId);
   if (error) throw new Error(`assets fetch: ${error.message}`);
   return (data ?? []) as AssetForMatch[];
 }
 
 function matchAsset(
-  vi: MudflapVehicleIdentifiers | null | undefined,
+  tx: MudflapTransaction,
   assets: AssetForMatch[],
 ): { assetId: number | null; source: string | null } {
+  // 0. card_last4 → mudflap_card_last4 — HIGHEST PRIORITY.
+  // The card physically lives in one specific truck; this mapping
+  // doesn't depend on the driver typing anything at the pump. Once
+  // the dispatcher sets the card last-4 on each asset, this catches
+  // every transaction.
+  if (tx.card_last4) {
+    const wanted = tx.card_last4.trim();
+    const c = assets.find(a => a.mudflap_card_last4 && a.mudflap_card_last4.trim() === wanted);
+    if (c) return { assetId: c.id, source: "card_last4" };
+  }
+
+  const vi = tx.vehicle_identifiers;
   if (!vi) return { assetId: null, source: null };
 
   // 1. vehicle_number exact → unit
@@ -274,7 +287,7 @@ export async function syncMudflapCarriers(
 
   for (const tx of transactions) {
     totalCharged += (tx.total_cost ?? 0) / 100;
-    const { assetId } = matchAsset(tx.vehicle_identifiers, assets);
+    const { assetId } = matchAsset(tx, assets);
     if (assetId != null) assetLinked++;
 
     const row = mapTransaction(orgId, tx, assetId);

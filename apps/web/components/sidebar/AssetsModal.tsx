@@ -742,6 +742,7 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove, on
   const [notes,           setNotes]           = useState(asset.notes           ?? '');
   const [color,           setColor]           = useState(asset.color);
   const [motiveVehicleId,     setMotiveVehicleId]     = useState(asset.motiveVehicleId ?? '');
+  const [mudflapCardLast4,    setMudflapCardLast4]    = useState(asset.mudflapCardLast4 ?? '');
   const [confirmDelete,       setConfirmDelete]       = useState(false);
 
   // Top-of-panel tab selector. 'details' covers everything except the
@@ -769,7 +770,8 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove, on
     notes             !== (asset.notes             ?? '')     ||
     color             !== asset.color                          ||
     type              !== asset.type                           ||
-    motiveVehicleId   !== (asset.motiveVehicleId   ?? '');
+    motiveVehicleId   !== (asset.motiveVehicleId   ?? '')     ||
+    mudflapCardLast4  !== (asset.mudflapCardLast4  ?? '');
 
   // Notify parent so it can intercept close/select while dirty.
   useEffect(() => { onDirtyChange?.(isDirty); }, [isDirty, onDirtyChange]);
@@ -794,6 +796,7 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove, on
       color,
       type,
       motiveVehicleId:   motiveVehicleId.trim() || undefined,
+      mudflapCardLast4:  mudflapCardLast4.trim() || undefined,
     });
   };
 
@@ -812,6 +815,7 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove, on
     setColor(asset.color);
     setType(asset.type);
     setMotiveVehicleId(asset.motiveVehicleId ?? '');
+    setMudflapCardLast4(asset.mudflapCardLast4 ?? '');
   };
 
   useImperativeHandle(ref, () => ({
@@ -1095,6 +1099,23 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove, on
             }} />
         </PField>
         )}
+
+        {/* Mudflap fuel card — last 4 digits of the physical card
+            assigned to this truck. The Mudflap Carriers sync uses this
+            as the primary asset-link key, so once it's set every
+            transaction on that card auto-links here regardless of
+            what the driver types at the pump. */}
+        <PField label="Mudflap card (last 4)">
+          <input type="text" value={mudflapCardLast4}
+            onChange={e => setMudflapCardLast4(e.target.value.replace(/[^0-9]/g, '').slice(0, 4))}
+            placeholder="e.g. 8913" inputMode="numeric" maxLength={4} style={P_INPUT}
+            onFocus={focusBorder}
+            onBlur={e => {
+              const v = e.target.value.trim();
+              setMudflapCardLast4(v);
+              blurBorder(e);
+            }} />
+        </PField>
       </div>
 
       {/* Quick links to the truck-scoped views on the Fuel and

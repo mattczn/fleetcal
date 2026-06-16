@@ -569,6 +569,8 @@ export interface CreateAssetRequest {
   notes?:             string | null;
   hidden?:            boolean;
   motiveVehicleId?:   string | null;
+  /** Last 4 of the Mudflap fuel card assigned to this truck. */
+  mudflapCardLast4?:  string | null;
   /** Optional explicit sort_order; otherwise the server appends to the end. */
   sortOrder?:         number;
   /** YYYY-MM-DD; defaults to today server-side. */
@@ -593,6 +595,8 @@ export interface UpdateAssetRequest  {
   notes?:             string | null;
   hidden?:          boolean;
   motiveVehicleId?: string | null;
+  /** Last 4 of the Mudflap fuel card assigned to this truck. */
+  mudflapCardLast4?: string | null;
   sortOrder?:       number;
   /** Move the start of active period (rare — usually set once on create). */
   activeFrom?:      string;

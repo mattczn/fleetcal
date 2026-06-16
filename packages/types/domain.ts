@@ -287,6 +287,12 @@ export interface Asset {
   hidden?: boolean;
   notes?: string;
   motiveVehicleId?: string;
+  /** Last 4 digits of the Mudflap fuel card assigned to this truck.
+   *  The Mudflap Carriers API matcher uses this as the highest-
+   *  priority truck identifier because the physical card lives inside
+   *  the truck — it's the only mapping that doesn't depend on the
+   *  driver typing the vehicle number at the pump correctly. */
+  mudflapCardLast4?: string;
   /** assets.sort_order — NOT NULL DEFAULT 0 in the DB; always present. */
   sortOrder: number;
   /** Active lifecycle. See Driver.activeFrom — same semantics. The
