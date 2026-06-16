@@ -1311,6 +1311,21 @@ class RailwayClient {
     return this.req<{ scanned: number; matched: number }>('POST', `/v1/fuel-transactions/auto-match-sweep`);
   }
 
+  /** Pull fuel transactions from the Mudflap Carriers API for the date
+   *  range. Body dates are YYYY-MM-DD UTC. Returns counts so the UI
+   *  can render a "ingested X new" toast. */
+  syncMudflapCarriers(from: string, to: string) {
+    return this.req<{
+      fetched:      number;
+      inserted:     number;
+      duplicates:   number;
+      failed:       number;
+      assetLinked:  number;
+      totalCharged: number;
+      failedSample: Array<{ providerTransactionId: string; error: string }>;
+    }>('POST', `/v1/fuel-transactions/mudflap-sync`, { from, to });
+  }
+
   // ── Inspection reports (DVIRs) ──────────────────────────────────────
   listInspectionReports(query: {
     assetId?: number; trailerId?: number; driverId?: number;

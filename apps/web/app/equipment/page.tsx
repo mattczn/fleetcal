@@ -4337,6 +4337,8 @@ function FuelTabContent({
   // auto-dismisses after a few seconds.
   const [sweepBusy,   setSweepBusy]     = useState(false);
   const [sweepResult, setSweepResult]   = useState<{ matched: number; scanned: number } | null>(null);
+  const [mfBusy,      setMfBusy]        = useState(false);
+  const [mfResult,    setMfResult]      = useState<{ inserted: number; duplicates: number; assetLinked: number; fetched: number; error?: string } | null>(null);
 
   // Period selector — scopes both the KPI bar above and the table
   // below to the same date window. Defaults to "This Week" (Sat→Fri)
@@ -4419,6 +4421,38 @@ function FuelTabContent({
       setSweepBusy(false);
     }
   }, [sweepBusy, reload]);
+
+  // Pull the last 14 days of card transactions from the Mudflap Carriers
+  // API. Different population from the email path: API has Mudflap card
+  // transactions, email has fuel-code transactions. No overlap, no dedup
+  // conflict (different provider values). 14d is a generous window so
+  // back-dated postings + manual catch-ups don't need a date picker.
+  const runMudflapSync = useCallback(async () => {
+    if (mfBusy) return;
+    setMfBusy(true);
+    setMfResult(null);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const today = new Date();
+    const back = new Date(Date.now() - 14 * 86_400_000);
+    const fmt = (d: Date) => `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+    try {
+      const r = await railway.syncMudflapCarriers(fmt(back), fmt(today));
+      setMfResult({
+        inserted:    r.inserted,
+        duplicates:  r.duplicates,
+        assetLinked: r.assetLinked,
+        fetched:     r.fetched,
+      });
+      await reload();
+      setTimeout(() => setMfResult(null), 6000);
+    } catch (err) {
+      console.error('[mudflap sync] failed:', err);
+      setMfResult({ inserted: 0, duplicates: 0, assetLinked: 0, fetched: 0, error: (err as Error).message ?? 'sync failed' });
+      setTimeout(() => setMfResult(null), 6000);
+    } finally {
+      setMfBusy(false);
+    }
+  }, [mfBusy, reload]);
 
   // Build unified rows. Matched transactions splice their paired
   // report so authoritative driver/asset names win over the receipt's
@@ -4671,6 +4705,37 @@ function FuelTabContent({
                   : `Linked ${sweepResult.matched} new pair${sweepResult.matched === 1 ? '' : 's'}`}
             </span>
           )}
+          {mfResult && (
+            <span style={{
+              fontSize:   12,
+              color:      mfResult.error ? 'var(--gc-red)' : 'var(--gc-text-2)',
+              fontWeight: 500,
+              marginRight: 8,
+            }}>
+              {mfResult.error
+                ? `Mudflap sync failed`
+                : mfResult.fetched === 0
+                  ? 'Mudflap: nothing new'
+                  : `Mudflap: ${mfResult.inserted} new, ${mfResult.duplicates} dup, ${mfResult.assetLinked} auto-linked`}
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={runMudflapSync}
+            disabled={mfBusy}
+            className="rounded-md transition-colors"
+            style={{
+              background: mfBusy ? 'var(--gc-bg)' : 'transparent',
+              color:      mfBusy ? 'var(--gc-text-3)' : 'var(--gc-text-1)',
+              border:     `1px solid ${mfBusy ? 'var(--gc-border-light)' : 'var(--gc-border)'}`,
+              padding:    '7px 12px',
+              fontSize:   13,
+              fontWeight: 600,
+              cursor:     mfBusy ? 'default' : 'pointer',
+            }}
+            title="Pull the last 14 days of card transactions from the Mudflap Carriers API. Card transactions are new — the email parser only catches fuel-code transactions, so both stay running.">
+            {mfBusy ? 'Syncing Mudflap…' : 'Sync Mudflap'}
+          </button>
           <button
             type="button"
             onClick={runSweep}
