@@ -582,6 +582,79 @@ function rowToPeriod(r: DbActivityPeriodRow): AssetActivityPeriod {
   };
 }
 
+/**
+ * Cap check for a period mutation: returns a 402 Response if reopening
+ * this asset would put the org over its truck cap, else null.
+ *
+ * The cap counts assets whose active_to is NULL or >= today (mirrors
+ * applyActiveCapFilter, what POST /v1/assets uses). A period mutation
+ * only changes the count when it moves the asset from "currently
+ * retired" (active_to in the past) to "active or future" (period
+ * extending end_date to NULL or today+). Otherwise the count stays
+ * the same — adding more periods to an already-counted asset doesn't
+ * change anything.
+ *
+ * Internal/unrestricted orgs short-circuit to null. Caller patterns:
+ *   const block = await capCheckForPeriodChange(orgId, id, endDate);
+ *   if (block) return block;
+ */
+type CapBlockResponse = ReturnType<typeof Response.json>;
+async function capCheckForPeriodChange(
+  orgId: string,
+  assetId: number,
+  newEndDate: string | null,
+): Promise<CapBlockResponse | null> {
+  const today = new Date().toISOString().slice(0, 10);
+  // Read current asset.active_to to know whether this asset is already
+  // counted toward the cap. Trigger keeps this in sync with all periods.
+  const { data: assetRow } = await supabase
+    .from("assets")
+    .select("active_to")
+    .eq("id", assetId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  const currentActiveTo = (assetRow as { active_to: string | null } | null)?.active_to;
+  const currentlyCounted =
+    currentActiveTo === null || (currentActiveTo !== undefined && currentActiveTo >= today);
+  const wouldBeCounted = newEndDate === null || newEndDate >= today;
+  if (currentlyCounted || !wouldBeCounted) return null;
+
+  const tier = await getOrgTier(orgId);
+  if (!Number.isFinite(tier.maxTrucks)) return null;
+
+  // Same filter and Unassigned exclusions as POST /v1/assets so the
+  // count matches across endpoints (otherwise "you're at 5/5" could
+  // disagree between Add Truck and Reopen Period).
+  const baseQ = supabase
+    .from("assets")
+    .select("*", { count: "exact", head: true })
+    .eq("org_id", orgId)
+    .neq("type", "Unassigned")
+    .neq("name", "Unassigned");
+  const { count: activeCount, error: countErr } = await applyActiveCapFilter(baseQ);
+  if (countErr) {
+    console.error("[capCheckForPeriodChange] count failed:", countErr);
+    return Response.json(
+      { error: "tier_check_failed", detail: countErr.message } satisfies ApiErrorResponse,
+      { status: 500 },
+    );
+  }
+  const current = activeCount ?? 0;
+  if (current < tier.maxTrucks) return null;
+
+  const detail = tier.tier === "none"
+    ? `Reopening this truck would put you over your truck limit. Retire or delete a different truck first, or contact support.`
+    : `Reopening this truck would put you over your plan limit (${current} of ${tier.maxTrucks} active). Retire or delete a different truck first, or upgrade your plan.`;
+  return Response.json(
+    {
+      error:  "tier_cap_exceeded",
+      detail,
+      errors: [`tier=${tier.tier}`, `current=${current}`, `max=${tier.maxTrucks}`],
+    } satisfies ApiErrorResponse,
+    { status: 402 },
+  );
+}
+
 // GET /v1/assets/:id/periods — list all periods for an asset, oldest first.
 assets.get("/:id/periods", async (c) => {
   const orgId = c.get("orgId");
@@ -626,6 +699,10 @@ assets.post("/:id/periods", requireCapability("assets.edit"), async (c) => {
   if (endDate !== null && endDate < startDate) {
     return c.json({ error: "validation_failed", errors: ["endDate must be on or after startDate"] } satisfies ApiErrorResponse, 400);
   }
+
+  // Tier cap: refuse if reopening this asset would exceed the org's plan.
+  const capBlock = await capCheckForPeriodChange(orgId, id, endDate);
+  if (capBlock) return capBlock;
 
   const { data, error } = await supabase
     .from("asset_activity_periods" as never)
@@ -677,6 +754,25 @@ assets.patch("/:id/periods/:periodId", requireCapability("assets.edit"), async (
   }
   if (Object.keys(update).length === 0) {
     return c.json({ error: "validation_failed", errors: ["no fields"] } satisfies ApiErrorResponse, 400);
+  }
+
+  // Tier cap: if this PATCH extends the period to today or beyond and
+  // the asset is currently retired (active_to in the past), reopening
+  // it could push the org over the cap. Compute the effective new
+  // end_date — body value if provided, otherwise the period's existing
+  // end_date — and run the same check used on POST /v1/assets/:id/periods.
+  if ("endDate" in body) {
+    const { data: currentPeriod } = await supabase
+      .from("asset_activity_periods" as never)
+      .select("end_date")
+      .eq("id", periodId)
+      .eq("asset_id", id)
+      .eq("org_id", orgId)
+      .maybeSingle();
+    const currentEnd = (currentPeriod as { end_date: string | null } | null)?.end_date ?? null;
+    const effectiveNewEnd: string | null = body.endDate === undefined ? currentEnd : (body.endDate ?? null);
+    const capBlock = await capCheckForPeriodChange(orgId, id, effectiveNewEnd);
+    if (capBlock) return capBlock;
   }
 
   const { data, error } = await supabase
