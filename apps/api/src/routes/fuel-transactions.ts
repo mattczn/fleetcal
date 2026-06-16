@@ -359,6 +359,42 @@ fuelTxClerk.use("*", requireModule("fuel"), requireCapability("fuel.access"));
 // records were created, so there's nothing to match against).
 fuelTxClerk.post("/import", bulkImportHandler);
 
+// POST /v1/fuel-transactions/mudflap-sync — pull recent transactions
+// from the Mudflap Carriers API and ingest them. Body: { from, to } as
+// YYYY-MM-DD UTC dates. Returns counts so the UI can render a useful
+// toast. The Mudflap token comes from MUDFLAP_CARRIERS_TOKEN env var
+// (Curzon-only for now; per-org storage when we onboard a 2nd customer).
+fuelTxClerk.post("/mudflap-sync", async (c) => {
+  const orgId = c.get("orgId");
+  const body  = (await c.req.json().catch(() => null)) as { from?: string; to?: string } | null;
+  const from  = body?.from?.trim();
+  const to    = body?.to?.trim();
+  if (!from || !to || !/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+    return c.json({ error: "validation_failed", errors: ["from + to required as YYYY-MM-DD"] } satisfies ApiErrorResponse, 400);
+  }
+  if (from > to) {
+    return c.json({ error: "validation_failed", errors: ["from must be on or before to"] } satisfies ApiErrorResponse, 400);
+  }
+  try {
+    const { syncMudflapCarriers } = await import("../lib/mudflapCarriersSync.js");
+    const result = await syncMudflapCarriers(orgId, from, to);
+    return c.json(result);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes("MUDFLAP_CARRIERS_TOKEN not set")) {
+      return c.json({
+        error:  "not_configured",
+        detail: "Mudflap Carriers API token is not configured for this deployment. Contact support.",
+      } satisfies ApiErrorResponse, 503);
+    }
+    console.error("[POST /v1/fuel-transactions/mudflap-sync] failed:", err);
+    return c.json({
+      error:  "sync_failed",
+      detail: message,
+    } satisfies ApiErrorResponse, 500);
+  }
+});
+
 // GET /v1/fuel-transactions — list with filters.
 fuelTxClerk.get("/", async (c) => {
   const orgId = c.get("orgId");
