@@ -540,4 +540,207 @@ assets.post("/:id/documents", requireCapability("assets.edit"), async (c) => {
   return c.json({ document: doc });
 });
 
+// ── Asset activity periods ───────────────────────────────────────────────
+//
+// Each asset has 1+ activity periods (start_date → end_date, end_date NULL
+// = currently open). The 20260616 migration created the table, backfilled
+// one period per asset from the legacy active_from/active_to columns, and
+// installed a trigger that keeps those legacy columns in sync as a
+// denormalized view of the periods. So:
+//   - Existing reads (filter by active_to IS NULL) keep working unchanged.
+//   - These endpoints are the new write surface — closing/opening periods.
+//   - The DB-level EXCLUDE constraint prevents overlapping periods for the
+//     same asset; we map that error to a 409 here.
+
+interface DbActivityPeriodRow {
+  id:              number;
+  asset_id:        number;
+  org_id:          string;
+  start_date:      string;
+  end_date:        string | null;
+  created_at:      string;
+  created_by_name: string | null;
+}
+
+interface AssetActivityPeriod {
+  id:            number;
+  assetId:       number;
+  startDate:     string;
+  endDate:       string | null;
+  createdAt:     string;
+  createdByName: string | null;
+}
+
+function rowToPeriod(r: DbActivityPeriodRow): AssetActivityPeriod {
+  return {
+    id:            r.id,
+    assetId:       r.asset_id,
+    startDate:     r.start_date,
+    endDate:       r.end_date,
+    createdAt:     r.created_at,
+    createdByName: r.created_by_name,
+  };
+}
+
+// GET /v1/assets/:id/periods — list all periods for an asset, oldest first.
+assets.get("/:id/periods", async (c) => {
+  const orgId = c.get("orgId");
+  const id    = Number(c.req.param("id"));
+  if (!Number.isFinite(id)) {
+    return c.json({ error: "validation_failed", errors: ["id must be numeric"] } satisfies ApiErrorResponse, 400);
+  }
+  const { data, error } = await supabase
+    .from("asset_activity_periods" as never)
+    .select("id, asset_id, org_id, start_date, end_date, created_at, created_by_name")
+    .eq("org_id", orgId)
+    .eq("asset_id", id)
+    .order("start_date", { ascending: true });
+  if (error) {
+    console.error("[GET /v1/assets/:id/periods] failed:", error);
+    return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  }
+  const periods = ((data ?? []) as DbActivityPeriodRow[]).map(rowToPeriod);
+  return c.json({ periods });
+});
+
+// POST /v1/assets/:id/periods — start a new period for an asset.
+// Body: { startDate: "YYYY-MM-DD", endDate?: "YYYY-MM-DD" | null }
+// Typical flow: "+ New activity period" after a previous one was closed.
+// The EXCLUDE constraint on (asset_id, daterange) rejects overlaps; we
+// surface that as a 409 with a human-readable message.
+assets.post("/:id/periods", requireCapability("assets.edit"), async (c) => {
+  const orgId = c.get("orgId");
+  const id    = Number(c.req.param("id"));
+  if (!Number.isFinite(id)) {
+    return c.json({ error: "validation_failed", errors: ["id must be numeric"] } satisfies ApiErrorResponse, 400);
+  }
+  const body = await c.req.json<{ startDate?: string; endDate?: string | null; createdByName?: string }>();
+  const startDate = (body.startDate ?? "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate)) {
+    return c.json({ error: "validation_failed", errors: ["startDate required as YYYY-MM-DD"] } satisfies ApiErrorResponse, 400);
+  }
+  const endDate = body.endDate ?? null;
+  if (endDate !== null && !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
+    return c.json({ error: "validation_failed", errors: ["endDate must be YYYY-MM-DD or null"] } satisfies ApiErrorResponse, 400);
+  }
+  if (endDate !== null && endDate < startDate) {
+    return c.json({ error: "validation_failed", errors: ["endDate must be on or after startDate"] } satisfies ApiErrorResponse, 400);
+  }
+
+  const { data, error } = await supabase
+    .from("asset_activity_periods" as never)
+    .insert({
+      asset_id:        id,
+      org_id:          orgId,
+      start_date:      startDate,
+      end_date:        endDate,
+      created_by_name: body.createdByName ?? null,
+    } as never)
+    .select("id, asset_id, org_id, start_date, end_date, created_at, created_by_name")
+    .single();
+  if (error || !data) {
+    if (error?.message?.includes("aap_no_overlap")) {
+      return c.json({
+        error:  "period_overlap",
+        detail: "This period overlaps with an existing activity period for this asset.",
+      } satisfies ApiErrorResponse, 409);
+    }
+    console.error("[POST /v1/assets/:id/periods] failed:", error);
+    return c.json({ error: "insert_failed", detail: error?.message } satisfies ApiErrorResponse, 500);
+  }
+  return c.json({ period: rowToPeriod(data as unknown as DbActivityPeriodRow) });
+});
+
+// PATCH /v1/assets/:id/periods/:periodId — edit a period's dates.
+// Used to close an open period (set endDate to today) and to correct
+// mistakes in start/end dates.
+assets.patch("/:id/periods/:periodId", requireCapability("assets.edit"), async (c) => {
+  const orgId    = c.get("orgId");
+  const id       = Number(c.req.param("id"));
+  const periodId = Number(c.req.param("periodId"));
+  if (!Number.isFinite(id) || !Number.isFinite(periodId)) {
+    return c.json({ error: "validation_failed", errors: ["id and periodId must be numeric"] } satisfies ApiErrorResponse, 400);
+  }
+  const body = await c.req.json<{ startDate?: string; endDate?: string | null }>();
+  const update: Record<string, unknown> = {};
+  if ("startDate" in body) {
+    if (typeof body.startDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(body.startDate)) {
+      return c.json({ error: "validation_failed", errors: ["startDate must be YYYY-MM-DD"] } satisfies ApiErrorResponse, 400);
+    }
+    update.start_date = body.startDate;
+  }
+  if ("endDate" in body) {
+    if (body.endDate !== null && (typeof body.endDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(body.endDate))) {
+      return c.json({ error: "validation_failed", errors: ["endDate must be YYYY-MM-DD or null"] } satisfies ApiErrorResponse, 400);
+    }
+    update.end_date = body.endDate;
+  }
+  if (Object.keys(update).length === 0) {
+    return c.json({ error: "validation_failed", errors: ["no fields"] } satisfies ApiErrorResponse, 400);
+  }
+
+  const { data, error } = await supabase
+    .from("asset_activity_periods" as never)
+    .update(update as never)
+    .eq("id", periodId)
+    .eq("asset_id", id)
+    .eq("org_id", orgId)
+    .select("id, asset_id, org_id, start_date, end_date, created_at, created_by_name")
+    .single();
+  if (error || !data) {
+    if (error?.message?.includes("aap_no_overlap")) {
+      return c.json({
+        error:  "period_overlap",
+        detail: "The new dates overlap with another activity period for this asset.",
+      } satisfies ApiErrorResponse, 409);
+    }
+    if (error?.message?.includes("aap_end_after_start")) {
+      return c.json({
+        error:  "validation_failed",
+        errors: ["endDate must be on or after startDate"],
+      } satisfies ApiErrorResponse, 400);
+    }
+    console.error("[PATCH /v1/assets/:id/periods/:periodId] failed:", error);
+    return c.json({ error: "update_failed", detail: error?.message } satisfies ApiErrorResponse, 500);
+  }
+  return c.json({ period: rowToPeriod(data as unknown as DbActivityPeriodRow) });
+});
+
+// DELETE /v1/assets/:id/periods/:periodId — remove a wrongly-created
+// period. Gated on assets.delete because it's a structural edit; the
+// common "close this period" action is a PATCH, not a DELETE. Refuses
+// to delete the last remaining period (would leave the asset orphaned
+// from a period perspective — the trigger handles the legacy columns
+// but downstream views would still want at least one row).
+assets.delete("/:id/periods/:periodId", requireCapability("assets.delete"), async (c) => {
+  const orgId    = c.get("orgId");
+  const id       = Number(c.req.param("id"));
+  const periodId = Number(c.req.param("periodId"));
+  if (!Number.isFinite(id) || !Number.isFinite(periodId)) {
+    return c.json({ error: "validation_failed", errors: ["id and periodId must be numeric"] } satisfies ApiErrorResponse, 400);
+  }
+  const { count: existing } = await supabase
+    .from("asset_activity_periods" as never)
+    .select("id", { count: "exact", head: true })
+    .eq("org_id", orgId)
+    .eq("asset_id", id);
+  if ((existing ?? 0) <= 1) {
+    return c.json({
+      error:  "last_period",
+      detail: "Can't delete the only activity period for an asset. Edit its dates instead, or retire the asset.",
+    } satisfies ApiErrorResponse, 409);
+  }
+  const { error } = await supabase
+    .from("asset_activity_periods" as never)
+    .delete()
+    .eq("id", periodId)
+    .eq("asset_id", id)
+    .eq("org_id", orgId);
+  if (error) {
+    console.error("[DELETE /v1/assets/:id/periods/:periodId] failed:", error);
+    return c.json({ error: "delete_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  }
+  return c.json({ deleted: true, id: periodId });
+});
+
 export default assets;
