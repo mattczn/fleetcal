@@ -20,18 +20,49 @@ import {
 import { supabase } from "../lib/supabase.js";
 import { driverAuth, type DriverAuthVariables } from "../middleware/driverAuth.js";
 import { isHeic } from "../lib/heicDetect.js";
+import { heicToJpeg, rewriteHeicExtension } from "../lib/heicToJpeg.js";
 
-/** Standardized HEIC rejection. Returned at every driver-app upload
- *  boundary so an iPhone POD shot in HEIC mode can never reach
- *  load_documents — pdf-lib has no HEIC support and the packet
- *  builder would silently drop it, leaving the broker an invoice with
- *  no proof. The driver app should be transcoding to JPG before
- *  upload (per the photo-upload module), but defense-in-depth here
- *  catches any bypass: older app versions, alternate upload paths,
- *  third-party tools posting to the API directly. */
-const HEIC_REJECTION = {
-  error:  "unsupported_format",
-  detail: "HEIC photos can't be saved. Open iPhone Settings → Camera → Formats → Most Compatible to save new photos as JPG, then re-upload.",
+/**
+ * Convert HEIC → JPEG inline at every driver-app upload boundary so an
+ * iPhone POD shot in HEIC mode becomes a renderable JPEG before it
+ * lands in load_documents. pdf-lib has no HEIC support — leaving raw
+ * HEIC in the table means the invoice packet builder silently drops
+ * it later, costing the broker a real document and us a re-send.
+ *
+ * Returns the (possibly converted) bytes + mime + filename, or null if
+ * the file isn't HEIC (caller proceeds as-is) or the decode threw
+ * (caller should 415 — see callsites).
+ */
+async function convertIfHeic(file: File, bytes: Uint8Array<ArrayBuffer>): Promise<
+  | { converted: true;  bytes: Uint8Array<ArrayBuffer>; mime: string; name: string }
+  | { converted: false; bytes: Uint8Array<ArrayBuffer>; mime: string; name: string }
+  | { converted: false; failed: true }
+> {
+  if (!isHeic(bytes, file.type)) {
+    return { converted: false, bytes, mime: file.type, name: file.name };
+  }
+  try {
+    const t0 = Date.now();
+    const result = await heicToJpeg(bytes);
+    console.log(
+      "[driver upload] HEIC → JPEG converted:",
+      file.name, `${result.originalBytes}B → ${result.jpegBytes.length}B in ${Date.now() - t0}ms`,
+    );
+    return {
+      converted: true,
+      bytes:     result.jpegBytes,
+      mime:      "image/jpeg",
+      name:      rewriteHeicExtension(file.name),
+    };
+  } catch (err) {
+    console.error("[driver upload] HEIC decode failed:", file.name, err);
+    return { converted: false, failed: true };
+  }
+}
+
+const HEIC_DECODE_FAILED = {
+  error:  "heic_decode_failed",
+  detail: "Couldn't decode this HEIC photo. Re-take the shot with iPhone Settings → Camera → Formats → Most Compatible enabled, or re-export the existing photo as JPG.",
 } as const;
 
 const driver = new Hono<{ Variables: DriverAuthVariables }>();
@@ -1564,9 +1595,15 @@ driver.post("/loads/:id/documents", async (c) => {
     .maybeSingle();
   const loadId = (ev as { load_id: string | null } | null)?.load_id ?? null;
 
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  if (isHeic(bytes, file.type)) return c.json(HEIC_REJECTION, 415);
-  const ext   = (file.name.split(".").pop() ?? "bin").toLowerCase();
+  let bytes      = new Uint8Array(await file.arrayBuffer());
+  let uploadName = file.name;
+  let uploadMime = file.type;
+  {
+    const conv = await convertIfHeic(file, bytes);
+    if ("failed" in conv) return c.json(HEIC_DECODE_FAILED, 415);
+    bytes = conv.bytes; uploadName = conv.name; uploadMime = conv.mime;
+  }
+  const ext   = (uploadName.split(".").pop() ?? "bin").toLowerCase();
   const random = Math.random().toString(36).slice(2, 10);
   const storagePath = `${orgId}/${id}/${Date.now()}_${random}.${ext}`;
 
@@ -1575,7 +1612,7 @@ driver.post("/loads/:id/documents", async (c) => {
   // convention: "{LOAD_NUM}_{KIND}{_N}.{ext}". Suffix _N appears when the
   // load already has another doc of the same kind. Falls back to the
   // client-sent name if the load has no load_num (non-revenue, untagged).
-  let displayName = file.name;
+  let displayName = uploadName;
   if (loadId) {
     const { data: loadInfo } = await supabase
       .from("loads")
@@ -1601,7 +1638,7 @@ driver.post("/loads/:id/documents", async (c) => {
   const { error: uploadErr } = await supabase.storage
     .from(DOC_BUCKET)
     .upload(storagePath, bytes, {
-      contentType: file.type || "application/octet-stream",
+      contentType: uploadMime || "application/octet-stream",
       upsert: false,
     });
   if (uploadErr) {
@@ -1617,7 +1654,7 @@ driver.post("/loads/:id/documents", async (c) => {
       org_id:                orgId,
       storage_path:          storagePath,
       file_name:             displayName,
-      mime_type:             file.type || null,
+      mime_type:             uploadMime || null,
       size_bytes:            bytes.length,
       kind,
       uploaded_by_driver_id: driverId,
@@ -2306,16 +2343,22 @@ driver.post("/maintenance-reports/:id/photos", async (c) => {
     return c.json({ error: "validation_failed", errors: ["file required"] }, 400);
   }
 
-  const ext = (file.name.split(".").pop() ?? "bin").toLowerCase();
+  let bytes      = new Uint8Array(await file.arrayBuffer());
+  let uploadName = file.name;
+  let uploadMime = file.type;
+  {
+    const conv = await convertIfHeic(file, bytes);
+    if ("failed" in conv) return c.json(HEIC_DECODE_FAILED, 415);
+    bytes = conv.bytes; uploadName = conv.name; uploadMime = conv.mime;
+  }
+  const ext = (uploadName.split(".").pop() ?? "bin").toLowerCase();
   const rand = Math.random().toString(36).slice(2, 10);
   const storagePath = `${orgId}/${id}/${Date.now()}_${rand}.${ext}`;
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  if (isHeic(bytes, file.type)) return c.json(HEIC_REJECTION, 415);
 
   const { error: uploadErr } = await supabase.storage
     .from(MAINT_PHOTO_BUCKET_DRIVER)
     .upload(storagePath, bytes, {
-      contentType: file.type || "application/octet-stream",
+      contentType: uploadMime || "application/octet-stream",
       upsert: false,
     });
   if (uploadErr) {
@@ -2331,7 +2374,7 @@ driver.post("/maintenance-reports/:id/photos", async (c) => {
       org_id:       orgId,
       storage_path: storagePath,
       file_name:    file.name,
-      mime_type:    file.type || null,
+      mime_type:    uploadMime || null,
       size_bytes:   bytes.length,
     } as any)
     .select("id, file_name, mime_type, size_bytes, uploaded_at")
@@ -2470,16 +2513,22 @@ driver.post("/documents", async (c) => {
     return c.json({ error: "validation_failed", errors: [`kind must be one of ${DRIVER_DOC_KINDS_SELF.join("|")}`] }, 400);
   }
 
-  const ext  = (file.name.split(".").pop() ?? "bin").toLowerCase();
+  let bytes      = new Uint8Array(await file.arrayBuffer());
+  let uploadName = file.name;
+  let uploadMime = file.type;
+  {
+    const conv = await convertIfHeic(file, bytes);
+    if ("failed" in conv) return c.json(HEIC_DECODE_FAILED, 415);
+    bytes = conv.bytes; uploadName = conv.name; uploadMime = conv.mime;
+  }
+  const ext  = (uploadName.split(".").pop() ?? "bin").toLowerCase();
   const rand = Math.random().toString(36).slice(2, 10);
   const storagePath = `${orgId}/${driverId}/${kind}_${Date.now()}_${rand}.${ext}`;
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  if (isHeic(bytes, file.type)) return c.json(HEIC_REJECTION, 415);
 
   const { error: upErr } = await supabase.storage
     .from(DRIVER_DOC_BUCKET_SELF)
     .upload(storagePath, bytes, {
-      contentType: file.type || "application/octet-stream",
+      contentType: uploadMime || "application/octet-stream",
       upsert: false,
     });
   if (upErr) {
@@ -2496,7 +2545,7 @@ driver.post("/documents", async (c) => {
       kind,
       storage_path: storagePath,
       file_name:    file.name,
-      mime_type:    file.type || null,
+      mime_type:    uploadMime || null,
       size_bytes:   bytes.length,
       expires_on:   body.expiresOn?.trim() || null,
       notes:        body.notes?.trim() || null,
@@ -2597,13 +2646,19 @@ driver.post("/fuel-reports/:id/photos", async (c) => {
   const ext  = (file.name.split(".").pop() ?? "bin").toLowerCase();
   const rand = Math.random().toString(36).slice(2, 10);
   const storagePath = `${orgId}/${id}/${Date.now()}_${rand}.${ext}`;
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  if (isHeic(bytes, file.type)) return c.json(HEIC_REJECTION, 415);
+  let bytes      = new Uint8Array(await file.arrayBuffer());
+  let uploadName = file.name;
+  let uploadMime = file.type;
+  {
+    const conv = await convertIfHeic(file, bytes);
+    if ("failed" in conv) return c.json(HEIC_DECODE_FAILED, 415);
+    bytes = conv.bytes; uploadName = conv.name; uploadMime = conv.mime;
+  }
 
   const { error: uploadErr } = await supabase.storage
     .from(FUEL_RECEIPT_BUCKET)
     .upload(storagePath, bytes, {
-      contentType: file.type || "application/octet-stream",
+      contentType: uploadMime || "application/octet-stream",
       upsert: false,
     });
   if (uploadErr) {
@@ -2619,7 +2674,7 @@ driver.post("/fuel-reports/:id/photos", async (c) => {
       org_id:       orgId,
       storage_path: storagePath,
       file_name:    file.name,
-      mime_type:    file.type || null,
+      mime_type:    uploadMime || null,
       size_bytes:   bytes.length,
     } as any)
     .select("id, file_name, mime_type, size_bytes, uploaded_at")
@@ -2823,16 +2878,22 @@ driver.post("/inspections/:id/photos", async (c) => {
     return c.json({ error: "validation_failed", errors: ["target must be 'truck' or 'trailer'"] }, 400);
   }
 
-  const ext = (file.name.split(".").pop() ?? "bin").toLowerCase();
+  let bytes      = new Uint8Array(await file.arrayBuffer());
+  let uploadName = file.name;
+  let uploadMime = file.type;
+  {
+    const conv = await convertIfHeic(file, bytes);
+    if ("failed" in conv) return c.json(HEIC_DECODE_FAILED, 415);
+    bytes = conv.bytes; uploadName = conv.name; uploadMime = conv.mime;
+  }
+  const ext = (uploadName.split(".").pop() ?? "bin").toLowerCase();
   const rand = Math.random().toString(36).slice(2, 10);
   const storagePath = `${orgId}/${id}/${Date.now()}_${rand}.${ext}`;
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  if (isHeic(bytes, file.type)) return c.json(HEIC_REJECTION, 415);
 
   const { error: uploadErr } = await supabase.storage
     .from(INSPECTION_PHOTO_BUCKET)
     .upload(storagePath, bytes, {
-      contentType: file.type || "application/octet-stream",
+      contentType: uploadMime || "application/octet-stream",
       upsert: false,
     });
   if (uploadErr) {

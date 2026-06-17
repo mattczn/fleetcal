@@ -832,6 +832,7 @@ loads.get("/:id/documents", async (c) => {
 // occurrences in this file that referred to it bare.
 import { bucketForKind, bucketReadOrder, DOC_BUCKET, RATE_CON_BUCKET } from "../lib/docBuckets.js";
 import { isHeic } from "../lib/heicDetect.js";
+import { heicToJpeg, rewriteHeicExtension } from "../lib/heicToJpeg.js";
 
 loads.post("/:id/documents", requireCapability("loads.edit"), async (c) => {
   const orgId  = c.get("orgId");
@@ -874,28 +875,42 @@ loads.post("/:id/documents", requireCapability("loads.edit"), async (c) => {
     return c.json({ error: "not_found", detail: "no event for load" } satisfies ApiErrorResponse, 404);
   }
 
-  const bytes  = new Uint8Array(await file.arrayBuffer());
+  let bytes      = new Uint8Array(await file.arrayBuffer());
+  let uploadName = file.name;
+  let uploadMime = file.type;
 
-  // Reject HEIC at the door — both the client-declared mime type AND
-  // the magic-byte sniff are checked, so a renamed file can't slip
-  // through. HEIC is iPhone's default photo format; pdf-lib (and
-  // every browser preview path) can't render it, so allowing it in
-  // means silent packet drops downstream and broker emails missing
-  // proof of delivery. Curzon got bitten by exactly this in
-  // production — three POD photos uploaded as HEIC, broker received
-  // invoice + rate-con with no PODs, and the dispatcher had no idea
-  // until the broker asked. Better to fail loud here.
+  // HEIC → JPEG transcode. iPhone shoots HEIC by default; pdf-lib
+  // (and every browser preview path) can't render it. Before this
+  // converted, HEIC uploads silently dropped from invoice packets
+  // downstream — Curzon lost POD attachments on the 2026-06-17
+  // batch because of exactly this. Now: detect by magic bytes,
+  // re-encode as JPEG quality 0.9, store as .jpg. If the decode
+  // throws (truncated / corrupted HEIC, OOM), we fall back to
+  // rejection so the bad file never reaches load_documents.
   if (isHeic(bytes, file.type)) {
-    return c.json(
-      {
-        error:  "unsupported_format",
-        detail: "HEIC photos can't be attached to invoices. On iPhone, change Settings → Camera → Formats to \"Most Compatible\" so new photos save as JPG. To convert an existing photo, open it in Photos → File → Export → JPEG.",
-      } satisfies ApiErrorResponse,
-      415,
-    );
+    try {
+      const t0 = Date.now();
+      const result = await heicToJpeg(bytes);
+      bytes      = result.jpegBytes;
+      uploadName = rewriteHeicExtension(file.name);
+      uploadMime = "image/jpeg";
+      console.log(
+        "[POST /v1/loads/:id/documents] HEIC → JPEG converted:",
+        file.name, `${result.originalBytes}B → ${bytes.length}B in ${Date.now() - t0}ms`,
+      );
+    } catch (err) {
+      console.error("[POST /v1/loads/:id/documents] HEIC decode failed:", file.name, err);
+      return c.json(
+        {
+          error:  "heic_decode_failed",
+          detail: "Couldn't convert this HEIC photo. Re-export it as JPG (Photos → File → Export → JPEG) and re-upload.",
+        } satisfies ApiErrorResponse,
+        415,
+      );
+    }
   }
 
-  const ext    = (file.name.split(".").pop() ?? "bin").toLowerCase();
+  const ext    = (uploadName.split(".").pop() ?? "bin").toLowerCase();
   const random = Math.random().toString(36).slice(2, 10);
   const storagePath = `${orgId}/${eventId}/${Date.now()}_${random}.${ext}`;
 
@@ -969,7 +984,7 @@ loads.post("/:id/documents", requireCapability("loads.edit"), async (c) => {
     .eq("org_id", orgId)
     .maybeSingle();
   const loadNum = (loadInfo as { load_num: string | null } | null)?.load_num ?? null;
-  let displayName = file.name;
+  let displayName = uploadName;
   if (loadNum) {
     const safeNum = loadNum.replace(/[^A-Za-z0-9_-]/g, "");
     const kindLabel = kind.toUpperCase();
@@ -992,7 +1007,7 @@ loads.post("/:id/documents", requireCapability("loads.edit"), async (c) => {
   const { error: uploadErr } = await supabase.storage
     .from(targetBucket)
     .upload(storagePath, bytes, {
-      contentType: file.type || "application/octet-stream",
+      contentType: uploadMime || "application/octet-stream",
       upsert: false,
     });
   if (uploadErr) {
@@ -1009,7 +1024,7 @@ loads.post("/:id/documents", requireCapability("loads.edit"), async (c) => {
       org_id:       orgId,
       storage_path: storagePath,
       file_name:    displayName,
-      mime_type:    file.type || null,
+      mime_type:    uploadMime || null,
       size_bytes:   bytes.length,
       kind,
     } as any)
@@ -1893,5 +1908,153 @@ loads.post("/:id/unsplit-relay", requireCapability("loads.edit"), async (c) => {
 // Mount the per-load check-calls subroutes here so Hono's path merging
 // produces /v1/loads/:loadId/check-calls cleanly.
 loads.route("/:loadId/check-calls", checkCallsScopedRouter);
+
+// ─────────────────────────────────────────────────────────────────────────
+// POST /v1/loads/backfill-heic — convert existing HEIC docs to JPG
+// ─────────────────────────────────────────────────────────────────────────
+//
+// Operational lever for the in-the-wild HEIC photos that landed before
+// the upload-side conversion went live. Iterates every load_documents
+// row in the caller's org whose mime_type is HEIC/HEIF, downloads each
+// from Supabase Storage, transcodes to JPG, writes the new blob,
+// updates the row (storage_path / mime_type / file_name), and removes
+// the original HEIC blob. Idempotent — re-running after a partial pass
+// only touches rows still flagged HEIC.
+//
+// Single-doc transcode takes ~1-2s. Body accepts an optional
+// `loadIds: string[]` to scope to specific loads (e.g. "fix just the
+// 6 affected invoices") so we don't process the whole org when a
+// dispatcher just wants to re-send a single batch.
+//
+// Returns a structured summary the UI can show:
+//   { total, converted, failed: [{id, storagePath, reason}, ...], skippedRateCon }
+loads.post("/backfill-heic", requireCapability("loads.edit"), async (c) => {
+  const orgId = c.get("orgId");
+  const body  = await c.req.json<{ loadIds?: string[]; dryRun?: boolean }>().catch(() => ({} as { loadIds?: string[]; dryRun?: boolean }));
+  const scopedLoadIds = body.loadIds;
+  const dryRun        = !!body.dryRun;
+
+  let query = supabase
+    .from("load_documents")
+    .select("id, load_id, kind, file_name, mime_type, size_bytes, storage_path")
+    .eq("org_id", orgId)
+    .or("mime_type.ilike.image/heic%,mime_type.ilike.image/heif%");
+  if (scopedLoadIds && scopedLoadIds.length) {
+    query = query.in("load_id", scopedLoadIds);
+  }
+  const { data, error } = await query;
+  if (error) {
+    console.error("[POST /v1/loads/backfill-heic] list failed:", error);
+    return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  }
+
+  type Row = {
+    id: string; load_id: string | null; kind: string;
+    file_name: string; mime_type: string | null; size_bytes: number | null;
+    storage_path: string;
+  };
+  const rows = (data ?? []) as Row[];
+
+  if (dryRun) {
+    return c.json({
+      total:     rows.length,
+      preview:   rows.slice(0, 20).map(r => ({ id: r.id, loadId: r.load_id, kind: r.kind, fileName: r.file_name, mime: r.mime_type })),
+      dryRun:    true,
+    });
+  }
+
+  const failed: Array<{ id: string; storagePath: string; reason: string }> = [];
+  let converted = 0;
+
+  for (const row of rows) {
+    // Rate-cons live in a different bucket and use a different code
+    // path for the invoice packet anyway. Skip them here to keep this
+    // tool focused on the POD/BOL/etc. invoice-packet attachments
+    // where the silent-drop bug actually bit.
+    if (row.kind === "rate_con") {
+      failed.push({ id: row.id, storagePath: row.storage_path, reason: "rate_con_skipped" });
+      continue;
+    }
+    const bucket = bucketForKind(row.kind);
+    try {
+      const { data: blob, error: dlErr } = await supabase.storage.from(bucket).download(row.storage_path);
+      if (dlErr || !blob) {
+        failed.push({ id: row.id, storagePath: row.storage_path, reason: `download_failed: ${dlErr?.message ?? "no blob"}` });
+        continue;
+      }
+      const originalBytes = new Uint8Array(await blob.arrayBuffer());
+      // Sanity check — the row says HEIC but the bytes might disagree
+      // (mime_type can lie). If the magic bytes aren't HEIC we just
+      // rewrite the mime so downstream pdf-lib sniffs the actual
+      // format and embeds normally.
+      if (!isHeic(originalBytes, row.mime_type)) {
+        await supabase
+          .from("load_documents")
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          .update({ mime_type: "image/jpeg" } as any)
+          .eq("id", row.id)
+          .eq("org_id", orgId);
+        converted++;
+        continue;
+      }
+
+      const result = await heicToJpeg(originalBytes);
+
+      // Write the converted bytes to a fresh storage path so a failed
+      // mid-flight retry can't half-overwrite the original. Keep the
+      // same filename-with-jpg-ext pattern dispatchers see in the docs
+      // panel. Only after the new blob is up AND the DB row points at
+      // it do we delete the legacy HEIC blob.
+      const ts        = Date.now();
+      const rand      = Math.random().toString(36).slice(2, 10);
+      const eventDir  = row.storage_path.split("/").slice(0, -1).join("/") || `${orgId}`;
+      const newPath   = `${eventDir}/${ts}_${rand}_converted.jpg`;
+      const { error: upErr } = await supabase.storage
+        .from(bucket)
+        .upload(newPath, result.jpegBytes, {
+          contentType: "image/jpeg",
+          upsert: false,
+        });
+      if (upErr) {
+        failed.push({ id: row.id, storagePath: row.storage_path, reason: `reupload_failed: ${upErr.message}` });
+        continue;
+      }
+
+      const newFileName = rewriteHeicExtension(row.file_name);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error: updErr } = await supabase
+        .from("load_documents")
+        .update({
+          storage_path: newPath,
+          file_name:    newFileName,
+          mime_type:    "image/jpeg",
+          size_bytes:   result.jpegBytes.length,
+        } as any)
+        .eq("id", row.id)
+        .eq("org_id", orgId);
+      if (updErr) {
+        // Roll back the upload so the next pass can retry cleanly.
+        await supabase.storage.from(bucket).remove([newPath]);
+        failed.push({ id: row.id, storagePath: row.storage_path, reason: `db_update_failed: ${updErr.message}` });
+        continue;
+      }
+
+      // Best-effort cleanup of the legacy HEIC blob. If this fails we
+      // just leave the orphan in storage — the DB row already points at
+      // the new JPG and the packet builder is happy.
+      await supabase.storage.from(bucket).remove([row.storage_path]);
+      converted++;
+    } catch (err) {
+      console.error("[POST /v1/loads/backfill-heic] convert failed:", row.id, err);
+      failed.push({ id: row.id, storagePath: row.storage_path, reason: `convert_threw: ${(err as Error)?.message ?? "unknown"}` });
+    }
+  }
+
+  return c.json({
+    total:     rows.length,
+    converted,
+    failed,
+  });
+});
 
 export default loads;

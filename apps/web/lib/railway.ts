@@ -1204,6 +1204,22 @@ class RailwayClient {
     return this.req<CreateInvoiceResponse>('POST', `/v1/invoices/${id}/regenerate`, body);
   }
   /**
+   * One-shot HEIC → JPEG backfill across load_documents. Scoped to the
+   * caller's org by the server. Optionally narrow with `loadIds` to
+   * convert just specific loads (e.g. the affected invoice set).
+   * `dryRun: true` returns the count + a sample without touching any
+   * blob — handy for sanity-checking the scope before committing.
+   */
+  backfillHeic(body: { loadIds?: string[]; dryRun?: boolean } = {}) {
+    return this.req<{
+      total:     number;
+      converted?: number;
+      preview?:  Array<{ id: string; loadId: string | null; kind: string; fileName: string; mime: string | null }>;
+      failed?:   Array<{ id: string; storagePath: string; reason: string }>;
+      dryRun?:   boolean;
+    }>('POST', '/v1/loads/backfill-heic', body);
+  }
+  /**
    * Fetch the rendered invoice PDF as a Blob. Uses authed fetch under
    * the hood; callers turn the Blob into either a download link or
    * an object URL for inline viewing.
