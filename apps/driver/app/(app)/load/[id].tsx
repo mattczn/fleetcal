@@ -341,7 +341,7 @@ function CheckInButton({
         Alert.alert(
           "Checked in (no location)",
           "We couldn't get a GPS fix, so this check-in is unverified. "
-          + "Enable Location for Curzon Driver in Settings to verify future check-ins.",
+          + "Enable Location for FleetCal Driver in Settings to verify future check-ins.",
         );
       }
       onCheckedIn?.("checkin");

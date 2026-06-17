@@ -18,9 +18,9 @@ import { supabase } from "@/lib/supabase";
 // screen so the SMS opt-in disclosure points at the real Privacy /
 // Terms / Support pages — required for Twilio A2P 10DLC sign-off and
 // Apple App Store review.
-const PRIVACY_URL = "https://www.curzontrucking.com/app/privacy-policy";
-const TERMS_URL   = "https://www.curzontrucking.com/app/terms-conditions";
-const SUPPORT_URL = "https://www.curzontrucking.com/app/support";
+const PRIVACY_URL = "https://www.fleetcal.app/privacy-policy";
+const TERMS_URL   = "https://www.fleetcal.app/terms-conditions";
+const SUPPORT_URL = "https://www.fleetcal.app/support";
 
 type Step = "phone" | "otp";
 
@@ -111,10 +111,10 @@ export default function LoginScreen() {
           </View>
 
           <Text style={[txt(800), { fontSize: 32, color: "#ffffff", letterSpacing: -0.5 }]}>
-            Curzon
+            FleetCal
           </Text>
           <Text style={[txt(800), { fontSize: 32, color: "#1a73e8", letterSpacing: -0.5, marginTop: -4 }]}>
-            Trucking
+            Driver
           </Text>
           <Text
             style={[
@@ -198,7 +198,7 @@ export default function LoginScreen() {
                   ]}
                 >
                   By tapping Send Code, you agree to receive SMS verification
-                  codes and operational notifications from Curzon Trucking at
+                  codes and operational notifications from FleetCal at
                   the number above. Msg &amp; data rates may apply. Msg
                   frequency varies. Reply STOP to opt out, HELP for help.
                 </Text>

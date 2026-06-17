@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Curzon Driver",
+    "name": "FleetCal Driver",
     "slug": "curzon-driver",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -10,11 +10,11 @@
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#1a2332"
+      "backgroundColor": "#1a73e8"
     },
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.curzondriver.matt",
+      "bundleIdentifier": "com.systematica.fleetcal.driver",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
@@ -24,7 +24,7 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#1A56DB"
       },
-      "package": "com.curzontrucking.driver",
+      "package": "com.systematica.fleetcal.driver",
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "googleServicesFile": "./google-services.json",
@@ -38,28 +38,28 @@
       "favicon": "./assets/favicon.png",
       "bundler": "metro"
     },
-    "scheme": "curzon-driver",
+    "scheme": "fleetcal-driver",
     "plugins": [
       "expo-router",
       "expo-secure-store",
       [
         "expo-image-picker",
         {
-          "photosPermission": "Allow Curzon Driver to access your photos for document uploads.",
-          "cameraPermission": "Allow Curzon Driver to use your camera to capture paperwork."
+          "photosPermission": "Allow FleetCal Driver to access your photos for document uploads.",
+          "cameraPermission": "Allow FleetCal Driver to use your camera to capture paperwork."
         }
       ],
       [
         "react-native-document-scanner-plugin",
         {
-          "cameraPermission": "Allow Curzon Driver to scan documents."
+          "cameraPermission": "Allow FleetCal Driver to scan documents."
         }
       ],
       [
         "expo-location",
         {
-          "locationAlwaysAndWhenInUsePermission": "Allow Curzon Driver to record your location when you check in at a stop. This helps verify your arrival and supports detention claims.",
-          "locationWhenInUsePermission": "Allow Curzon Driver to record your location when you check in at a stop."
+          "locationAlwaysAndWhenInUsePermission": "Allow FleetCal Driver to record your location when you check in at a stop. This helps verify your arrival and supports detention claims.",
+          "locationWhenInUsePermission": "Allow FleetCal Driver to record your location when you check in at a stop."
         }
       ],
       [

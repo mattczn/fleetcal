@@ -49,7 +49,7 @@ export default function SignInScreen() {
           <Truck size={44} color="#ffffff" strokeWidth={2.2} />
         </View>
         <Text style={[txt(800), { fontSize: 30, color: "#ffffff", letterSpacing: -0.5 }]}>
-          Curzon Dispatch
+          FleetCal Go
         </Text>
         <Text style={[txt(500), { fontSize: 14, color: "rgba(255,255,255,0.7)", marginTop: 8, textAlign: "center" }]}>
           Sign in with your Google account to view today&apos;s schedule.

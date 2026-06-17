@@ -224,7 +224,7 @@ export default function LoadsScreen() {
         // Visible banner so the driver knows push isn't working — silent
         // failure was leaving drivers with no pings + no way to tell.
         // 'denied' usually means iOS notification permission was declined
-        // (Settings → Notifications → Curzon). 'failed' means
+        // (Settings → Notifications → FleetCal Driver). 'failed' means
         // permission's fine but token registration with the server
         // didn't go through after retries.
         <View style={{ backgroundColor: "#fef3c7", paddingHorizontal: 16, paddingVertical: 10, borderTopWidth: 1, borderTopColor: "#fde68a" }}>
@@ -233,7 +233,7 @@ export default function LoadsScreen() {
           </Text>
           <Text style={[txt(500), { fontSize: 11, color: "#92400e", marginTop: 2 }]}>
             {pushStatus === "denied"
-              ? "Enable notifications in Settings → Notifications → Curzon so dispatch can reach you."
+              ? "Enable notifications in Settings → Notifications → FleetCal Driver so dispatch can reach you."
               : "We couldn't register this device for push. Pull down to retry, or restart the app."}
           </Text>
         </View>

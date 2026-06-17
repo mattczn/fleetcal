@@ -23,9 +23,9 @@
   "submit": {
     "production": {
       "ios": {
-        "appleId":     "curzondispatch2@gmail.com",
-        "ascAppId":    "6769581720",
-        "appleTeamId": "6CTS43SC6C"
+        "appleId":     "TODO_SYSTEMATICA_APPLE_ID",
+        "ascAppId":    "TODO_FLEETCAL_DRIVER_ASC_APP_ID",
+        "appleTeamId": "TODO_SYSTEMATICA_TEAM_ID"
       }
     }
   }

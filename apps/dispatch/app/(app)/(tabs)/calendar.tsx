@@ -1099,7 +1099,7 @@ export default function CalendarScreen() {
         </Text>
         <Text style={[txt(500), { fontSize: 13, color: "#5f6368", marginTop: 8, textAlign: "center" }]}>
           {user?.primaryEmailAddress?.emailAddress
-            ? `Signed in as ${user.primaryEmailAddress.emailAddress}, but you don't have access to a Curzon org.`
+            ? `Signed in as ${user.primaryEmailAddress.emailAddress}, but you don't have access to a FleetCal organization.`
             : "Set an active organization in your Clerk dashboard to continue."}
         </Text>
         <TouchableOpacity onPress={() => signOut()} style={{ marginTop: 22, paddingHorizontal: 18, paddingVertical: 10, backgroundColor: "#1a73e8", borderRadius: 999 }}>

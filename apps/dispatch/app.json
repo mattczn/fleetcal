@@ -1,13 +1,13 @@
 {
   "expo": {
-    "name": "Curzon Dispatch",
+    "name": "FleetCal Go",
     "slug": "dispatchgo",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
-    "scheme": "dispatchgo",
+    "scheme": "fleetcal-go",
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
@@ -15,7 +15,7 @@
     },
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.dispatchgo.app",
+      "bundleIdentifier": "com.systematica.fleetcal.dispatch",
       "infoPlist": {
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": false,
@@ -34,7 +34,7 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#1A56DB"
       },
-      "package": "com.dispatchgo.app",
+      "package": "com.systematica.fleetcal.dispatch",
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false
     },
@@ -53,14 +53,14 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Allow Curzon Dispatch to access your photos so you can attach paperwork to loads.",
-          "cameraPermission": "Allow Curzon Dispatch to use your camera to capture paperwork."
+          "photosPermission": "Allow FleetCal Go to access your photos so you can attach paperwork to loads.",
+          "cameraPermission": "Allow FleetCal Go to use your camera to capture paperwork."
         }
       ],
       [
         "react-native-document-scanner-plugin",
         {
-          "cameraPermission": "Allow Curzon Dispatch to scan paperwork documents."
+          "cameraPermission": "Allow FleetCal Go to scan paperwork documents."
         }
       ]
     ],

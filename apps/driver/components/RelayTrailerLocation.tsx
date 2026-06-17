@@ -85,7 +85,7 @@ function PickupView({ eventId, trailerDropoffLat, trailerDropoffLng, trailerDrop
       if (perm.status !== "granted") {
         Alert.alert(
           "Location permission needed",
-          "Enable location for Curzon Driver in Settings so we can pin the trailer drop spot.",
+          "Enable location for FleetCal Driver in Settings so we can pin the trailer drop spot.",
         );
         return;
       }
