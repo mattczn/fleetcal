@@ -18,7 +18,7 @@
  * 200-row dump was slow to scan + slow to render on bigger orgs.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { createPortal } from 'react-dom';
 import {
@@ -6455,6 +6455,7 @@ function MatchPanel({
         <DriverReportPicker
           transactionDate={t.transactionDate}
           targetGallons={t.dieselGallons}
+          targetAssetId={t.assetId}
           driverNameById={driverNameById}
           assetLabelById={assetLabelById}
           busy={busy}
@@ -6480,10 +6481,14 @@ function MatchPanel({
 // surface — the listFuelReports endpoint supports matchStatus
 // filtering, so we only fetch 'pending' reports.
 function DriverReportPicker({
-  transactionDate, targetGallons, driverNameById, assetLabelById, busy, onPick,
+  transactionDate, targetGallons, targetAssetId, driverNameById, assetLabelById, busy, onPick,
 }: {
   transactionDate: string;
   targetGallons:   number | undefined;
+  /** The transaction's resolved asset_id (typically from the Mudflap
+   *  card match). Reports for THIS asset float to the top; reports
+   *  for any other asset get a "Different truck" warning pill. */
+  targetAssetId:   number | undefined;
   driverNameById:  Map<number, string>;
   assetLabelById:  Map<number, string>;
   busy:            boolean;
@@ -6510,16 +6515,28 @@ function DriverReportPicker({
       .finally(() => setLoading(false));
   }, [transactionDate]);
 
-  // Sort by gallons-distance from the receipt's target (closest first).
-  // Falls back to date-distance when gallons isn't available.
+  // Two-key sort: first prefer reports for the SAME asset as the
+  // transaction (typically the Mudflap-card-derived truck), then break
+  // ties by how close the gallons are to the receipt. This puts the
+  // most likely correct report on top by construction. Cross-asset
+  // reports stay in the list but render with a warning pill so the
+  // dispatcher sees the mismatch before clicking.
   const sorted = useMemo(() => {
     const target = targetGallons ?? 0;
     return [...rows].sort((a, b) => {
+      const aSameAsset = targetAssetId != null && a.assetId === targetAssetId;
+      const bSameAsset = targetAssetId != null && b.assetId === targetAssetId;
+      if (aSameAsset !== bSameAsset) return aSameAsset ? -1 : 1;
       const da = Math.abs(a.dieselGallons - target);
       const db = Math.abs(b.dieselGallons - target);
       return da - db;
     });
-  }, [rows, targetGallons]);
+  }, [rows, targetGallons, targetAssetId]);
+
+  const sameAssetCount = useMemo(
+    () => targetAssetId != null ? rows.filter(r => r.assetId === targetAssetId).length : 0,
+    [rows, targetAssetId],
+  );
 
   return (
     <div
@@ -6549,7 +6566,7 @@ function DriverReportPicker({
       )}
       {sorted.length > 0 && (
         <div className="flex flex-col" style={{ maxHeight: 280, overflowY: 'auto' }}>
-          {sorted.map(r => {
+          {sorted.map((r, i) => {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const embedded = r as any;
             const driverName = embedded.driverName as string | undefined
@@ -6560,34 +6577,76 @@ function DriverReportPicker({
               ?? `Asset #${r.assetId}`;
             const galDiff = targetGallons != null ? Math.abs(r.dieselGallons - targetGallons) : null;
             const isClose = galDiff != null && galDiff <= 0.5;
+            const sameAsset = targetAssetId != null && r.assetId === targetAssetId;
+            const isFirstDifferentAsset =
+              targetAssetId != null && !sameAsset && i === sameAssetCount && sameAssetCount > 0;
             return (
-              <button
-                key={r.id}
-                type="button"
-                disabled={busy}
-                onClick={() => onPick(r.id)}
-                className="flex items-center gap-3 px-3 py-2 text-left transition-colors disabled:opacity-50"
-                style={{
-                  borderBottom: '1px solid var(--gc-border-light)',
-                  background:   isClose ? '#f0fdf4' : 'transparent',
-                  cursor:       busy ? 'default' : 'pointer',
-                }}
-                onMouseEnter={e => { if (!busy && !isClose) (e.currentTarget as HTMLElement).style.background = 'var(--gc-surface)'; }}
-                onMouseLeave={e => { if (!busy && !isClose) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}>
-                <div className="flex-1 min-w-0">
-                  <div className="text-[12.5px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
-                    {driverName} <span style={{ color: 'var(--gc-text-3)', fontWeight: 400 }}>·</span> {assetName}
+              <Fragment key={r.id}>
+                {/* Divider before the first different-asset row so the
+                    dispatcher sees a clear boundary between "for this
+                    truck" (top) and "for other trucks" (below). Only
+                    rendered when at least one same-asset report was
+                    found AND there are some other-asset ones below. */}
+                {isFirstDifferentAsset && (
+                  <div
+                    className="px-3 py-1.5 text-[10.5px] font-bold uppercase tracking-wider"
+                    style={{
+                      background: 'var(--gc-surface-2)',
+                      color:      'var(--gc-text-3)',
+                      borderBottom: '1px solid var(--gc-border-light)',
+                      borderTop:    '1px solid var(--gc-border-light)',
+                    }}>
+                    Other trucks (different from the card's truck)
                   </div>
-                  <div className="text-[11px] mt-0.5 tabular-nums" style={{ color: 'var(--gc-text-3)' }}>
-                    {new Date(r.reportedAt).toLocaleString('en-US', { timeZone: calendarTimezone })} · {r.dieselGallons.toFixed(1)} gal
-                    {galDiff != null && galDiff > 0.001 && ` · Δ${galDiff.toFixed(1)} gal from receipt`}
-                    {r.state && ` · ${r.state}`}
+                )}
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => onPick(r.id)}
+                  className="flex items-center gap-3 px-3 py-2 text-left transition-colors disabled:opacity-50"
+                  style={{
+                    borderBottom: '1px solid var(--gc-border-light)',
+                    background:   isClose && sameAsset ? '#f0fdf4' : 'transparent',
+                    cursor:       busy ? 'default' : 'pointer',
+                  }}
+                  onMouseEnter={e => { if (!busy) (e.currentTarget as HTMLElement).style.background = isClose && sameAsset ? '#dcfce7' : 'var(--gc-surface)'; }}
+                  onMouseLeave={e => { if (!busy) (e.currentTarget as HTMLElement).style.background = isClose && sameAsset ? '#f0fdf4' : 'transparent'; }}>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5 text-[12.5px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+                      <span>{driverName}</span>
+                      <span style={{ color: 'var(--gc-text-3)', fontWeight: 400 }}>·</span>
+                      <span>{assetName}</span>
+                      {/* Cross-asset warning pill. Fires when the
+                          transaction has a resolved asset_id and the
+                          report's asset_id is different. Click would
+                          also trigger the card_truck_mismatch confirm
+                          dialog on the server side, so this is a
+                          pre-emptive visual cue. */}
+                      {targetAssetId != null && !sameAsset && (
+                        <span
+                          className="inline-flex items-center gap-1 text-[9.5px] font-bold uppercase tracking-wider rounded"
+                          style={{
+                            background: 'rgba(217,119,6,0.12)',
+                            color:      '#b45309',
+                            padding:    '1.5px 6px',
+                          }}
+                          title={`This report is for a different truck than the transaction. Linking will prompt for confirmation.`}
+                        >
+                          ⚠ Different truck
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-[11px] mt-0.5 tabular-nums" style={{ color: 'var(--gc-text-3)' }}>
+                      {new Date(r.reportedAt).toLocaleString('en-US', { timeZone: calendarTimezone })} · {r.dieselGallons.toFixed(1)} gal
+                      {galDiff != null && galDiff > 0.001 && ` · Δ${galDiff.toFixed(1)} gal from receipt`}
+                      {r.state && ` · ${r.state}`}
+                    </div>
                   </div>
-                </div>
-                <div className="text-[11px] font-bold uppercase tracking-wider shrink-0" style={{ color: 'var(--gc-blue)' }}>
-                  Link →
-                </div>
-              </button>
+                  <div className="text-[11px] font-bold uppercase tracking-wider shrink-0" style={{ color: 'var(--gc-blue)' }}>
+                    Link →
+                  </div>
+                </button>
+              </Fragment>
             );
           })}
         </div>
