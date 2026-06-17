@@ -1293,6 +1293,13 @@ export interface FuelTransaction {
   /** Resolved FleetCal asset id. Set automatically when matchedTruck
    *  resolves to assets.unit, or manually via PATCH /:id/assign. */
   assetId?:               number;
+  /** How we know the asset_id. Set by the Mudflap sync to one of
+   *  card / vehicle_number / vehicle_number_token / vin / license_plate
+   *  depending on which matcher fired; set to 'report' when mirrored
+   *  from a linked fuel_report; set to 'manual' on explicit dispatcher
+   *  assignment. Drives the via-card pill and the cross-truck warning
+   *  when re-linking. Null on rows from before the column existed. */
+  assetLinkSource?:       string;
 
   // Diesel
   dieselGallons?:         number;

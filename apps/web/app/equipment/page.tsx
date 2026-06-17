@@ -5971,8 +5971,27 @@ function FuelDetail({
       {/* Assignment + status — both the actionable surface. */}
       <div className="px-5 py-4 grid grid-cols-2 gap-5">
         <div>
-          <div className="text-[11px] font-bold uppercase tracking-wider mb-2" style={{ color: 'var(--gc-text-3)' }}>
-            Assigned to
+          <div className="flex items-center gap-1.5 mb-2">
+            <div className="text-[11px] font-bold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
+              Assigned to
+            </div>
+            {/* Visual cue that this asset_id was set deterministically by
+                the Mudflap card match, not by a fuzzy heuristic. Tells
+                dispatchers it's safe to trust before they manually
+                re-link, and matches the card_truck_mismatch dialog. */}
+            {t?.assetLinkSource === 'card' && (
+              <span
+                className="inline-flex items-center gap-1 text-[9.5px] font-bold uppercase tracking-wider rounded"
+                style={{
+                  background: 'rgba(30,142,62,0.12)',
+                  color:      '#1e8e3e',
+                  padding:    '1.5px 6px',
+                }}
+                title={`Truck inferred from the Mudflap card last-4 (****${t.paymentLast4 ?? '????'}). This mapping doesn't depend on what the driver typed at the pump.`}
+              >
+                via card
+              </span>
+            )}
           </div>
           {t ? (
             <AssignmentControls
@@ -6303,6 +6322,40 @@ function MatchPanel({
       onFuelMutation();
       setTimeout(() => setFeedback(null), 4000);
     } catch (err) {
+      // Card-priority guard: server returns 409 with error='card_truck_mismatch'
+      // when this transaction is card-linked to a different truck than
+      // the report claims. The error payload carries both truck names so
+      // we can show a useful confirm prompt before re-issuing with force.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const e = err as any;
+      const detail = e?.detail;
+      const isMismatch = detail && typeof detail === 'object' && detail.error === 'card_truck_mismatch';
+      if (isMismatch) {
+        const cardTruck   = detail.cardAssetName   ?? `truck #${detail.cardAssetId}`;
+        const reportTruck = detail.reportAssetName ?? `truck #${detail.reportAssetId}`;
+        const cardLast4   = detail.cardLast4 ?? '????';
+        const ok = confirm(
+          `This transaction is for ${cardTruck} (Mudflap card ****${cardLast4}) but you're linking it to a driver report for ${reportTruck}.\n\nOverride the card link?`,
+        );
+        if (!ok) {
+          setBusy(false);
+          return;
+        }
+        try {
+          const r = await railway.matchFuelTransaction(t.id, { fuelReportId: reportId }, { force: true });
+          onChange(r.fuelTransaction);
+          setPickerOpen(false);
+          setFeedback(`Linked (overrode Mudflap card link)`);
+          onFuelMutation();
+          setTimeout(() => setFeedback(null), 4000);
+        } catch (err2) {
+          setFeedback((err2 as Error).message ?? 'Link failed');
+          setTimeout(() => setFeedback(null), 5000);
+        } finally {
+          setBusy(false);
+        }
+        return;
+      }
       setFeedback((err as Error).message ?? 'Link failed');
       setTimeout(() => setFeedback(null), 5000);
     } finally {

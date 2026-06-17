@@ -67,6 +67,7 @@ interface FuelTransactionRow {
   matched_truck:            string | null;
   driver_id:                number | null;
   asset_id:                 number | null;
+  asset_link_source:        string | null;
   diesel_gallons:           number | null;
   diesel_retail_price:      number | null;
   diesel_discount_price:    number | null;
@@ -92,7 +93,7 @@ interface FuelTransactionRow {
 
 const TX_COLS =
   "id,org_id,provider,provider_transaction_id,transaction_date," +
-  "driver_name,location,matched_truck,driver_id,asset_id," +
+  "driver_name,location,matched_truck,driver_id,asset_id,asset_link_source," +
   "diesel_gallons,diesel_retail_price,diesel_discount_price,diesel_total," +
   "def_gallons,def_retail_price,def_discount_price,def_total," +
   "total_charged,total_saved,payment_last4," +
@@ -112,6 +113,7 @@ function rowToTx(r: FuelTransactionRow): FuelTransaction {
     matchedTruck:          r.matched_truck ?? undefined,
     driverId:              r.driver_id ?? undefined,
     assetId:               r.asset_id ?? undefined,
+    assetLinkSource:       r.asset_link_source ?? undefined,
     dieselGallons:         r.diesel_gallons ?? undefined,
     dieselRetailPrice:     r.diesel_retail_price ?? undefined,
     dieselDiscountPrice:   r.diesel_discount_price ?? undefined,
@@ -444,26 +446,41 @@ fuelTxClerk.get("/", async (c) => {
 });
 
 // PATCH /v1/fuel-transactions/:id/match — manual link / unlink.
+//
+// Cross-truck warning (?force=true to override):
+//   When the transaction's asset_link_source is 'card' (meaning the
+//   asset_id was set deterministically from assets.mudflap_card_last4
+//   matching the Mudflap card_last4 on the receipt), linking it to a
+//   driver report for a DIFFERENT truck would silently overwrite the
+//   card-derived truth. Refuse unless the caller passes ?force=true.
+//   The UI shows a confirm dialog with both truck names and re-issues
+//   the request with force=true on user confirmation.
 fuelTxClerk.patch("/:id/match", requireCapability("fuel.edit"), async (c) => {
   const orgId  = c.get("orgId");
   const userId = c.get("userId");
   const id     = c.req.param("id");
+  const force  = c.req.query("force") === "true";
   const body   = await c.req.json<MatchFuelTransactionRequest>().catch(() => null);
   if (!body || (body.fuelReportId !== null && typeof body.fuelReportId !== "string")) {
     return c.json({ error: "bad_request", detail: "fuelReportId required (string or null)" } satisfies ApiErrorResponse, 400);
   }
 
   // Fetch existing row to discover its old fuel_report_id (so we can
-  // clear the back-pointer on the formerly-linked report).
-  const { data: prev } = await supabase
+  // clear the back-pointer on the formerly-linked report) AND its
+  // current asset_id + asset_link_source for the card-priority check.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: prev } = await (supabase as any)
     .from("fuel_transactions")
-    .select("id, fuel_report_id")
+    .select("id, fuel_report_id, asset_id, asset_link_source")
     .eq("id", id).eq("org_id", orgId)
     .maybeSingle();
   if (!prev) {
     return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
   }
-  const prevReportId = (prev as { fuel_report_id: string | null }).fuel_report_id;
+  const prevRow = prev as { fuel_report_id: string | null; asset_id: number | null; asset_link_source: string | null };
+  const prevReportId       = prevRow.fuel_report_id;
+  const prevAssetId        = prevRow.asset_id;
+  const prevAssetLinkSrc   = prevRow.asset_link_source;
 
   // When linking to a fuel_report, mirror its driver_id + asset_id
   // onto the transaction so the unified panel's dropdowns reflect
@@ -487,6 +504,50 @@ fuelTxClerk.patch("/:id/match", requireCapability("fuel.edit"), async (c) => {
     }
   }
 
+  // Card-priority guard: if the current asset_id was set by the
+  // Mudflap card matcher (asset_link_source='card'), refuse to
+  // overwrite with a report that points at a different truck — that's
+  // almost certainly a dispatcher mistake. Pass ?force=true to override.
+  if (
+    !force
+    && body.fuelReportId
+    && prevAssetLinkSrc === "card"
+    && prevAssetId != null
+    && mirroredAssetId != null
+    && mirroredAssetId !== prevAssetId
+  ) {
+    // Look up both truck display names so the UI dialog can show
+    // "CT-2021" vs "CT-2027" instead of raw IDs.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: assets } = await (supabase as any)
+      .from("assets")
+      .select("id, name, unit, mudflap_card_last4")
+      .in("id", [prevAssetId, mirroredAssetId])
+      .eq("org_id", orgId);
+    const byId = new Map<number, { name: string; unit: string | null; mudflap_card_last4: string | null }>();
+    for (const a of (assets ?? []) as Array<{ id: number; name: string; unit: string | null; mudflap_card_last4: string | null }>) {
+      byId.set(a.id, { name: a.name, unit: a.unit, mudflap_card_last4: a.mudflap_card_last4 });
+    }
+    const cardAsset   = byId.get(prevAssetId);
+    const reportAsset = byId.get(mirroredAssetId);
+    // Body is a structured error — additional fields beyond the
+    // standard ApiErrorResponse shape so the UI can render the dialog
+    // with both truck names. Cast through unknown to skip the
+    // satisfies-narrowing on this one endpoint.
+    return c.json({
+      error:           "card_truck_mismatch",
+      detail:          `This transaction is for ${cardAsset?.name ?? `truck #${prevAssetId}`} (Mudflap card ****${cardAsset?.mudflap_card_last4 ?? "????"}), but you're linking it to a report for ${reportAsset?.name ?? `truck #${mirroredAssetId}`}. Pass force=true to override.`,
+      cardAssetId:     prevAssetId,
+      cardAssetName:   cardAsset?.name ?? null,
+      cardAssetUnit:   cardAsset?.unit ?? null,
+      cardLast4:       cardAsset?.mudflap_card_last4 ?? null,
+      reportAssetId:   mirroredAssetId,
+      reportAssetName: reportAsset?.name ?? null,
+      reportAssetUnit: reportAsset?.unit ?? null,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any, 409);
+  }
+
   const updateRow: Record<string, unknown> = body.fuelReportId === null
     ? {
         fuel_report_id:   null,
@@ -500,35 +561,44 @@ fuelTxClerk.patch("/:id/match", requireCapability("fuel.edit"), async (c) => {
         // an unlink so the dispatcher's attribution work isn't lost.
       }
     : {
-        fuel_report_id:   body.fuelReportId,
-        match_status:     "manual_matched",
-        match_confidence: 100,
-        match_notes:      body.matchNotes ?? null,
-        matched_at:       new Date().toISOString(),
-        matched_by:       userId,
-        // Pre-populate driver/asset from the linked report. The DB
-        // coalesce below preserves any prior intentional override:
-        // if the row already had driver_id=14 and the report says
-        // driver_id=17, we keep 14. Same for asset.
-        driver_id:        mirroredDriverId,
-        asset_id:         mirroredAssetId,
+        fuel_report_id:    body.fuelReportId,
+        match_status:      "manual_matched",
+        match_confidence:  100,
+        match_notes:       body.matchNotes ?? null,
+        matched_at:        new Date().toISOString(),
+        matched_by:        userId,
+        // Pre-populate driver/asset from the linked report; the
+        // override block below preserves any prior intentional value.
+        driver_id:         mirroredDriverId,
+        asset_id:          mirroredAssetId,
+        asset_link_source: mirroredAssetId != null ? "report" : null,
       };
 
-  // For the link case, we want to mirror only when the transaction
-  // doesn't already have a value. The cleanest way is to read first,
-  // then conditionally set. We already read `prev` above with just
-  // fuel_report_id — extend that to also pull driver_id/asset_id so
-  // we can decide here.
-  const { data: prevFull } = await supabase
-    .from("fuel_transactions")
-    .select("driver_id, asset_id")
-    .eq("id", id).eq("org_id", orgId)
-    .maybeSingle();
-  if (body.fuelReportId && prevFull) {
-    const prevDriver = (prevFull as { driver_id: number | null }).driver_id;
-    const prevAsset  = (prevFull as { asset_id:  number | null }).asset_id;
-    if (prevDriver != null) updateRow.driver_id = prevDriver; // preserve override
-    if (prevAsset  != null) updateRow.asset_id  = prevAsset;  // preserve override
+  // Preserve prior driver/asset attribution. Three cases:
+  //   - prev had no asset_id          → use mirroredAssetId, src=report
+  //   - prev had asset_id, same truck → keep both id + src
+  //   - prev had asset_id, force=true override on cross-truck → adopt
+  //     the report's truck and mark src='manual' (dispatcher chose)
+  // The cross-truck-without-force case is already blocked above (409).
+  if (body.fuelReportId) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: prevFull } = await (supabase as any)
+      .from("fuel_transactions")
+      .select("driver_id")
+      .eq("id", id).eq("org_id", orgId)
+      .maybeSingle();
+    const prevDriver = (prevFull as { driver_id: number | null } | null)?.driver_id ?? null;
+    if (prevDriver != null) updateRow.driver_id = prevDriver;
+
+    if (prevAssetId != null) {
+      if (force && mirroredAssetId != null && mirroredAssetId !== prevAssetId) {
+        updateRow.asset_id          = mirroredAssetId;
+        updateRow.asset_link_source = "manual";
+      } else {
+        updateRow.asset_id          = prevAssetId;
+        updateRow.asset_link_source = prevAssetLinkSrc;
+      }
+    }
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -671,12 +741,14 @@ fuelTxClerk.patch("/:id/assign", requireCapability("fuel.edit"), async (c) => {
   if (!orig) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
   const origDriverName = (orig as { driver_name: string | null }).driver_name;
 
-  // Primary update.
+  // Primary update. asset_link_source = 'manual' when the dispatcher
+  // explicitly sets an asset_id; cleared to null when assetId is null.
   const { data: updated, error } = await supabase
     .from("fuel_transactions")
     .update({
-      driver_id: body.driverId,
-      asset_id:  body.assetId,
+      driver_id:         body.driverId,
+      asset_id:          body.assetId,
+      asset_link_source: body.assetId != null ? "manual" : null,
     } as any) // eslint-disable-line @typescript-eslint/no-explicit-any
     .eq("id", id).eq("org_id", orgId)
     .select(TX_COLS)
@@ -694,8 +766,9 @@ fuelTxClerk.patch("/:id/assign", requireCapability("fuel.edit"), async (c) => {
     const { data: similar, error: simErr } = await supabase
       .from("fuel_transactions")
       .update({
-        driver_id: body.driverId,
-        asset_id:  body.assetId,
+        driver_id:         body.driverId,
+        asset_id:          body.assetId,
+        asset_link_source: body.assetId != null ? "manual" : null,
       } as any) // eslint-disable-line @typescript-eslint/no-explicit-any
       .eq("org_id", orgId)
       .ilike("driver_name", normalized)   // case-insensitive exact match

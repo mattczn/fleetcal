@@ -190,6 +190,7 @@ type InsertRow = {
   location:                 string | null;
   matched_truck:            string | null;
   asset_id:                 number | null;
+  asset_link_source:        string | null;
   diesel_gallons:           number | null;
   diesel_retail_price:      number | null;
   diesel_discount_price:    number | null;
@@ -207,6 +208,7 @@ function mapTransaction(
   orgId: string,
   tx: MudflapTransaction,
   assetId: number | null,
+  assetLinkSource: string | null,
 ): InsertRow {
   // Mudflap reports cents; our schema stores dollars to 2 decimals.
   const dollars = (cents: number | null | undefined): number | null =>
@@ -238,6 +240,7 @@ function mapTransaction(
     location:                merchant,
     matched_truck:           tx.vehicle_identifiers?.vehicle_number ?? null,
     asset_id:                assetId,
+    asset_link_source:       assetLinkSource,
     diesel_gallons:          isDef ? null : (tx.quantity ?? null),
     diesel_retail_price:     isDef ? null : dollars(tx.retail_price),
     diesel_discount_price:   isDef ? null : dollars(tx.mudflap_price),
@@ -287,10 +290,10 @@ export async function syncMudflapCarriers(
 
   for (const tx of transactions) {
     totalCharged += (tx.total_cost ?? 0) / 100;
-    const { assetId } = matchAsset(tx, assets);
+    const { assetId, source } = matchAsset(tx, assets);
     if (assetId != null) assetLinked++;
 
-    const row = mapTransaction(orgId, tx, assetId);
+    const row = mapTransaction(orgId, tx, assetId, source);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: inserted_row, error } = await (supabase as any)

@@ -1287,8 +1287,9 @@ class RailwayClient {
     const s = qs.toString();
     return this.req<ListFuelTransactionsResponse>('GET', `/v1/fuel-transactions${s ? `?${s}` : ''}`);
   }
-  matchFuelTransaction(id: string, body: MatchFuelTransactionRequest) {
-    return this.req<MatchFuelTransactionResponse>('PATCH', `/v1/fuel-transactions/${id}/match`, body);
+  matchFuelTransaction(id: string, body: MatchFuelTransactionRequest, opts?: { force?: boolean }) {
+    const qs = opts?.force ? '?force=true' : '';
+    return this.req<MatchFuelTransactionResponse>('PATCH', `/v1/fuel-transactions/${id}/match${qs}`, body);
   }
   /** Assign driver + truck directly on a card transaction, independent
    *  of any driver fuel_report. When body.applyToSimilar is true the
