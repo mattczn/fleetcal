@@ -1484,10 +1484,34 @@ loads.patch("/:id/events/:eventId", requireCapability("loads.edit"), async (c) =
       .maybeSingle();
     const prevRow = prev as { driver_id: number | null; status: string | null } | null;
     prevStatus = prevRow?.status ?? null;
-    if ("driverId" in body && (prevRow?.driver_id ?? null) !== (body.driverId ?? null)) {
+    const prevDriverId = prevRow?.driver_id ?? null;
+    const newDriverId  = "driverId" in body ? (body.driverId ?? null) : prevDriverId;
+    const driverChanging = "driverId" in body && prevDriverId !== newDriverId;
+
+    if (driverChanging) {
       update.confirmed_at             = null;
       update.confirmed_by             = null;
       update.confirm_reminder_sent_at = null;
+    }
+
+    // Status state machine: keep status consistent with driver
+    // assignment. The dispatcher's mental model:
+    //   - scheduled  = no driver
+    //   - assigned   = driver assigned, hasn't confirmed yet
+    //   - dispatched = driver confirmed in the app
+    //   - en_route+  = driver started the trip in the app
+    // Auto-promote/demote ONLY when the dispatcher didn't explicitly
+    // set status in this same request (their write wins), and only
+    // when the current status is the matching gateway state. Higher
+    // states (dispatched / en_route / picked_up / delivered) stay
+    // untouched because they were set by the driver-side workflow
+    // and a driver swap shouldn't roll them back automatically.
+    if (driverChanging && !("status" in body)) {
+      if (newDriverId != null && prevStatus === "scheduled") {
+        update.status = "assigned";
+      } else if (newDriverId == null && prevStatus === "assigned") {
+        update.status = "scheduled";
+      }
     }
   }
 
@@ -1507,19 +1531,23 @@ loads.patch("/:id/events/:eventId", requireCapability("loads.edit"), async (c) =
   // path (with its multi-mode `loadCancelled` shape) but EVERY other
   // status transition by a dispatcher was silent. Now any
   // server-observed status change writes a per-leg audit entry. This
-  // also catches programmatic flips from scripts / other callers.
+  // also catches programmatic flips from scripts / other callers AND
+  // the auto-promotion above (scheduled → assigned when a driver is
+  // set, etc.) — `effectiveNewStatus` reads the value we actually
+  // wrote, not what was in body.
+  const effectiveNewStatus = (update.status as string | undefined)
+    ?? (("status" in body) ? body.status : undefined);
   if (
-    "status" in body &&
     prevStatus !== null &&
-    body.status !== undefined &&
-    body.status !== prevStatus
+    effectiveNewStatus !== undefined &&
+    effectiveNewStatus !== prevStatus
   ) {
     const actorName = await getUserDisplayName(c.get("userId"));
     await appendEventAudit(eventId, orgId, {
       changedAt:     new Date().toISOString(),
       changedByName: actorName ?? "Dispatcher",
       prevStatus:    prevStatus as never,
-      newStatus:     body.status as never,
+      newStatus:     effectiveNewStatus as never,
     });
   }
 

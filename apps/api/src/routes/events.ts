@@ -41,6 +41,8 @@ import {
 import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability, effectiveCanForOrg } from "../middleware/require.js";
+import { appendLoadAudit } from "../lib/auditLog.js";
+import { getUserDisplayName } from "../lib/clerk.js";
 
 const events = new Hono<{ Variables: AuthVariables }>();
 
@@ -463,13 +465,47 @@ events.delete("/:id", async (c) => {
     return badRequest(c, ["cannot delete a revenue event directly; pass keepLoad=true to drop the event but keep the load, or DELETE /v1/loads/:id to delete both"]);
   }
 
+  // Cancel-implies-removed invariant: a revenue event being soft-
+  // deleted via keepLoad=true MEANS the load was cancelled (otherwise
+  // the dispatcher would just edit it). Flip status to 'cancelled' in
+  // the same update so:
+  //   - The load's billing/status filters don't keep showing it as
+  //     scheduled / assigned.
+  //   - The audit history reflects the cancel, not just a quiet delete.
+  // Non-revenue events keep their existing status — they're not loads
+  // in the dispatch sense.
+  const deleteUpdate: Record<string, unknown> = {
+    deleted_at: new Date().toISOString(),
+  };
+  if (isRevenue) deleteUpdate.status = "cancelled";
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { error: delErr } = await supabase
     .from("events")
-    .update({ deleted_at: new Date().toISOString() })
+    .update(deleteUpdate as any)
     .eq("id", eventId)
     .eq("org_id", orgId);
   if (delErr) {
     return c.json({ error: "delete_failed", detail: delErr.message } satisfies ApiErrorResponse, 500);
+  }
+
+  // Audit entry: for revenue events, append a loadCancelled+remove-event
+  // entry to loads.audit_log so the modal/history shows WHO cancelled
+  // the load and WHEN, even if the client's audit write fell on the
+  // floor (network, race, or alternate caller). Server-side fallback
+  // means the modal isn't blind regardless of which path triggered
+  // the delete.
+  if (isRevenue && evRow.load_id) {
+    try {
+      const actorName = await getUserDisplayName(c.get("userId")) ?? "Dispatcher";
+      await appendLoadAudit(evRow.load_id, orgId, {
+        changedAt:     new Date().toISOString(),
+        changedByName: actorName,
+        loadCancelled: { mode: "remove-event" },
+      });
+    } catch (auditErr) {
+      console.warn("[DELETE /v1/events/:id?keepLoad=true] audit append failed (non-fatal):", auditErr);
+    }
   }
 
   // Unlink any maintenance work orders that pointed at this event.
