@@ -1291,6 +1291,32 @@ class RailwayClient {
     const qs = opts?.force ? '?force=true' : '';
     return this.req<MatchFuelTransactionResponse>('PATCH', `/v1/fuel-transactions/${id}/match${qs}`, body);
   }
+  /** General field edit — amounts, gallons, date, location, driver name,
+   *  payment last-4, etc. Match/assign fields have their own endpoints. */
+  updateFuelTransaction(id: string, body: {
+    transactionDate?:      string;
+    totalCharged?:         number;
+    totalSaved?:           number;
+    dieselGallons?:        number | null;
+    dieselRetailPrice?:    number | null;
+    dieselDiscountPrice?:  number | null;
+    dieselTotal?:          number | null;
+    defGallons?:           number | null;
+    defRetailPrice?:       number | null;
+    defDiscountPrice?:     number | null;
+    defTotal?:             number | null;
+    location?:             string | null;
+    driverName?:           string | null;
+    matchedTruck?:         string | null;
+    paymentLast4?:         string | null;
+  }) {
+    return this.req<{ fuelTransaction: import('@fleetcal/types').FuelTransaction }>('PATCH', `/v1/fuel-transactions/${id}`, body);
+  }
+  /** Soft delete. Stamps deleted_at + clears any linked fuel_report's
+   *  back-pointer. Server keeps the row for recovery via SQL if needed. */
+  deleteFuelTransaction(id: string) {
+    return this.req<{ ok: true; id: string }>('DELETE', `/v1/fuel-transactions/${id}`);
+  }
   /** Assign driver + truck directly on a card transaction, independent
    *  of any driver fuel_report. When body.applyToSimilar is true the
    *  server also updates every other unmatched transaction with the

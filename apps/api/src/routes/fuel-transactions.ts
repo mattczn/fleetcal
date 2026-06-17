@@ -817,6 +817,121 @@ fuelTxClerk.post("/auto-match-sweep", requireCapability("fuel.edit"), async (c) 
   }
 });
 
+// PATCH /v1/fuel-transactions/:id — edit a transaction's fields.
+//
+// Used to correct a wrong amount, wrong gallons, wrong date, etc.
+// after ingest — Mudflap sometimes posts a slightly different total
+// than what was printed on the receipt, and the dispatcher needs to
+// reconcile. Doesn't touch the match/assign fields — those have
+// their own endpoints (/match, /assign) with their own guards.
+fuelTxClerk.patch("/:id", requireCapability("fuel.edit"), async (c) => {
+  const orgId = c.get("orgId");
+  const id    = c.req.param("id");
+  const body  = await c.req.json<{
+    transactionDate?:      string;
+    totalCharged?:         number;
+    totalSaved?:           number;
+    dieselGallons?:        number | null;
+    dieselRetailPrice?:    number | null;
+    dieselDiscountPrice?:  number | null;
+    dieselTotal?:          number | null;
+    defGallons?:           number | null;
+    defRetailPrice?:       number | null;
+    defDiscountPrice?:     number | null;
+    defTotal?:             number | null;
+    location?:             string | null;
+    driverName?:           string | null;
+    matchedTruck?:         string | null;
+    paymentLast4?:         string | null;
+  }>().catch(() => null);
+  if (!body || typeof body !== "object") {
+    return c.json({ error: "validation_failed", errors: ["body required"] } satisfies ApiErrorResponse, 400);
+  }
+
+  const update: Record<string, unknown> = {};
+  if ("transactionDate"     in body) update.transaction_date       = body.transactionDate;
+  if ("totalCharged"        in body) update.total_charged          = body.totalCharged;
+  if ("totalSaved"          in body) update.total_saved            = body.totalSaved;
+  if ("dieselGallons"       in body) update.diesel_gallons         = body.dieselGallons       ?? null;
+  if ("dieselRetailPrice"   in body) update.diesel_retail_price    = body.dieselRetailPrice   ?? null;
+  if ("dieselDiscountPrice" in body) update.diesel_discount_price  = body.dieselDiscountPrice ?? null;
+  if ("dieselTotal"         in body) update.diesel_total           = body.dieselTotal         ?? null;
+  if ("defGallons"          in body) update.def_gallons            = body.defGallons          ?? null;
+  if ("defRetailPrice"      in body) update.def_retail_price       = body.defRetailPrice      ?? null;
+  if ("defDiscountPrice"    in body) update.def_discount_price     = body.defDiscountPrice    ?? null;
+  if ("defTotal"            in body) update.def_total              = body.defTotal            ?? null;
+  if ("location"            in body) update.location               = body.location            ?? null;
+  if ("driverName"          in body) update.driver_name            = body.driverName          ?? null;
+  if ("matchedTruck"        in body) update.matched_truck          = body.matchedTruck        ?? null;
+  if ("paymentLast4"        in body) update.payment_last4          = body.paymentLast4        ?? null;
+
+  if (Object.keys(update).length === 0) {
+    return c.json({ error: "validation_failed", errors: ["no fields to update"] } satisfies ApiErrorResponse, 400);
+  }
+  update.updated_at = new Date().toISOString();
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await supabase
+    .from("fuel_transactions")
+    .update(update as any)
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .is("deleted_at", null)
+    .select(TX_COLS)
+    .maybeSingle();
+  if (error) {
+    console.error("[PATCH /v1/fuel-transactions/:id] failed:", error);
+    return c.json({ error: "update_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  }
+  if (!data) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+  return c.json({ fuelTransaction: rowToTx(data as unknown as FuelTransactionRow) });
+});
+
+// DELETE /v1/fuel-transactions/:id — soft delete.
+//
+// Stamps deleted_at + clears any linked fuel_report back-pointer so
+// the report drops back to 'pending' for the auto-matcher. Soft so
+// dispatcher accidents are recoverable via SQL; hard-deletes need
+// to be done manually (?hard=true branch).
+fuelTxClerk.delete("/:id", requireCapability("fuel.edit"), async (c) => {
+  const orgId = c.get("orgId");
+  const id    = c.req.param("id");
+
+  // Fetch linked report id before we soft-delete so we can clear its
+  // back-pointer in one go (otherwise the report stays "matched" to
+  // a transaction the user can no longer see).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: existing } = await (supabase as any)
+    .from("fuel_transactions")
+    .select("id, fuel_report_id")
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .is("deleted_at", null)
+    .maybeSingle();
+  if (!existing) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+  const linkedReportId = (existing as { fuel_report_id: string | null }).fuel_report_id;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { error } = await (supabase as any)
+    .from("fuel_transactions")
+    .update({ deleted_at: new Date().toISOString() })
+    .eq("id", id)
+    .eq("org_id", orgId);
+  if (error) {
+    console.error("[DELETE /v1/fuel-transactions/:id] failed:", error);
+    return c.json({ error: "delete_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  }
+  if (linkedReportId) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabase as any)
+      .from("fuel_reports")
+      .update({ transaction_id: null, match_status: "pending" })
+      .eq("id", linkedReportId)
+      .eq("org_id", orgId);
+  }
+  return c.json({ ok: true, id });
+});
+
 // Two separate routers exported so index.ts can mount the api-key
 // branch on the OPEN app group (no clerk wrapper) and the rest under
 // `authed`. Combining them here under a single .use("*", clerkAuth)
