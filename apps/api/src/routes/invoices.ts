@@ -2283,16 +2283,15 @@ invoices.post("/:id/regenerate", async (c) => {
   }
   if (wasSent) {
     // The previous packet is already in the broker's inbox; clear the
-    // sent_at / sent_method markers so the next Send writes fresh
-    // ones (and so the UI's "sent" badge goes away while the row is
-    // back in draft). The new invoice_number is the same as the old
-    // one — brokers reconcile by number, so they'll see the second
-    // packet as a correction rather than a new charge.
-    updateRow.status        = "draft";
-    updateRow.sent_at       = null;
-    updateRow.sent_method   = null;
-    updateRow.sent_to_email = null;
-    updateRow.sent_to_name  = null;
+    // sent_at / sent_to / sent_method markers so the next Send writes
+    // fresh ones (and so the UI's "sent" badge goes away while the
+    // row is back in draft). The new invoice_number is the same as
+    // the old one — brokers reconcile by number, so they'll see the
+    // second packet as a correction rather than a new charge.
+    updateRow.status      = "draft";
+    updateRow.sent_at     = null;
+    updateRow.sent_to     = null;
+    updateRow.sent_method = null;
   }
   // Acceptable starting states: draft, void, or sent. Paid was rejected above.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
