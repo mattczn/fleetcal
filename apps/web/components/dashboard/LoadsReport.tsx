@@ -130,12 +130,23 @@ const COLUMNS: ColumnDef[] = [
   { id: 'priority',     label: 'Priority',    get: (l) => l.pickupPriority ? 'Yes' : '' },
   { id: 'pickup',       label: 'Pickup',      get: (l) => firstStop(l, 'pickup') },
   { id: 'delivery',     label: 'Delivery',    get: (l) => firstStop(l, 'delivery') },
+  { id: 'stops',        label: 'Stops', align: 'right',        get: (l) => l.stops?.length ?? '' },
   { id: 'commodity',    label: 'Commodity',   get: (l) => l.commodity ?? '' },
   { id: 'weight',       label: 'Weight (lbs)', align: 'right', get: (l) => l.weight ?? '' },
   { id: 'miles',        label: 'Miles', align: 'right',        get: (l) => l.totalLoadedMiles ?? '' },
   { id: 'loadPrice',    label: 'Linehaul',   align: 'right',   get: (l) => l.loadPrice ?? '' },
   { id: 'accessorials', label: 'Accessorials', align: 'right', get: (l) => billableAccessorials(l) || '' },
   { id: 'total',        label: 'Total',       align: 'right',  get: (l) => billableTotal(l) || '' },
+  // Rate per mile from linehaul ÷ total loaded miles. Linehaul is the
+  // right numerator here, not Total Billable — accessorials are
+  // distance-independent (lumpers, detention) so folding them in would
+  // distort the per-mile rate against comparable loads. Returns '' when
+  // either side is missing or zero so empty cells stay empty.
+  { id: 'rpm',          label: 'RPM', align: 'right',          get: (l) => {
+    const m = l.totalLoadedMiles ?? 0;
+    const p = l.loadPrice ?? 0;
+    return (m > 0 && p > 0) ? p / m : '';
+  } },
   { id: 'driverPay',    label: 'Driver Pay', align: 'right',   get: (l) => l.totalDriverPay ?? '' },
   { id: 'refNums',      label: 'References',  get: (l) => refStr(l) },
   { id: 'dispatcher',   label: 'Dispatcher',  get: (l) => l.dispatcher ?? '' },
@@ -143,7 +154,10 @@ const COLUMNS: ColumnDef[] = [
   { id: 'notes',        label: 'Notes',       get: (l) => l.notes ?? '' },
 ];
 
-const DEFAULT_VISIBLE = ['pickupDate', 'loadNum', 'customer', 'driver', 'asset', 'status', 'loadPrice', 'accessorials', 'total', 'driverPay'];
+const DEFAULT_VISIBLE = [
+  'pickupDate', 'deliveryDate', 'loadNum', 'customer', 'driver', 'asset',
+  'status', 'stops', 'miles', 'loadPrice', 'accessorials', 'total', 'rpm', 'driverPay',
+];
 const DEFAULT_VISIBLE_SET = new Set(DEFAULT_VISIBLE);
 
 // Default per-column widths. Same Motive-style sensible-default pattern
@@ -167,12 +181,14 @@ const COL_WIDTHS: Record<string, number> = {
   priority:       80,
   pickup:         200,
   delivery:       200,
+  stops:          80,
   commodity:      140,
   weight:         110,
   miles:          90,
   loadPrice:      110,
   accessorials:   120,
   total:          120,
+  rpm:            90,
   driverPay:      110,
   refNums:        220,
   dispatcher:     140,
@@ -546,7 +562,7 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
     if (v === '' || v == null) return '';
     if (typeof v === 'number') {
       if (col.noFormat) return String(v);
-      const isMoney = col.id === 'loadPrice' || col.id === 'driverPay' || col.id === 'accessorials' || col.id === 'total';
+      const isMoney = col.id === 'loadPrice' || col.id === 'driverPay' || col.id === 'accessorials' || col.id === 'total' || col.id === 'rpm';
       return isMoney && v > 0 ? fmt$(v) : v.toLocaleString();
     }
     return String(v);
@@ -694,29 +710,87 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [availableColumns, ctx, customers, drivers, assets, openEditModal]);
 
-  // In-table search — narrows what's visible without changing the
-  // headline totals above. Searches across the high-value text fields:
-  // load #, internal id, broker, driver names, asset name, ref nums,
-  // cities. Stop facility/city values bubble up through firstStop().
-  const tableFilters = useMemo<OpsFilter<LoadSummary>[]>(() => [{
-    kind: 'search',
-    placeholder: 'Search load #, broker, driver, city…',
-    width: 320,
-    match: (load, q) => {
-      const haystack = [
-        load.loadNum,
-        load.internalLoadId != null ? String(load.internalLoadId) : '',
-        load.broker,
-        load.pickupDriverName,
-        load.deliveryDriverName,
-        load.commodity,
-        firstStop(load, 'pickup'),
-        firstStop(load, 'delivery'),
-        refStr(load),
-      ].join(' ').toLowerCase();
-      return haystack.includes(q);
+  // OpsTable filter chips. Narrow what's visible WITHOUT changing the
+  // headline totals above — same convention as /accounting and /closeout
+  // (the bucket-tile $ stays at the bucket level; chips refine the table
+  // view). Adding more later (e.g. equipment type, dispatcher) is just
+  // another entry here.
+  const tableFilters = useMemo<OpsFilter<LoadSummary>[]>(() => [
+    {
+      kind: 'search',
+      placeholder: 'Search load #, broker, driver, city…',
+      width: 320,
+      match: (load, q) => {
+        const haystack = [
+          load.loadNum,
+          load.internalLoadId != null ? String(load.internalLoadId) : '',
+          load.broker,
+          load.pickupDriverName,
+          load.deliveryDriverName,
+          load.commodity,
+          firstStop(load, 'pickup'),
+          firstStop(load, 'delivery'),
+          refStr(load),
+        ].join(' ').toLowerCase();
+        return haystack.includes(q);
+      },
     },
-  }], []);
+    {
+      kind: 'select',
+      key: 'status',
+      label: 'Status',
+      options: [
+        { value: 'scheduled',  label: 'Scheduled' },
+        { value: 'assigned',   label: 'Assigned' },
+        { value: 'dispatched', label: 'Dispatched' },
+        { value: 'en_route',   label: 'En Route' },
+        { value: 'picked_up',  label: 'Picked Up' },
+        { value: 'delivered',  label: 'Delivered' },
+        { value: 'cancelled',  label: 'Cancelled' },
+        { value: 'tonu',       label: 'TONU' },
+        { value: 'problem',    label: 'Problem' },
+      ],
+      // Pickup-leg status is the load's headline status. Relays get the
+      // delivery side filtered through the Delivery Status column when
+      // the user wants that finer cut.
+      predicate: (load, v) => load.pickupStatus === v,
+    },
+    {
+      kind: 'select',
+      key: 'billing',
+      label: 'Billing',
+      options: [
+        { value: 'pending',   label: 'Pending' },
+        { value: 'verified',  label: 'Verified' },
+        { value: 'invoiced',  label: 'Invoiced' },
+        { value: 'paid',      label: 'Paid' },
+        { value: 'on_hold',   label: 'On Hold' },
+      ],
+      // Loads with no billingStatus set default to pending (matches the
+      // way /accounting buckets unflagged rows).
+      predicate: (load, v) => (load.billingStatus ?? 'pending') === v,
+    },
+    {
+      kind: 'select',
+      key: 'relay',
+      label: 'Relay',
+      options: [
+        { value: 'yes', label: 'Relay only' },
+        { value: 'no',  label: 'Non-relay' },
+      ],
+      predicate: (load, v) => load.isRelay === (v === 'yes'),
+    },
+    {
+      kind: 'select',
+      key: 'priority',
+      label: 'Priority',
+      options: [
+        { value: 'yes', label: 'Priority only' },
+        { value: 'no',  label: 'Non-priority' },
+      ],
+      predicate: (load, v) => (!!load.pickupPriority) === (v === 'yes'),
+    },
+  ], []);
 
   // ── Export helpers ──────────────────────────────────────────────────────────
 
