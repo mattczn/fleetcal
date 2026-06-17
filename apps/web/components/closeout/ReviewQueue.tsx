@@ -561,12 +561,20 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
       if (dirtyIncludeCount > 0) await saveIncludes();
 
       let result: import('@fleetcal/types').CreateInvoiceResponse;
-      if (activeInvoice && activeInvoice.status === 'draft') {
-        result = await railway.regenerateInvoice(activeInvoice.id);
-      } else if (activeInvoice && activeInvoice.status !== 'draft') {
-        // Server would 409 — fail fast with a clearer message.
-        setInvoiceError(`Cannot regenerate a ${activeInvoice.status} invoice. Void it first if you need to replace it.`);
+      if (activeInvoice && activeInvoice.status === 'paid') {
+        // Money has moved; server will 409 anyway. Fail fast with a
+        // clearer message than the raw server detail.
+        setInvoiceError('Cannot regenerate a paid invoice. Hit Unmark Paid first if you need to replace it.');
         return;
+      }
+      if (activeInvoice && (activeInvoice.status === 'draft'
+                         || activeInvoice.status === 'void'
+                         || activeInvoice.status === 'sent')) {
+        // Server handles all three: draft refreshes in place; void
+        // revives to draft; sent rewinds to draft so the next Send
+        // ships a correction packet. Same invoice number is preserved
+        // in all cases.
+        result = await railway.regenerateInvoice(activeInvoice.id);
       } else {
         result = await railway.createInvoice({ loadId: targetLoadId });
       }
@@ -580,8 +588,16 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
         return next;
       });
     } catch (err) {
-      const msg = (err as Error).message ?? 'Unknown error';
       console.error('[review queue] invoice generate/regenerate failed:', err);
+      // Pull the server's structured detail out of RailwayError when
+      // available — generic .message is the URL + status string,
+      // which tells the dispatcher nothing.
+      let msg = (err as Error)?.message ?? 'Unknown error';
+      if (err instanceof RailwayError) {
+        const body = err.detail as { error?: string; detail?: string } | undefined;
+        if (body?.detail) msg = body.detail;
+        else if (body?.error) msg = body.error;
+      }
       setInvoiceError(msg);
     } finally {
       setInvoiceBusy(false);
@@ -2617,10 +2633,14 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                   stays focused on the invoice + release path. */}
               {/* Generate / Regenerate invoice — primary green CTA.
                   Persists the per-row invoice selection from the doc
-                  list above before firing. Verb flips by activeInvoice:
+                  list above before firing. Verb flips by activeInvoice
+                  status:
                     • no active invoice  → "Generate invoice"
                     • active draft       → "Regenerate invoice"
-                    • sent / paid        → disabled with explainer
+                    • void               → "Regenerate invoice"  (server revives to draft)
+                    • sent               → "Regenerate invoice"  (server rewinds sent → draft;
+                                                                  next Send ships a correction)
+                    • paid               → disabled, "Unmark Paid first" hint
 
                   Hidden entirely while billing_status is still 'pending'
                   — invoice generation is a post-release action. Surfacing
@@ -2631,26 +2651,31 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                   only path forward from 'pending'; once released, this
                   block lights up. */}
               {current.billingStatus !== 'pending' && (() => {
-                const hasDraft     = activeInvoice?.status === 'draft';
-                const hasNonDraft  = activeInvoice && activeInvoice.status !== 'draft';
+                const status      = activeInvoice?.status;
+                const hasDraft    = status === 'draft';
+                const hasVoid     = status === 'void';
+                const hasSent     = status === 'sent';
+                const hasPaid     = status === 'paid';
+                const hasInvoice  = !!status;
                 const label =
-                  hasDraft     ? 'Regenerate invoice' :
-                  hasNonDraft  ? `Invoice ${activeInvoice!.status}` :
-                                 'Generate invoice';
-                const Icon = hasDraft ? RefreshCw : Receipt;
+                  hasPaid                                ? 'Invoice paid' :
+                  hasDraft || hasVoid || hasSent         ? 'Regenerate invoice' :
+                                                           'Generate invoice';
+                const Icon = (hasDraft || hasVoid || hasSent || hasPaid) ? RefreshCw : Receipt;
+                const isPrimary = !hasInvoice; // Generate is loud green; Regenerate is secondary outline.
                 return (
                   <>
                     <button type="button"
                       onClick={() => void handleGenerateOrRegenerate()}
-                      disabled={invoiceBusy || !!hasNonDraft}
-                      title={hasNonDraft ? `Cannot regenerate a ${activeInvoice!.status} invoice — void it first.` : undefined}
+                      disabled={invoiceBusy || hasPaid}
+                      title={hasPaid ? 'Cannot regenerate a paid invoice — hit Unmark Paid first.' : undefined}
                       className="w-full flex items-center justify-center gap-1.5 text-[12px] font-extrabold uppercase tracking-wider px-3 py-2 rounded-lg transition-opacity disabled:opacity-50"
                       style={{
-                        background: hasNonDraft ? 'var(--gc-surface)' : hasDraft ? 'var(--gc-surface)' : '#188038',
-                        color:      hasNonDraft ? 'var(--gc-text-3)'  : hasDraft ? 'var(--gc-text-2)' : '#fff',
-                        border:     hasNonDraft || hasDraft ? '1.5px solid var(--gc-border)' : 'none',
-                        textShadow: hasNonDraft || hasDraft ? undefined : '0 1px 1px rgba(0,0,0,0.2)',
-                        boxShadow:  hasNonDraft || hasDraft ? undefined : '0 1px 3px rgba(0,0,0,0.12)',
+                        background: isPrimary ? '#188038' : 'var(--gc-surface)',
+                        color:      isPrimary ? '#fff' : (hasPaid ? 'var(--gc-text-3)' : 'var(--gc-text-2)'),
+                        border:     isPrimary ? 'none' : '1.5px solid var(--gc-border)',
+                        textShadow: isPrimary ? '0 1px 1px rgba(0,0,0,0.2)' : undefined,
+                        boxShadow:  isPrimary ? '0 1px 3px rgba(0,0,0,0.12)' : undefined,
                       }}>
                       {invoiceBusy ? <Loader2 size={12} className="animate-spin" /> : <Icon size={12} />}
                       {label}
