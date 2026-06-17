@@ -2212,13 +2212,16 @@ invoices.post("/:id/void", async (c) => {
 // Status semantics:
 //   - draft  → refresh in place (most common path)
 //   - void   → revive to draft + refresh. Recovers invoices that got
-//              stuck void by an earlier failed regenerate run. Treated
-//              as "the latest attempt is what counts" — drafts that
-//              never shipped have no audit-trail value to preserve.
-//   - sent   → 409. Broker has it; void it manually first if you need
-//              to replace.
-//   - paid   → 409. Same reasoning + accounting just doesn't want
-//              paid invoices mutating under it.
+//              stuck void by an earlier failed regenerate run.
+//   - sent   → implicit void + revive to draft. The broker already
+//              has the old packet; the dispatcher clicking Regenerate
+//              is explicitly choosing to ship a corrected version.
+//              Net effect: same one-row, same invoice_number, status
+//              flips sent → draft so the next Send produces a new
+//              packet with the latest doc + financial state.
+//   - paid   → 409. Money has changed hands; the dispatcher needs to
+//              hit Unmark Paid first if they really want to replace
+//              the row.
 //
 // Why UPDATE-in-place rather than void + insert:
 //   `idx_invoices_number_per_org` is unconditional (covers void too),
@@ -2244,13 +2247,14 @@ invoices.post("/:id/regenerate", async (c) => {
     return c.json({ error: "not_found", detail: "invoice not found" } satisfies ApiErrorResponse, 404);
   }
   const existing = existingRow as unknown as InvoiceRow;
-  if (existing.status === "sent" || existing.status === "paid") {
+  if (existing.status === "paid") {
     return c.json(
-      { error: "invalid_state", detail: `cannot regenerate ${existing.status} invoice — void it first if you need to replace it` } satisfies ApiErrorResponse,
+      { error: "invalid_state", detail: "cannot regenerate a paid invoice — Unmark Paid first if you need to replace it" } satisfies ApiErrorResponse,
       409,
     );
   }
   const wasVoided = existing.status === "void";
+  const wasSent   = existing.status === "sent";
   const loadId = existing.load_id;
   const carryInvoiceNumber = body.invoiceNumber ?? existing.invoice_number;
 
@@ -2277,14 +2281,27 @@ invoices.post("/:id/regenerate", async (c) => {
     updateRow.status      = "draft";
     updateRow.void_reason = null;
   }
-  // Acceptable starting states: draft or void. Sent/paid were rejected above.
+  if (wasSent) {
+    // The previous packet is already in the broker's inbox; clear the
+    // sent_at / sent_method markers so the next Send writes fresh
+    // ones (and so the UI's "sent" badge goes away while the row is
+    // back in draft). The new invoice_number is the same as the old
+    // one — brokers reconcile by number, so they'll see the second
+    // packet as a correction rather than a new charge.
+    updateRow.status        = "draft";
+    updateRow.sent_at       = null;
+    updateRow.sent_method   = null;
+    updateRow.sent_to_email = null;
+    updateRow.sent_to_name  = null;
+  }
+  // Acceptable starting states: draft, void, or sent. Paid was rejected above.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: updatedRow, error: updateErr } = await supabase
     .from("invoices")
     .update(updateRow as any)
     .eq("id", existing.id)
     .eq("org_id", orgId)
-    .in("status", ["draft", "void"])
+    .in("status", ["draft", "void", "sent"])
     .select(INVOICE_COLS)
     .single();
   if (updateErr) {
@@ -2309,6 +2326,13 @@ invoices.post("/:id/regenerate", async (c) => {
   //    verified, or it could be in any state if other ops touched it).
   if (wasVoided) {
     await setBillingStatus(load.id, orgId, "invoiced", undefined);
+  }
+  // If we rewound a sent invoice to draft, the load's billing_status
+  // was 'invoiced' — that needs to drop back to 'verified' so the
+  // closeout/accounting buckets show this load as ready to re-send.
+  // The next Send call will flip it back to 'invoiced' on success.
+  if (wasSent) {
+    await setBillingStatus(load.id, orgId, "verified", undefined);
   }
 
   const newInvoice = rowToInvoice(updatedRow as unknown as InvoiceRow);

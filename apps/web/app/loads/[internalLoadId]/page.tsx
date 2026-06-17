@@ -61,7 +61,7 @@ import {
   SECTION_LABELS, getEnabledFieldsForSection,
   type FieldSection, type FieldDef,
 } from '@/lib/fields';
-import { railway } from '@/lib/railway';
+import { railway, RailwayError } from '@/lib/railway';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { displayBrokerName } from '@/lib/customerMatch';
 import type { Load, Invoice, Customer, InternalNote, LoadStatus } from '@fleetcal/types';
@@ -445,7 +445,17 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
       await refresh({ silent: true });
     } catch (e) {
       console.error('[load detail] regenerate failed:', e);
-      window.alert(`Regenerate failed: ${(e as Error)?.message ?? 'Unknown error'}`);
+      // Surface the server's actual reason ('invalid_state: cannot
+      // regenerate paid invoice…' etc.) instead of the generic URL+status
+      // string `(e as Error).message` produces. RailwayError.detail
+      // carries the parsed body when the server returned JSON.
+      let msg = (e as Error)?.message ?? 'Unknown error';
+      if (e instanceof RailwayError) {
+        const body = e.detail as { error?: string; detail?: string } | undefined;
+        if (body?.detail) msg = body.detail;
+        else if (body?.error) msg = body.error;
+      }
+      window.alert(`Regenerate failed: ${msg}`);
     } finally {
       setInvoiceBusy(null);
     }
