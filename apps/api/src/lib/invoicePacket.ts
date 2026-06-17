@@ -20,6 +20,7 @@
  */
 
 import { PDFDocument, degrees } from "pdf-lib";
+import { isHeicMagic } from "./heicDetect.js";
 import type { Invoice, DocumentKind } from "@fleetcal/types";
 import { renderInvoicePdf } from "./invoicePdf.js";
 import { supabase } from "./supabase.js";
@@ -161,7 +162,7 @@ function readJpegOrientation(bytes: Uint8Array): 1 | 3 | 6 | 8 {
  * extension — some uploads come in as `.jpeg.pdf` etc. PDF starts
  * with `%PDF-`, JPEG with FFD8FF, PNG with 89 50 4E 47.
  */
-function detectFormat(bytes: Uint8Array): "pdf" | "jpeg" | "png" | "unknown" {
+function detectFormat(bytes: Uint8Array): "pdf" | "jpeg" | "png" | "heic" | "unknown" {
   if (bytes.length < 4) return "unknown";
   // %PDF-
   if (bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46) return "pdf";
@@ -169,6 +170,11 @@ function detectFormat(bytes: Uint8Array): "pdf" | "jpeg" | "png" | "unknown" {
   if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "jpeg";
   // 89 50 4E 47
   if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return "png";
+  // HEIC / HEIF — ISO BMFF `ftyp` box at offset 4. pdf-lib can't embed
+  // these; we surface a dedicated reason so the send-time error tells
+  // the dispatcher "this is HEIC, re-export as JPG" instead of vague
+  // "unsupported_format".
+  if (isHeicMagic(bytes)) return "heic";
   return "unknown";
 }
 
@@ -201,6 +207,14 @@ async function embedPrefetched(
   }
   if (fmt === "jpeg" || fmt === "png") {
     return embedImagePrefetched(target, src, bytes, fmt);
+  }
+  if (fmt === "heic") {
+    // pdf-lib has no HEIC path. Dispatcher needs an explicit hint — the
+    // 422 the send endpoint returns surfaces this reason verbatim so
+    // they see "POD.jpg is HEIC, re-export as JPG" in the confirm
+    // dialog instead of a generic "unsupported_format" string.
+    console.warn("[invoicePacket] HEIC source can't be embedded:", src.path);
+    return { ok: false, reason: "heic_unsupported_re_export_as_jpg" };
   }
   console.warn("[invoicePacket] unsupported format:", src.path, fmt);
   return { ok: false, reason: "unsupported_format" };
@@ -410,6 +424,25 @@ export async function buildInvoicePacket(args: PacketArgs): Promise<PacketResult
 const PACKET_DOC_KINDS_ORDER: DocumentKind[] = ["pod", "bol", "lumper", "scale", "receipt", "driver_sheet"];
 
 export async function resolveDefaultPacketDocs(loadId: string, orgId: string): Promise<string[]> {
+  // Pull the load's delivery time so the POD heuristic can match the
+  // ReviewQueue UI's rule: "any POD uploaded within ~24h of delivery
+  // counts as a real POD for this load." We take MAX(end) across the
+  // load's non-deleted events — for a single-leg load that's the
+  // delivery end; for a relay it's the final drop. Matches how the
+  // closeout queue + accounting compute deliveredAt.
+  const { data: legRows } = await supabase
+    .from("events")
+    .select("end")
+    .eq("load_id", loadId)
+    .eq("org_id", orgId)
+    .is("deleted_at", null);
+  let deliveredAtMs = 0;
+  for (const row of (legRows ?? []) as Array<{ end: string | null }>) {
+    if (!row.end) continue;
+    const ms = Date.parse(row.end);
+    if (Number.isFinite(ms) && ms > deliveredAtMs) deliveredAtMs = ms;
+  }
+
   const { data, error } = await supabase
     .from("load_documents")
     .select("storage_path,kind,uploaded_at")
@@ -421,15 +454,50 @@ export async function resolveDefaultPacketDocs(loadId: string, orgId: string): P
     console.warn("[invoicePacket] resolveDefault failed:", error);
     return [];
   }
-  const byKind = new Map<string, string>();
-  for (const row of (data ?? []) as Array<{ storage_path: string; kind: string }>) {
-    if (!byKind.has(row.kind)) byKind.set(row.kind, row.storage_path);
+  const rows = (data ?? []) as Array<{ storage_path: string; kind: string; uploaded_at: string }>;
+
+  // PODs are the only kind drivers commonly upload multiple of for a
+  // single load (one photo per pallet, one per damage angle, etc.).
+  // Include ALL PODs uploaded from 24h BEFORE delivery onward — this
+  // matches ReviewQueue.tsx's `effectiveInclude` heuristic exactly so
+  // the dispatcher's visual "INVOICE" pills line up with what
+  // actually ships to the broker. Loads that haven't delivered yet
+  // (deliveredAtMs === 0) fall through to "include every POD."
+  //
+  // Every other kind (BOL, lumper, scale, receipt, driver_sheet) is
+  // a singleton in practice — newest-per-kind keeps the packet small
+  // and never picks two competing copies of the same kind.
+  const pickedPodPaths: string[] = [];
+  const newestByOtherKind = new Map<string, string>();
+  const WINDOW_MS = 86_400_000; // 24h
+  for (const r of rows) {
+    if (r.kind === "pod") {
+      const uploadedMs = Date.parse(r.uploaded_at);
+      if (!deliveredAtMs || !Number.isFinite(uploadedMs) || uploadedMs >= deliveredAtMs - WINDOW_MS) {
+        pickedPodPaths.push(r.storage_path);
+      }
+    } else {
+      if (!newestByOtherKind.has(r.kind)) {
+        newestByOtherKind.set(r.kind, r.storage_path);
+      }
+    }
   }
-  // Emit in the canonical kind order so the merged packet always
-  // looks the same shape across loads.
-  return PACKET_DOC_KINDS_ORDER
-    .map(k => byKind.get(k))
-    .filter((v): v is string => !!v);
+
+  // Emit in canonical kind order so the merged packet shape stays
+  // predictable across loads. PODs come first per PACKET_DOC_KINDS_ORDER.
+  const out: string[] = [];
+  for (const kind of PACKET_DOC_KINDS_ORDER) {
+    if (kind === "pod") {
+      // PODs ordered by upload time DESC (matches the query order),
+      // so the newest POD lands first within the POD block. Brokers
+      // typically read top-down; freshest photo lands at the top.
+      out.push(...pickedPodPaths);
+    } else {
+      const p = newestByOtherKind.get(kind);
+      if (p) out.push(p);
+    }
+  }
+  return out;
 }
 
 /**

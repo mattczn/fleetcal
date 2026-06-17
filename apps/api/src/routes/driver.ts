@@ -19,6 +19,20 @@ import {
 
 import { supabase } from "../lib/supabase.js";
 import { driverAuth, type DriverAuthVariables } from "../middleware/driverAuth.js";
+import { isHeic } from "../lib/heicDetect.js";
+
+/** Standardized HEIC rejection. Returned at every driver-app upload
+ *  boundary so an iPhone POD shot in HEIC mode can never reach
+ *  load_documents — pdf-lib has no HEIC support and the packet
+ *  builder would silently drop it, leaving the broker an invoice with
+ *  no proof. The driver app should be transcoding to JPG before
+ *  upload (per the photo-upload module), but defense-in-depth here
+ *  catches any bypass: older app versions, alternate upload paths,
+ *  third-party tools posting to the API directly. */
+const HEIC_REJECTION = {
+  error:  "unsupported_format",
+  detail: "HEIC photos can't be saved. Open iPhone Settings → Camera → Formats → Most Compatible to save new photos as JPG, then re-upload.",
+} as const;
 
 const driver = new Hono<{ Variables: DriverAuthVariables }>();
 
@@ -1551,6 +1565,7 @@ driver.post("/loads/:id/documents", async (c) => {
   const loadId = (ev as { load_id: string | null } | null)?.load_id ?? null;
 
   const bytes = new Uint8Array(await file.arrayBuffer());
+  if (isHeic(bytes, file.type)) return c.json(HEIC_REJECTION, 415);
   const ext   = (file.name.split(".").pop() ?? "bin").toLowerCase();
   const random = Math.random().toString(36).slice(2, 10);
   const storagePath = `${orgId}/${id}/${Date.now()}_${random}.${ext}`;
@@ -2295,6 +2310,7 @@ driver.post("/maintenance-reports/:id/photos", async (c) => {
   const rand = Math.random().toString(36).slice(2, 10);
   const storagePath = `${orgId}/${id}/${Date.now()}_${rand}.${ext}`;
   const bytes = new Uint8Array(await file.arrayBuffer());
+  if (isHeic(bytes, file.type)) return c.json(HEIC_REJECTION, 415);
 
   const { error: uploadErr } = await supabase.storage
     .from(MAINT_PHOTO_BUCKET_DRIVER)
@@ -2458,6 +2474,7 @@ driver.post("/documents", async (c) => {
   const rand = Math.random().toString(36).slice(2, 10);
   const storagePath = `${orgId}/${driverId}/${kind}_${Date.now()}_${rand}.${ext}`;
   const bytes = new Uint8Array(await file.arrayBuffer());
+  if (isHeic(bytes, file.type)) return c.json(HEIC_REJECTION, 415);
 
   const { error: upErr } = await supabase.storage
     .from(DRIVER_DOC_BUCKET_SELF)
@@ -2581,6 +2598,7 @@ driver.post("/fuel-reports/:id/photos", async (c) => {
   const rand = Math.random().toString(36).slice(2, 10);
   const storagePath = `${orgId}/${id}/${Date.now()}_${rand}.${ext}`;
   const bytes = new Uint8Array(await file.arrayBuffer());
+  if (isHeic(bytes, file.type)) return c.json(HEIC_REJECTION, 415);
 
   const { error: uploadErr } = await supabase.storage
     .from(FUEL_RECEIPT_BUCKET)
@@ -2809,6 +2827,7 @@ driver.post("/inspections/:id/photos", async (c) => {
   const rand = Math.random().toString(36).slice(2, 10);
   const storagePath = `${orgId}/${id}/${Date.now()}_${rand}.${ext}`;
   const bytes = new Uint8Array(await file.arrayBuffer());
+  if (isHeic(bytes, file.type)) return c.json(HEIC_REJECTION, 415);
 
   const { error: uploadErr } = await supabase.storage
     .from(INSPECTION_PHOTO_BUCKET)

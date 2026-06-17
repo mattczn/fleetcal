@@ -831,6 +831,7 @@ loads.get("/:id/documents", async (c) => {
 // the same kind → bucket rule. Kept as a local alias for the previous
 // occurrences in this file that referred to it bare.
 import { bucketForKind, bucketReadOrder, DOC_BUCKET, RATE_CON_BUCKET } from "../lib/docBuckets.js";
+import { isHeic } from "../lib/heicDetect.js";
 
 loads.post("/:id/documents", requireCapability("loads.edit"), async (c) => {
   const orgId  = c.get("orgId");
@@ -874,6 +875,26 @@ loads.post("/:id/documents", requireCapability("loads.edit"), async (c) => {
   }
 
   const bytes  = new Uint8Array(await file.arrayBuffer());
+
+  // Reject HEIC at the door — both the client-declared mime type AND
+  // the magic-byte sniff are checked, so a renamed file can't slip
+  // through. HEIC is iPhone's default photo format; pdf-lib (and
+  // every browser preview path) can't render it, so allowing it in
+  // means silent packet drops downstream and broker emails missing
+  // proof of delivery. Curzon got bitten by exactly this in
+  // production — three POD photos uploaded as HEIC, broker received
+  // invoice + rate-con with no PODs, and the dispatcher had no idea
+  // until the broker asked. Better to fail loud here.
+  if (isHeic(bytes, file.type)) {
+    return c.json(
+      {
+        error:  "unsupported_format",
+        detail: "HEIC photos can't be attached to invoices. On iPhone, change Settings → Camera → Formats to \"Most Compatible\" so new photos save as JPG. To convert an existing photo, open it in Photos → File → Export → JPEG.",
+      } satisfies ApiErrorResponse,
+      415,
+    );
+  }
+
   const ext    = (file.name.split(".").pop() ?? "bin").toLowerCase();
   const random = Math.random().toString(36).slice(2, 10);
   const storagePath = `${orgId}/${eventId}/${Date.now()}_${random}.${ext}`;
