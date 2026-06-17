@@ -2339,14 +2339,26 @@ invoices.post("/:id/regenerate", async (c) => {
   // 5. Replace the archived packet doc. persistInvoicePacket clears any
   //    prior packet rows for this invoice id automatically before
   //    writing the new one.
+  let packetPersistError: string | null = null;
   try {
     const { persistInvoicePacket } = await import("../lib/invoicePacket.js");
     await persistInvoicePacket({ invoice: newInvoice, orgId });
+    console.log("[POST /v1/invoices/:id/regenerate] packet rebuilt:", newInvoice.invoiceNumber);
   } catch (err) {
-    console.warn("[POST /v1/invoices/:id/regenerate] packet persistence failed:", err);
+    // Non-fatal for the regenerate call itself (the invoice row is
+    // already updated + status flipped). But the dispatcher relies on
+    // the rebuilt packet doc showing up in the load's docs panel — a
+    // silent persistence failure would make it look like nothing
+    // happened. Log loudly so Railway shows the failure mode, and
+    // surface it in the response so the client can warn the user.
+    packetPersistError = (err as Error)?.message ?? "unknown";
+    console.error("[POST /v1/invoices/:id/regenerate] packet persistence FAILED:", newInvoice.invoiceNumber, err);
   }
 
-  const res: CreateInvoiceResponse = { invoice: newInvoice };
+  const res: CreateInvoiceResponse & { warning?: string } = { invoice: newInvoice };
+  if (packetPersistError) {
+    res.warning = `Invoice regenerated but the merged packet PDF didn't rebuild: ${packetPersistError}. The invoice itself is fine — try clicking Regenerate again, or contact support if it keeps failing.`;
+  }
   return c.json(res, 200);
 });
 

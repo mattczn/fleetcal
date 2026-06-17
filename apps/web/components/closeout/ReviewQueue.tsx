@@ -579,6 +579,11 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
         result = await railway.createInvoice({ loadId: targetLoadId });
       }
       setActiveInvoice(result.invoice);
+      // Server reports a warning when the row updated but the packet
+      // PDF rebuild failed. Surface it so the dispatcher doesn't ship
+      // an obsolete attachment.
+      const warning = (result as unknown as { warning?: string }).warning;
+      if (warning) setInvoiceError(warning);
       // Patch local billingStatus to 'invoiced' so the next render
       // shows the Send button + the Released stamp without waiting on
       // the parent's list refresh.
@@ -587,6 +592,31 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
         next.set(targetLoadId, 'invoiced');
         return next;
       });
+      // Refetch the docs panel — persistInvoicePacket on the server
+      // just rewrote the kind='invoice' + kind='invoice_packet' rows,
+      // so the panel's cached doc list is stale and would visually
+      // show the old packet. Drop the per-load cache entry, re-prefetch,
+      // and replace `docs` from the fresh result. Without this the
+      // dispatcher clicks Regenerate, sees no visible change, and
+      // assumes the call did nothing.
+      try {
+        useCalendarStore.getState().markLoadSelfWrite(targetLoadId);
+        docsCacheRef.current.delete(targetLoadId);
+        await prefetchLoadAssets(targetLoadId, !!current?.rateConPdf);
+        const fresh = docsCacheRef.current.get(targetLoadId);
+        if (fresh) setDocs(fresh.docs);
+      } catch (refetchErr) {
+        // Don't surface — the regenerate itself succeeded; the docs
+        // panel will catch up on next tab change. Log so we notice if
+        // this becomes a real failure mode.
+        console.warn('[review queue] docs refetch after regenerate failed:', refetchErr);
+      }
+      // Tell the parent's load summaries to refresh — the load's
+      // billing_status flipped on the server (sent → verified on a
+      // sent-rewind, verified → invoiced on a fresh generate). Without
+      // this the load stays in the wrong closeout bucket until the
+      // user navigates away and back.
+      useCalendarStore.getState().bumpLoadEditTick();
     } catch (err) {
       console.error('[review queue] invoice generate/regenerate failed:', err);
       // Pull the server's structured detail out of RailwayError when
