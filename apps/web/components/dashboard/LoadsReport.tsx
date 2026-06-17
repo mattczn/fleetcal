@@ -1,9 +1,9 @@
 'use client';
 
-import { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { createPortal } from 'react-dom';
-import { Search, ChevronDown, X, Download, FileSpreadsheet, Loader2, Settings, Filter, Calendar, Users, Truck, User, Eye, ChevronUp, ChevronLeft, ChevronRight, GripVertical } from 'lucide-react';
+import { Search, ChevronDown, Download, FileSpreadsheet, Loader2, Filter, Calendar, Users, Truck, User } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { railway } from '@/lib/railway';
 import type { LoadSummary } from '@fleetcal/types';
@@ -13,13 +13,14 @@ import CopyChip from '@/components/ui/CopyChip';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 import DriversModal from '@/components/sidebar/DriversModal';
 import AssetsModal from '@/components/sidebar/AssetsModal';
+import { OpsTable, type OpsColumn, type OpsFilter } from '@/components/ui/OpsTable';
 
 // ── Column catalog ────────────────────────────────────────────────────────────
 
 interface ColumnDef {
   id:    string;
   label: string;
-  /** Raw value — used for sorting, column-filter distinct values, and export. */
+  /** Raw value — used for sorting and export. */
   get:   (load: LoadSummary, ctx: ColumnCtx) => string | number;
   align?: 'right';
   /** Skip thousands-separator formatting (e.g. ID columns). */
@@ -67,19 +68,13 @@ function billableTotal(load: LoadSummary): number {
  *  pickupFrom/To against pickupAt, and pickupAt is stored as a naive
  *  org-local string itself ("2026-05-30T01:00:00"). The lexicographic
  *  comparison only matches the user's intuition when both sides live
- *  in the same TZ semantics — i.e. naive on both ends.
- *
- *  Earlier this helper converted to a Z-suffixed UTC ISO, which
- *  broke ordering: a naive "01:00:00" lex-compares LESS than a UTC
- *  "04:59:59.999Z", so a load at 1am Sat CT slid under a "Sat-Fri"
- *  pickup-end cutoff (the screenshot bug). */
+ *  in the same TZ semantics — i.e. naive on both ends. */
 function orgStartOfDayNaive(yyyymmdd: string): string {
   return `${yyyymmdd}T00:00:00.000`;
 }
 function orgEndOfDayNaive(yyyymmdd: string): string {
   return `${yyyymmdd}T23:59:59.999`;
 }
-
 
 function refStr(load: LoadSummary): string {
   return (load.refNums ?? []).map(r => r.label ? `${r.label}: ${r.value}` : r.value).join(' | ');
@@ -149,6 +144,41 @@ const COLUMNS: ColumnDef[] = [
 ];
 
 const DEFAULT_VISIBLE = ['pickupDate', 'loadNum', 'customer', 'driver', 'asset', 'status', 'loadPrice', 'accessorials', 'total', 'driverPay'];
+const DEFAULT_VISIBLE_SET = new Set(DEFAULT_VISIBLE);
+
+// Default per-column widths. Same Motive-style sensible-default pattern
+// /accounting and /closeout use — OpsTable honors col.width and the user
+// can hide/reorder via the column picker.
+const COL_WIDTHS: Record<string, number> = {
+  pickupDate:     110,
+  deliveryDate:   110,
+  loadNum:        130,
+  internalId:     110,
+  customer:       180,
+  title:          240,
+  driver:         160,
+  pickupDriver:   150,
+  deliveryDriver: 150,
+  asset:          120,
+  trailerType:    140,
+  isRelay:        80,
+  status:         120,
+  deliveryStatus: 130,
+  priority:       80,
+  pickup:         200,
+  delivery:       200,
+  commodity:      140,
+  weight:         110,
+  miles:          90,
+  loadPrice:      110,
+  accessorials:   120,
+  total:          120,
+  driverPay:      110,
+  refNums:        220,
+  dispatcher:     140,
+  billingStatus:  110,
+  notes:          240,
+};
 
 // ── Multi-select dropdown ─────────────────────────────────────────────────────
 
@@ -162,7 +192,7 @@ interface MultiSelectProps<T> {
   width?:   number;
 }
 
-function MultiSelect<T>({ label, options, optionId, optionLabel, selected, onChange, width = 220, icon }: MultiSelectProps<T> & { icon?: React.ReactNode }) {
+function MultiSelect<T>({ label, options, optionId, optionLabel, selected, onChange, width = 220, icon }: MultiSelectProps<T> & { icon?: ReactNode }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [coords, setCoords] = useState<{ top: number; left: number; width: number } | null>(null);
@@ -323,6 +353,31 @@ interface Props {
   defaultTo?: string;
 }
 
+// One-time migration from the report's pre-OpsTable localStorage keys to
+// the OpsTable persistKey shape. Old keys stored VISIBLE column ids;
+// OpsTable stores HIDDEN ones. Migrates once per browser, then leaves
+// OpsTable in charge.
+function migrateLegacyColumnPrefs(allColumnIds: string[]) {
+  if (typeof window === 'undefined') return;
+  try {
+    if (window.localStorage.getItem('loadsReport:migrated:v1')) return;
+
+    const oldVisible = window.localStorage.getItem('loadsReport.columns');
+    if (oldVisible && !window.localStorage.getItem('loadsReport:hidden')) {
+      const visible = JSON.parse(oldVisible) as string[];
+      const hidden  = allColumnIds.filter(id => !visible.includes(id));
+      window.localStorage.setItem('loadsReport:hidden', JSON.stringify(hidden));
+    }
+
+    const oldOrder = window.localStorage.getItem('loadsReport.columnOrder');
+    if (oldOrder && !window.localStorage.getItem('loadsReport:order')) {
+      window.localStorage.setItem('loadsReport:order', oldOrder);
+    }
+
+    window.localStorage.setItem('loadsReport:migrated:v1', '1');
+  } catch { /* ignore — non-critical */ }
+}
+
 export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
   const router = useRouter();
   const { customers, drivers, assets, openEditModal, dbReady } = useCalendarStore();
@@ -379,62 +434,10 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
   const [loading,   setLoading]   = useState(false);
   const [error,     setError]     = useState<string | null>(null);
 
-  // Column visibility
-  const [visible, setVisible] = useState<Set<string>>(() => new Set(DEFAULT_VISIBLE));
-  const [showColumnPicker, setShowColumnPicker] = useState(false);
-
-  // Column display order (drag-and-drop reorderable). Default = COLUMNS order.
-  const [columnOrder, setColumnOrder] = useState<string[]>(() => COLUMNS.map(c => c.id));
-  const [draggedColId, setDraggedColId] = useState<string | null>(null);
-  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
-
-  // Per-column filter (Excel-style): column id → set of EXCLUDED display values.
-  // A row passes if for every keyed column its cell display value is not in
-  // the excluded set. Empty/absent map = no filter for that column.
-  const [columnFilters, setColumnFilters] = useState<Record<string, Set<string>>>({});
-  const [openFilterCol, setOpenFilterCol] = useState<string | null>(null);
-  const [filterCoords,  setFilterCoords]  = useState<{ top: number; left: number } | null>(null);
-  const [colFilterSearch, setColFilterSearch] = useState('');
-  const filterPopupRef = useRef<HTMLDivElement>(null);
-
-  // Sort: click a column header to toggle asc → desc → off.
-  const [sortKey, setSortKey] = useState<{ col: string; dir: 'asc' | 'desc' } | null>(null);
-
-  // Pagination — display only. CSV/Excel exports always include the full
-  // filtered set across pages.
-  const [pageSize, setPageSize] = useState<50 | 100 | 200>(50);
-  const [page,     setPage]     = useState(0);
-
-  // Refs for the columns-picker dropdown (used to detect outside clicks).
-  const columnsBtnRef    = useRef<HTMLButtonElement>(null);
-  const columnsPanelRef  = useRef<HTMLDivElement>(null);
-
+  // One-time pref migration from the pre-OpsTable storage shape.
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      const stored = localStorage.getItem('loadsReport.columns');
-      if (stored) setVisible(new Set(JSON.parse(stored)));
-    } catch { /* ignore */ }
-    try {
-      const storedOrder = localStorage.getItem('loadsReport.columnOrder');
-      if (storedOrder) {
-        const known = new Set(COLUMNS.map(c => c.id));
-        const arr = (JSON.parse(storedOrder) as string[]).filter(id => known.has(id));
-        const missing = COLUMNS.filter(c => !arr.includes(c.id)).map(c => c.id);
-        setColumnOrder([...arr, ...missing]);
-      }
-    } catch { /* ignore */ }
+    migrateLegacyColumnPrefs(COLUMNS.map(c => c.id));
   }, []);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    localStorage.setItem('loadsReport.columns', JSON.stringify([...visible]));
-  }, [visible]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    localStorage.setItem('loadsReport.columnOrder', JSON.stringify(columnOrder));
-  }, [columnOrder]);
 
   // Distinct driver names from the loaded events as the picker options.
   // (Drivers table ids don't always match driverName text, so name-based
@@ -504,7 +507,7 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
   // pickup-side / load-level fields here. Driver matches against
   // EITHER the pickup or delivery driver so a relay still surfaces
   // when either of its drivers is selected.
-  const topRows = useMemo(() => {
+  const filteredRows = useMemo(() => {
     if (!loads) return [];
     return loads.filter(load => {
       if (selectedCustomers.size > 0) {
@@ -526,39 +529,18 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
     });
   }, [loads, selectedCustomers, selectedCustomerNames, selectedDrivers, selectedAssets]);
 
-  // Columns in user's chosen order (drag-and-drop in the picker).
-  // Users without loads.view_driver_pay never see the Driver Pay
-  // column — it's stripped from both the column picker and the
-  // render path so they can't even toggle it on.
+  // Columns the user can pick / sort / etc. Driver Pay is stripped for
+  // users without the perm so they can't toggle it back on either.
   const availableColumns = useMemo(
     () => canViewDriverPay ? COLUMNS : COLUMNS.filter(c => c.id !== 'driverPay'),
     [canViewDriverPay],
   );
-  const availableIds = useMemo(() => new Set(availableColumns.map(c => c.id)), [availableColumns]);
-  const orderedColumns = useMemo(
-    () => columnOrder
-      .map(id => availableColumns.find(c => c.id === id))
-      .filter((c): c is ColumnDef => !!c),
-    [columnOrder, availableColumns],
-  );
-  const visibleColumns = orderedColumns.filter(c => visible.has(c.id) && availableIds.has(c.id));
 
-  const moveColumn = (fromId: string, toId: string) => {
-    if (fromId === toId) return;
-    setColumnOrder(prev => {
-      const fromIdx = prev.indexOf(fromId);
-      const toIdx   = prev.indexOf(toId);
-      if (fromIdx === -1 || toIdx === -1) return prev;
-      const next = [...prev];
-      next.splice(fromIdx, 1);
-      next.splice(toIdx, 0, fromId);
-      return next;
-    });
-  };
-
-  // Display value for a cell — same formatting the table renders, used for
-  // both the visible table and the column-filter distinct-value list.
+  // Money formatter shared between cells and the stats line.
   const fmt$ = (n: number) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+  // Stable display string the cell would render (same formatting rules
+  // we use in the OpsColumn render below). Used by export only.
   const cellDisplay = (col: ColumnDef, load: LoadSummary): string => {
     const v = col.get(load, ctx);
     if (v === '' || v == null) return '';
@@ -570,157 +552,210 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
     return String(v);
   };
 
-  // Apply column filters (post top-level filters)
-  const rows = useMemo(() => {
-    const activeKeys = Object.keys(columnFilters).filter(k => columnFilters[k]?.size);
-    if (activeKeys.length === 0) return topRows;
-    return topRows.filter(load => {
-      for (const colId of activeKeys) {
-        const col = COLUMNS.find(c => c.id === colId);
-        if (!col) continue;
-        if (columnFilters[colId].has(cellDisplay(col, load))) return false;
-      }
-      return true;
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [topRows, columnFilters, ctx]);
-
-  // Display-only sort. Exports use unsorted `rows` so CSV/Excel stays raw.
-  const sortedRows = useMemo(() => {
-    if (!sortKey) return rows;
-    const col = COLUMNS.find(c => c.id === sortKey.col);
-    if (!col) return rows;
-    const dir = sortKey.dir === 'asc' ? 1 : -1;
-    return [...rows].sort((a, b) => {
-      const av = col.get(a, ctx);
-      const bv = col.get(b, ctx);
-      const aEmpty = av === '' || av == null;
-      const bEmpty = bv === '' || bv == null;
-      if (aEmpty && bEmpty) return 0;
-      if (aEmpty) return 1;            // empties always at the bottom
-      if (bEmpty) return -1;
-      if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dir;
-      return String(av).localeCompare(String(bv), undefined, { numeric: true }) * dir;
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, sortKey, ctx]);
-
-  const cycleSort = (colId: string) => {
-    setSortKey(prev => {
-      if (!prev || prev.col !== colId) return { col: colId, dir: 'asc' };
-      if (prev.dir === 'asc') return { col: colId, dir: 'desc' };
-      return null;
-    });
-  };
-
-  // Reset to page 0 whenever the visible-row set or sort changes.
-  useEffect(() => { setPage(0); }, [topRows, columnFilters, sortKey, pageSize]);
-
-  const totalPages = Math.max(1, Math.ceil(sortedRows.length / pageSize));
-  const safePage = Math.min(page, totalPages - 1);
-  const pagedRows = sortedRows.slice(safePage * pageSize, (safePage + 1) * pageSize);
-
-  // Totals (numeric columns only) — based on the filtered rows.
-  // Each row is now one load (post-dedupe), so summing loadPrice gives
-  // a true revenue total instead of double-counting relays. The "total"
-  // column sums loadPrice + billable accessorials and is the headline
-  // billable number to compare against accounting.
+  // Totals (numeric columns only) — based on the filteredRows set so
+  // the headline numbers reflect the dropdown filters above. OpsTable's
+  // internal search filter narrows what's VISIBLE in the table but
+  // doesn't move the topline aggregates around. Matches /accounting's
+  // bucket-tile convention.
   const totals = useMemo(() => {
-    const sums: Record<string, number> = {};
-    for (const col of visibleColumns) {
-      if (
-        col.id === 'loadPrice' ||
-        col.id === 'driverPay' ||
-        col.id === 'accessorials' ||
-        col.id === 'total' ||
-        col.id === 'weight'
-      ) {
-        sums[col.id] = rows.reduce((acc, r) => acc + (Number(col.get(r, ctx)) || 0), 0);
-      }
+    const sums = { loadPrice: 0, driverPay: 0, accessorials: 0, total: 0, weight: 0 };
+    for (const r of filteredRows) {
+      sums.loadPrice    += r.loadPrice ?? 0;
+      sums.driverPay    += r.totalDriverPay ?? 0;
+      sums.accessorials += billableAccessorials(r);
+      sums.total        += billableTotal(r);
+      sums.weight       += r.weight ?? 0;
     }
     return sums;
-  }, [rows, visibleColumns, ctx]);
+  }, [filteredRows]);
 
-  // Distinct values for the currently-open column-filter popup, computed
-  // from topRows so excluded values are still visible/uncheckable.
-  const distinctForOpenCol = useMemo(() => {
-    if (!openFilterCol) return [] as Array<{ value: string; count: number }>;
-    const col = COLUMNS.find(c => c.id === openFilterCol);
-    if (!col) return [];
-    const counts = new Map<string, number>();
-    for (const load of topRows) {
-      const display = cellDisplay(col, load);
-      counts.set(display, (counts.get(display) ?? 0) + 1);
+  // ── OpsTable column adapter ────────────────────────────────────────
+  const tableColumns = useMemo<OpsColumn<LoadSummary>[]>(() => {
+    const cols: OpsColumn<LoadSummary>[] = [];
+
+    for (const c of availableColumns) {
+      cols.push({
+        key: c.id,
+        header: c.label,
+        width: COL_WIDTHS[c.id] ?? 140,
+        align: c.align === 'right' ? 'right' : 'left',
+        sortable: true,
+        sortValue: (load) => {
+          const v = c.get(load, ctx);
+          if (v == null || v === '') return '';
+          return v;
+        },
+        defaultHidden: !DEFAULT_VISIBLE_SET.has(c.id),
+        pickerLabel: c.label,
+        render: (load) => {
+          const display = cellDisplay(c, load);
+
+          if (c.id === 'loadNum' && load.loadNum) {
+            return <CopyChip value={load.loadNum} style={{ fontSize: 13, fontWeight: 600, color: 'var(--gc-text-1)' }} />;
+          }
+          if (c.id === 'internalId' && load.internalLoadId != null) {
+            return <CopyChip value={String(load.internalLoadId)} style={{ fontSize: 13, fontWeight: 600, color: 'var(--gc-text-1)' }} />;
+          }
+          if (c.id === 'customer') {
+            const customer =
+              customers.find(x => x.id === load.customerId) ??
+              (load.broker ? customers.find(x => x.name === load.broker || x.aliases.includes(load.broker!)) : undefined);
+            if (customer) {
+              return (
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); setBrokerProfileId(customer.id); }}
+                  style={{ background: 'none', border: 'none', padding: 0, color: 'var(--gc-blue)', cursor: 'pointer', textAlign: 'left', fontSize: 13 }}
+                  onMouseEnter={(e) => (e.currentTarget.style.textDecoration = 'underline')}
+                  onMouseLeave={(e) => (e.currentTarget.style.textDecoration = 'none')}
+                >
+                  {customer.shortName?.trim() || customer.name}
+                </button>
+              );
+            }
+          }
+          if (c.id === 'driver') {
+            // Resolve the pickup driver by ID first so renames flow through;
+            // fall back to a name match for legacy rows missing the FK.
+            const driverRec =
+              (load.pickupDriverId != null ? drivers.find(d => d.id === load.pickupDriverId) : undefined) ??
+              (load.pickupDriverName ? drivers.find(d => d.name === load.pickupDriverName) : undefined);
+            if (driverRec) {
+              const fullName = `${driverRec.firstName ?? ''} ${driverRec.lastName ?? ''}`.trim() || driverRec.name;
+              const relaySuffix = load.isRelay && load.deliveryDriverName && load.deliveryDriverName !== fullName
+                ? ` → ${load.deliveryDriverName}` : '';
+              return (
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); setDriverModalId(driverRec.id); }}
+                  style={{ background: 'none', border: 'none', padding: 0, color: 'var(--gc-blue)', cursor: 'pointer', textAlign: 'left', fontSize: 13 }}
+                  onMouseEnter={(e) => (e.currentTarget.style.textDecoration = 'underline')}
+                  onMouseLeave={(e) => (e.currentTarget.style.textDecoration = 'none')}
+                  title={load.isRelay ? `Relay — pickup: ${fullName}${load.deliveryDriverName ? `, delivery: ${load.deliveryDriverName}` : ''}` : undefined}
+                >
+                  {fullName}{relaySuffix}
+                </button>
+              );
+            }
+            return load.pickupDriverName || <span style={{ color: 'var(--gc-text-3)' }}>—</span>;
+          }
+          if (c.id === 'asset') {
+            const a = assets.find(x => x.id === load.pickupAssetId);
+            if (a) {
+              return (
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); setAssetModalId(a.id); }}
+                  style={{ background: 'none', border: 'none', padding: 0, color: 'var(--gc-blue)', cursor: 'pointer', textAlign: 'left', fontSize: 13 }}
+                  onMouseEnter={(e) => (e.currentTarget.style.textDecoration = 'underline')}
+                  onMouseLeave={(e) => (e.currentTarget.style.textDecoration = 'none')}
+                >
+                  {a.unit ? `${a.name} #${a.unit}` : a.name}
+                </button>
+              );
+            }
+          }
+
+          return display || <span style={{ color: 'var(--gc-text-3)' }}>—</span>;
+        },
+      });
     }
-    return [...counts.entries()]
-      .map(([value, count]) => ({ value, count }))
-      .sort((a, b) => a.value.localeCompare(b.value, undefined, { numeric: true }));
+
+    // Pinned-right action column — mirrors /accounting + /closeout's
+    // "always-reachable utility column" convention.
+    cols.push({
+      key: '__view',
+      header: '',
+      width: 80,
+      pinned: 'right',
+      alwaysVisible: true,
+      render: (load) => {
+        const eventId = load.legs[0]?.eventId ?? load.loadId;
+        return (
+          <button
+            type="button"
+            onClick={() => openEditModal(eventId)}
+            title="Open load"
+            style={{
+              fontSize: 11, fontWeight: 600, padding: '4px 12px', borderRadius: 5,
+              border: '1px solid var(--gc-border)', background: 'transparent',
+              color: 'var(--gc-text-2)', cursor: 'pointer',
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--gc-hover)'; e.currentTarget.style.color = 'var(--gc-blue)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gc-text-2)'; }}
+          >
+            View
+          </button>
+        );
+      },
+    });
+
+    return cols;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [openFilterCol, topRows, ctx]);
+  }, [availableColumns, ctx, customers, drivers, assets, openEditModal]);
 
-  // Close column filter popup on outside click
-  useEffect(() => {
-    if (!openFilterCol) return;
-    const onClick = (e: MouseEvent) => {
-      const t = e.target as Node;
-      if (filterPopupRef.current?.contains(t)) return;
-      // Allow clicking the same header to toggle close — handled there.
-      const headerEl = (e.target as HTMLElement)?.closest?.('[data-col-header]');
-      if (headerEl?.getAttribute('data-col-header') === openFilterCol) return;
-      setOpenFilterCol(null);
-    };
-    document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
-  }, [openFilterCol]);
-
-  // Close columns-picker on outside click (clicking the trigger toggles).
-  useEffect(() => {
-    if (!showColumnPicker) return;
-    const onClick = (e: MouseEvent) => {
-      const t = e.target as Node;
-      if (columnsBtnRef.current?.contains(t)) return;
-      if (columnsPanelRef.current?.contains(t)) return;
-      setShowColumnPicker(false);
-    };
-    document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
-  }, [showColumnPicker]);
-
-  const toggleColFilterValue = (colId: string, value: string) => {
-    setColumnFilters(prev => {
-      const next = { ...prev };
-      const set = new Set(next[colId] ?? []);
-      if (set.has(value)) set.delete(value); else set.add(value);
-      if (set.size === 0) delete next[colId];
-      else next[colId] = set;
-      return next;
-    });
-  };
-
-  const clearColumnFilter = (colId: string) => {
-    setColumnFilters(prev => {
-      if (!prev[colId]) return prev;
-      const next = { ...prev };
-      delete next[colId];
-      return next;
-    });
-  };
-
-  const openColFilter = (col: ColumnDef, headerEl: HTMLElement) => {
-    if (openFilterCol === col.id) { setOpenFilterCol(null); return; }
-    const r = headerEl.getBoundingClientRect();
-    setFilterCoords({ top: r.bottom + 4, left: r.left });
-    setColFilterSearch('');
-    setOpenFilterCol(col.id);
-  };
+  // In-table search — narrows what's visible without changing the
+  // headline totals above. Searches across the high-value text fields:
+  // load #, internal id, broker, driver names, asset name, ref nums,
+  // cities. Stop facility/city values bubble up through firstStop().
+  const tableFilters = useMemo<OpsFilter<LoadSummary>[]>(() => [{
+    kind: 'search',
+    placeholder: 'Search load #, broker, driver, city…',
+    width: 320,
+    match: (load, q) => {
+      const haystack = [
+        load.loadNum,
+        load.internalLoadId != null ? String(load.internalLoadId) : '',
+        load.broker,
+        load.pickupDriverName,
+        load.deliveryDriverName,
+        load.commodity,
+        firstStop(load, 'pickup'),
+        firstStop(load, 'delivery'),
+        refStr(load),
+      ].join(' ').toLowerCase();
+      return haystack.includes(q);
+    },
+  }], []);
 
   // ── Export helpers ──────────────────────────────────────────────────────────
 
   const dateStamp = `${from}_to_${to}`;
 
+  // Export the full filteredRows set (NOT the search-narrowed table) so
+  // the export matches the report filters the user set up top, regardless
+  // of what they're scanning inside the table. Visibility is taken from
+  // OpsTable's persisted state so the user gets the columns they actually
+  // see in the table. Mirrors the dispatcher's mental model: "give me
+  // what's on screen, expanded to every row that matched my filters."
+  const getVisibleColumns = (): ColumnDef[] => {
+    let hidden = new Set<string>();
+    try {
+      const raw = typeof window !== 'undefined' ? window.localStorage.getItem('loadsReport:hidden') : null;
+      if (raw) hidden = new Set(JSON.parse(raw) as string[]);
+    } catch { /* ignore */ }
+    let order = availableColumns.map(c => c.id);
+    try {
+      const raw = typeof window !== 'undefined' ? window.localStorage.getItem('loadsReport:order') : null;
+      if (raw) {
+        const persisted = JSON.parse(raw) as string[];
+        const known = new Set(availableColumns.map(c => c.id));
+        const valid = persisted.filter(id => known.has(id));
+        const missing = order.filter(id => !valid.includes(id));
+        order = [...valid, ...missing];
+      }
+    } catch { /* ignore */ }
+    const byId = new Map(availableColumns.map(c => [c.id, c]));
+    return order
+      .filter(id => !hidden.has(id))
+      .map(id => byId.get(id))
+      .filter((c): c is ColumnDef => !!c);
+  };
+
   const exportData = (format: 'csv' | 'xls') => {
-    const headers = visibleColumns.map(c => c.label);
-    const data = rows.map(r => visibleColumns.map(c => c.get(r, ctx)));
+    const cols = getVisibleColumns();
+    const headers = cols.map(c => c.label);
+    const data = filteredRows.map(r => cols.map(c => c.get(r, ctx)));
 
     if (format === 'csv') {
       const esc = (v: string | number) => {
@@ -757,6 +792,8 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
     fontSize: 11, fontWeight: 700, textTransform: 'uppercase',
     letterSpacing: '0.05em', color: 'var(--gc-text-3)',
   };
+
+  const hasExportable = filteredRows.length > 0;
 
   return (
     <div style={{ marginTop: 32, marginBottom: 16, background: 'var(--gc-surface)', borderRadius: 14, border: '1px solid var(--gc-border)' }}>
@@ -892,34 +929,24 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
 
       {/* Results */}
       {loads !== null && (
-        <>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 20px', borderTop: '1px solid var(--gc-border-light)' }}>
+        <div style={{ padding: '16px 20px 20px', borderTop: '1px solid var(--gc-border-light)' }}>
+          {/* Stats + export buttons */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, marginBottom: 12 }}>
             <div style={{ fontSize: 12, color: 'var(--gc-text-2)' }}>
-              <strong style={{ color: 'var(--gc-text-1)' }}>{rows.length}</strong>
-              {' load'}{rows.length === 1 ? '' : 's'}
+              <strong style={{ color: 'var(--gc-text-1)' }}>{filteredRows.length}</strong>
+              {' load'}{filteredRows.length === 1 ? '' : 's'}
               {totals.loadPrice ? <> · Linehaul <strong style={{ color: 'var(--gc-text-1)' }}>{fmt$(totals.loadPrice)}</strong></> : null}
               {totals.accessorials ? <> · Accessorials <strong style={{ color: 'var(--gc-text-1)' }}>{fmt$(totals.accessorials)}</strong></> : null}
               {totals.total ? <> · Total <strong style={{ color: 'var(--gc-text-1)' }}>{fmt$(totals.total)}</strong></> : null}
               {totals.driverPay ? <> · Driver Pay <strong style={{ color: 'var(--gc-text-1)' }}>{fmt$(totals.driverPay)}</strong></> : null}
             </div>
-            <div style={{ display: 'flex', gap: 6, position: 'relative' }}>
-              <button
-                ref={columnsBtnRef}
-                type="button"
-                onClick={() => setShowColumnPicker(p => !p)}
-                style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, padding: '6px 10px', borderRadius: 6, border: '1px solid var(--gc-border)', background: 'transparent', color: 'var(--gc-text-2)', cursor: 'pointer' }}
-                onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
-                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-              >
-                <Settings size={12} />
-                Columns ({visible.size})
-              </button>
+            <div style={{ display: 'flex', gap: 6 }}>
               <button
                 type="button"
                 onClick={() => exportData('csv')}
-                disabled={rows.length === 0}
-                style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, padding: '6px 10px', borderRadius: 6, border: '1px solid var(--gc-border)', background: 'transparent', color: 'var(--gc-text-2)', cursor: rows.length === 0 ? 'default' : 'pointer', opacity: rows.length === 0 ? 0.4 : 1 }}
-                onMouseEnter={e => { if (rows.length) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+                disabled={!hasExportable}
+                style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, padding: '6px 10px', borderRadius: 6, border: '1px solid var(--gc-border)', background: 'transparent', color: 'var(--gc-text-2)', cursor: !hasExportable ? 'default' : 'pointer', opacity: !hasExportable ? 0.4 : 1 }}
+                onMouseEnter={e => { if (hasExportable) e.currentTarget.style.background = 'var(--gc-hover)'; }}
                 onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
               >
                 <Download size={12} />
@@ -928,386 +955,41 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
               <button
                 type="button"
                 onClick={() => exportData('xls')}
-                disabled={rows.length === 0}
-                style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, padding: '6px 10px', borderRadius: 6, border: '1px solid var(--gc-border)', background: 'transparent', color: 'var(--gc-text-2)', cursor: rows.length === 0 ? 'default' : 'pointer', opacity: rows.length === 0 ? 0.4 : 1 }}
-                onMouseEnter={e => { if (rows.length) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+                disabled={!hasExportable}
+                style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, padding: '6px 10px', borderRadius: 6, border: '1px solid var(--gc-border)', background: 'transparent', color: 'var(--gc-text-2)', cursor: !hasExportable ? 'default' : 'pointer', opacity: !hasExportable ? 0.4 : 1 }}
+                onMouseEnter={e => { if (hasExportable) e.currentTarget.style.background = 'var(--gc-hover)'; }}
                 onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
               >
                 <FileSpreadsheet size={12} />
                 Excel
               </button>
-
-              {showColumnPicker && (
-                <div ref={columnsPanelRef} style={{
-                  position: 'absolute', top: 'calc(100% + 4px)', right: 0, zIndex: 30,
-                  background: 'var(--gc-surface)', border: '1px solid var(--gc-border)',
-                  borderRadius: 8, boxShadow: 'var(--shadow-3)', width: 240, maxHeight: 360, overflowY: 'auto',
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', borderBottom: '1px solid var(--gc-border-light)' }}>
-                    <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--gc-text-3)' }}>Columns · drag to reorder</span>
-                    <button
-                      type="button"
-                      onClick={() => setShowColumnPicker(false)}
-                      style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: 'var(--gc-text-3)' }}
-                    >
-                      <X size={12} />
-                    </button>
-                  </div>
-                  {orderedColumns.map(col => {
-                    const isDragging = draggedColId === col.id;
-                    const isTarget   = dropTargetId === col.id && draggedColId && draggedColId !== col.id;
-                    return (
-                      <div
-                        key={col.id}
-                        onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (draggedColId && draggedColId !== col.id) setDropTargetId(col.id); }}
-                        onDragLeave={() => { if (dropTargetId === col.id) setDropTargetId(null); }}
-                        onDrop={e => { e.preventDefault(); if (draggedColId) moveColumn(draggedColId, col.id); setDraggedColId(null); setDropTargetId(null); }}
-                        style={{
-                          display: 'flex', alignItems: 'center', gap: 8,
-                          padding: '6px 12px', fontSize: 13, color: 'var(--gc-text-1)',
-                          opacity: isDragging ? 0.4 : 1,
-                          borderTop: isTarget ? '2px solid #1a73e8' : '2px solid transparent',
-                          background: isTarget ? 'var(--gc-blue-light)' : 'transparent',
-                        }}
-                        onMouseEnter={e => { if (!isTarget && !isDragging) e.currentTarget.style.background = 'var(--gc-hover)'; }}
-                        onMouseLeave={e => { if (!isTarget) e.currentTarget.style.background = 'transparent'; }}
-                      >
-                        <span
-                          draggable
-                          onDragStart={e => { setDraggedColId(col.id); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', col.id); }}
-                          onDragEnd={() => { setDraggedColId(null); setDropTargetId(null); }}
-                          title="Drag to reorder"
-                          style={{ cursor: 'grab', display: 'flex', color: 'var(--gc-text-3)', userSelect: 'none' }}
-                        >
-                          <GripVertical size={12} />
-                        </span>
-                        <input
-                          type="checkbox"
-                          checked={visible.has(col.id)}
-                          onChange={() => {
-                            const next = new Set(visible);
-                            if (next.has(col.id)) next.delete(col.id); else next.add(col.id);
-                            setVisible(next);
-                          }}
-                          style={{ cursor: 'pointer' }}
-                        />
-                        <span style={{ flex: 1, cursor: 'pointer' }} onClick={() => {
-                          const next = new Set(visible);
-                          if (next.has(col.id)) next.delete(col.id); else next.add(col.id);
-                          setVisible(next);
-                        }}>
-                          {col.label}
-                        </span>
-                      </div>
-                    );
-                  })}
-                  <div style={{ display: 'flex', gap: 6, padding: 8, borderTop: '1px solid var(--gc-border-light)' }}>
-                    <button
-                      type="button"
-                      onClick={() => setVisible(new Set(availableColumns.map(c => c.id)))}
-                      style={{ flex: 1, fontSize: 11, padding: '5px 8px', borderRadius: 5, border: '1px solid var(--gc-border)', background: 'transparent', color: 'var(--gc-text-2)', cursor: 'pointer' }}>
-                      All
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setVisible(new Set(DEFAULT_VISIBLE))}
-                      style={{ flex: 1, fontSize: 11, padding: '5px 8px', borderRadius: 5, border: '1px solid var(--gc-border)', background: 'transparent', color: 'var(--gc-text-2)', cursor: 'pointer' }}>
-                      Defaults
-                    </button>
-                  </div>
-                </div>
-              )}
             </div>
           </div>
 
-          {/* Table */}
-          {rows.length === 0 ? (
-            <div style={{ padding: '40px 20px', textAlign: 'center', fontSize: 13, color: 'var(--gc-text-3)' }}>
-              No loads match these filters.
-            </div>
-          ) : (
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr style={{ background: 'linear-gradient(180deg, #eef4fc 0%, #e4ecf7 100%)' }}>
-                    <th style={{
-                      padding: '12px 14px', fontSize: 10, fontWeight: 800,
-                      textTransform: 'uppercase', letterSpacing: '0.06em',
-                      color: '#1558d6', textAlign: 'left',
-                      borderBottom: '2px solid #c5d8fd',
-                      whiteSpace: 'nowrap', width: 1,
-                    }}>
-                      View
-                    </th>
-                    {visibleColumns.map(col => {
-                      const isFiltered = !!columnFilters[col.id]?.size;
-                      const isOpen = openFilterCol === col.id;
-                      const sortDir = sortKey?.col === col.id ? sortKey.dir : null;
-                      const isActive = isFiltered || sortDir;
-                      return (
-                        <th
-                          key={col.id}
-                          data-col-header={col.id}
-                          onClick={() => cycleSort(col.id)}
-                          title={`Click to sort${isFiltered ? ' · filter active' : ''}`}
-                          style={{
-                            textAlign: col.align === 'right' ? 'right' : 'left',
-                            padding: '12px 14px', fontWeight: 800, fontSize: 10,
-                            textTransform: 'uppercase', letterSpacing: '0.06em',
-                            color: isActive ? '#1558d6' : '#3c4858',
-                            borderBottom: `2px solid ${isActive ? '#1a73e8' : '#c5d8fd'}`,
-                            background: isOpen
-                              ? 'rgba(26,115,232,0.14)'
-                              : (isActive ? 'rgba(26,115,232,0.06)' : 'transparent'),
-                            whiteSpace: 'nowrap', cursor: 'pointer',
-                            userSelect: 'none',
-                            transition: 'background 100ms, color 100ms',
-                          }}
-                          onMouseEnter={e => { if (!isOpen) e.currentTarget.style.background = 'rgba(26,115,232,0.10)'; }}
-                          onMouseLeave={e => { if (!isOpen) e.currentTarget.style.background = isActive ? 'rgba(26,115,232,0.06)' : 'transparent'; }}
-                        >
-                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, justifyContent: col.align === 'right' ? 'flex-end' : 'flex-start' }}>
-                            {col.label}
-                            {sortDir && (
-                              sortDir === 'asc'
-                                ? <ChevronUp size={11} style={{ color: '#1a73e8' }} />
-                                : <ChevronDown size={11} style={{ color: '#1a73e8' }} />
-                            )}
-                            <button
-                              type="button"
-                              data-filter-trigger
-                              onClick={e => {
-                                e.stopPropagation();
-                                const th = (e.currentTarget as HTMLElement).closest('th');
-                                if (th instanceof HTMLElement) openColFilter(col, th);
-                              }}
-                              title="Filter values"
-                              style={{
-                                display: 'inline-flex', alignItems: 'center',
-                                padding: 2, borderRadius: 3,
-                                border: 'none', background: 'transparent',
-                                cursor: 'pointer', color: isFiltered ? '#1a73e8' : '#5f6c80',
-                                opacity: isFiltered ? 1 : 0.5,
-                              }}
-                              onMouseEnter={e => { e.currentTarget.style.background = 'rgba(26,115,232,0.18)'; e.currentTarget.style.opacity = '1'; }}
-                              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.opacity = isFiltered ? '1' : '0.5'; }}
-                            >
-                              <Filter size={10} />
-                            </button>
-                          </span>
-                        </th>
-                      );
-                    })}
-                  </tr>
-                </thead>
-                <tbody>
-                  {pagedRows.map(load => {
-                    // Match by FK first, then fall back to canonical name + alias match
-                    const customer =
-                      customers.find(c => c.id === load.customerId) ??
-                      (load.broker ? customers.find(c => c.name === load.broker || c.aliases.includes(load.broker!)) : undefined);
-                    // openEditModal expects an event id, not a load id. Use
-                    // the pickup leg's event id so a click opens the
-                    // canonical event for the load.
-                    const eventId = load.legs[0]?.eventId ?? load.loadId;
-                    return (
-                      <tr key={load.loadId}
-                          onDoubleClick={(e) => {
-                            // Mirror the OpsTable behavior — clicking a
-                            // button / link / copyable cell inside the
-                            // row shouldn't fire the navigation. Also
-                            // clear the OS-level word selection the
-                            // first click started so we don't leave a
-                            // highlight behind us.
-                            const target = e.target as HTMLElement;
-                            if (target.closest('button, a, input, [data-row-click-ignore]')) return;
-                            if (load.internalLoadId == null) return;
-                            window.getSelection?.()?.removeAllRanges?.();
-                            router.push(`/loads/${load.internalLoadId}`);
-                          }}
-                          style={{ borderBottom: '1px solid var(--gc-border-light)', cursor: load.internalLoadId != null ? 'pointer' : 'default' }}>
-                        <td style={{ padding: '10px 12px', textAlign: 'left', whiteSpace: 'nowrap' }}>
-                          <button
-                            type="button"
-                            onClick={() => openEditModal(eventId)}
-                            title="Open load"
-                            style={{
-                              fontSize: 11, fontWeight: 600, padding: '4px 12px', borderRadius: 5,
-                              border: '1px solid var(--gc-border)', background: 'transparent',
-                              color: 'var(--gc-text-2)', cursor: 'pointer',
-                            }}
-                            onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; e.currentTarget.style.color = 'var(--gc-blue)'; }}
-                            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gc-text-2)'; }}
-                          >
-                            View
-                          </button>
-                        </td>
-                        {visibleColumns.map(col => {
-                          const display = cellDisplay(col, load);
-                          let inner: React.ReactNode = display || <span style={{ color: 'var(--gc-text-3)' }}>—</span>;
-
-                          if (col.id === 'loadNum' && load.loadNum) {
-                            inner = <CopyChip value={load.loadNum} style={{ fontSize: 12, fontWeight: 600, color: 'var(--gc-text-1)' }} />;
-                          } else if (col.id === 'internalId' && load.internalLoadId != null) {
-                            inner = <CopyChip value={String(load.internalLoadId)} style={{ fontSize: 12, fontWeight: 600, color: 'var(--gc-text-1)' }} />;
-                          } else if (col.id === 'customer' && customer) {
-                            inner = (
-                              <button
-                                type="button"
-                                onClick={e => { e.stopPropagation(); setBrokerProfileId(customer.id); }}
-                                style={{ background: 'none', border: 'none', padding: 0, color: 'var(--gc-blue)', cursor: 'pointer', textAlign: 'left', fontSize: 12 }}
-                                onMouseEnter={e => (e.currentTarget.style.textDecoration = 'underline')}
-                                onMouseLeave={e => (e.currentTarget.style.textDecoration = 'none')}
-                              >
-                                {customer.shortName?.trim() || customer.name}
-                              </button>
-                            );
-                          } else if (col.id === 'driver') {
-                            // Resolve the pickup driver by ID first so renames flow through;
-                            // fall back to a name match for legacy rows missing the FK.
-                            const driverRec =
-                              (load.pickupDriverId != null ? drivers.find(d => d.id === load.pickupDriverId) : undefined) ??
-                              (load.pickupDriverName ? drivers.find(d => d.name === load.pickupDriverName) : undefined);
-                            if (driverRec) {
-                              // Render the CURRENT driver name so an in-place rename surfaces.
-                              const fullName = `${driverRec.firstName ?? ''} ${driverRec.lastName ?? ''}`.trim() || driverRec.name;
-                              const relaySuffix = load.isRelay && load.deliveryDriverName && load.deliveryDriverName !== fullName
-                                ? ` → ${load.deliveryDriverName}` : '';
-                              inner = (
-                                <button
-                                  type="button"
-                                  onClick={e => { e.stopPropagation(); setDriverModalId(driverRec.id); }}
-                                  style={{ background: 'none', border: 'none', padding: 0, color: 'var(--gc-blue)', cursor: 'pointer', textAlign: 'left', fontSize: 12 }}
-                                  onMouseEnter={e => (e.currentTarget.style.textDecoration = 'underline')}
-                                  onMouseLeave={e => (e.currentTarget.style.textDecoration = 'none')}
-                                  title={load.isRelay ? `Relay — pickup: ${fullName}${load.deliveryDriverName ? `, delivery: ${load.deliveryDriverName}` : ''}` : undefined}
-                                >
-                                  {fullName}{relaySuffix}
-                                </button>
-                              );
-                            } else if (load.pickupDriverName) {
-                              inner = load.pickupDriverName;
-                            }
-                          } else if (col.id === 'asset') {
-                            const a = assets.find(x => x.id === load.pickupAssetId);
-                            if (a) {
-                              inner = (
-                                <button
-                                  type="button"
-                                  onClick={e => { e.stopPropagation(); setAssetModalId(a.id); }}
-                                  style={{ background: 'none', border: 'none', padding: 0, color: 'var(--gc-blue)', cursor: 'pointer', textAlign: 'left', fontSize: 12 }}
-                                  onMouseEnter={e => (e.currentTarget.style.textDecoration = 'underline')}
-                                  onMouseLeave={e => (e.currentTarget.style.textDecoration = 'none')}
-                                >
-                                  {a.unit ? `${a.name} #${a.unit}` : a.name}
-                                </button>
-                              );
-                            }
-                          }
-
-                          return (
-                            <td
-                              key={col.id}
-                              style={{
-                                padding: '10px 12px',
-                                textAlign: col.align === 'right' ? 'right' : 'left',
-                                color: 'var(--gc-text-1)',
-                                maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                              }}
-                              title={display}
-                            >
-                              {inner}
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          {/* Pagination footer — only when there are rows */}
-          {rows.length > 0 && (
-            <div style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              padding: '12px 20px', borderTop: '1px solid var(--gc-border-light)',
-              fontSize: 12, color: 'var(--gc-text-2)',
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span>Rows per page</span>
-                <select
-                  value={pageSize}
-                  onChange={e => setPageSize(Number(e.target.value) as 50 | 100 | 200)}
-                  style={{
-                    fontSize: 12, padding: '4px 8px', borderRadius: 6,
-                    border: '1px solid var(--gc-border)', background: 'var(--gc-surface)',
-                    color: 'var(--gc-text-1)', cursor: 'pointer',
-                  }}
-                >
-                  <option value={50}>50</option>
-                  <option value={100}>100</option>
-                  <option value={200}>200</option>
-                </select>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span>
-                  {rows.length === 0
-                    ? '0 rows'
-                    : <>
-                        <strong style={{ color: 'var(--gc-text-1)' }}>{safePage * pageSize + 1}</strong>
-                        {'–'}
-                        <strong style={{ color: 'var(--gc-text-1)' }}>{Math.min((safePage + 1) * pageSize, rows.length)}</strong>
-                        {' of '}
-                        <strong style={{ color: 'var(--gc-text-1)' }}>{rows.length}</strong>
-                      </>}
-                </span>
-                <div style={{ display: 'flex', gap: 4 }}>
-                  <button
-                    type="button"
-                    onClick={() => setPage(p => Math.max(0, p - 1))}
-                    disabled={safePage === 0}
-                    style={{
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      width: 28, height: 28, borderRadius: 6,
-                      border: '1px solid var(--gc-border)', background: 'transparent',
-                      color: 'var(--gc-text-2)',
-                      cursor: safePage === 0 ? 'default' : 'pointer',
-                      opacity: safePage === 0 ? 0.4 : 1,
-                    }}
-                    onMouseEnter={e => { if (safePage > 0) e.currentTarget.style.background = 'var(--gc-hover)'; }}
-                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                    title="Previous page"
-                  >
-                    <ChevronLeft size={14} />
-                  </button>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', padding: '0 8px', minWidth: 70, justifyContent: 'center' }}>
-                    Page <strong style={{ color: 'var(--gc-text-1)', margin: '0 4px' }}>{safePage + 1}</strong> / {totalPages}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
-                    disabled={safePage >= totalPages - 1}
-                    style={{
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      width: 28, height: 28, borderRadius: 6,
-                      border: '1px solid var(--gc-border)', background: 'transparent',
-                      color: 'var(--gc-text-2)',
-                      cursor: safePage >= totalPages - 1 ? 'default' : 'pointer',
-                      opacity: safePage >= totalPages - 1 ? 0.4 : 1,
-                    }}
-                    onMouseEnter={e => { if (safePage < totalPages - 1) e.currentTarget.style.background = 'var(--gc-hover)'; }}
-                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                    title="Next page"
-                  >
-                    <ChevronRight size={14} />
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-        </>
+          {/* OpsTable owns search chip, sorted headers, column picker
+              (visibility + drag-to-reorder), and pagination. Persistence
+              is keyed at "loadsReport" so the user's hide/show + order +
+              sort survive across visits — identical convention to the
+              accounting + closeout tables. */}
+          <OpsTable<LoadSummary>
+            columns={tableColumns}
+            filters={tableFilters}
+            data={filteredRows}
+            loading={loading}
+            rowKey={(load) => load.loadId}
+            onRowDoubleClick={(load) => {
+              if (load.internalLoadId != null) router.push(`/loads/${load.internalLoadId}`);
+            }}
+            emptyLabel="No loads match these filters."
+            density="comfortable"
+            pageSize={50}
+            defaultSort={{ key: 'pickupDate', dir: 'desc' }}
+            columnPicker
+            columnReorder
+            persistKey="loadsReport"
+            countLabel="load"
+          />
+        </div>
       )}
 
       {/* Customer profile modal — opened from a customer-cell click */}
@@ -1328,110 +1010,6 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
           initialAssetId={assetModalId}
           onClose={() => setAssetModalId(null)}
         />
-      )}
-
-      {/* Column-filter popup (portal) */}
-      {openFilterCol && filterCoords && typeof document !== 'undefined' && createPortal(
-        (() => {
-          const colDef = COLUMNS.find(c => c.id === openFilterCol);
-          if (!colDef) return null;
-          const excluded = columnFilters[openFilterCol] ?? new Set<string>();
-          const search = colFilterSearch.toLowerCase();
-          const items = search
-            ? distinctForOpenCol.filter(d => d.value.toLowerCase().includes(search))
-            : distinctForOpenCol;
-          return (
-            <div
-              ref={filterPopupRef}
-              style={{
-                position: 'fixed', top: filterCoords.top, left: filterCoords.left,
-                zIndex: 9999, width: 260, maxHeight: 380,
-                background: 'var(--gc-surface)', border: '1px solid var(--gc-border)',
-                borderRadius: 8, boxShadow: 'var(--shadow-3)',
-                display: 'flex', flexDirection: 'column',
-              }}
-            >
-              <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--gc-border-light)' }}>
-                <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--gc-text-3)', marginBottom: 6 }}>
-                  Filter · {colDef.label}
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 8px', background: 'var(--gc-bg)', borderRadius: 6 }}>
-                  <Search size={12} style={{ color: 'var(--gc-text-3)' }} />
-                  <input
-                    autoFocus
-                    value={colFilterSearch}
-                    onChange={e => setColFilterSearch(e.target.value)}
-                    placeholder="Search values…"
-                    style={{ flex: 1, fontSize: 12, border: 'none', background: 'transparent', outline: 'none', color: 'var(--gc-text-1)' }}
-                  />
-                </div>
-              </div>
-              <div style={{ overflowY: 'auto', flex: 1 }}>
-                {items.length === 0 ? (
-                  <div style={{ padding: 12, fontSize: 12, color: 'var(--gc-text-3)', textAlign: 'center' }}>No values</div>
-                ) : items.map(({ value, count }) => {
-                  const checked = !excluded.has(value);
-                  const display = value === '' ? <em style={{ color: 'var(--gc-text-3)' }}>(empty)</em> : value;
-                  return (
-                    <label key={value} style={{
-                      display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px',
-                      fontSize: 13, cursor: 'pointer', color: 'var(--gc-text-1)',
-                    }}
-                    onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
-                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() => toggleColFilterValue(openFilterCol, value)}
-                      />
-                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
-                        {display}
-                      </span>
-                      <span style={{ fontSize: 11, color: 'var(--gc-text-3)' }}>{count}</span>
-                    </label>
-                  );
-                })}
-              </div>
-              <div style={{ display: 'flex', gap: 6, padding: 8, borderTop: '1px solid var(--gc-border-light)' }}>
-                <button
-                  type="button"
-                  onClick={() => clearColumnFilter(openFilterCol)}
-                  disabled={excluded.size === 0}
-                  style={{
-                    flex: 1, fontSize: 11, fontWeight: 600, padding: '6px 8px', borderRadius: 5,
-                    border: '1px solid var(--gc-border)', background: 'transparent',
-                    color: excluded.size === 0 ? 'var(--gc-text-3)' : 'var(--gc-text-2)',
-                    cursor: excluded.size === 0 ? 'default' : 'pointer',
-                  }}
-                >
-                  Show all
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    // Hide all currently visible values (matching the search)
-                    setColumnFilters(prev => {
-                      const next = { ...prev };
-                      const set = new Set(next[openFilterCol] ?? []);
-                      for (const it of items) set.add(it.value);
-                      next[openFilterCol] = set;
-                      return next;
-                    });
-                  }}
-                  style={{
-                    flex: 1, fontSize: 11, fontWeight: 600, padding: '6px 8px', borderRadius: 5,
-                    border: '1px solid var(--gc-border)', background: 'transparent',
-                    color: 'var(--gc-text-2)', cursor: 'pointer',
-                  }}
-                >
-                  Hide all{search ? ' shown' : ''}
-                </button>
-              </div>
-            </div>
-          );
-        })(),
-        document.body,
       )}
 
       {/* Initial empty state — illustrative placeholder */}
