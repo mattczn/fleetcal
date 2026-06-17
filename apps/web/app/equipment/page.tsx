@@ -6146,6 +6146,125 @@ function FuelDetail({
           )}
         </div>
       </div>
+
+      {/* Danger zone — delete the transaction and/or the driver report.
+          Soft delete on both; the txn's linked report (if any) gets
+          its back-pointer cleared so the auto-matcher can re-link. */}
+      {(t || report) && (
+        <DangerZone
+          transaction={t ?? null}
+          report={report}
+          onMutation={onFuelMutation}
+        />
+      )}
+    </div>
+  );
+}
+
+function DangerZone({
+  transaction, report, onMutation,
+}: {
+  transaction: FuelTransaction | null;
+  report: FuelReport | null;
+  onMutation: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [feedback, setFeedback] = useState<string | null>(null);
+
+  async function deleteTransaction() {
+    if (!transaction || busy) return;
+    if (!confirm(
+      `Delete this fuel transaction?\n\n` +
+      `Date: ${new Date(transaction.transactionDate).toLocaleDateString()}\n` +
+      `Amount: $${transaction.totalCharged.toFixed(2)}\n` +
+      (transaction.location ? `Location: ${transaction.location}\n` : '') +
+      `\nThis is a soft delete — the row stays in the database and can be ` +
+      `restored via SQL if needed.`,
+    )) return;
+    setBusy(true); setFeedback(null);
+    try {
+      await railway.deleteFuelTransaction(transaction.id);
+      setFeedback('Transaction deleted');
+      onMutation();
+    } catch (e) {
+      setFeedback((e as Error).message ?? 'Delete failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteReport() {
+    if (!report || busy) return;
+    if (!confirm(
+      `Delete this driver fuel report?\n\n` +
+      `Reported: ${new Date(report.reportedAt).toLocaleString()}\n` +
+      `Gallons: ${report.dieselGallons.toFixed(1)}\n` +
+      `\nThis is a HARD delete — also removes any attached receipt photos.`,
+    )) return;
+    setBusy(true); setFeedback(null);
+    try {
+      await railway.deleteFuelReport(report.id);
+      setFeedback('Report deleted');
+      onMutation();
+    } catch (e) {
+      setFeedback((e as Error).message ?? 'Delete failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="px-5 py-4 mt-2"
+      style={{ borderTop: '1px solid var(--gc-border-light)' }}>
+      <div className="text-[10.5px] font-bold uppercase tracking-wider mb-2.5"
+        style={{ color: '#dc2626' }}>
+        Danger zone
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        {transaction && (
+          <button type="button"
+            onClick={deleteTransaction}
+            disabled={busy}
+            className="rounded-md transition-colors disabled:opacity-50"
+            style={{
+              background: 'transparent',
+              color:      '#dc2626',
+              border:     '1px solid rgba(220,38,38,0.4)',
+              padding:    '5px 10px',
+              fontSize:   12,
+              fontWeight: 600,
+              cursor:     busy ? 'default' : 'pointer',
+            }}
+            onMouseEnter={e => { if (!busy) (e.currentTarget as HTMLElement).style.background = 'rgba(220,38,38,0.08)'; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}>
+            <Trash2 size={11} style={{ display: 'inline', marginRight: 5, marginBottom: 1 }} />
+            Delete transaction
+          </button>
+        )}
+        {report && (
+          <button type="button"
+            onClick={deleteReport}
+            disabled={busy}
+            className="rounded-md transition-colors disabled:opacity-50"
+            style={{
+              background: 'transparent',
+              color:      '#dc2626',
+              border:     '1px solid rgba(220,38,38,0.4)',
+              padding:    '5px 10px',
+              fontSize:   12,
+              fontWeight: 600,
+              cursor:     busy ? 'default' : 'pointer',
+            }}
+            onMouseEnter={e => { if (!busy) (e.currentTarget as HTMLElement).style.background = 'rgba(220,38,38,0.08)'; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}>
+            <Trash2 size={11} style={{ display: 'inline', marginRight: 5, marginBottom: 1 }} />
+            Delete driver report
+          </button>
+        )}
+        {feedback && (
+          <span className="text-[11.5px]" style={{ color: 'var(--gc-text-2)' }}>{feedback}</span>
+        )}
+      </div>
     </div>
   );
 }
