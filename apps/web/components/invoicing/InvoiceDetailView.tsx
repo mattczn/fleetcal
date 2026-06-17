@@ -219,7 +219,7 @@ export function InvoiceDetailView({
     bccSelf: boolean;
     bodyText?: string;
     attachLoadDocs: boolean;
-  }) {
+  }, allowPartialPacket = false) {
     if (!invoice) return;
     setBusy('email');
     try {
@@ -230,6 +230,7 @@ export function InvoiceDetailView({
         bccSelf:        args.bccSelf,
         bodyText:       args.bodyText?.trim() ? args.bodyText : undefined,
         attachLoadDocs: args.attachLoadDocs,
+        ...(allowPartialPacket ? { allowPartialPacket: true } : {}),
       });
       setInvoice(updated);
       setEmailOpen(false);
@@ -244,9 +245,30 @@ export function InvoiceDetailView({
       useCalendarStore.getState().bumpLoadEditTick();
     } catch (err) {
       console.error('[invoice] email send failed:', err);
+
+      // Server refused because one or more selected docs failed to
+      // attach. Surface the list to the dispatcher and ask for an
+      // explicit "send anyway" — no more silent drops. The 422 body
+      // carries the failing paths in `errors[]` (set by the server).
+      if (err instanceof RailwayError && err.status === 422) {
+        const body = err.detail as { error?: string; detail?: string; errors?: string[] } | undefined;
+        if (body?.error === 'packet_incomplete') {
+          const failed = body.errors ?? [];
+          const list   = failed.slice(0, 10).map(s => `  • ${s}`).join('\n');
+          const more   = failed.length > 10 ? `\n  …and ${failed.length - 10} more` : '';
+          const proceed = window.confirm(
+            `${body.detail ?? 'The packet is incomplete.'}\n\nFailed to attach:\n${list}${more}\n\nSend WITHOUT the failed docs?`,
+          );
+          if (proceed) {
+            await handleEmailSend(args, true);
+          }
+          return;
+        }
+      }
+
       const msg = err instanceof RailwayError && err.status === 503
         ? 'Email is not configured on the server yet (missing RESEND_API_KEY).'
-        : 'Email send failed. Check console for details.';
+        : `Email send failed: ${(err as Error)?.message ?? 'unknown error'}`;
       window.alert(msg);
     } finally {
       setBusy(null);

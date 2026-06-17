@@ -409,12 +409,14 @@ export function BatchSendDialog({ rows, mode = 'send', onOpenBroker, onClose, on
   );
   const hasPortal     = groups.some(g => g.broker?.invoiceMethod === 'portal');
 
-  async function handleSend() {
+  async function handleSend(allowPartialPacket = false) {
     setBusy(true);
     try {
+      const ids = invoices.map(i => i.id);
+      const payload = { invoiceIds: ids, bccSelf, attachLoadDocs, ...(allowPartialPacket ? { allowPartialPacket: true } : {}) };
       const res = mode === 'resend'
-        ? await railway.batchResendInvoices({ invoiceIds: invoices.map(i => i.id), bccSelf, attachLoadDocs })
-        : await railway.batchSendInvoices({ invoiceIds: invoices.map(i => i.id), bccSelf, attachLoadDocs });
+        ? await railway.batchResendInvoices(payload)
+        : await railway.batchSendInvoices(payload);
       setResult(res);
     } catch (err) {
       console.error(`[batch${mode === 'resend' ? 'Resend' : 'Send'}] failed:`, err);
@@ -423,6 +425,15 @@ export function BatchSendDialog({ rows, mode = 'send', onOpenBroker, onClose, on
       setBusy(false);
     }
   }
+
+  // Surface a "send the failed ones anyway" affordance when at least one
+  // invoice was held back due to a partial packet. The dispatcher reviews
+  // the failure list, decides if shipping without the dropped docs is
+  // acceptable, and re-runs the batch with the override. Server filters
+  // back to only the still-draft IDs by definition (sent ones are gone).
+  const failedPacketIncomplete = result?.groups.some(
+    g => g.status === 'failed' && g.error?.startsWith('packet_incomplete:'),
+  ) ?? false;
 
   return (
     <div className="fixed inset-0 z-[200] flex items-center justify-center"
@@ -568,11 +579,30 @@ export function BatchSendDialog({ rows, mode = 'send', onOpenBroker, onClose, on
               </button>
             </>
           ) : (
-            <button onClick={() => onComplete(result ?? undefined)}
-              className="text-[12px] font-semibold px-4 py-1.5 rounded-lg transition-colors"
-              style={{ background: '#1a73e8', color: '#fff' }}>
-              Done
-            </button>
+            <>
+              {failedPacketIncomplete && (
+                <button
+                  onClick={() => {
+                    const proceed = window.confirm(
+                      'Some packets dropped selected supporting docs. Resend those invoices WITHOUT the failed docs?',
+                    );
+                    if (proceed) {
+                      setResult(null);
+                      void handleSend(true);
+                    }
+                  }}
+                  disabled={busy}
+                  className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors disabled:opacity-60"
+                  style={{ background: 'var(--gc-surface)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}>
+                  Send failed ones anyway
+                </button>
+              )}
+              <button onClick={() => onComplete(result ?? undefined)}
+                className="text-[12px] font-semibold px-4 py-1.5 rounded-lg transition-colors"
+                style={{ background: '#1a73e8', color: '#fff' }}>
+                Done
+              </button>
+            </>
           )}
         </div>
       </div>

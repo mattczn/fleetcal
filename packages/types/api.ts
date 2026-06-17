@@ -1088,6 +1088,13 @@ export interface SendInvoiceRequest {
   bccSelf?:        boolean;
   bodyText?:       string;
   attachLoadDocs?: boolean;
+  /** Permission to send the packet even when one or more of the
+   *  dispatcher-selected supporting docs failed to download or embed.
+   *  Default false: the API returns 422 `packet_incomplete` listing
+   *  the failed paths so the dispatcher knows the email did NOT go
+   *  out and can fix the docs (re-upload, convert HEIC → JPG, etc.).
+   *  Set true to acknowledge the loss and ship anyway. */
+  allowPartialPacket?: boolean;
 }
 
 export interface SendInvoiceResponse { invoice: Invoice; }
@@ -1166,6 +1173,12 @@ export interface BatchSendInvoicesRequest {
   bccSelf?:   boolean;
   bodyText?:  string;
   attachLoadDocs?: boolean;
+  /** Same semantics as SendInvoiceRequest.allowPartialPacket. Defaults
+   *  to false: any invoice whose packet drops a selected doc gets
+   *  reported as `failed` in the per-invoice results and stays in
+   *  draft so the dispatcher can fix + retry. Set true to ship every
+   *  packet despite drops. */
+  allowPartialPacket?: boolean;
 }
 
 export interface BatchSendInvoicesResponse {

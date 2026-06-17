@@ -34,7 +34,7 @@ import type { Load, CalendarEvent, Stop } from '@/lib/types';
 import type { LoadDocument } from '@/lib/db';
 import Tooltip from '@/components/ui/Tooltip';
 import { fetchLoadDocuments, getLoadDocumentSignedUrl } from '@/lib/db';
-import { railway } from '@/lib/railway';
+import { railway, RailwayError } from '@/lib/railway';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { parseNaiveIsoInTz } from '@/lib/time-utils';
 import { displayBrokerName } from '@/lib/customerMatch';
@@ -596,7 +596,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   // wants one click to ship it. The server resolves the broker
   // address from the load + customer record, so we don't need to
   // collect a "to" address client-side.
-  async function handleSendInvoice() {
+  async function handleSendInvoice(allowPartialPacket = false) {
     if (!current || !activeInvoice || activeInvoice.status !== 'draft') return;
     setInvoiceBusy(true);
     setInvoiceError(null);
@@ -605,11 +605,34 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
         method:         'email',
         bccSelf:        true,
         attachLoadDocs: true,
+        ...(allowPartialPacket ? { allowPartialPacket: true } : {}),
       });
       setActiveInvoice(res.invoice);
     } catch (err) {
-      const msg = (err as Error).message ?? 'Unknown error';
       console.error('[review queue] invoice send failed:', err);
+
+      // Server refused because one or more selected docs failed to
+      // attach. Surface the list + ask for an explicit "send anyway"
+      // — silent drops aren't acceptable.
+      if (err instanceof RailwayError && err.status === 422) {
+        const body = err.detail as { error?: string; detail?: string; errors?: string[] } | undefined;
+        if (body?.error === 'packet_incomplete') {
+          const failed = body.errors ?? [];
+          const list   = failed.slice(0, 10).map(s => `  • ${s}`).join('\n');
+          const more   = failed.length > 10 ? `\n  …and ${failed.length - 10} more` : '';
+          const proceed = window.confirm(
+            `${body.detail ?? 'The packet is incomplete.'}\n\nFailed to attach:\n${list}${more}\n\nSend WITHOUT the failed docs?`,
+          );
+          if (proceed) {
+            await handleSendInvoice(true);
+            return;
+          }
+          setInvoiceError('Send cancelled — packet incomplete.');
+          return;
+        }
+      }
+
+      const msg = (err as Error).message ?? 'Unknown error';
       setInvoiceError(msg);
     } finally {
       setInvoiceBusy(false);

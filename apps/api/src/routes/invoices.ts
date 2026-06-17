@@ -1148,9 +1148,29 @@ invoices.post("/:id/send", requireCapability("accounting.send_invoice"), async (
         dueDate:    fmt(invoice.dueAt),
       });
       packetBuffer = packet.buffer;
+      // Refuse to ship a packet that lost selected supporting docs
+      // unless the dispatcher explicitly opted in (allowPartialPacket).
+      // Prior behavior was to console.warn and email the broker
+      // anyway — the dispatcher had no idea their POD/BOL/etc. weren't
+      // attached. Returning 422 with the failing paths forces the
+      // mistake to surface in the UI before it becomes a billing fight.
+      if (packet.skipped.length && !body.allowPartialPacket) {
+        console.warn(
+          "[POST /v1/invoices/:id/send] refusing send — packet incomplete:",
+          packet.skipped,
+        );
+        return c.json(
+          {
+            error:  "packet_incomplete",
+            detail: `${packet.skipped.length} selected doc${packet.skipped.length === 1 ? "" : "s"} failed to attach. Fix them and retry, or resend with allowPartialPacket=true to ship the packet without them.`,
+            errors: packet.skipped.map(s => `${s.path} (${s.reason})`),
+          } satisfies ApiErrorResponse,
+          422,
+        );
+      }
       if (packet.skipped.length) {
         console.warn(
-          "[POST /v1/invoices/:id/send] packet skipped some sources:",
+          "[POST /v1/invoices/:id/send] sending with skipped sources (allowPartialPacket=true):",
           packet.skipped,
         );
       }
@@ -1910,8 +1930,24 @@ invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async
         issuedDate:  fmt(inv.issuedAt),
         dueDate:     fmt(inv.dueAt),
       });
+      // Same partial-packet guard as the single-invoice send. Default:
+      // skip this invoice from the batch and report failed; the
+      // dispatcher can re-run with allowPartialPacket=true if they
+      // know what they're shipping.
+      if (built.skipped.length && !body.allowPartialPacket) {
+        console.warn("[batch-send] refusing send — packet incomplete:", inv.invoiceNumber, built.skipped);
+        return {
+          customerId,
+          brokerName,
+          to:         recipient ?? null,
+          status:     "failed",
+          invoiceIds: [inv.id],
+          loadNumber,
+          error:      `packet_incomplete: ${built.skipped.length} selected doc${built.skipped.length === 1 ? "" : "s"} failed to attach — ${built.skipped.map(s => `${s.path} (${s.reason})`).join("; ")}`,
+        };
+      }
       if (built.skipped.length) {
-        console.warn("[batch-send] packet skipped sources:", inv.invoiceNumber, built.skipped);
+        console.warn("[batch-send] sending with skipped sources (allowPartialPacket=true):", inv.invoiceNumber, built.skipped);
       }
       packet = built.buffer;
     } catch (err) {

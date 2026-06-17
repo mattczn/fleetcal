@@ -52,9 +52,12 @@ interface PacketArgs {
 
 export interface PacketResult {
   buffer:   Buffer;
-  /** Diagnostic: paths that were requested but skipped (download
-   *  failed, unsupported format, etc.). Empty array on full success. */
-  skipped:  string[];
+  /** Diagnostic: requested sources that didn't make it into the merged
+   *  packet (download failed, unsupported format, embedder threw…),
+   *  each with its failure reason so the caller can surface it to the
+   *  dispatcher BEFORE the email actually goes out. Empty on full
+   *  success. */
+  skipped:  Array<{ path: string; reason: string }>;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────
@@ -311,7 +314,7 @@ async function appendSource(target: PDFDocument, src: SourceDoc): Promise<{ ok: 
 // ─── Main builder ───────────────────────────────────────────────────────
 
 export async function buildInvoicePacket(args: PacketArgs): Promise<PacketResult> {
-  const skipped: string[] = [];
+  const skipped: Array<{ path: string; reason: string }> = [];
 
   // PARALLELIZE the slow stuff: the @react-pdf/renderer invocation +
   // every Supabase Storage download happens at the same time. The
@@ -372,9 +375,9 @@ export async function buildInvoicePacket(args: PacketArgs): Promise<PacketResult
   for (let i = 0; i < extraSources.length; i++) {
     const bytes = extraFetched[i];
     const src   = extraSources[i];
-    if (!bytes) { skipped.push(src.path); continue; }
+    if (!bytes) { skipped.push({ path: src.path, reason: "download_failed" }); continue; }
     const r = await embedPrefetched(packet, src, bytes);
-    if (!r.ok) skipped.push(src.path);
+    if (!r.ok) skipped.push({ path: src.path, reason: r.reason ?? "embed_failed" });
   }
 
   // Rate con last: pick the first bucket that returned bytes.
@@ -382,9 +385,9 @@ export async function buildInvoicePacket(args: PacketArgs): Promise<PacketResult
   if (args.rateConPath && !args.rateConPath.startsWith("data:")) {
     if (rateConBuf) {
       const r = await embedPrefetched(packet, rateConSources[0], rateConBuf);
-      if (!r.ok) skipped.push(`rate-con:${args.rateConPath}`);
+      if (!r.ok) skipped.push({ path: `rate-con:${args.rateConPath}`, reason: r.reason ?? "embed_failed" });
     } else {
-      skipped.push(`rate-con:${args.rateConPath}`);
+      skipped.push({ path: `rate-con:${args.rateConPath}`, reason: "download_failed" });
     }
   }
 
