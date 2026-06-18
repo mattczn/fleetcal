@@ -770,11 +770,38 @@ export default function DashboardView() {
   // period for that asset's readings). Used by the Revenue by Truck
   // card to show miles next to each row when the truck has an ELD.
   const [eldMilesByAsset, setEldMilesByAsset] = useState<Record<string, number>>({});
-  // Per-asset miles source. 'movements' means the ECM odometer was
-  // frozen for this asset and the server fell back to summing GPS
-  // movement distance — surface an "est." badge on those rows.
+  // Per-asset miles source.
+  //   'odometer'        — ECM odometer max−min, the factual ELD value
+  //   'movements'       — server-side fallback: ECM frozen so we summed
+  //                        Motive GPS movement distance instead
+  //   'loaded_estimate' — client-side fallback: no ELD at all, so we
+  //                        estimated miles as loadedMiles × (1 + dh%)
+  // Both fallback sources get an "est" badge in the UI; the breakdown
+  // tooltip explains which heuristic produced the number.
   const [eldMilesSourceByAsset, setEldMilesSourceByAsset] =
     useState<Record<string, 'odometer' | 'movements'>>({});
+  // Deadhead % dial for loaded-miles-based estimates on non-ELD
+  // trucks. The timeline page (FleetWeekView) owns the dial; we just
+  // read the same localStorage key it writes to so the two screens
+  // stay in sync. Stored as a 0..1 ratio (0.15 = 15%). Synced once on
+  // mount and on the 'storage' event (cross-tab updates).
+  const DEADHEAD_PCT_KEY     = 'fleetWeek.deadheadPct';
+  const DEFAULT_DEADHEAD_PCT = 0.15;
+  const [deadheadPct, setDeadheadPct] = useState<number>(DEFAULT_DEADHEAD_PCT);
+  useEffect(() => {
+    const read = () => {
+      const raw = window.localStorage.getItem(DEADHEAD_PCT_KEY);
+      if (raw == null) return;
+      const parsed = parseFloat(raw);
+      if (Number.isFinite(parsed) && parsed >= 0) setDeadheadPct(parsed);
+    };
+    read();
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === DEADHEAD_PCT_KEY) read();
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
   useEffect(() => {
     if (!dbReady) return;
     let cancelled = false;
@@ -937,6 +964,31 @@ export default function DashboardView() {
     if (typeof window !== 'undefined') localStorage.setItem('dashboard.assetChart.showPayroll', showPayrollOverlay ? '1' : '0');
   }, [showPayrollOverlay]);
 
+  // Loaded miles per asset — pulled from loadSummaries so the
+  // numbers match the Total Loaded Miles tile exactly. Relays
+  // split: each leg credits its OWN asset (pickupAssetId gets
+  // pickupLoadedMiles, deliveryAssetId gets deliveryLoadedMiles).
+  // Single-leg loads attribute the load's miles once to avoid the
+  // duplicate-credit trap (delivery field mirrors pickup on single
+  // legs per the LoadSummary contract at packages/types/api.ts).
+  const loadedMilesByAsset = useMemo(() => {
+    const m = new Map<number, number>();
+    if (!loadSummaries) return m;
+    const add = (id: number | undefined | null, mi: number | undefined) => {
+      if (id == null || !mi) return;
+      m.set(id, (m.get(id) ?? 0) + mi);
+    };
+    for (const l of loadSummaries) {
+      if (l.pickupAssetId !== l.deliveryAssetId) {
+        add(l.pickupAssetId,   l.pickupLoadedMiles);
+        add(l.deliveryAssetId, l.deliveryLoadedMiles);
+      } else {
+        add(l.pickupAssetId, l.pickupLoadedMiles ?? l.totalLoadedMiles);
+      }
+    }
+    return m;
+  }, [loadSummaries]);
+
   const revenueByAsset = useMemo(() => {
     // Index relay legs by group so we can find the partner cheaply.
     const partnerByGroup = new Map<string, CalendarEvent>();
@@ -988,16 +1040,33 @@ export default function DashboardView() {
         }
         const fuel    = fuelByAsset.get(asset.id) ?? 0;
         const payroll = payrollByAsset.get(asset.id) ?? 0;
-        // ELD miles from motive_odometer_readings — only meaningful for
-        // trucks with a Motive vehicle linked. Asset id key is stringified
-        // to match the server's Record<string, number> serialization.
-        // Undefined for non-ELD trucks; the UI renders an em-dash there.
-        const eldMiles = asset.motiveVehicleId
+        // ── Miles attribution, three sources in priority order ──
+        // 1. ECM odometer (motive_odometer_readings max−min) — factual
+        //    truth from the ELD when present.
+        // 2. GPS movements sum — server-side fallback when the
+        //    odometer froze (broken ECM sensor).
+        // 3. Loaded miles × (1 + deadhead %) — client-side fallback
+        //    for trucks with no ELD integration at all. Matches the
+        //    timeline page's effectiveMiles formula so the two
+        //    surfaces tell the same story.
+        // `eldMilesSource` is null only when we genuinely have nothing
+        // to show (no ELD AND no loaded miles in the period).
+        const rawEld     = asset.motiveVehicleId
           ? (eldMilesByAsset[String(asset.id)] ?? 0)
-          : null;
-        const eldMilesSource = asset.motiveVehicleId
+          : 0;
+        const rawEldSrc  = asset.motiveVehicleId
           ? (eldMilesSourceByAsset[String(asset.id)] ?? 'odometer')
           : null;
+        const loadedMi   = loadedMilesByAsset.get(asset.id) ?? 0;
+        let   eldMiles:        number | null = null;
+        let   eldMilesSource:  'odometer' | 'movements' | 'loaded_estimate' | null = null;
+        if (asset.motiveVehicleId && rawEld > 0) {
+          eldMiles       = rawEld;
+          eldMilesSource = rawEldSrc;
+        } else if (loadedMi > 0) {
+          eldMiles       = loadedMi * (1 + deadheadPct);
+          eldMilesSource = 'loaded_estimate';
+        }
         return {
           asset,
           revenue,
@@ -1011,7 +1080,7 @@ export default function DashboardView() {
         };
       })
       .sort((a, b) => b.revenue - a.revenue);
-  }, [assets, filtered, unassignedAssetId, pStart, pEnd, fuelByAsset, payrollByAsset, eldMilesByAsset, eldMilesSourceByAsset]);
+  }, [assets, filtered, unassignedAssetId, pStart, pEnd, fuelByAsset, payrollByAsset, eldMilesByAsset, eldMilesSourceByAsset, loadedMilesByAsset, deadheadPct]);
 
 
   // ── Sortable weekly loads list ──
@@ -1056,47 +1125,69 @@ export default function DashboardView() {
 
   const maxAssetRev = Math.max(...revenueByAsset.map(a => a.revenue), 1);
 
-  // ── Total Miles hover breakdown ──
-  // Lists every ELD-equipped truck with its miles for the period
-  // and tags the source: blue ELD chip when we have a real ECM
-  // odometer delta, amber EST chip when we fell back to GPS
-  // movements because the odometer was frozen. This surfaces broken
-  // ELD devices the dispatcher would otherwise miss — a truck with
-  // an EST badge has a hardware issue that needs a tech visit. The
-  // node is fed straight into the KpiCard's hoverContent slot so it
-  // only renders when the user actually hovers the tile.
+  // ── Total Miles: all-source aggregate + hover breakdown ──
+  // The KPI tile shows ELD odometer truth + GPS-fallback + loaded-
+  // miles estimate combined, so the dispatcher sees one number for
+  // "how many miles did the fleet turn this period" instead of an
+  // ELD-only subset. The breakdown lists every truck that contributed
+  // (active in the period, with miles from any source) and tags each
+  // row with the source via a small badge:
+  //   ELD (blue)  — real ECM odometer delta
+  //   EST (amber) — either GPS-movements fallback (broken ELC) or
+  //                 loaded-miles × (1 + deadhead%) (no ELD on truck)
+  // The badge tooltip differentiates which estimate flavor produced
+  // the number, so a broken sensor still stands out from a no-ELD
+  // truck. We source rows from `revenueByAsset` directly so this is
+  // guaranteed to match the per-truck card below.
+  const eldMilesAll = useMemo<number | null>(() => {
+    if (eldMiles === null) return null;
+    let extra = 0;
+    for (const r of revenueByAsset) {
+      if (r.eldMilesSource === 'loaded_estimate' && r.eldMiles != null) {
+        extra += r.eldMiles;
+      }
+    }
+    return eldMiles + extra;
+  }, [eldMiles, revenueByAsset]);
+
   const eldMilesBreakdown = useMemo<React.ReactNode | null>(() => {
-    const eldRows = assets
-      .filter(a =>
-        a.motiveVehicleId != null &&
-        a.id !== unassignedAssetId &&
-        a.name !== 'Unassigned'
-      )
-      .map(a => {
-        const miles  = eldMilesByAsset[String(a.id)] ?? 0;
-        const source = eldMilesSourceByAsset[String(a.id)] ?? 'odometer';
-        const label  = a.unit ? `#${a.unit} · ${a.name}` : a.name;
-        return { id: a.id, label, miles, source };
-      })
+    const rows = revenueByAsset
+      .filter(r => r.eldMilesSource !== null && r.eldMiles != null && r.eldMiles > 0)
+      .map(r => ({
+        id:     r.asset.id,
+        label:  r.asset.unit ? `#${r.asset.unit} · ${r.asset.name}` : r.asset.name,
+        miles:  r.eldMiles!,
+        source: r.eldMilesSource!,
+      }))
       .sort((x, y) => y.miles - x.miles);
-    if (eldRows.length === 0) return null;
+    if (rows.length === 0) return null;
+    const eldCount = rows.filter(r => r.source === 'odometer').length;
+    const estCount = rows.length - eldCount;
     return (
-      <div style={{ minWidth: 240, maxWidth: 320 }}>
+      <div style={{ minWidth: 260, maxWidth: 320 }}>
         <div
-          className="text-[10px] font-semibold uppercase tracking-wider mb-1.5 pb-1"
+          className="text-[10px] font-semibold uppercase tracking-wider mb-1.5 pb-1 flex items-center justify-between gap-2"
           style={{
             color: 'rgba(255,255,255,0.55)',
             borderBottom: '1px solid rgba(255,255,255,0.15)',
           }}
         >
-          Miles by truck · {eldRows.length} ELD
+          <span>Miles by truck</span>
+          <span style={{ color: 'rgba(255,255,255,0.7)', fontWeight: 500 }}>
+            {eldCount} ELD · {estCount} est
+          </span>
         </div>
         <div
           className="flex flex-col gap-0.5"
           style={{ maxHeight: 280, overflowY: 'auto' }}
         >
-          {eldRows.map(r => {
-            const isEst = r.source === 'movements';
+          {rows.map(r => {
+            const isEst = r.source !== 'odometer';
+            const tip   = r.source === 'odometer'
+              ? 'Real odometer delta from the ELD'
+              : r.source === 'movements'
+                ? 'ECM odometer frozen — estimated from Motive GPS movements'
+                : `No ELD on this truck — estimated as loaded miles × (1 + ${Math.round(deadheadPct * 100)}% deadhead)`;
             return (
               <div key={r.id} className="flex items-center gap-2 text-[11px]">
                 <span
@@ -1108,11 +1199,7 @@ export default function DashboardView() {
                 </span>
                 <span
                   className="tabular-nums"
-                  style={{
-                    color: r.miles > 0 ? '#fff' : 'rgba(255,255,255,0.5)',
-                    minWidth: 56,
-                    textAlign: 'right',
-                  }}
+                  style={{ color: '#fff', minWidth: 56, textAlign: 'right' }}
                 >
                   {Math.round(r.miles).toLocaleString()} mi
                 </span>
@@ -1121,13 +1208,11 @@ export default function DashboardView() {
                   style={{
                     minWidth: 30,
                     textAlign: 'center',
-                    color: isEst ? '#f9ab00' : '#8ab4f8',
+                    color:      isEst ? '#f9ab00' : '#8ab4f8',
                     background: isEst ? 'rgba(249,171,0,0.18)' : 'rgba(138,180,248,0.18)',
                     lineHeight: 1,
                   }}
-                  title={isEst
-                    ? 'ECM odometer frozen — estimated from Motive GPS movements'
-                    : 'Real odometer delta from the ELD'}
+                  title={tip}
                 >
                   {isEst ? 'EST' : 'ELD'}
                 </span>
@@ -1135,9 +1220,18 @@ export default function DashboardView() {
             );
           })}
         </div>
+        <div
+          className="text-[10px] mt-1.5 pt-1.5"
+          style={{
+            color: 'rgba(255,255,255,0.5)',
+            borderTop: '1px solid rgba(255,255,255,0.15)',
+          }}
+        >
+          Deadhead {Math.round(deadheadPct * 100)}% — adjust on the timeline page.
+        </div>
       </div>
     );
-  }, [assets, unassignedAssetId, eldMilesByAsset, eldMilesSourceByAsset]);
+  }, [revenueByAsset, deadheadPct]);
 
   // ── Export helpers ──────────────────────────────────────────────────────────
   function exportWeekLoads(format: 'csv' | 'xls') {
@@ -1474,14 +1568,14 @@ export default function DashboardView() {
             {showEldMiles && (
               <KpiCard
                 label="Total Miles"
-                value={eldMiles == null ? '—' : fmtMiles(eldMiles)}
-                sub="ELD-equipped trucks only · hover for breakdown"
+                value={eldMilesAll == null ? '—' : fmtMiles(eldMilesAll)}
+                sub="ELD + estimates · hover for breakdown"
                 icon={<Gauge size={17} />}
                 accent="#0288d1"
-                loading={eldMiles === null}
+                loading={eldMilesAll === null}
                 formula={
                   <>
-                    Sum of <strong>(max odometer − min odometer)</strong> for every ELD-equipped truck over the selected period, pulled from Motive. Includes deadhead, bobtail, and personal use — these are wheels-turning miles, not loaded miles. Trucks whose ECM odometer is frozen fall back to GPS movement distance and show an <strong>EST</strong> badge.
+                    Per-truck miles, summed. Sources in priority: <strong>(1)</strong> ECM odometer max−min from the ELD, <strong>(2)</strong> Motive GPS movement distance when the odometer is frozen, <strong>(3)</strong> loaded miles × (1 + deadhead %) when the truck has no ELD. Estimated rows show an <strong>EST</strong> badge in the breakdown.
                   </>
                 }
                 hoverContent={eldMilesBreakdown}
@@ -1710,13 +1804,15 @@ export default function DashboardView() {
                               so the dispatcher knows it's an
                               estimate, not ECM truth. */}
                           {(() => {
-                            const isEst = eldMilesSource === 'movements';
+                            const isEst = eldMilesSource !== null && eldMilesSource !== 'odometer';
                             const tip =
                               eldMiles == null
-                                ? 'No ELD linked to this truck'
-                                : isEst
-                                  ? `ECM odometer frozen for this period — estimated from Motive GPS movements: ${Math.round(eldMiles).toLocaleString()} mi`
-                                  : `ELD miles this period: ${Math.round(eldMiles).toLocaleString()}`;
+                                ? 'No miles recorded for this truck this period'
+                                : eldMilesSource === 'odometer'
+                                  ? `ELD miles this period: ${Math.round(eldMiles).toLocaleString()}`
+                                  : eldMilesSource === 'movements'
+                                    ? `ECM odometer frozen for this period — estimated from Motive GPS movements: ${Math.round(eldMiles).toLocaleString()} mi`
+                                    : `No ELD on this truck — estimated as loaded miles × (1 + ${Math.round(deadheadPct * 100)}% deadhead): ${Math.round(eldMiles).toLocaleString()} mi`;
                             return (
                               <div className="text-xs shrink-0 text-right tabular-nums flex items-center justify-end gap-1"
                                 style={{ color: eldMiles == null ? 'var(--gc-text-3)' : 'var(--gc-text-1)', minWidth: 70 }}
