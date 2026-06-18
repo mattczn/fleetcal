@@ -9,14 +9,16 @@ import {
   Alert,
   ActivityIndicator,
   Linking,
+  Image,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { Truck, ArrowLeft } from "lucide-react-native";
+import { StatusBar } from "expo-status-bar";
+import { ArrowLeft } from "lucide-react-native";
 import { supabase } from "@/lib/supabase";
+import { C, f, RADIUS, SHADOW, ACCENT } from "@/lib/theme";
 
-// Canonical legal URLs hosted on the marketing site. Linked from this
-// screen so the SMS opt-in disclosure points at the real Privacy /
-// Terms / Support pages — required for Twilio A2P 10DLC sign-off and
+// Canonical legal URLs hosted on the marketing site. Linked from the
+// SMS opt-in disclosure — required for Twilio A2P 10DLC sign-off and
 // Apple App Store review.
 const PRIVACY_URL = "https://www.fleetcal.app/privacy-policy";
 const TERMS_URL   = "https://www.fleetcal.app/terms-conditions";
@@ -24,13 +26,15 @@ const SUPPORT_URL = "https://www.fleetcal.app/support";
 
 type Step = "phone" | "otp";
 
-const txt = (weight: 500 | 600 | 700 | 800) => ({
-  fontFamily:
-    weight === 500 ? "PlusJakartaSans_500Medium"  :
-    weight === 600 ? "PlusJakartaSans_600SemiBold" :
-    weight === 700 ? "PlusJakartaSans_700Bold"     :
-                     "PlusJakartaSans_800ExtraBold",
-});
+/** Format raw input as a US phone number: "(801) 555-0001". Caps at 10
+ *  digits; partial input formats progressively as the driver types. */
+function formatUSPhone(input: string): string {
+  const d = input.replace(/\D/g, "").slice(0, 10);
+  if (d.length === 0) return "";
+  if (d.length < 4) return `(${d}`;
+  if (d.length < 7) return `(${d.slice(0, 3)}) ${d.slice(3)}`;
+  return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
+}
 
 export default function LoginScreen() {
   const [step, setStep] = useState<Step>("phone");
@@ -66,12 +70,7 @@ export default function LoginScreen() {
     setLoading(false);
     if (error) {
       // Wrong code / expired / network → clear the input and let the
-      // driver retry without backing out + re-entering the phone. If
-      // the code expired Supabase returns a specific message; in that
-      // case bounce back to the phone step so they can request a new
-      // code. Either way the user has a clear path forward instead of
-      // being stuck on a dismissed alert with a 6-digit field already
-      // showing their bad code.
+      // driver retry without backing out + re-entering the phone.
       const msg = error.message ?? "";
       const expired = /expir|token has expired/i.test(msg);
       Alert.alert(
@@ -87,184 +86,119 @@ export default function LoginScreen() {
     }
   }
 
+  const inputStyle = {
+    backgroundColor: C.surface,
+    color: C.t1,
+    borderRadius: RADIUS.btn,
+    paddingHorizontal: 16,
+    paddingVertical: 15,
+    fontSize: 17,
+    borderWidth: 1,
+    borderColor: C.border,
+  } as const;
+
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: "#1a2332" }}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }} edges={["top", "bottom"]}>
+      <StatusBar style="dark" />
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
-        <View style={{ flex: 1, paddingHorizontal: 26, justifyContent: "center" }}>
+        <View style={{ flex: 1, paddingHorizontal: 24, justifyContent: "center" }}>
           {/* Brand */}
-          <View
-            style={{
-              width: 56, height: 56, borderRadius: 16,
-              backgroundColor: "#1a73e8",
-              alignItems: "center", justifyContent: "center",
-              marginBottom: 22,
-              shadowColor: "#1a73e8",
-              shadowOpacity: 0.4,
-              shadowRadius: 18,
-              shadowOffset: { width: 0, height: 6 },
-            }}
-          >
-            <Truck size={28} color="#ffffff" strokeWidth={2.4} />
+          <View style={{ borderRadius: 20, marginBottom: 22, alignSelf: "flex-start", ...SHADOW.card }}>
+            <Image
+              source={require("../../assets/icon.png")}
+              style={{ width: 72, height: 72, borderRadius: 20 }}
+            />
           </View>
-
-          <Text style={[txt(800), { fontSize: 32, color: "#ffffff", letterSpacing: -0.5 }]}>
-            FleetCal
-          </Text>
-          <Text style={[txt(800), { fontSize: 32, color: "#1a73e8", letterSpacing: -0.5, marginTop: -4 }]}>
-            Driver
-          </Text>
-          <Text
-            style={[
-              txt(500),
-              { fontSize: 14, color: "rgba(255,255,255,0.55)", marginTop: 8, lineHeight: 20 },
-            ]}
-          >
-            Driver portal — sign in with your phone number to see today&apos;s loads.
-          </Text>
-
-          <View style={{ height: 36 }} />
 
           {step === "phone" ? (
             <>
-              <Text
-                style={[
-                  txt(700),
-                  { fontSize: 12, color: "rgba(255,255,255,0.7)", letterSpacing: 0.6, marginBottom: 8 },
-                ]}
-              >
+              <Text style={[f(800), { fontSize: 28, color: C.t1, letterSpacing: -0.6 }]}>
+                Sign in to FleetCal
+              </Text>
+              <Text style={[f(500), { fontSize: 15, color: C.t3, marginTop: 8, lineHeight: 21 }]}>
+                Enter your mobile number and we&apos;ll text you a verification code.
+              </Text>
+
+              <Text style={[f(700), { fontSize: 11.5, color: C.t3, letterSpacing: 0.6, marginTop: 30, marginBottom: 8 }]}>
                 MOBILE NUMBER
               </Text>
               <TextInput
-                style={[
-                  txt(600),
-                  {
-                    backgroundColor: "rgba(255,255,255,0.08)",
-                    color: "#ffffff",
-                    borderRadius: 14,
-                    paddingHorizontal: 16,
-                    paddingVertical: 16,
-                    fontSize: 16,
-                    borderWidth: 1,
-                    borderColor: "rgba(255,255,255,0.14)",
-                    marginBottom: 16,
-                  },
-                ]}
+                style={[f(700), inputStyle]}
                 placeholder="(801) 555-0001"
-                placeholderTextColor="#5f6368"
+                placeholderTextColor={C.t4}
                 keyboardType="phone-pad"
                 textContentType="telephoneNumber"
                 value={phone}
-                onChangeText={setPhone}
+                onChangeText={(t) => setPhone(formatUSPhone(t))}
                 autoFocus
                 maxLength={14}
               />
 
               <TouchableOpacity
-                activeOpacity={0.85}
+                activeOpacity={0.9}
                 onPress={handleSendOtp}
                 disabled={loading}
                 style={{
-                  backgroundColor: "#1a73e8",
-                  borderRadius: 14,
-                  paddingVertical: 16,
+                  backgroundColor: ACCENT,
+                  borderRadius: RADIUS.btn,
+                  height: 54,
                   alignItems: "center",
-                  shadowColor: "#1a73e8",
-                  shadowOpacity: 0.35,
-                  shadowRadius: 14,
-                  shadowOffset: { width: 0, height: 6 },
+                  justifyContent: "center",
+                  marginTop: 16,
+                  ...SHADOW.card,
                 }}
               >
                 {loading ? (
                   <ActivityIndicator color="#ffffff" />
                 ) : (
-                  <Text style={[txt(800), { color: "#ffffff", fontSize: 15, letterSpacing: 0.2 }]}>
+                  <Text style={[f(800), { color: "#ffffff", fontSize: 16, letterSpacing: 0.2 }]}>
                     Send Code
                   </Text>
                 )}
               </TouchableOpacity>
 
               {/* SMS consent disclosure — required by Twilio A2P 10DLC.
-                  Must be visible at the point of phone-number entry so
-                  the campaign reviewer can confirm consent isn't buried
-                  in the terms. */}
-              <View style={{ marginTop: 18 }}>
-                <Text
-                  style={[
-                    txt(500),
-                    { fontSize: 11, color: "rgba(255,255,255,0.55)", lineHeight: 16, textAlign: "center" },
-                  ]}
-                >
-                  By tapping Send Code, you agree to receive SMS verification
-                  codes and operational notifications from FleetCal at
-                  the number above. Msg &amp; data rates may apply. Msg
-                  frequency varies. Reply STOP to opt out, HELP for help.
+                  Must stay visible at the point of phone-number entry. */}
+              <View style={{ marginTop: 22 }}>
+                <Text style={[f(500), { fontSize: 11.5, color: C.t4, lineHeight: 17, textAlign: "center" }]}>
+                  By tapping Send Code, you agree to receive SMS verification codes and
+                  operational notifications from FleetCal. Msg &amp; data rates may apply.
+                  Reply STOP to opt out, HELP for help.
                 </Text>
-                <View
-                  style={{
-                    flexDirection: "row",
-                    justifyContent: "center",
-                    alignItems: "center",
-                    gap: 14,
-                    marginTop: 10,
-                    flexWrap: "wrap",
-                  }}
-                >
+                <View style={{ flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 14, marginTop: 12 }}>
                   <TouchableOpacity onPress={() => void Linking.openURL(PRIVACY_URL)}>
-                    <Text style={[txt(600), { fontSize: 11, color: "rgba(255,255,255,0.75)", textDecorationLine: "underline" }]}>
-                      Privacy
-                    </Text>
+                    <Text style={[f(700), { fontSize: 12, color: C.blueInk }]}>Privacy</Text>
                   </TouchableOpacity>
-                  <Text style={{ fontSize: 11, color: "rgba(255,255,255,0.25)" }}>·</Text>
+                  <Text style={{ fontSize: 12, color: C.t4 }}>·</Text>
                   <TouchableOpacity onPress={() => void Linking.openURL(TERMS_URL)}>
-                    <Text style={[txt(600), { fontSize: 11, color: "rgba(255,255,255,0.75)", textDecorationLine: "underline" }]}>
-                      Terms
-                    </Text>
+                    <Text style={[f(700), { fontSize: 12, color: C.blueInk }]}>Terms</Text>
                   </TouchableOpacity>
-                  <Text style={{ fontSize: 11, color: "rgba(255,255,255,0.25)" }}>·</Text>
+                  <Text style={{ fontSize: 12, color: C.t4 }}>·</Text>
                   <TouchableOpacity onPress={() => void Linking.openURL(SUPPORT_URL)}>
-                    <Text style={[txt(600), { fontSize: 11, color: "rgba(255,255,255,0.75)", textDecorationLine: "underline" }]}>
-                      Support
-                    </Text>
+                    <Text style={[f(700), { fontSize: 12, color: C.blueInk }]}>Support</Text>
                   </TouchableOpacity>
                 </View>
               </View>
             </>
           ) : (
             <>
-              <Text
-                style={[
-                  txt(700),
-                  { fontSize: 12, color: "rgba(255,255,255,0.7)", letterSpacing: 0.6, marginBottom: 4 },
-                ]}
-              >
-                VERIFICATION CODE
+              <Text style={[f(800), { fontSize: 28, color: C.t1, letterSpacing: -0.6 }]}>
+                Enter your code
               </Text>
-              <Text style={[txt(500), { fontSize: 13, color: "rgba(255,255,255,0.5)", marginBottom: 14 }]}>
-                Sent to {phone}
+              <Text style={[f(500), { fontSize: 15, color: C.t3, marginTop: 8, lineHeight: 21 }]}>
+                We texted a 6-digit code to {phone}.
               </Text>
 
+              <Text style={[f(700), { fontSize: 11.5, color: C.t3, letterSpacing: 0.6, marginTop: 30, marginBottom: 8 }]}>
+                VERIFICATION CODE
+              </Text>
               <TextInput
-                style={[
-                  txt(800),
-                  {
-                    backgroundColor: "rgba(255,255,255,0.08)",
-                    color: "#ffffff",
-                    borderRadius: 14,
-                    paddingHorizontal: 16,
-                    paddingVertical: 16,
-                    fontSize: 26,
-                    letterSpacing: 8,
-                    textAlign: "center",
-                    borderWidth: 1,
-                    borderColor: "rgba(255,255,255,0.14)",
-                    marginBottom: 16,
-                  },
-                ]}
+                style={[f(800), inputStyle, { fontSize: 26, letterSpacing: 10, textAlign: "center" }]}
                 placeholder="000000"
-                placeholderTextColor="#3c4043"
+                placeholderTextColor={C.t4}
                 keyboardType="number-pad"
                 textContentType="oneTimeCode"
                 value={otp}
@@ -274,38 +208,34 @@ export default function LoginScreen() {
               />
 
               <TouchableOpacity
-                activeOpacity={0.85}
+                activeOpacity={0.9}
                 onPress={handleVerifyOtp}
                 disabled={loading}
                 style={{
-                  backgroundColor: "#1a73e8",
-                  borderRadius: 14,
-                  paddingVertical: 16,
+                  backgroundColor: ACCENT,
+                  borderRadius: RADIUS.btn,
+                  height: 54,
                   alignItems: "center",
-                  marginBottom: 12,
-                  shadowColor: "#1a73e8",
-                  shadowOpacity: 0.35,
-                  shadowRadius: 14,
-                  shadowOffset: { width: 0, height: 6 },
+                  justifyContent: "center",
+                  marginTop: 16,
+                  ...SHADOW.card,
                 }}
               >
                 {loading ? (
                   <ActivityIndicator color="#ffffff" />
                 ) : (
-                  <Text style={[txt(800), { color: "#ffffff", fontSize: 15, letterSpacing: 0.2 }]}>
-                    Verify & Sign In
+                  <Text style={[f(800), { color: "#ffffff", fontSize: 16, letterSpacing: 0.2 }]}>
+                    Verify &amp; Sign In
                   </Text>
                 )}
               </TouchableOpacity>
 
               <TouchableOpacity
-                onPress={() => setStep("phone")}
-                style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 8 }}
+                onPress={() => { setOtp(""); setStep("phone"); }}
+                style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 14, marginTop: 4 }}
               >
-                <ArrowLeft size={14} color="rgba(255,255,255,0.55)" strokeWidth={2.2} />
-                <Text style={[txt(600), { color: "rgba(255,255,255,0.55)", fontSize: 13 }]}>
-                  Use a different number
-                </Text>
+                <ArrowLeft size={15} color={C.t3} strokeWidth={2.2} />
+                <Text style={[f(700), { color: C.t3, fontSize: 14 }]}>Use a different number</Text>
               </TouchableOpacity>
             </>
           )}

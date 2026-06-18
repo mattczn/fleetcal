@@ -1062,12 +1062,11 @@ export default function LoadDetailScreen() {
                 </>
               ) : null}
             </View>
-          ) : (
+          ) : load.loadNum || load.broker ? (
             <Text style={[txt(700), { fontSize: 12, color: C.blueInk, marginTop: 1 }]} numberOfLines={1}>
-              {load.loadNum ? `#${load.loadNum}` : load.internalLoadId ? `#${load.internalLoadId}` : ""}
-              {load.broker ? `${load.loadNum || load.internalLoadId ? " · " : ""}${load.broker}` : ""}
+              {load.loadNum ? `#${load.loadNum}` : ""}{load.loadNum && load.broker ? " · " : ""}{load.broker ?? ""}
             </Text>
-          )}
+          ) : null}
         </View>
         <TouchableOpacity
           onPress={() => setStatusPickerVisible(true)}

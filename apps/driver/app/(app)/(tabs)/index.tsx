@@ -49,7 +49,9 @@ export default function LoadsScreen() {
   const session = useDriverSession();
   const driver  = session.status === "matched" ? session.driver : null;
   useLoadsRealtime(driver?.driverId, driver?.orgId);
-  const pushStatus = usePushRegistration(driver?.driverId, driver?.orgId);
+  // Registers the device for push silently. We intentionally don't surface
+  // a "registration failed" banner — it's noise the driver can't action.
+  usePushRegistration(driver?.driverId, driver?.orgId);
   // Observe-only — never prompts. Pings the API with the current
   // OS-level notification + location permissions so dispatch can
   // see them in the driver's profile.
@@ -203,22 +205,6 @@ export default function LoadsScreen() {
           })}
         </View>
       </Glass>
-
-      {(pushStatus === "denied" || pushStatus === "failed") && (
-        // Visible banner so the driver knows push isn't working. 'denied'
-        // usually means iOS notification permission was declined; 'failed'
-        // means permission's fine but token registration didn't go through.
-        <View style={{ backgroundColor: C.amberBg, paddingHorizontal: SP.screenPx, paddingVertical: 10 }}>
-          <Text style={[f(700), { fontSize: 12, color: C.amberInk }]}>
-            {pushStatus === "denied" ? "Push notifications are off" : "Push registration failed"}
-          </Text>
-          <Text style={[f(500), { fontSize: 11, color: C.amberInk, marginTop: 2 }]}>
-            {pushStatus === "denied"
-              ? "Enable notifications in Settings → Notifications → FleetCal Driver so dispatch can reach you."
-              : "We couldn't register this device for push. Pull down to retry, or restart the app."}
-          </Text>
-        </View>
-      )}
 
       {isLoading ? (
         <View style={{ flex: 1, backgroundColor: C.bg, alignItems: "center", justifyContent: "center" }}>

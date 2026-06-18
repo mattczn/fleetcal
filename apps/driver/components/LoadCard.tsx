@@ -8,7 +8,7 @@ import { fetchOrgSettings } from "@/lib/api/orgSettings";
 import { useDriverSession } from "@/lib/useDriverSession";
 import {
   RelayChip, NonRevChip, StatusPill,
-  fmtTimeRangeShort, fmtStopAppt, fmtShortDate, loadNumLabel, fmtScheduleType,
+  fmtTimeRangeShort, fmtStopAppt, fmtShortDate, fmtScheduleType,
   fmtRelayHandoffTime, relayHandoffAction,
 } from "@/lib/loadCard";
 import { C, f, SP, RADIUS, SHADOW, SCHED_TINT } from "@/lib/theme";
@@ -136,9 +136,11 @@ export function LoadCard({ load }: Props) {
           <Text style={[f(800), { fontSize: 16.5, color: C.t1, letterSpacing: -0.3, lineHeight: 21 }]} numberOfLines={2}>
             {load.title}
           </Text>
-          <Text style={[f(700), { fontSize: 12, color: C.blueInk, marginTop: 3 }]} numberOfLines={1}>
-            {loadNumLabel(load)}{load.broker ? ` · ${load.broker}` : ""}
-          </Text>
+          {load.loadNum || load.broker ? (
+            <Text style={[f(700), { fontSize: 12, color: C.blueInk, marginTop: 3 }]} numberOfLines={1}>
+              {load.loadNum ? `#${load.loadNum}` : ""}{load.loadNum && load.broker ? " · " : ""}{load.broker ?? ""}
+            </Text>
+          ) : null}
         </View>
         <View style={{ alignItems: "flex-end", gap: 6 }}>
           <StatusPill status={load.status} size="small" />
