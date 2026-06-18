@@ -23,9 +23,9 @@
   "submit": {
     "production": {
       "ios": {
-        "appleId":     "TODO_SYSTEMATICA_APPLE_ID",
-        "ascAppId":    "TODO_FLEETCAL_GO_ASC_APP_ID",
-        "appleTeamId": "TODO_SYSTEMATICA_TEAM_ID"
+        "appleId":     "mattcurzon12@gmail.com",
+        "ascAppId":    "6781804187",
+        "appleTeamId": "6CTS43SC6C"
       }
     }
   }
