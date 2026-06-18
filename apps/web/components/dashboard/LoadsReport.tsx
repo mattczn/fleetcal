@@ -548,28 +548,41 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
             }
           }
           if (c.id === 'driver') {
-            // Resolve the pickup driver by ID first so renames flow through;
+            // Resolve each leg's driver by ID first so renames flow through;
             // fall back to a name match for legacy rows missing the FK.
-            const driverRec =
-              (load.pickupDriverId != null ? drivers.find(d => d.id === load.pickupDriverId) : undefined) ??
-              (load.pickupDriverName ? drivers.find(d => d.name === load.pickupDriverName) : undefined);
-            if (driverRec) {
-              const fullName = `${driverRec.firstName ?? ''} ${driverRec.lastName ?? ''}`.trim() || driverRec.name;
-              const relaySuffix = load.isRelay && load.deliveryDriverName && load.deliveryDriverName !== fullName
-                ? ` → ${load.deliveryDriverName}` : '';
+            const resolveDriver = (driverId?: number, name?: string) =>
+              (driverId != null ? drivers.find(d => d.id === driverId) : undefined) ??
+              (name ? drivers.find(d => d.name === name) : undefined);
+            const pickupRec   = resolveDriver(load.pickupDriverId,   load.pickupDriverName);
+            const deliveryRec = load.isRelay
+              ? resolveDriver(load.deliveryDriverId, load.deliveryDriverName)
+              : undefined;
+            const fullName = (rec: { firstName?: string; lastName?: string; name: string }) =>
+              `${rec.firstName ?? ''} ${rec.lastName ?? ''}`.trim() || rec.name;
+            const DriverLink = ({ rec }: { rec: { id: number; firstName?: string; lastName?: string; name: string } }) => (
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); setDriverModalId(rec.id); }}
+                style={{ background: 'none', border: 'none', padding: 0, color: 'var(--gc-blue)', cursor: 'pointer', textAlign: 'left', fontSize: 13 }}
+                onMouseEnter={(e) => (e.currentTarget.style.textDecoration = 'underline')}
+                onMouseLeave={(e) => (e.currentTarget.style.textDecoration = 'none')}
+              >
+                {fullName(rec)}
+              </button>
+            );
+            // Relay loads show BOTH drivers separated by "→"; each
+            // driver is independently clickable so the dispatcher can
+            // jump straight to either leg's driver modal.
+            if (deliveryRec && pickupRec && deliveryRec.id !== pickupRec.id) {
               return (
-                <button
-                  type="button"
-                  onClick={(e) => { e.stopPropagation(); setDriverModalId(driverRec.id); }}
-                  style={{ background: 'none', border: 'none', padding: 0, color: 'var(--gc-blue)', cursor: 'pointer', textAlign: 'left', fontSize: 13 }}
-                  onMouseEnter={(e) => (e.currentTarget.style.textDecoration = 'underline')}
-                  onMouseLeave={(e) => (e.currentTarget.style.textDecoration = 'none')}
-                  title={load.isRelay ? `Relay — pickup: ${fullName}${load.deliveryDriverName ? `, delivery: ${load.deliveryDriverName}` : ''}` : undefined}
-                >
-                  {fullName}{relaySuffix}
-                </button>
+                <span className="inline-flex items-center gap-1">
+                  <DriverLink rec={pickupRec} />
+                  <span style={{ color: 'var(--gc-text-3)' }}>→</span>
+                  <DriverLink rec={deliveryRec} />
+                </span>
               );
             }
+            if (pickupRec) return <DriverLink rec={pickupRec} />;
             return load.pickupDriverName || <span style={{ color: 'var(--gc-text-3)' }}>—</span>;
           }
           if (c.id === 'asset') {
