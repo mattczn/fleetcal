@@ -84,13 +84,24 @@ function refStr(load: LoadSummary): string {
   return (load.refNums ?? []).map(r => r.label ? `${r.label}: ${r.value}` : r.value).join(' | ');
 }
 
-function firstStop(load: LoadSummary, type: 'pickup' | 'delivery'): string {
+/** Return the FIRST pickup / LAST delivery stop on the load. Same
+ *  resolution rule the calendar + closeout use: prefer the explicit
+ *  pickup / delivery type, fall back to first / last stop. */
+function firstStop(load: LoadSummary, type: 'pickup' | 'delivery') {
   const stops = load.stops ?? [];
-  const stop = type === 'pickup'
+  return type === 'pickup'
     ? (stops.find(s => s.type === 'pickup') ?? stops[0])
     : ([...stops].reverse().find(s => s.type === 'delivery' || s.type === 'drop' || s.type === 'drop_hook') ?? stops[stops.length - 1]);
-  if (!stop) return '';
-  return stop.facilityName ?? stop.city ?? stop.address ?? '';
+}
+
+/** Display label for the legacy pickup/delivery summary column (the
+ *  one that pre-dates separate city/state columns). Used by the
+ *  in-table search match so a dispatcher typing the facility name
+ *  still surfaces the load. */
+function stopLabel(load: LoadSummary, type: 'pickup' | 'delivery'): string {
+  const s = firstStop(load, type);
+  if (!s) return '';
+  return s.facilityName ?? s.city ?? s.address ?? '';
 }
 
 const COLUMNS: ColumnDef[] = [
@@ -122,8 +133,14 @@ const COLUMNS: ColumnDef[] = [
   }},
   { id: 'trailerType',  label: 'Equipment Type', get: (l) => l.trailerType ?? '' },
   { id: 'status',       label: 'Status',      get: (l) => STATUS_LABEL[l.pickupStatus ?? 'scheduled'] ?? l.pickupStatus ?? '' },
-  { id: 'pickup',       label: 'Pickup City', get: (l) => firstStop(l, 'pickup') },
-  { id: 'delivery',     label: 'Delivery City', get: (l) => firstStop(l, 'delivery') },
+  // City / state pulled straight from the stop's geocoded address
+  // fields (Stop.city, Stop.state — two-letter code from Google's
+  // administrative_area_level_1). Falls back to '' when the stop is
+  // legacy / un-geocoded; export shows blank rather than guessing.
+  { id: 'pickupCity',   label: 'Pickup City', get: (l) => firstStop(l, 'pickup')?.city ?? '' },
+  { id: 'pickupState',  label: 'Pickup State', get: (l) => firstStop(l, 'pickup')?.state ?? '' },
+  { id: 'deliveryCity', label: 'Delivery City', get: (l) => firstStop(l, 'delivery')?.city ?? '' },
+  { id: 'deliveryState', label: 'Delivery State', get: (l) => firstStop(l, 'delivery')?.state ?? '' },
   { id: 'stops',        label: 'Stops', align: 'right',        get: (l) => l.stops?.length ?? '' },
   // Docs column — same docBadge cluster the billing/paperwork tables render.
   // For sort + export we surface a flat summary string of "RC 1 · POD 2 …".
@@ -164,6 +181,7 @@ const COLUMNS: ColumnDef[] = [
 
 const DEFAULT_VISIBLE = [
   'pickupDate', 'deliveryDate', 'loadNum', 'customer', 'driver', 'asset',
+  'pickupCity', 'pickupState', 'deliveryCity', 'deliveryState',
   'status', 'docs', 'stops', 'miles', 'loadPrice', 'accessorials', 'total', 'rpm', 'driverPay',
 ];
 const DEFAULT_VISIBLE_SET = new Set(DEFAULT_VISIBLE);
@@ -182,8 +200,10 @@ const COL_WIDTHS: Record<string, number> = {
   asset:          120,
   trailerType:    140,
   status:         120,
-  pickup:         200,
-  delivery:       200,
+  pickupCity:     150,
+  pickupState:    70,
+  deliveryCity:   150,
+  deliveryState:  70,
   stops:          80,
   docs:           260,
   commodity:      140,
@@ -644,6 +664,13 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
       placeholder: 'Search load #, broker, driver, city…',
       width: 320,
       match: (load, q) => {
+        // Pull every reasonable search target — facility name, city,
+        // state — so a dispatcher typing either the facility ("Pepsi
+        // Las Vegas"), the city ("Las Vegas"), or the state ("NV")
+        // surfaces the load. stopLabel returns the facility-or-city
+        // fallback summary; explicit city/state come from the geocode.
+        const pickup   = firstStop(load, 'pickup');
+        const delivery = firstStop(load, 'delivery');
         const haystack = [
           load.loadNum,
           load.internalLoadId != null ? String(load.internalLoadId) : '',
@@ -651,10 +678,12 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
           load.pickupDriverName,
           load.deliveryDriverName,
           load.commodity,
-          firstStop(load, 'pickup'),
-          firstStop(load, 'delivery'),
+          stopLabel(load, 'pickup'),
+          stopLabel(load, 'delivery'),
+          pickup?.city, pickup?.state,
+          delivery?.city, delivery?.state,
           refStr(load),
-        ].join(' ').toLowerCase();
+        ].filter(Boolean).join(' ').toLowerCase();
         return haystack.includes(q);
       },
     },
