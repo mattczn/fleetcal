@@ -996,7 +996,17 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
           overflow: 'hidden',
           display: 'flex',
           flexDirection: 'column',
-          maxHeight: 'min(720px, calc(100vh - 260px))',
+          // `height` (not maxHeight) is load-bearing: a flex column's
+          // children only get a definite remaining-space slice for
+          // their own flex-1 + min-h-0 if the parent has a definite
+          // height. With maxHeight alone the container was content-
+          // sized — OpsTable's overflow: auto had nothing to scroll
+          // inside of, and our own overflow: hidden was clipping the
+          // rows instead of producing scrollbars. Trade-off: when
+          // there are few rows, the card still occupies this height
+          // and shows empty space below the last row, same as
+          // /accounting and /closeout.
+          height: 'min(720px, calc(100vh - 260px))',
         }}>
           {/* Stats + export buttons */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, marginBottom: 12 }}>
