@@ -633,13 +633,62 @@ movements.get("/odometer-summary", async (c) => {
     }
   }
 
-  const perAsset: Record<number, number> = {};
-  let total = 0;
+  const perAsset:       Record<number, number> = {};
+  const perAssetSource: Record<number, 'odometer' | 'movements'> = {};
   for (const [assetId, { min, max }] of byAsset) {
-    const delta = Math.max(0, max - min);
-    perAsset[assetId] = delta;
-    total += delta;
+    perAsset[assetId]       = Math.max(0, max - min);
+    perAssetSource[assetId] = 'odometer';
   }
+
+  // ── Step 4: movements-based fallback for trucks whose odometer
+  // froze. Some ELDs lose their connection to the engine ECM and
+  // start returning the SAME odometer value every day until the
+  // device is reseated/replaced. The truck still moves — Motive's
+  // GPS log keeps producing `movements` rows with real distance — but
+  // our odometer aggregate goes to 0 and the dashboard shows the
+  // truck as inactive when it's actually busy.
+  //
+  // For every ELD asset, sum movements.miles in the same window. If
+  // the odometer says ≤1 mile (essentially zero) AND movements say
+  // the truck actually drove >1 mile, swap in the movements total and
+  // mark the source as `'movements'`. The dashboard surfaces an
+  // "est." badge so the dispatcher knows it's GPS-derived rather than
+  // ECM-truth.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: moveRows, error: moveErr } = await (supabase as any)
+    .from("movements")
+    .select("asset_id, miles")
+    .eq("org_id", orgId)
+    .in("asset_id", eldAssetIds)
+    .gte("start_time", from)
+    .lte("start_time", to);
+  if (moveErr) {
+    console.error("[GET /v1/movements/odometer-summary] movements fetch failed (non-fatal):", moveErr);
+  }
+  const movementsByAsset = new Map<number, number>();
+  for (const r of (moveRows ?? []) as Array<{ asset_id: number | null; miles: number | null }>) {
+    if (r.asset_id == null || r.miles == null) continue;
+    movementsByAsset.set(r.asset_id, (movementsByAsset.get(r.asset_id) ?? 0) + r.miles);
+  }
+
+  // Apply the fallback per asset. Threshold = 1 mile: a real day of
+  // driving easily clears that on both sides; a parked truck (or a
+  // missing-data day) stays at 0 either way.
+  const ODO_DEAD_THRESHOLD_MI = 1;
+  const MOVE_REAL_THRESHOLD_MI = 1;
+  let fallbackCount = 0;
+  for (const assetId of eldAssetIds) {
+    const odoVal  = perAsset[assetId] ?? 0;
+    const moveVal = movementsByAsset.get(assetId) ?? 0;
+    if (odoVal <= ODO_DEAD_THRESHOLD_MI && moveVal > MOVE_REAL_THRESHOLD_MI) {
+      perAsset[assetId]       = moveVal;
+      perAssetSource[assetId] = 'movements';
+      fallbackCount++;
+    }
+  }
+
+  let total = 0;
+  for (const id of Object.keys(perAsset)) total += perAsset[Number(id)] ?? 0;
 
   // Diagnostic logging — Railway logs will show exactly where the
   // pipeline collapsed if total ever comes back as 0 again.
@@ -649,13 +698,20 @@ movements.get("/odometer-summary", async (c) => {
     `rowsAsset=${(rowsAsset ?? []).length} rowsVehicle=${(rowsVehicle ?? []).length} ` +
     `deduped=${rows.length} counted=${countedRows} ` +
     `unresolved=${unresolvedRows} nullMiles=${nullMilesRows} ` +
-    `groups=${byAsset.size} totalMiles=${total}`,
+    `groups=${byAsset.size} movementsRows=${(moveRows ?? []).length} ` +
+    `fallbackAssets=${fallbackCount} totalMiles=${total}`,
   );
 
   return c.json({
     totalMiles:    total,
-    eldAssetCount: byAsset.size,
+    eldAssetCount: Object.keys(perAsset).length,
     perAsset,
+    /** Per-asset miles source. `'odometer'` = ECM odometer max−min
+     *  (preferred, factual). `'movements'` = sum of Motive GPS
+     *  movement distance (fallback when the odometer froze). The
+     *  dashboard renders an "est." badge for the latter so the
+     *  dispatcher can spot trucks with broken ELDs. */
+    perAssetSource,
     // Surface the raw counts so the dashboard (or curl) can see which
     // pipeline stage is empty without digging into Railway logs.
     debug: {
@@ -668,6 +724,8 @@ movements.get("/odometer-summary", async (c) => {
       unresolvedRows,
       nullMilesRows,
       groupedAssets:    byAsset.size,
+      movementsRows:    (moveRows ?? []).length,
+      fallbackAssets:   fallbackCount,
     },
   });
 });

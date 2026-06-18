@@ -338,7 +338,7 @@ function CostBar({
 }
 
 function KpiCard({
-  label, value, sub, icon, accent, badge, loading, formula,
+  label, value, sub, icon, accent, badge, loading, formula, hoverContent,
 }: {
   label: string; value: string; sub: string;
   icon: React.ReactNode; accent: string;
@@ -357,6 +357,11 @@ function KpiCard({
    *  the long formula — keeps the tile clean while still being one
    *  hover away. */
   formula?: React.ReactNode;
+  /** Optional per-tile breakdown surfaced when the user hovers the
+   *  value row itself. Used by Total Miles to expose the per-truck
+   *  miles + ELD/EST source badges without permanently spending a
+   *  card on it. Skipped during `loading`. */
+  hoverContent?: React.ReactNode;
 }) {
   return (
     <Card>
@@ -402,22 +407,31 @@ function KpiCard({
           />
         </>
       ) : (
-        <>
-          <div className="flex items-baseline gap-2 mb-1.5">
-            <span className="text-[26px] font-semibold leading-none" style={{ color: 'var(--gc-text-1)' }}>
-              {value}
-            </span>
-            {badge ? (
-              <span
-                className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded"
-                style={{ background: badge.color + '22', color: badge.color }}
-              >
-                {badge.text}
-              </span>
-            ) : null}
-          </div>
-          <div className="text-xs" style={{ color: 'var(--gc-text-3)' }}>{sub}</div>
-        </>
+        (() => {
+          const valueBlock = (
+            <div style={hoverContent ? { cursor: 'help' } : undefined}>
+              <div className="flex items-baseline gap-2 mb-1.5">
+                <span className="text-[26px] font-semibold leading-none" style={{ color: 'var(--gc-text-1)' }}>
+                  {value}
+                </span>
+                {badge ? (
+                  <span
+                    className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded"
+                    style={{ background: badge.color + '22', color: badge.color }}
+                  >
+                    {badge.text}
+                  </span>
+                ) : null}
+              </div>
+              <div className="text-xs" style={{ color: 'var(--gc-text-3)' }}>{sub}</div>
+            </div>
+          );
+          return hoverContent ? (
+            <Tooltip content={hoverContent} placement="bottom">
+              {valueBlock}
+            </Tooltip>
+          ) : valueBlock;
+        })()
       )}
     </Card>
   );
@@ -756,21 +770,31 @@ export default function DashboardView() {
   // period for that asset's readings). Used by the Revenue by Truck
   // card to show miles next to each row when the truck has an ELD.
   const [eldMilesByAsset, setEldMilesByAsset] = useState<Record<string, number>>({});
+  // Per-asset miles source. 'movements' means the ECM odometer was
+  // frozen for this asset and the server fell back to summing GPS
+  // movement distance — surface an "est." badge on those rows.
+  const [eldMilesSourceByAsset, setEldMilesSourceByAsset] =
+    useState<Record<string, 'odometer' | 'movements'>>({});
   useEffect(() => {
     if (!dbReady) return;
     let cancelled = false;
     (async () => {
       try {
         // captured_at is timestamptz — needs real UTC ISO.
-        const { totalMiles, perAsset } = await fetchWithRetry(
+        const { totalMiles, perAsset, perAssetSource } = await fetchWithRetry(
           () => railway.odometerSummary(periodIso.fromUtc, periodIso.toUtc),
         );
         if (cancelled) return;
         setEldMiles(totalMiles);
         setEldMilesByAsset(perAsset ?? {});
+        setEldMilesSourceByAsset(perAssetSource ?? {});
       } catch (err) {
         console.error('[DashboardView] odometerSummary failed:', err);
-        if (!cancelled) { setEldMiles(0); setEldMilesByAsset({}); }
+        if (!cancelled) {
+          setEldMiles(0);
+          setEldMilesByAsset({});
+          setEldMilesSourceByAsset({});
+        }
       }
     })();
     return () => { cancelled = true; };
@@ -971,19 +995,23 @@ export default function DashboardView() {
         const eldMiles = asset.motiveVehicleId
           ? (eldMilesByAsset[String(asset.id)] ?? 0)
           : null;
+        const eldMilesSource = asset.motiveVehicleId
+          ? (eldMilesSourceByAsset[String(asset.id)] ?? 'odometer')
+          : null;
         return {
           asset,
           revenue,
           loads,
           miles: 0,
           eldMiles,
+          eldMilesSource,
           fuel,
           payroll,
           net: revenue - fuel - payroll,
         };
       })
       .sort((a, b) => b.revenue - a.revenue);
-  }, [assets, filtered, unassignedAssetId, pStart, pEnd, fuelByAsset, payrollByAsset, eldMilesByAsset]);
+  }, [assets, filtered, unassignedAssetId, pStart, pEnd, fuelByAsset, payrollByAsset, eldMilesByAsset, eldMilesSourceByAsset]);
 
 
   // ── Sortable weekly loads list ──
@@ -1027,6 +1055,89 @@ export default function DashboardView() {
   }, [events]);
 
   const maxAssetRev = Math.max(...revenueByAsset.map(a => a.revenue), 1);
+
+  // ── Total Miles hover breakdown ──
+  // Lists every ELD-equipped truck with its miles for the period
+  // and tags the source: blue ELD chip when we have a real ECM
+  // odometer delta, amber EST chip when we fell back to GPS
+  // movements because the odometer was frozen. This surfaces broken
+  // ELD devices the dispatcher would otherwise miss — a truck with
+  // an EST badge has a hardware issue that needs a tech visit. The
+  // node is fed straight into the KpiCard's hoverContent slot so it
+  // only renders when the user actually hovers the tile.
+  const eldMilesBreakdown = useMemo<React.ReactNode | null>(() => {
+    const eldRows = assets
+      .filter(a =>
+        a.motiveVehicleId != null &&
+        a.id !== unassignedAssetId &&
+        a.name !== 'Unassigned'
+      )
+      .map(a => {
+        const miles  = eldMilesByAsset[String(a.id)] ?? 0;
+        const source = eldMilesSourceByAsset[String(a.id)] ?? 'odometer';
+        const label  = a.unit ? `#${a.unit} · ${a.name}` : a.name;
+        return { id: a.id, label, miles, source };
+      })
+      .sort((x, y) => y.miles - x.miles);
+    if (eldRows.length === 0) return null;
+    return (
+      <div style={{ minWidth: 240, maxWidth: 320 }}>
+        <div
+          className="text-[10px] font-semibold uppercase tracking-wider mb-1.5 pb-1"
+          style={{
+            color: 'rgba(255,255,255,0.55)',
+            borderBottom: '1px solid rgba(255,255,255,0.15)',
+          }}
+        >
+          Miles by truck · {eldRows.length} ELD
+        </div>
+        <div
+          className="flex flex-col gap-0.5"
+          style={{ maxHeight: 280, overflowY: 'auto' }}
+        >
+          {eldRows.map(r => {
+            const isEst = r.source === 'movements';
+            return (
+              <div key={r.id} className="flex items-center gap-2 text-[11px]">
+                <span
+                  className="flex-1 truncate"
+                  style={{ color: 'rgba(255,255,255,0.85)' }}
+                  title={r.label}
+                >
+                  {r.label}
+                </span>
+                <span
+                  className="tabular-nums"
+                  style={{
+                    color: r.miles > 0 ? '#fff' : 'rgba(255,255,255,0.5)',
+                    minWidth: 56,
+                    textAlign: 'right',
+                  }}
+                >
+                  {Math.round(r.miles).toLocaleString()} mi
+                </span>
+                <span
+                  className="text-[9px] font-semibold uppercase tracking-wide px-1 py-px rounded"
+                  style={{
+                    minWidth: 30,
+                    textAlign: 'center',
+                    color: isEst ? '#f9ab00' : '#8ab4f8',
+                    background: isEst ? 'rgba(249,171,0,0.18)' : 'rgba(138,180,248,0.18)',
+                    lineHeight: 1,
+                  }}
+                  title={isEst
+                    ? 'ECM odometer frozen — estimated from Motive GPS movements'
+                    : 'Real odometer delta from the ELD'}
+                >
+                  {isEst ? 'EST' : 'ELD'}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }, [assets, unassignedAssetId, eldMilesByAsset, eldMilesSourceByAsset]);
 
   // ── Export helpers ──────────────────────────────────────────────────────────
   function exportWeekLoads(format: 'csv' | 'xls') {
@@ -1364,15 +1475,16 @@ export default function DashboardView() {
               <KpiCard
                 label="Total Miles"
                 value={eldMiles == null ? '—' : fmtMiles(eldMiles)}
-                sub="ELD-equipped trucks only"
+                sub="ELD-equipped trucks only · hover for breakdown"
                 icon={<Gauge size={17} />}
                 accent="#0288d1"
                 loading={eldMiles === null}
                 formula={
                   <>
-                    Sum of <strong>(max odometer − min odometer)</strong> for every ELD-equipped truck over the selected period, pulled from Motive. Includes deadhead, bobtail, and personal use — these are wheels-turning miles, not loaded miles.
+                    Sum of <strong>(max odometer − min odometer)</strong> for every ELD-equipped truck over the selected period, pulled from Motive. Includes deadhead, bobtail, and personal use — these are wheels-turning miles, not loaded miles. Trucks whose ECM odometer is frozen fall back to GPS movement distance and show an <strong>EST</strong> badge.
                   </>
                 }
+                hoverContent={eldMilesBreakdown}
               />
             )}
             {showVolumeKpis && (
@@ -1464,7 +1576,7 @@ export default function DashboardView() {
               ) : (
                 <>
                   <div className="space-y-3">
-                    {revenueByAsset.map(({ asset, revenue, loads, fuel, payroll, net, eldMiles }) => {
+                    {revenueByAsset.map(({ asset, revenue, loads, fuel, payroll, net, eldMiles, eldMilesSource }) => {
                       const showOverlays = showPayrollOverlay || showFuelOverlay;
                       // Inside the bar: margin (asset color) | payroll (purple) | fuel (red).
                       // Each segment is its share of maxAssetRev so widths are
@@ -1591,12 +1703,40 @@ export default function DashboardView() {
                               odometer aggregate that powers the fleet
                               Total Miles tile. Em-dash when the asset
                               isn't ELD-equipped so the column stays
-                              aligned across rows. */}
-                          <div className="text-xs shrink-0 text-right tabular-nums"
-                            style={{ color: eldMiles == null ? 'var(--gc-text-3)' : 'var(--gc-text-1)', minWidth: 70 }}
-                            title={eldMiles == null ? 'No ELD linked to this truck' : `ELD miles this period: ${Math.round(eldMiles).toLocaleString()}`}>
-                            {eldMiles == null ? '—' : `${Math.round(eldMiles).toLocaleString()} mi`}
-                          </div>
+                              aligned across rows. When the ECM
+                              odometer is frozen (broken sensor), the
+                              server falls back to GPS movement
+                              distance and we surface an "est." badge
+                              so the dispatcher knows it's an
+                              estimate, not ECM truth. */}
+                          {(() => {
+                            const isEst = eldMilesSource === 'movements';
+                            const tip =
+                              eldMiles == null
+                                ? 'No ELD linked to this truck'
+                                : isEst
+                                  ? `ECM odometer frozen for this period — estimated from Motive GPS movements: ${Math.round(eldMiles).toLocaleString()} mi`
+                                  : `ELD miles this period: ${Math.round(eldMiles).toLocaleString()}`;
+                            return (
+                              <div className="text-xs shrink-0 text-right tabular-nums flex items-center justify-end gap-1"
+                                style={{ color: eldMiles == null ? 'var(--gc-text-3)' : 'var(--gc-text-1)', minWidth: 70 }}
+                                title={tip}>
+                                <span>{eldMiles == null ? '—' : `${Math.round(eldMiles).toLocaleString()} mi`}</span>
+                                {isEst && (
+                                  <span
+                                    className="text-[9px] font-semibold uppercase tracking-wide px-1 py-px rounded"
+                                    style={{
+                                      color: 'var(--gc-text-2)',
+                                      background: 'var(--gc-bg-3)',
+                                      lineHeight: 1,
+                                    }}
+                                  >
+                                    est
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })()}
                           <div className="text-xs shrink-0 text-right" style={{ color: 'var(--gc-text-3)', minWidth: 60 }}>
                             {loadsLabel}
                           </div>

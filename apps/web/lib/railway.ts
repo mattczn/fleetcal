@@ -967,13 +967,18 @@ class RailwayClient {
   }
   /** Fleet-wide ELD mileage in [from, to] — `max(odometer_miles) -
    *  min(...)` per asset that has motive_vehicle_id set, summed.
-   *  Used by the dashboard Total Miles tile. */
+   *  Used by the dashboard Total Miles tile. When the ECM odometer
+   *  is frozen (sensor-disconnect failure), the server falls back to
+   *  summing `movements.miles` for that asset and marks
+   *  `perAssetSource[id] = 'movements'` so the UI can label it as
+   *  estimated. */
   odometerSummary(from: string, to: string) {
     const qs = new URLSearchParams({ from, to });
     return this.req<{
-      totalMiles:    number;
-      eldAssetCount: number;
-      perAsset:      Record<string, number>;
+      totalMiles:     number;
+      eldAssetCount:  number;
+      perAsset:       Record<string, number>;
+      perAssetSource: Record<string, 'odometer' | 'movements'>;
     }>('GET', `/v1/movements/odometer-summary?${qs.toString()}`);
   }
   /** Time series of daily odometer snapshots for one vehicle. */
