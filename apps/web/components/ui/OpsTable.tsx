@@ -176,6 +176,14 @@ export type OpsFilter<T> =
       /** Stable key — used as React key and the value-state map key. */
       key: string;
       label: string;
+      /** Optional pre-formed plural for the "All X" placeholder. The
+       *  default naively appends "s" (label → "labels"), which fails on
+       *  English words ending in -s / -us / -y ("status" → "statuss",
+       *  "category" → "categorys"). Pass `pluralLabel: 'statuses'` to
+       *  override. Only the placeholder cares — the chip's visible label
+       *  in non-empty states uses the user-selected option's label
+       *  directly. */
+      pluralLabel?: string;
       options: ReadonlyArray<{ value: string; label: string; count?: number }>;
       predicate: (row: T, value: string) => boolean;
       /** Default selected value (defaults to '' = no filter). */
@@ -868,6 +876,7 @@ export function OpsTable<T>({
                 <SelectChip
                   key={f.key}
                   label={f.label}
+                  pluralLabel={f.pluralLabel}
                   value={filterState[f.key] ?? ''}
                   onChange={v => setFilterState(s => ({ ...s, [f.key]: v }))}
                   options={f.options}
@@ -1430,9 +1439,10 @@ function SearchChip({
 }
 
 function SelectChip({
-  label, value, onChange, options,
+  label, pluralLabel, value, onChange, options,
 }: {
   label: string;
+  pluralLabel?: string;
   value: string;
   onChange: (v: string) => void;
   options: ReadonlyArray<{ value: string; label: string; count?: number }>;
@@ -1486,7 +1496,7 @@ function SelectChip({
           <DropdownItem
             active={value === ''}
             onClick={() => { onChange(''); setOpen(false); }}>
-            <span style={{ color: 'var(--gc-text-3)' }}>All {label.toLowerCase()}s</span>
+            <span style={{ color: 'var(--gc-text-3)' }}>All {pluralLabel ?? `${label.toLowerCase()}s`}</span>
           </DropdownItem>
           {options.map(opt => (
             <DropdownItem

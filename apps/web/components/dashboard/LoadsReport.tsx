@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { Download, FileSpreadsheet, Loader2, Filter, Calendar, Eye, Star } from 'lucide-react';
+import { Download, FileSpreadsheet, Loader2, Filter, Calendar, Star } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { railway } from '@/lib/railway';
 import type { LoadSummary } from '@fleetcal/types';
@@ -103,16 +103,11 @@ const COLUMNS: ColumnDef[] = [
            ?? (l.broker ? ctx.customers.find(c => c.name === l.broker || c.aliases.includes(l.broker!)) : undefined);
     return (c?.shortName?.trim() || c?.name) ?? l.broker ?? '';
   } },
-  // Title is derived from pickup → delivery cities. A load doesn't have
-  // a single "title" — historically the event title was a leg name like
-  // "Pickup at XYZ", which doesn't make sense at the load level.
-  { id: 'title',        label: 'Title',       get: (l) => {
-    const pickup = l.stops.find(s => s.type === 'pickup') ?? l.stops[0];
-    const delivery = [...l.stops].reverse().find(s => s.type === 'delivery' || s.type === 'drop' || s.type === 'drop_hook') ?? l.stops[l.stops.length - 1];
-    const a = pickup?.city ?? pickup?.facilityName ?? '';
-    const b = delivery?.city ?? delivery?.facilityName ?? '';
-    return a && b ? `${a} → ${b}` : (a || b || '');
-  } },
+  // Title — the load's event-shaped headline (e.g. "Pickup at XYZ →
+  // Delivery at ABC"). Rendered as a clickable link in tableColumns
+  // below that opens the load modal, matching the way load titles work
+  // everywhere else in the app.
+  { id: 'title',        label: 'Title',       get: (l) => l.title ?? '' },
   { id: 'driver',       label: 'Driver',      get: (l) => {
     // Pickup leg's driver is the headline name. For relays, both legs'
     // drivers are exposed below as separate columns.
@@ -127,8 +122,8 @@ const COLUMNS: ColumnDef[] = [
   }},
   { id: 'trailerType',  label: 'Equipment Type', get: (l) => l.trailerType ?? '' },
   { id: 'status',       label: 'Status',      get: (l) => STATUS_LABEL[l.pickupStatus ?? 'scheduled'] ?? l.pickupStatus ?? '' },
-  { id: 'pickup',       label: 'Pickup',      get: (l) => firstStop(l, 'pickup') },
-  { id: 'delivery',     label: 'Delivery',    get: (l) => firstStop(l, 'delivery') },
+  { id: 'pickup',       label: 'Pickup City', get: (l) => firstStop(l, 'pickup') },
+  { id: 'delivery',     label: 'Delivery City', get: (l) => firstStop(l, 'delivery') },
   { id: 'stops',        label: 'Stops', align: 'right',        get: (l) => l.stops?.length ?? '' },
   // Docs column — same docBadge cluster the billing/paperwork tables render.
   // For sort + export we surface a flat summary string of "RC 1 · POD 2 …".
@@ -460,6 +455,32 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
   const tableColumns = useMemo<OpsColumn<LoadSummary>[]>(() => {
     const cols: OpsColumn<LoadSummary>[] = [];
 
+    // Left-pinned utility column FIRST in the array so it visually
+    // anchors the row's leading edge (sticky position is CSS;
+    // visual order follows the array). Star toggles priority via
+    // the closeout PATCH; notes opens InternalNotesModal.
+    cols.push({
+      key: '__utility',
+      header: '',
+      width: 86,
+      pinned: 'left',
+      alwaysVisible: true,
+      pickerLabel: 'Star / notes',
+      render: (load) => {
+        const notesCount = (load.internalNotes ?? []).length;
+        return (
+          <div className="inline-flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+            <PriorityToggle
+              load={load}
+              actorName={actorName}
+              onAfter={(nextPriority) => patchLoadInState(load.loadId, { pickupPriority: nextPriority })}
+            />
+            <NotesButton count={notesCount} onOpen={() => setNotesTarget(load)} />
+          </div>
+        );
+      },
+    });
+
     for (const c of availableColumns) {
       cols.push({
         key: c.id,
@@ -479,6 +500,24 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
 
           if (c.id === 'loadNum' && load.loadNum) {
             return <CopyChip value={load.loadNum} style={{ fontSize: 13, fontWeight: 600, color: 'var(--gc-text-1)' }} />;
+          }
+          // Title — clickable link that opens the load modal. Same
+          // affordance as customer / driver / asset cells: looks like
+          // text but acts like a button.
+          if (c.id === 'title' && load.title) {
+            const eventId = load.legs[0]?.eventId ?? load.loadId;
+            return (
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); openEditModal(eventId); }}
+                style={{ background: 'none', border: 'none', padding: 0, color: 'var(--gc-blue)', cursor: 'pointer', textAlign: 'left', fontSize: 13 }}
+                onMouseEnter={(e) => (e.currentTarget.style.textDecoration = 'underline')}
+                onMouseLeave={(e) => (e.currentTarget.style.textDecoration = 'none')}
+                title={load.title}
+              >
+                {load.title}
+              </button>
+            );
           }
           if (c.id === 'internalId' && load.internalLoadId != null) {
             return <CopyChip value={String(load.internalLoadId)} style={{ fontSize: 13, fontWeight: 600, color: 'var(--gc-text-1)' }} />;
@@ -590,41 +629,6 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
       });
     }
 
-    // Right-pinned utility column — priority star, notes indicator,
-    // "View" action. Mirrors the cluster /accounting and /closeout
-    // pin to the row's edge so it stays reachable while the rest of
-    // the row scrolls horizontally.
-    cols.push({
-      key: '__utility',
-      header: '',
-      width: 150,
-      pinned: 'right',
-      alwaysVisible: true,
-      pickerLabel: 'Star / notes / view',
-      render: (load) => {
-        const notesCount = (load.internalNotes ?? []).length;
-        const eventId = load.legs[0]?.eventId ?? load.loadId;
-        return (
-          <div className="inline-flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-            <PriorityToggle
-              load={load}
-              actorName={actorName}
-              onAfter={(nextPriority) => patchLoadInState(load.loadId, { pickupPriority: nextPriority })}
-            />
-            <NotesButton count={notesCount} onOpen={() => setNotesTarget(load)} />
-            <FastTooltip text="Open this load">
-              <button
-                onClick={() => openEditModal(eventId)}
-                className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-lg transition-colors whitespace-nowrap"
-                style={{ background: 'var(--gc-surface)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}>
-                <Eye size={11} /> View
-              </button>
-            </FastTooltip>
-          </div>
-        );
-      },
-    });
-
     return cols;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [availableColumns, ctx, customers, drivers, assets, openEditModal, actorName]);
@@ -658,6 +662,7 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
       kind: 'select',
       key: 'status',
       label: 'Status',
+      pluralLabel: 'statuses',
       options: [
         { value: 'scheduled',  label: 'Scheduled' },
         { value: 'assigned',   label: 'Assigned' },
@@ -724,6 +729,32 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
         .sort((a, b) => a.label.localeCompare(b.label)),
       predicate: (load, v) =>
         String(load.pickupAssetId) === v || String(load.deliveryAssetId) === v,
+    },
+    {
+      kind: 'select',
+      key: 'accessorial',
+      label: 'Accessorial',
+      options: [
+        { value: '__any',        label: 'Has any accessorial' },
+        { value: '__pending',    label: 'Has pending accessorial' },
+        { value: '__none',       label: 'No accessorials' },
+        { value: 'detention',    label: 'Detention' },
+        { value: 'lumper',       label: 'Lumper' },
+        { value: 'layover',      label: 'Layover' },
+        { value: 'scale_ticket', label: 'Scale' },
+        { value: 'extra_stop',   label: 'Extra stop' },
+        { value: 'other',        label: 'Other' },
+      ],
+      // Mirrors /accounting's preset list. `__any` / `__pending` /
+      // `__none` are aggregate filters; everything else matches
+      // accessorial.category exactly.
+      predicate: (load, v) => {
+        const accs = load.accessorials ?? [];
+        if (v === '__any')     return accs.length > 0;
+        if (v === '__pending') return accs.some(a => a.status !== 'approved' && a.status !== 'denied');
+        if (v === '__none')    return accs.length === 0;
+        return accs.some(a => a.category === v);
+      },
     },
     {
       kind: 'select',
@@ -815,7 +846,7 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
   const hasExportable = filteredRows.length > 0;
 
   return (
-    <div style={{ marginTop: 32, marginBottom: 16, background: 'var(--gc-surface)', borderRadius: 14, border: '1px solid var(--gc-border)' }}>
+    <div style={{ marginTop: 32, marginBottom: 16, background: 'var(--gc-surface)', borderRadius: 14, border: '1px solid var(--gc-border)', minWidth: 0, overflow: 'hidden' }}>
       <div style={{ padding: '20px 28px', borderBottom: '1px solid var(--gc-border-light)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <div style={{ width: 32, height: 32, borderRadius: 8, background: '#e8f0fe', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
@@ -913,7 +944,12 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
 
       {/* Results */}
       {loads !== null && (
-        <div style={{ padding: '16px 20px 20px', borderTop: '1px solid var(--gc-border-light)' }}>
+        // minWidth: 0 + overflow: hidden so the OpsTable card's own
+        // overflowX: 'auto' actually handles horizontal scroll instead
+        // of letting the row push the whole card wider than the
+        // dashboard tab. Mirrors how /accounting + /closeout keep the
+        // scrollbar contained inside the card.
+        <div style={{ padding: '16px 20px 20px', borderTop: '1px solid var(--gc-border-light)', minWidth: 0, overflow: 'hidden' }}>
           {/* Stats + export buttons */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, marginBottom: 12 }}>
             <div style={{ fontSize: 12, color: 'var(--gc-text-2)' }}>
