@@ -1002,11 +1002,18 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
           // height. With maxHeight alone the container was content-
           // sized — OpsTable's overflow: auto had nothing to scroll
           // inside of, and our own overflow: hidden was clipping the
-          // rows instead of producing scrollbars. Trade-off: when
-          // there are few rows, the card still occupies this height
-          // and shows empty space below the last row, same as
-          // /accounting and /closeout.
-          height: 'min(720px, calc(100vh - 260px))',
+          // rows instead of producing scrollbars.
+          //
+          // 900px ceiling + 180px chrome buffer (was 720/260) so the
+          // table claims more vertical real estate when the dispatcher
+          // has scrolled past the dashboard KPI strip. dvh handles
+          // mobile browser-toolbar tricks better than vh — the table
+          // doesn't change size when the address bar collapses.
+          //
+          // Trade-off: when there are few rows the card still occupies
+          // this height and shows empty space below the last row, same
+          // as /accounting and /closeout.
+          height: 'min(900px, calc(100dvh - 180px))',
         }}>
           {/* Stats + export buttons */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, marginBottom: 12 }}>
