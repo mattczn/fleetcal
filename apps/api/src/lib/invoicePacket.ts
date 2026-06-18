@@ -424,25 +424,6 @@ export async function buildInvoicePacket(args: PacketArgs): Promise<PacketResult
 const PACKET_DOC_KINDS_ORDER: DocumentKind[] = ["pod", "bol", "lumper", "scale", "receipt", "driver_sheet"];
 
 export async function resolveDefaultPacketDocs(loadId: string, orgId: string): Promise<string[]> {
-  // Pull the load's delivery time so the POD heuristic can match the
-  // ReviewQueue UI's rule: "any POD uploaded within ~24h of delivery
-  // counts as a real POD for this load." We take MAX(end) across the
-  // load's non-deleted events — for a single-leg load that's the
-  // delivery end; for a relay it's the final drop. Matches how the
-  // closeout queue + accounting compute deliveredAt.
-  const { data: legRows } = await supabase
-    .from("events")
-    .select("end")
-    .eq("load_id", loadId)
-    .eq("org_id", orgId)
-    .is("deleted_at", null);
-  let deliveredAtMs = 0;
-  for (const row of (legRows ?? []) as Array<{ end: string | null }>) {
-    if (!row.end) continue;
-    const ms = Date.parse(row.end);
-    if (Number.isFinite(ms) && ms > deliveredAtMs) deliveredAtMs = ms;
-  }
-
   const { data, error } = await supabase
     .from("load_documents")
     .select("storage_path,kind,uploaded_at")
@@ -456,26 +437,22 @@ export async function resolveDefaultPacketDocs(loadId: string, orgId: string): P
   }
   const rows = (data ?? []) as Array<{ storage_path: string; kind: string; uploaded_at: string }>;
 
-  // PODs are the only kind drivers commonly upload multiple of for a
-  // single load (one photo per pallet, one per damage angle, etc.).
-  // Include ALL PODs uploaded from 24h BEFORE delivery onward — this
-  // matches ReviewQueue.tsx's `effectiveInclude` heuristic exactly so
-  // the dispatcher's visual "INVOICE" pills line up with what
-  // actually ships to the broker. Loads that haven't delivered yet
-  // (deliveredAtMs === 0) fall through to "include every POD."
+  // PODs: if a doc is on the load tagged kind='pod', it belongs in the
+  // packet. Brokers want as much proof of delivery as we can hand them;
+  // there's no upside to filtering by a time window. Previous versions
+  // gated PODs to "uploaded within 24h of delivery" to match a defensive
+  // UI heuristic — but the heuristic dropped real PODs uploaded at pickup
+  // time or in batches days before delivery, and the dispatcher had no
+  // good way to override the default.
   //
   // Every other kind (BOL, lumper, scale, receipt, driver_sheet) is
   // a singleton in practice — newest-per-kind keeps the packet small
   // and never picks two competing copies of the same kind.
   const pickedPodPaths: string[] = [];
   const newestByOtherKind = new Map<string, string>();
-  const WINDOW_MS = 86_400_000; // 24h
   for (const r of rows) {
     if (r.kind === "pod") {
-      const uploadedMs = Date.parse(r.uploaded_at);
-      if (!deliveredAtMs || !Number.isFinite(uploadedMs) || uploadedMs >= deliveredAtMs - WINDOW_MS) {
-        pickedPodPaths.push(r.storage_path);
-      }
+      pickedPodPaths.push(r.storage_path);
     } else {
       if (!newestByOtherKind.has(r.kind)) {
         newestByOtherKind.set(r.kind, r.storage_path);

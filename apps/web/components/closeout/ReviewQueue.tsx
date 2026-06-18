@@ -36,7 +36,6 @@ import Tooltip from '@/components/ui/Tooltip';
 import { fetchLoadDocuments, getLoadDocumentSignedUrl } from '@/lib/db';
 import { railway, RailwayError } from '@/lib/railway';
 import { useCalendarStore } from '@/store/useCalendarStore';
-import { parseNaiveIsoInTz } from '@/lib/time-utils';
 import { displayBrokerName } from '@/lib/customerMatch';
 import PdfCanvas from '@/components/pdf/PdfCanvas';
 import DocViewer from './DocViewer';
@@ -466,25 +465,25 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   // effectiveInclude resolves a single doc to its current visible
   // boolean. includedDocIds is the same data as a Set so existing
   // call sites that read `.has(d.id)` keep working unchanged.
-  const deliveredAt = current?.end ? parseNaiveIsoInTz(current.end, tz) : 0;
   const effectiveInclude = (d: LoadDocument): boolean => {
     if (Object.prototype.hasOwnProperty.call(pendingIncludeChanges, d.id)) {
       return pendingIncludeChanges[d.id];
     }
     if (d.includedInInvoice === true)  return true;
     if (d.includedInInvoice === false) return false;
-    // null → heuristic: POD uploaded near delivery time.
-    return d.kind === 'pod'
-      && new Date(d.uploadedAt).getTime() >= deliveredAt - 86_400_000;
+    // null → default: every POD on the load belongs in the invoice
+    // packet. Matches the server-side resolveDefaultPacketDocs rule
+    // exactly. If a dispatcher wants to exclude a particular POD they
+    // toggle the pill off, which writes included_in_invoice=false.
+    return d.kind === 'pod';
   };
   const includedDocIds = useMemo<Set<string>>(() => {
     const s = new Set<string>();
     for (const d of docs) if (effectiveInclude(d)) s.add(d.id);
     return s;
-    // effectiveInclude reads deliveredAt + pending from closure; both
-    // are inputs to the derivation, so list them explicitly.
+    // effectiveInclude reads pendingIncludeChanges from closure.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [docs, pendingIncludeChanges, deliveredAt]);
+  }, [docs, pendingIncludeChanges]);
   const dirtyIncludeCount = Object.keys(pendingIncludeChanges).length;
 
   // ── Actions ───────────────────────────────────────────────────────
@@ -498,7 +497,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
       const persisted = doc
         ? (doc.includedInInvoice === true  ? true
          : doc.includedInInvoice === false ? false
-         : (doc.kind === 'pod' && new Date(doc.uploadedAt).getTime() >= deliveredAt - 86_400_000))
+         : doc.kind === 'pod')
         : null;
       const copy = { ...prev };
       if (persisted === next) delete copy[docId];
