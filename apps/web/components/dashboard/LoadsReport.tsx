@@ -1,19 +1,23 @@
 'use client';
 
-import { useState, useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { createPortal } from 'react-dom';
-import { Search, ChevronDown, Download, FileSpreadsheet, Loader2, Filter, Calendar, Users, Truck, User } from 'lucide-react';
+import { Download, FileSpreadsheet, Loader2, Filter, Calendar, Eye, Star } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { railway } from '@/lib/railway';
 import type { LoadSummary } from '@fleetcal/types';
 import { usePermissions } from '@/lib/usePermissions';
+import { useUser } from '@clerk/nextjs';
 import DatePicker from '@/components/calendar/DatePicker';
 import CopyChip from '@/components/ui/CopyChip';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 import DriversModal from '@/components/sidebar/DriversModal';
 import AssetsModal from '@/components/sidebar/AssetsModal';
+import InternalNotesModal from '@/components/closeout/InternalNotesModal';
 import { OpsTable, type OpsColumn, type OpsFilter } from '@/components/ui/OpsTable';
+import {
+  AccessorialsCell, DocBadge, RequiredDocBadge, NotesButton, FastTooltip,
+} from '@/components/queue/QueueTablePrimitives';
 
 // ── Column catalog ────────────────────────────────────────────────────────────
 
@@ -117,20 +121,31 @@ const COLUMNS: ColumnDef[] = [
     const b = l.deliveryDriverName ?? '';
     return a && b && a !== b ? `${a} → ${b}` : a || b;
   } },
-  { id: 'pickupDriver', label: 'Pickup Driver', get: (l) => l.pickupDriverName ?? '' },
-  { id: 'deliveryDriver', label: 'Delivery Driver', get: (l) => l.deliveryDriverName ?? '' },
   { id: 'asset',        label: 'Truck',       get: (l, ctx) => {
     const a = ctx.assets.find(x => x.id === l.pickupAssetId);
     return a ? (a.unit ? `${a.name} #${a.unit}` : a.name) : '';
   }},
   { id: 'trailerType',  label: 'Equipment Type', get: (l) => l.trailerType ?? '' },
-  { id: 'isRelay',      label: 'Relay',       get: (l) => l.isRelay ? 'Yes' : '' },
   { id: 'status',       label: 'Status',      get: (l) => STATUS_LABEL[l.pickupStatus ?? 'scheduled'] ?? l.pickupStatus ?? '' },
-  { id: 'deliveryStatus', label: 'Delivery Status', get: (l) => STATUS_LABEL[l.deliveryStatus ?? 'scheduled'] ?? l.deliveryStatus ?? '' },
-  { id: 'priority',     label: 'Priority',    get: (l) => l.pickupPriority ? 'Yes' : '' },
   { id: 'pickup',       label: 'Pickup',      get: (l) => firstStop(l, 'pickup') },
   { id: 'delivery',     label: 'Delivery',    get: (l) => firstStop(l, 'delivery') },
   { id: 'stops',        label: 'Stops', align: 'right',        get: (l) => l.stops?.length ?? '' },
+  // Docs column — same docBadge cluster the billing/paperwork tables render.
+  // For sort + export we surface a flat summary string of "RC 1 · POD 2 …".
+  // The visual badge cluster is built in tableColumns below.
+  { id: 'docs',         label: 'Docs',        get: (l) => {
+    const c = l.documentCounts ?? {};
+    const rc = Math.max(c.rate_con ?? 0, l.rateConPdf ? 1 : 0);
+    const parts: string[] = [];
+    if (rc > 0) parts.push(`RC ${rc}`);
+    if ((c.pod ?? 0) > 0) parts.push(`POD ${c.pod}`);
+    if ((c.bol ?? 0) > 0) parts.push(`BOL ${c.bol}`);
+    if ((c.lumper ?? 0) > 0) parts.push(`Lumper ${c.lumper}`);
+    if ((c.scale ?? 0) > 0) parts.push(`Scale ${c.scale}`);
+    if ((c.receipt ?? 0) > 0) parts.push(`Receipt ${c.receipt}`);
+    if ((c.driver_sheet ?? 0) > 0) parts.push(`Driver ${c.driver_sheet}`);
+    return parts.join(' · ');
+  } },
   { id: 'commodity',    label: 'Commodity',   get: (l) => l.commodity ?? '' },
   { id: 'weight',       label: 'Weight (lbs)', align: 'right', get: (l) => l.weight ?? '' },
   { id: 'miles',        label: 'Miles', align: 'right',        get: (l) => l.totalLoadedMiles ?? '' },
@@ -148,15 +163,13 @@ const COLUMNS: ColumnDef[] = [
     return (m > 0 && p > 0) ? p / m : '';
   } },
   { id: 'driverPay',    label: 'Driver Pay', align: 'right',   get: (l) => l.totalDriverPay ?? '' },
-  { id: 'refNums',      label: 'References',  get: (l) => refStr(l) },
   { id: 'dispatcher',   label: 'Dispatcher',  get: (l) => l.dispatcher ?? '' },
   { id: 'billingStatus', label: 'Billing',    get: (l) => l.billingStatus ?? '' },
-  { id: 'notes',        label: 'Notes',       get: (l) => l.notes ?? '' },
 ];
 
 const DEFAULT_VISIBLE = [
   'pickupDate', 'deliveryDate', 'loadNum', 'customer', 'driver', 'asset',
-  'status', 'stops', 'miles', 'loadPrice', 'accessorials', 'total', 'rpm', 'driverPay',
+  'status', 'docs', 'stops', 'miles', 'loadPrice', 'accessorials', 'total', 'rpm', 'driverPay',
 ];
 const DEFAULT_VISIBLE_SET = new Set(DEFAULT_VISIBLE);
 
@@ -171,194 +184,80 @@ const COL_WIDTHS: Record<string, number> = {
   customer:       180,
   title:          240,
   driver:         160,
-  pickupDriver:   150,
-  deliveryDriver: 150,
   asset:          120,
   trailerType:    140,
-  isRelay:        80,
   status:         120,
-  deliveryStatus: 130,
-  priority:       80,
   pickup:         200,
   delivery:       200,
   stops:          80,
+  docs:           260,
   commodity:      140,
   weight:         110,
   miles:          90,
   loadPrice:      110,
-  accessorials:   120,
+  accessorials:   140,
   total:          120,
   rpm:            90,
   driverPay:      110,
-  refNums:        220,
   dispatcher:     140,
   billingStatus:  110,
-  notes:          240,
 };
 
-// ── Multi-select dropdown ─────────────────────────────────────────────────────
+// ── Inline priority star toggle ───────────────────────────────────────────────
+// Same UX as accounting/closeout: clicking flips loads.pickupPriority via the
+// closeout PATCH endpoint, then patches the local row so the star repaints
+// immediately. Inline because it's tightly coupled to our local row-patch
+// helper; extracting to a shared module would require threading the patcher
+// in as a prop, which doesn't pay back yet.
 
-interface MultiSelectProps<T> {
-  label:    string;
-  options:  T[];
-  optionId: (o: T) => string;
-  optionLabel: (o: T) => string;
-  selected: Set<string>;
-  onChange: (next: Set<string>) => void;
-  width?:   number;
-}
-
-function MultiSelect<T>({ label, options, optionId, optionLabel, selected, onChange, width = 220, icon }: MultiSelectProps<T> & { icon?: ReactNode }) {
-  const [open, setOpen] = useState(false);
-  const [search, setSearch] = useState('');
-  const [coords, setCoords] = useState<{ top: number; left: number; width: number } | null>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const popupRef   = useRef<HTMLDivElement>(null);
-
-  // Position the popup relative to the trigger button (fixed, body-portaled).
-  useLayoutEffect(() => {
-    if (!open) { setCoords(null); return; }
-    const compute = () => {
-      const t = triggerRef.current;
-      if (!t) return;
-      const r = t.getBoundingClientRect();
-      setCoords({ top: r.bottom + 4, left: r.left, width: r.width });
-    };
-    compute();
-    const onScroll = () => compute();
-    window.addEventListener('scroll', onScroll, true);
-    window.addEventListener('resize', onScroll);
-    return () => {
-      window.removeEventListener('scroll', onScroll, true);
-      window.removeEventListener('resize', onScroll);
-    };
-  }, [open]);
-
-  // Close on outside click (covers both the trigger and the portaled popup).
-  useEffect(() => {
-    if (!open) return;
-    const onClick = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (triggerRef.current?.contains(target)) return;
-      if (popupRef.current?.contains(target)) return;
-      setOpen(false);
-    };
-    document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
-  }, [open]);
-
-  const filtered = search
-    ? options.filter(o => optionLabel(o).toLowerCase().includes(search.toLowerCase()))
-    : options;
-
-  const toggle = (id: string) => {
-    const next = new Set(selected);
-    if (next.has(id)) next.delete(id); else next.add(id);
-    onChange(next);
-  };
-
-  const summary = selected.size === 0
-    ? `All ${label.toLowerCase()}`
-    : selected.size === 1
-      ? optionLabel(options.find(o => optionId(o) === [...selected][0])!) ?? '1 selected'
-      : `${selected.size} selected`;
-
+function PriorityToggle({
+  load, actorName, onAfter,
+}: {
+  load:      { loadId: string; pickupPriority?: boolean };
+  actorName?: string;
+  onAfter:   (nextPriority: boolean) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const on = !!load.pickupPriority;
+  async function handleClick(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (busy) return;
+    setBusy(true);
+    try {
+      useCalendarStore.getState().markLoadSelfWrite(load.loadId);
+      await railway.updateLoadCloseout(load.loadId, {
+        action: on ? 'clear_priority' : 'set_priority',
+        actorName,
+      });
+      onAfter(!on);
+    } catch (err) {
+      console.error('[loads report] priority toggle failed:', err);
+    } finally {
+      setBusy(false);
+    }
+  }
+  const tooltip = on ? 'Priority — click to clear' : 'Mark this load as priority';
   return (
-    <>
-      <button
-        ref={triggerRef}
-        type="button"
-        onClick={() => setOpen(o => !o)}
+    <FastTooltip text={tooltip}>
+      <button onClick={handleClick} disabled={busy}
+        className="rounded-full p-1 transition-colors"
         style={{
-          width, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6,
-          fontSize: 14, padding: '9px 12px', borderRadius: 8,
-          border: `1px solid ${open ? 'var(--gc-blue)' : 'var(--gc-border)'}`,
-          background: 'var(--gc-surface)',
-          color: 'var(--gc-text-1)', cursor: 'pointer', textAlign: 'left',
-          boxShadow: open ? '0 0 0 3px rgba(26,115,232,0.15)' : 'none',
-          transition: 'border-color 120ms, box-shadow 120ms',
-        }}
-      >
-        <span style={{ display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden' }}>
-          {icon}
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: selected.size === 0 ? 'var(--gc-text-3)' : 'var(--gc-text-1)' }}>
-            {summary}
-          </span>
-        </span>
-        <ChevronDown size={14} style={{ color: 'var(--gc-text-3)', flexShrink: 0, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 150ms' }} />
+          background: on ? '#fef3c7' : 'transparent',
+          border:     `1px solid ${on ? '#eab308' : 'var(--gc-border)'}`,
+          color:      on ? '#854d0e' : 'var(--gc-text-3)',
+        }}>
+        <Star size={11} fill={on ? '#eab308' : 'none'} />
       </button>
-      {open && coords && typeof document !== 'undefined' && createPortal(
-        <div
-          ref={popupRef}
-          style={{
-            position: 'fixed', top: coords.top, left: coords.left, width: coords.width,
-            zIndex: 9999,
-            background: 'var(--gc-surface)', border: '1px solid var(--gc-border)',
-            borderRadius: 8, boxShadow: 'var(--shadow-3)', maxHeight: 360,
-            display: 'flex', flexDirection: 'column',
-          }}
-        >
-          <div style={{ padding: 8, borderBottom: '1px solid var(--gc-border-light)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 10px', background: 'var(--gc-bg)', borderRadius: 6 }}>
-              <Search size={13} style={{ color: 'var(--gc-text-3)' }} />
-              <input
-                autoFocus
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                placeholder={`Search ${label.toLowerCase()}…`}
-                style={{ flex: 1, fontSize: 13, border: 'none', background: 'transparent', outline: 'none', color: 'var(--gc-text-1)' }}
-              />
-            </div>
-          </div>
-          <div style={{ overflowY: 'auto', flex: 1 }}>
-            {filtered.length === 0 ? (
-              <div style={{ padding: 14, fontSize: 13, color: 'var(--gc-text-3)', textAlign: 'center' }}>
-                No matches
-              </div>
-            ) : filtered.map(o => {
-              const id = optionId(o);
-              const checked = selected.has(id);
-              return (
-                <label key={id} style={{
-                  display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px',
-                  fontSize: 13, cursor: 'pointer',
-                  background: checked ? 'var(--gc-blue-light)' : 'transparent',
-                  color: 'var(--gc-text-1)',
-                }}
-                onMouseEnter={e => { if (!checked) e.currentTarget.style.background = 'var(--gc-hover)'; }}
-                onMouseLeave={e => { if (!checked) e.currentTarget.style.background = 'transparent'; }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() => toggle(id)}
-                    style={{ cursor: 'pointer' }}
-                  />
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
-                    {optionLabel(o)}
-                  </span>
-                </label>
-              );
-            })}
-          </div>
-          {selected.size > 0 && (
-            <button
-              type="button"
-              onClick={() => { onChange(new Set()); }}
-              style={{
-                padding: '10px 14px', fontSize: 12, fontWeight: 600, color: 'var(--gc-text-3)',
-                background: 'var(--gc-bg)', border: 'none', borderTop: '1px solid var(--gc-border-light)',
-                cursor: 'pointer', textAlign: 'left',
-              }}>
-              Clear selection
-            </button>
-          )}
-        </div>,
-        document.body,
-      )}
-    </>
+    </FastTooltip>
   );
 }
+
+// ── Legacy MultiSelect removed ───────────────────────────────────────────────
+// Customer / Driver / Truck filters now live as OpsTable filter chips below
+// the date row, matching billing/paperwork. The hand-rolled MultiSelect
+// component used to live here (~210 lines) — deleted along with the parent
+// state buckets (selectedCustomers/Drivers/Assets).
+
 
 // ── Main report component ─────────────────────────────────────────────────────
 
@@ -396,6 +295,7 @@ function migrateLegacyColumnPrefs(allColumnIds: string[]) {
 
 export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
   const router = useRouter();
+  const { user } = useUser();
   const { customers, drivers, assets, openEditModal, dbReady } = useCalendarStore();
   const { can } = usePermissions();
   // Hide the Driver Pay column entirely for users without
@@ -403,9 +303,13 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
   // Maintenance from this cap, so they never see what we paid
   // drivers in this report.
   const canViewDriverPay = can('loads.view_driver_pay');
+  const actorName = user?.fullName ?? user?.username ?? undefined;
   const [brokerProfileId,  setBrokerProfileId]  = useState<string | null>(null);
   const [driverModalId,    setDriverModalId]    = useState<number | null>(null);
   const [assetModalId,     setAssetModalId]     = useState<number | null>(null);
+  // Internal notes modal — opened from the row's notes pill in the
+  // sticky utility column. Matches the accounting page's wiring.
+  const [notesTarget,      setNotesTarget]      = useState<LoadSummary | null>(null);
 
   // Date range — defaults to props (dashboard period) or last 30 days
   const today = new Date();
@@ -438,10 +342,12 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
     if (defaultTo)   setTo(defaultTo);
   }, [defaultFrom, defaultTo]);
 
-  // Multi-select filters (all = empty set)
-  const [selectedCustomers, setSelectedCustomers] = useState<Set<string>>(new Set());
-  const [selectedDrivers,   setSelectedDrivers]   = useState<Set<string>>(new Set());
-  const [selectedAssets,    setSelectedAssets]    = useState<Set<string>>(new Set());
+  // Local row patcher — used by inline mutations (priority toggle,
+  // internal-note save) so the table updates instantly without a
+  // full server refetch. Mirrors the accounting page's pattern.
+  const patchLoadInState = (loadId: string, patch: Partial<LoadSummary>) => {
+    setLoads(prev => prev?.map(l => l.loadId === loadId ? { ...l, ...patch } : l) ?? prev);
+  };
 
   // Results — LoadSummary[], one row per load. The server collapses
   // relay legs into a single row with pickup-side fields elevated, so
@@ -455,9 +361,8 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
     migrateLegacyColumnPrefs(COLUMNS.map(c => c.id));
   }, []);
 
-  // Distinct driver names from the loaded events as the picker options.
-  // (Drivers table ids don't always match driverName text, so name-based
-  // multi-select is the most reliable and matches what users actually see.)
+  // Distinct driver names from the active driver list — feeds the
+  // OpsTable Driver filter chip's options.
   const driverOptions = useMemo(() => {
     const names = new Set<string>();
     drivers.forEach(d => { if (d.name) names.add(d.name); });
@@ -505,45 +410,11 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [from, to, dbReady, dateMode]);
 
-  // Apply client-side multi-select filters.
-  // For customers: match on customerId FK first, then fall back to broker
-  // text matching the selected customer's name (older loads have no FK).
-  const selectedCustomerNames = useMemo(() => {
-    const names = new Set<string>();
-    for (const id of selectedCustomers) {
-      const c = customers.find(x => x.id === id);
-      if (c) names.add(c.name);
-    }
-    return names;
-  }, [selectedCustomers, customers]);
-
-  // Top-level dropdown filters layered on top of the server's
-  // pickup-date filter. Server already returns one row per load with
-  // pickup-side fields elevated, so we just filter against
-  // pickup-side / load-level fields here. Driver matches against
-  // EITHER the pickup or delivery driver so a relay still surfaces
-  // when either of its drivers is selected.
-  const filteredRows = useMemo(() => {
-    if (!loads) return [];
-    return loads.filter(load => {
-      if (selectedCustomers.size > 0) {
-        const fkMatch   = !!load.customerId && selectedCustomers.has(load.customerId);
-        const nameMatch = !!load.broker     && selectedCustomerNames.has(load.broker);
-        if (!fkMatch && !nameMatch) return false;
-      }
-      if (selectedDrivers.size > 0) {
-        const pickupHit   = !!load.pickupDriverName   && selectedDrivers.has(load.pickupDriverName);
-        const deliveryHit = !!load.deliveryDriverName && selectedDrivers.has(load.deliveryDriverName);
-        if (!pickupHit && !deliveryHit) return false;
-      }
-      if (selectedAssets.size > 0) {
-        const pickupAsset   = String(load.pickupAssetId);
-        const deliveryAsset = String(load.deliveryAssetId);
-        if (!selectedAssets.has(pickupAsset) && !selectedAssets.has(deliveryAsset)) return false;
-      }
-      return true;
-    });
-  }, [loads, selectedCustomers, selectedCustomerNames, selectedDrivers, selectedAssets]);
+  // Customer / Driver / Truck filters now live as OpsTable filter chips
+  // INSIDE the table (matches accounting + closeout). filteredRows is just
+  // the date-range-scoped server result; the chips refine display further
+  // without affecting the headline totals strip.
+  const filteredRows = useMemo(() => loads ?? [], [loads]);
 
   // Columns the user can pick / sort / etc. Driver Pay is stripped for
   // users without the perm so they can't toggle it back on either.
@@ -671,44 +542,92 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
               );
             }
           }
+          // Accessorials — render the same chip + hover-list as
+          // billing/paperwork (component lives in queue primitives).
+          // Sort + export still get the numeric billable total via the
+          // ColumnDef.get above.
+          if (c.id === 'accessorials') {
+            return <AccessorialsCell items={load.accessorials} />;
+          }
+          // Docs — same DocBadge / RequiredDocBadge cluster
+          // /accounting + /closeout render. Required: rate-con +
+          // POD (unless TONU) + Lumper / Scale when an accessorial
+          // demands one. Optional badges only appear when the doc
+          // is on file.
+          if (c.id === 'docs') {
+            const counts = load.documentCounts ?? {};
+            const rcCount  = Math.max(counts.rate_con ?? 0, load.rateConPdf ? 1 : 0);
+            const podCount = counts.pod ?? 0;
+            const accs = load.accessorials ?? [];
+            const needsLumper = accs.some(a => a.category === 'lumper');
+            const needsScale  = accs.some(a => a.category === 'scale_ticket');
+            const lumperCount = counts.lumper ?? 0;
+            const scaleCount  = counts.scale  ?? 0;
+            return (
+              <div className="flex flex-wrap gap-1">
+                <RequiredDocBadge label="RC"  present={rcCount > 0}  count={rcCount}  missingTitle="No rate confirmation uploaded" />
+                {!load.isTonu && (
+                  <RequiredDocBadge label="POD" present={podCount > 0} count={podCount} missingTitle="No POD uploaded" />
+                )}
+                {needsLumper && (
+                  <RequiredDocBadge label="Lumper" present={lumperCount > 0} count={lumperCount} missingTitle="No lumper receipt uploaded" />
+                )}
+                {needsScale && (
+                  <RequiredDocBadge label="Scale" present={scaleCount > 0} count={scaleCount} missingTitle="No scale ticket uploaded" />
+                )}
+                {(counts.bol          ?? 0) > 0 && <DocBadge label="BOL"     count={counts.bol}          />}
+                {!needsLumper && lumperCount > 0 && <DocBadge label="Lumper"  count={lumperCount}        />}
+                {!needsScale  && scaleCount  > 0 && <DocBadge label="Scale"   count={scaleCount}         />}
+                {(counts.receipt      ?? 0) > 0 && <DocBadge label="Receipt" count={counts.receipt}      />}
+                {(counts.driver_sheet ?? 0) > 0 && <DocBadge label="Driver"  count={counts.driver_sheet} />}
+                {(counts.invoice      ?? 0) > 0 && <DocBadge label="Invoice" count={counts.invoice}      />}
+              </div>
+            );
+          }
 
           return display || <span style={{ color: 'var(--gc-text-3)' }}>—</span>;
         },
       });
     }
 
-    // Pinned-right action column — mirrors /accounting + /closeout's
-    // "always-reachable utility column" convention.
+    // Right-pinned utility column — priority star, notes indicator,
+    // "View" action. Mirrors the cluster /accounting and /closeout
+    // pin to the row's edge so it stays reachable while the rest of
+    // the row scrolls horizontally.
     cols.push({
-      key: '__view',
+      key: '__utility',
       header: '',
-      width: 80,
+      width: 150,
       pinned: 'right',
       alwaysVisible: true,
+      pickerLabel: 'Star / notes / view',
       render: (load) => {
+        const notesCount = (load.internalNotes ?? []).length;
         const eventId = load.legs[0]?.eventId ?? load.loadId;
         return (
-          <button
-            type="button"
-            onClick={() => openEditModal(eventId)}
-            title="Open load"
-            style={{
-              fontSize: 11, fontWeight: 600, padding: '4px 12px', borderRadius: 5,
-              border: '1px solid var(--gc-border)', background: 'transparent',
-              color: 'var(--gc-text-2)', cursor: 'pointer',
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--gc-hover)'; e.currentTarget.style.color = 'var(--gc-blue)'; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gc-text-2)'; }}
-          >
-            View
-          </button>
+          <div className="inline-flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+            <PriorityToggle
+              load={load}
+              actorName={actorName}
+              onAfter={(nextPriority) => patchLoadInState(load.loadId, { pickupPriority: nextPriority })}
+            />
+            <NotesButton count={notesCount} onOpen={() => setNotesTarget(load)} />
+            <FastTooltip text="Open this load">
+              <button
+                onClick={() => openEditModal(eventId)}
+                className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-lg transition-colors whitespace-nowrap"
+                style={{ background: 'var(--gc-surface)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}>
+                <Eye size={11} /> View
+              </button>
+            </FastTooltip>
+          </div>
         );
       },
     });
 
     return cols;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [availableColumns, ctx, customers, drivers, assets, openEditModal]);
+  }, [availableColumns, ctx, customers, drivers, assets, openEditModal, actorName]);
 
   // OpsTable filter chips. Narrow what's visible WITHOUT changing the
   // headline totals above — same convention as /accounting and /closeout
@@ -772,13 +691,39 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
     },
     {
       kind: 'select',
-      key: 'relay',
-      label: 'Relay',
-      options: [
-        { value: 'yes', label: 'Relay only' },
-        { value: 'no',  label: 'Non-relay' },
-      ],
-      predicate: (load, v) => load.isRelay === (v === 'yes'),
+      key: 'customer',
+      label: 'Customer',
+      options: customers
+        .map(c => ({ value: c.name, label: c.shortName?.trim() || c.name }))
+        .sort((a, b) => a.label.localeCompare(b.label)),
+      // Match by FK-resolved customer name first, then fall back to the
+      // load's broker string for legacy rows that never got a
+      // customer_id stamped on them.
+      predicate: (load, v) => {
+        const c = customers.find(x => x.id === load.customerId);
+        const name = c?.name ?? load.broker ?? '';
+        return name === v;
+      },
+    },
+    {
+      kind: 'select',
+      key: 'driver',
+      label: 'Driver',
+      options: driverOptions.map(d => ({ value: d.name, label: d.name })),
+      // Match either leg's driver so a relay surfaces under either name.
+      predicate: (load, v) =>
+        load.pickupDriverName === v || load.deliveryDriverName === v,
+    },
+    {
+      kind: 'select',
+      key: 'truck',
+      label: 'Truck',
+      options: assets
+        .filter(a => !a.hidden)
+        .map(a => ({ value: String(a.id), label: a.unit ? `${a.name} #${a.unit}` : a.name }))
+        .sort((a, b) => a.label.localeCompare(b.label)),
+      predicate: (load, v) =>
+        String(load.pickupAssetId) === v || String(load.deliveryAssetId) === v,
     },
     {
       kind: 'select',
@@ -790,7 +735,7 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
       ],
       predicate: (load, v) => (!!load.pickupPriority) === (v === 'yes'),
     },
-  ], []);
+  ], [customers, driverOptions, assets]);
 
   // ── Export helpers ──────────────────────────────────────────────────────────
 
@@ -938,45 +883,10 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
           <label style={labelStyle}>{dateMode === 'pickup' ? 'Pickup To' : 'Delivery To'}</label>
           <DatePicker value={to} onChange={setTo} headerColor="#1a73e8" min={from} />
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <label style={labelStyle}>Customer</label>
-          <MultiSelect
-            label="customers"
-            options={customers}
-            optionId={c => c.id}
-            optionLabel={c => c.name}
-            selected={selectedCustomers}
-            onChange={setSelectedCustomers}
-            width={240}
-            icon={<Users size={13} style={{ color: 'var(--gc-text-3)' }} />}
-          />
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <label style={labelStyle}>Driver</label>
-          <MultiSelect
-            label="drivers"
-            options={driverOptions}
-            optionId={d => d.name}
-            optionLabel={d => d.name}
-            selected={selectedDrivers}
-            onChange={setSelectedDrivers}
-            width={220}
-            icon={<User size={13} style={{ color: 'var(--gc-text-3)' }} />}
-          />
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <label style={labelStyle}>Truck</label>
-          <MultiSelect
-            label="assets"
-            options={assets.filter(a => !a.hidden)}
-            optionId={a => String(a.id)}
-            optionLabel={a => a.unit ? `${a.name} #${a.unit}` : a.name}
-            selected={selectedAssets}
-            onChange={setSelectedAssets}
-            width={220}
-            icon={<Truck size={13} style={{ color: 'var(--gc-text-3)' }} />}
-          />
-        </div>
+        {/* Customer / Driver / Truck filters moved into the OpsTable's
+            filter chip row to match billing/paperwork. The date pickers
+            stay up here because they drive the server fetch — chip
+            selections only refine display of the already-loaded set. */}
         <button
           type="button"
           onClick={run}
@@ -1083,6 +993,28 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
         <AssetsModal
           initialAssetId={assetModalId}
           onClose={() => setAssetModalId(null)}
+        />
+      )}
+
+      {/* Internal notes modal — opened from the row's notes pill in
+          the sticky utility column. On save, patches the row's
+          internalNotes locally so the count chip updates immediately. */}
+      {notesTarget && (
+        <InternalNotesModal
+          load={notesTarget}
+          actorName={actorName}
+          onClose={() => setNotesTarget(null)}
+          onSaved={(newNote) => {
+            if (newNote && notesTarget) {
+              patchLoadInState(notesTarget.loadId, {
+                internalNotes: [...(notesTarget.internalNotes ?? []), newNote],
+              });
+              setNotesTarget({
+                ...notesTarget,
+                internalNotes: [...(notesTarget.internalNotes ?? []), newNote],
+              });
+            }
+          }}
         />
       )}
 
