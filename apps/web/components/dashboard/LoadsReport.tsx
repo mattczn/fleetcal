@@ -104,47 +104,56 @@ function stopLabel(load: LoadSummary, type: 'pickup' | 'delivery'): string {
   return s.facilityName ?? s.city ?? s.address ?? '';
 }
 
+// Helper for the Truck column: build the relay-aware label (e.g. "Truck 7
+// #234 → Truck 12 #501"). Single-leg loads fall back to just the pickup
+// asset. Used by both the get() — for sort + export — and the cell
+// render in tableColumns.
+function truckLabel(load: LoadSummary, ctx: ColumnCtx): string {
+  const pickup = ctx.assets.find(x => x.id === load.pickupAssetId);
+  const fmt = (a?: { name: string; unit?: string }) =>
+    a ? (a.unit ? `${a.name} #${a.unit}` : a.name) : '';
+  if (!load.isRelay) return fmt(pickup);
+  const delivery = ctx.assets.find(x => x.id === load.deliveryAssetId);
+  const a = fmt(pickup);
+  const b = fmt(delivery);
+  return a && b && a !== b ? `${a} → ${b}` : (a || b);
+}
+
 const COLUMNS: ColumnDef[] = [
+  { id: 'internalId',   label: 'Internal ID', get: (l) => l.internalLoadId ?? '', noFormat: true },
+  { id: 'loadNum',      label: 'Load #',      get: (l) => l.loadNum ?? '' },
+  // Title — the load's event-shaped headline (e.g. "Pickup at XYZ →
+  // Delivery at ABC"). Rendered as a clickable link in tableColumns
+  // below that opens the load modal.
+  { id: 'title',        label: 'Title',       get: (l) => l.title ?? '' },
   { id: 'pickupDate',   label: 'Pickup Date', get: (l) => fmtDate(l.pickupAt) },
   { id: 'deliveryDate', label: 'Delivery Date', get: (l) => fmtDate(l.deliveryAt) },
-  { id: 'loadNum',      label: 'Load #',      get: (l) => l.loadNum ?? '' },
-  { id: 'internalId',   label: 'Internal ID', get: (l) => l.internalLoadId ?? '', noFormat: true },
   { id: 'customer',     label: 'Customer',    get: (l, ctx) => {
     const c = ctx.customers.find(c => c.id === l.customerId)
            ?? (l.broker ? ctx.customers.find(c => c.name === l.broker || c.aliases.includes(l.broker!)) : undefined);
     return (c?.shortName?.trim() || c?.name) ?? l.broker ?? '';
   } },
-  // Title — the load's event-shaped headline (e.g. "Pickup at XYZ →
-  // Delivery at ABC"). Rendered as a clickable link in tableColumns
-  // below that opens the load modal, matching the way load titles work
-  // everywhere else in the app.
-  { id: 'title',        label: 'Title',       get: (l) => l.title ?? '' },
   { id: 'driver',       label: 'Driver',      get: (l) => {
-    // Pickup leg's driver is the headline name. For relays, both legs'
-    // drivers are exposed below as separate columns.
+    // Show BOTH drivers on relay loads ("Pickup → Delivery") so a
+    // dispatcher reading the row sees both legs at once. Non-relay
+    // loads keep the single name.
     if (!l.isRelay) return l.pickupDriverName ?? '';
     const a = l.pickupDriverName ?? '';
     const b = l.deliveryDriverName ?? '';
     return a && b && a !== b ? `${a} → ${b}` : a || b;
   } },
-  { id: 'asset',        label: 'Truck',       get: (l, ctx) => {
-    const a = ctx.assets.find(x => x.id === l.pickupAssetId);
-    return a ? (a.unit ? `${a.name} #${a.unit}` : a.name) : '';
-  }},
+  // Truck — relay-aware. truckLabel() returns "Truck A → Truck B" for
+  // relays, single name otherwise. Cell render below mirrors the same
+  // logic but wraps each truck in a clickable button.
+  { id: 'asset',        label: 'Truck',       get: (l, ctx) => truckLabel(l, ctx) },
   { id: 'trailerType',  label: 'Equipment Type', get: (l) => l.trailerType ?? '' },
   { id: 'status',       label: 'Status',      get: (l) => STATUS_LABEL[l.pickupStatus ?? 'scheduled'] ?? l.pickupStatus ?? '' },
-  // City / state pulled straight from the stop's geocoded address
-  // fields (Stop.city, Stop.state — two-letter code from Google's
-  // administrative_area_level_1). Falls back to '' when the stop is
-  // legacy / un-geocoded; export shows blank rather than guessing.
-  { id: 'pickupCity',   label: 'Pickup City', get: (l) => firstStop(l, 'pickup')?.city ?? '' },
-  { id: 'pickupState',  label: 'Pickup State', get: (l) => firstStop(l, 'pickup')?.state ?? '' },
-  { id: 'deliveryCity', label: 'Delivery City', get: (l) => firstStop(l, 'delivery')?.city ?? '' },
-  { id: 'deliveryState', label: 'Delivery State', get: (l) => firstStop(l, 'delivery')?.state ?? '' },
-  { id: 'stops',        label: 'Stops', align: 'right',        get: (l) => l.stops?.length ?? '' },
-  // Docs column — same docBadge cluster the billing/paperwork tables render.
-  // For sort + export we surface a flat summary string of "RC 1 · POD 2 …".
-  // The visual badge cluster is built in tableColumns below.
+  { id: 'loadPrice',    label: 'Linehaul',   align: 'right',   get: (l) => l.loadPrice ?? '' },
+  { id: 'accessorials', label: 'Accessorials', align: 'right', get: (l) => billableAccessorials(l) || '' },
+  { id: 'total',        label: 'Total',       align: 'right',  get: (l) => billableTotal(l) || '' },
+  // Docs — DocBadge cluster the billing/paperwork tables render. The
+  // get() output is a flat summary for sort + export ("RC 1 · POD 2");
+  // visual badges are built in tableColumns.
   { id: 'docs',         label: 'Docs',        get: (l) => {
     const c = l.documentCounts ?? {};
     const rc = Math.max(c.rate_con ?? 0, l.rateConPdf ? 1 : 0);
@@ -158,32 +167,32 @@ const COLUMNS: ColumnDef[] = [
     if ((c.driver_sheet ?? 0) > 0) parts.push(`Driver ${c.driver_sheet}`);
     return parts.join(' · ');
   } },
-  { id: 'commodity',    label: 'Commodity',   get: (l) => l.commodity ?? '' },
-  { id: 'weight',       label: 'Weight (lbs)', align: 'right', get: (l) => l.weight ?? '' },
-  { id: 'miles',        label: 'Miles', align: 'right',        get: (l) => l.totalLoadedMiles ?? '' },
-  { id: 'loadPrice',    label: 'Linehaul',   align: 'right',   get: (l) => l.loadPrice ?? '' },
-  { id: 'accessorials', label: 'Accessorials', align: 'right', get: (l) => billableAccessorials(l) || '' },
-  { id: 'total',        label: 'Total',       align: 'right',  get: (l) => billableTotal(l) || '' },
-  // Rate per mile from linehaul ÷ total loaded miles. Linehaul is the
-  // right numerator here, not Total Billable — accessorials are
-  // distance-independent (lumpers, detention) so folding them in would
-  // distort the per-mile rate against comparable loads. Returns '' when
-  // either side is missing or zero so empty cells stay empty.
+  { id: 'driverPay',    label: 'Driver Pay', align: 'right',   get: (l) => l.totalDriverPay ?? '' },
+  { id: 'miles',        label: 'Loaded Miles', align: 'right', get: (l) => l.totalLoadedMiles ?? '' },
+  // Rate per mile = linehaul ÷ loaded miles. Linehaul on purpose, not
+  // Total — accessorials are distance-independent so folding them in
+  // distorts the per-mile rate.
   { id: 'rpm',          label: 'RPM', align: 'right',          get: (l) => {
     const m = l.totalLoadedMiles ?? 0;
     const p = l.loadPrice ?? 0;
     return (m > 0 && p > 0) ? p / m : '';
   } },
-  { id: 'driverPay',    label: 'Driver Pay', align: 'right',   get: (l) => l.totalDriverPay ?? '' },
+  { id: 'stops',        label: 'Stops', align: 'right',        get: (l) => l.stops?.length ?? '' },
+  // City / state from Stop.city / Stop.state (Google geocoded
+  // administrative_area_level_1). Blank on legacy un-geocoded stops.
+  { id: 'pickupCity',   label: 'Pickup City', get: (l) => firstStop(l, 'pickup')?.city ?? '' },
+  { id: 'pickupState',  label: 'Pickup State', get: (l) => firstStop(l, 'pickup')?.state ?? '' },
+  { id: 'deliveryCity', label: 'Delivery City', get: (l) => firstStop(l, 'delivery')?.city ?? '' },
+  { id: 'deliveryState', label: 'Delivery State', get: (l) => firstStop(l, 'delivery')?.state ?? '' },
+  { id: 'weight',       label: 'Weight (lbs)', align: 'right', get: (l) => l.weight ?? '' },
+  { id: 'commodity',    label: 'Commodity',   get: (l) => l.commodity ?? '' },
   { id: 'dispatcher',   label: 'Dispatcher',  get: (l) => l.dispatcher ?? '' },
-  { id: 'billingStatus', label: 'Billing',    get: (l) => l.billingStatus ?? '' },
+  { id: 'billingStatus', label: 'Billing Status', get: (l) => l.billingStatus ?? '' },
 ];
 
-const DEFAULT_VISIBLE = [
-  'pickupDate', 'deliveryDate', 'loadNum', 'customer', 'driver', 'asset',
-  'pickupCity', 'pickupState', 'deliveryCity', 'deliveryState',
-  'status', 'docs', 'stops', 'miles', 'loadPrice', 'accessorials', 'total', 'rpm', 'driverPay',
-];
+// All columns are visible by default — derived from COLUMNS itself so
+// reordering / adding stays in sync without two places to edit.
+const DEFAULT_VISIBLE = COLUMNS.map(c => c.id);
 const DEFAULT_VISIBLE_SET = new Set(DEFAULT_VISIBLE);
 
 // Default per-column widths. Same Motive-style sensible-default pattern
@@ -196,8 +205,8 @@ const COL_WIDTHS: Record<string, number> = {
   internalId:     110,
   customer:       180,
   title:          240,
-  driver:         160,
-  asset:          120,
+  driver:         200,
+  asset:          180,
   trailerType:    140,
   status:         120,
   pickupCity:     150,
@@ -285,7 +294,7 @@ interface Props {
 
 // Column structure has been reshaped twice (utility column moves,
 // docs/accessorials adds, pickup/delivery split). The OpsTable
-// persistKey is bumped to `loadsReport-v2` to force a clean column
+// persistKey is bumped to `loadsReport-v3` to force a clean column
 // order. The legacy pre-OpsTable migration helper that lived here
 // (writing v1 keys) is gone — any v1 user gets v2 defaults on next
 // open, which is what we want now that the column set has changed
@@ -564,20 +573,35 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
             return load.pickupDriverName || <span style={{ color: 'var(--gc-text-3)' }}>—</span>;
           }
           if (c.id === 'asset') {
-            const a = assets.find(x => x.id === load.pickupAssetId);
-            if (a) {
+            const pickup   = assets.find(x => x.id === load.pickupAssetId);
+            const delivery = load.isRelay ? assets.find(x => x.id === load.deliveryAssetId) : undefined;
+            const fmt = (a?: { name: string; unit?: string }) =>
+              a ? (a.unit ? `${a.name} #${a.unit}` : a.name) : null;
+            const TruckLink = ({ asset }: { asset: { id: number; name: string; unit?: string } }) => (
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); setAssetModalId(asset.id); }}
+                style={{ background: 'none', border: 'none', padding: 0, color: 'var(--gc-blue)', cursor: 'pointer', textAlign: 'left', fontSize: 13 }}
+                onMouseEnter={(e) => (e.currentTarget.style.textDecoration = 'underline')}
+                onMouseLeave={(e) => (e.currentTarget.style.textDecoration = 'none')}
+              >
+                {fmt(asset)}
+              </button>
+            );
+            // Relay loads show BOTH trucks separated by "→"; each truck
+            // is independently clickable so a dispatcher can open the
+            // delivery-leg's asset modal without having to click
+            // through the pickup truck first.
+            if (delivery && pickup && delivery.id !== pickup.id) {
               return (
-                <button
-                  type="button"
-                  onClick={(e) => { e.stopPropagation(); setAssetModalId(a.id); }}
-                  style={{ background: 'none', border: 'none', padding: 0, color: 'var(--gc-blue)', cursor: 'pointer', textAlign: 'left', fontSize: 13 }}
-                  onMouseEnter={(e) => (e.currentTarget.style.textDecoration = 'underline')}
-                  onMouseLeave={(e) => (e.currentTarget.style.textDecoration = 'none')}
-                >
-                  {a.unit ? `${a.name} #${a.unit}` : a.name}
-                </button>
+                <span className="inline-flex items-center gap-1">
+                  <TruckLink asset={pickup} />
+                  <span style={{ color: 'var(--gc-text-3)' }}>→</span>
+                  <TruckLink asset={delivery} />
+                </span>
               );
             }
+            if (pickup) return <TruckLink asset={pickup} />;
           }
           // Accessorials — render the same chip + hover-list as
           // billing/paperwork (component lives in queue primitives).
@@ -1012,7 +1036,7 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
 
           {/* OpsTable owns search chip, sorted headers, column picker
               (visibility + drag-to-reorder), and pagination. Persistence
-              is keyed at "loadsReport-v2" so the user's hide/show +
+              is keyed at "loadsReport-v3" so the user's hide/show +
               order + sort survive across visits — identical convention
               to the accounting + closeout tables.
 
@@ -1038,7 +1062,7 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
             columnPicker
             columnReorder
             fillHeight
-            persistKey="loadsReport-v2"
+            persistKey="loadsReport-v3"
             countLabel="load"
           />
           </div>
