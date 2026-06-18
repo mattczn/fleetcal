@@ -11,6 +11,10 @@ import {
   PlusJakartaSans_700Bold,
   PlusJakartaSans_800ExtraBold,
 } from "@expo-google-fonts/plus-jakarta-sans";
+import {
+  JetBrainsMono_600SemiBold,
+  JetBrainsMono_700Bold,
+} from "@expo-google-fonts/jetbrains-mono";
 import { useDriverSession, type DriverSessionState } from "@/lib/useDriverSession";
 import { queryClient, asyncStoragePersister, PERSIST_MAX_AGE } from "@/lib/queryClient";
 import { drainQueue } from "@/lib/uploadQueue";
@@ -122,6 +126,8 @@ function RootLayoutInner() {
     PlusJakartaSans_600SemiBold,
     PlusJakartaSans_700Bold,
     PlusJakartaSans_800ExtraBold,
+    JetBrainsMono_600SemiBold,
+    JetBrainsMono_700Bold,
   });
 
   if (!fontsLoaded || session.status === "loading" || session.status === "loading-driver") {

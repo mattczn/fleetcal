@@ -10,7 +10,8 @@ import {
   Dimensions,
   Modal,
 } from "react-native";
-import { SafeAreaView, SafeAreaProvider } from "react-native-safe-area-context";
+import { SafeAreaView, SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
+import { StatusBar } from "expo-status-bar";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Inbox, AlertTriangle } from "lucide-react-native";
 import { SyncStatusPill } from "@/components/SyncStatusPill";
@@ -26,6 +27,8 @@ import { usePushRegistration } from "@/lib/usePushRegistration";
 import { useReportDevicePermissions } from "@/lib/useReportDevicePermissions";
 import { railway } from "@/lib/railway";
 import type { Load } from "@/lib/types";
+import { Glass } from "@/components/Glass";
+import { C, f, SP, RADIUS, SHADOW, ACCENT } from "@/lib/theme";
 
 const { width: SCREEN_W } = Dimensions.get("window");
 
@@ -38,18 +41,11 @@ function naiveAtOffset(hours: number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-const txt = (weight: 500 | 600 | 700 | 800) => ({
-  fontFamily:
-    weight === 500 ? "PlusJakartaSans_500Medium"  :
-    weight === 600 ? "PlusJakartaSans_600SemiBold" :
-    weight === 700 ? "PlusJakartaSans_700Bold"     :
-                     "PlusJakartaSans_800ExtraBold",
-});
-
 const TABS = ["Active", "Upcoming", "Recent"] as const;
 type TabIdx = 0 | 1 | 2;
 
 export default function LoadsScreen() {
+  const insets = useSafeAreaInsets();
   const session = useDriverSession();
   const driver  = session.status === "matched" ? session.driver : null;
   useLoadsRealtime(driver?.driverId, driver?.orgId);
@@ -122,9 +118,7 @@ export default function LoadsScreen() {
 
   // Prefetch the full load detail (with relay partner stops, etc.) for
   // every load in the ±24h window so tapping into one is instant and
-  // works offline if the device drops connectivity later. The list query
-  // already returns most fields, but the detail endpoint also surfaces
-  // relay partner info that the list omits.
+  // works offline if the device drops connectivity later.
   useEffect(() => {
     if (!driver) return;
     for (const load of within24h) {
@@ -157,26 +151,30 @@ export default function LoadsScreen() {
   ];
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: "#1a73e8" }} edges={["top"]}>
-      {/* Header */}
-      <View style={{ backgroundColor: "#1a73e8", paddingHorizontal: 22, paddingTop: 8, paddingBottom: 0 }}>
-        <View style={{ flexDirection: "row", alignItems: "flex-start" }}>
+    <View style={{ flex: 1, backgroundColor: C.bg }}>
+      <StatusBar style="dark" />
+
+      {/* Glass header */}
+      <Glass
+        deep
+        radii={{ borderBottomLeftRadius: RADIUS.headerList, borderBottomRightRadius: RADIUS.headerList }}
+        style={{ paddingTop: insets.top + 8, paddingHorizontal: SP.screenPx, paddingBottom: 12, zIndex: 10 }}
+      >
+        <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 12 }}>
           <View style={{ flex: 1 }}>
-            <Text style={[txt(500), { fontSize: 13, color: "rgba(255,255,255,0.6)" }]}>
-              {greeting},
-            </Text>
-            <Text style={[txt(800), { fontSize: 26, color: "#ffffff", marginTop: 2, letterSpacing: -0.3 }]}>
+            <Text style={[f(600), { fontSize: 13, color: C.t3, letterSpacing: 0.1 }]}>{greeting},</Text>
+            <Text style={[f(800), { fontSize: 27, color: C.t1, marginTop: 1, letterSpacing: -0.6 }]} numberOfLines={1}>
               {driver?.name ?? "Driver"}
             </Text>
           </View>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 6 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
             <SyncStatusPill />
-            <NotificationsBell tint="light" />
+            <NotificationsBell tint="dark" />
           </View>
         </View>
 
-        {/* Tab bar */}
-        <View style={{ flexDirection: "row", marginTop: 18 }}>
+        {/* Segmented tabs */}
+        <View style={{ flexDirection: "row", gap: 3, marginTop: 16, padding: 4, borderRadius: 14, backgroundColor: C.surfaceSunk }}>
           {TABS.map((tab, i) => {
             const count = tabData[i]?.length ?? 0;
             const isActive = activeTab === i;
@@ -184,54 +182,37 @@ export default function LoadsScreen() {
               <TouchableOpacity
                 key={tab}
                 onPress={() => selectTab(i as TabIdx)}
-                activeOpacity={0.7}
-                style={{ flex: 1, alignItems: "center", paddingBottom: 12 }}
+                activeOpacity={0.8}
+                style={[
+                  { flex: 1, height: 36, borderRadius: 11, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
+                  isActive && { backgroundColor: C.surface, ...SHADOW.card },
+                ]}
               >
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 8 }}>
-                  <Text style={[
-                    txt(isActive ? 800 : 600),
-                    { fontSize: 13, color: isActive ? "#ffffff" : "rgba(255,255,255,0.55)" },
-                  ]}>
-                    {tab}
-                  </Text>
-                  {count > 0 ? (
-                    <View style={{
-                      minWidth: 18, height: 18, borderRadius: 9,
-                      backgroundColor: isActive ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.1)",
-                      paddingHorizontal: 5,
-                      alignItems: "center", justifyContent: "center",
-                    }}>
-                      <Text style={[txt(800), { fontSize: 10, color: isActive ? "#ffffff" : "rgba(255,255,255,0.5)" }]}>
-                        {count}
-                      </Text>
-                    </View>
-                  ) : null}
-                </View>
-                {/* Active indicator */}
-                <View style={{
-                  height: 3,
-                  width: "60%",
-                  borderRadius: 2,
-                  backgroundColor: isActive ? "#ffffff" : "transparent",
-                }} />
+                <Text style={[f(700), { fontSize: 13.5, color: isActive ? C.t1 : C.t3, letterSpacing: -0.1 }]}>{tab}</Text>
+                {count > 0 ? (
+                  <View style={{
+                    minWidth: 19, height: 19, paddingHorizontal: 5, borderRadius: 999,
+                    alignItems: "center", justifyContent: "center",
+                    backgroundColor: isActive ? ACCENT : C.border,
+                  }}>
+                    <Text style={[f(800), { fontSize: 10.5, color: isActive ? "#ffffff" : C.t3 }]}>{count}</Text>
+                  </View>
+                ) : null}
               </TouchableOpacity>
             );
           })}
         </View>
-      </View>
+      </Glass>
 
       {(pushStatus === "denied" || pushStatus === "failed") && (
-        // Visible banner so the driver knows push isn't working — silent
-        // failure was leaving drivers with no pings + no way to tell.
-        // 'denied' usually means iOS notification permission was declined
-        // (Settings → Notifications → FleetCal Driver). 'failed' means
-        // permission's fine but token registration with the server
-        // didn't go through after retries.
-        <View style={{ backgroundColor: "#fef3c7", paddingHorizontal: 16, paddingVertical: 10, borderTopWidth: 1, borderTopColor: "#fde68a" }}>
-          <Text style={[txt(700), { fontSize: 12, color: "#92400e" }]}>
+        // Visible banner so the driver knows push isn't working. 'denied'
+        // usually means iOS notification permission was declined; 'failed'
+        // means permission's fine but token registration didn't go through.
+        <View style={{ backgroundColor: C.amberBg, paddingHorizontal: SP.screenPx, paddingVertical: 10 }}>
+          <Text style={[f(700), { fontSize: 12, color: C.amberInk }]}>
             {pushStatus === "denied" ? "Push notifications are off" : "Push registration failed"}
           </Text>
-          <Text style={[txt(500), { fontSize: 11, color: "#92400e", marginTop: 2 }]}>
+          <Text style={[f(500), { fontSize: 11, color: C.amberInk, marginTop: 2 }]}>
             {pushStatus === "denied"
               ? "Enable notifications in Settings → Notifications → FleetCal Driver so dispatch can reach you."
               : "We couldn't register this device for push. Pull down to retry, or restart the app."}
@@ -240,11 +221,11 @@ export default function LoadsScreen() {
       )}
 
       {isLoading ? (
-        <View style={{ flex: 1, backgroundColor: "#f8f9fa", alignItems: "center", justifyContent: "center" }}>
-          <ActivityIndicator size="large" color="#1a73e8" />
+        <View style={{ flex: 1, backgroundColor: C.bg, alignItems: "center", justifyContent: "center" }}>
+          <ActivityIndicator size="large" color={ACCENT} />
         </View>
       ) : isError ? (
-        <View style={{ flex: 1, backgroundColor: "#f8f9fa" }}>
+        <View style={{ flex: 1, backgroundColor: C.bg }}>
           <EmptyState title="Could not load schedule" subtitle="Pull down to retry" Icon={AlertTriangle} />
         </View>
       ) : (
@@ -265,16 +246,13 @@ export default function LoadsScreen() {
               key={tabIdx}
               data={data}
               keyExtractor={(item) => item.id}
-              style={{ width: SCREEN_W, backgroundColor: "#f8f9fa" }}
-              contentContainerStyle={{ paddingHorizontal: 0, paddingTop: 4, paddingBottom: 40, flexGrow: 1 }}
+              style={{ width: SCREEN_W, backgroundColor: C.bg }}
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={{ paddingHorizontal: 0, paddingTop: SP.cgap, paddingBottom: 24, flexGrow: 1 }}
               refreshControl={
-                <RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor="#1a73e8" />
+                <RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor={ACCENT} />
               }
-              // Inspection card is pinned to the top of the Active tab
-              // only — Upcoming/Recent don't need it. Wrapping the card
-              // (which already has its own marginHorizontal/marginTop)
-              // in a plain View lets the FlatList container drop its
-              // padding so the card sits flush.
+              // Inspection card pinned to the top of the Active tab only.
               ListHeaderComponent={tabIdx === 0 ? (
                 <InspectionCard
                   loading={inspectionLoading}
@@ -283,12 +261,12 @@ export default function LoadsScreen() {
                 />
               ) : null}
               renderItem={({ item }) => (
-                <View style={{ paddingHorizontal: 16 }}>
+                <View style={{ paddingHorizontal: SP.screenPx }}>
                   <LoadCard load={item} />
                 </View>
               )}
               ListEmptyComponent={
-                <View style={{ paddingHorizontal: 16, paddingTop: 16, flexGrow: 1 }}>
+                <View style={{ paddingHorizontal: SP.screenPx, paddingTop: 16, flexGrow: 1 }}>
                   <EmptyState
                     title={emptyLabels[tabIdx].title}
                     subtitle={emptyLabels[tabIdx].subtitle}
@@ -301,17 +279,9 @@ export default function LoadsScreen() {
         </ScrollView>
       )}
 
-      {/* Inspection form — full-screen modal. On submit, refetch the
-          today's-inspections query so the card flips to its green
-          state and lists the new entry.
-
-          IMPORTANT: <Modal> renders into its own native root view that
-          is OUTSIDE expo-router's SafeAreaProvider. Without an explicit
-          provider here, the SafeAreaView falls back to zero insets and
-          the back-arrow lands underneath the dynamic island. Wrapping
-          the modal contents with our own SafeAreaProvider re-injects
-          the insets so edges={["top"]} actually pushes the header
-          below the island. */}
+      {/* Inspection form — full-screen modal. <Modal> renders into its own
+          native root OUTSIDE expo-router's SafeAreaProvider, so we re-inject
+          one here for correct insets. */}
       <Modal
         visible={inspectionFormOpen}
         animationType="slide"
@@ -331,6 +301,6 @@ export default function LoadsScreen() {
           </SafeAreaView>
         </SafeAreaProvider>
       </Modal>
-    </SafeAreaView>
+    </View>
   );
 }

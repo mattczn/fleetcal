@@ -1,29 +1,25 @@
 import React from "react";
 import { View, Text, TouchableOpacity } from "react-native";
 import { useRouter } from "expo-router";
-import { MapPin, Truck, ChevronRight, Container, AlertTriangle, Bell } from "lucide-react-native";
+import { MapPin, Truck, ChevronRight, Container, AlertTriangle, Bell, Route } from "lucide-react-native";
 import { useQuery } from "@tanstack/react-query";
 import type { Load, Stop } from "@/lib/types";
-import { needsConfirmation } from "@/lib/loadStatus";
 import { fetchOrgSettings } from "@/lib/api/orgSettings";
 import { useDriverSession } from "@/lib/useDriverSession";
 import {
-  RelayChip, NonRevChip, StatusPill, DiagonalStripes,
+  RelayChip, NonRevChip, StatusPill,
   fmtTimeRangeShort, fmtStopAppt, fmtShortDate, loadNumLabel, fmtScheduleType,
   fmtRelayHandoffTime, relayHandoffAction,
 } from "@/lib/loadCard";
+import { C, f, SP, RADIUS, SHADOW, SCHED_TINT } from "@/lib/theme";
 
 type Props = { load: Load };
 
 /**
  * The "from" / "to" of this driver's leg — handles relays correctly.
- *
- *   - Single load:    first stop is pickup, last is delivery.
- *   - Pickup leg:     first stop is pickup, last is the relay handoff.
- *   - Delivery leg:   first stop is the relay handoff, last is delivery.
- *
- * Looking up by stop.type === "pickup" missed relay-leg stops (which
- * are typed "relay"), so empty cells appeared on the home cards.
+ *   - Single load:  first stop is pickup, last is delivery.
+ *   - Pickup leg:   first stop is pickup, last is the relay handoff.
+ *   - Delivery leg: first stop is the relay handoff, last is delivery.
  */
 function originStop(load: Load): Stop | undefined {
   return load.stops[0];
@@ -31,10 +27,9 @@ function originStop(load: Load): Stop | undefined {
 function destinationStop(load: Load): Stop | undefined {
   return load.stops[load.stops.length - 1];
 }
-
 function originLabel(s: Stop | undefined, isRelayDelivery: boolean): string {
   if (isRelayDelivery) return "RELAY HANDOFF";
-  if (s?.type === "pickup")   return "PICKUP";
+  if (s?.type === "pickup") return "PICKUP";
   return "ORIGIN";
 }
 function destLabel(s: Stop | undefined, isRelayPickup: boolean): string {
@@ -42,245 +37,205 @@ function destLabel(s: Stop | undefined, isRelayPickup: boolean): string {
   if (s?.type === "delivery" || s?.type === "drop_hook") return "DELIVERY";
   return "DESTINATION";
 }
-
 function locLabel(s: Stop | undefined): string {
   if (!s) return "—";
-  // Loads-page rows want a quick "where" — city + state is the right
-  // grain. Fall through to facility / address only when geocoding
-  // hasn't filled in the city yet.
   if (s.city && s.state) return `${s.city}, ${s.state}`;
   return s.city ?? s.facilityName ?? s.address ?? "—";
 }
+/** Facility sub-line — only when the place line already shows City, ST. */
+function facilitySub(s: Stop | undefined): string | null {
+  if (s?.city && s?.state && s.facilityName) return s.facilityName;
+  return null;
+}
 
-const txt = (weight: 500 | 600 | 700 | 800) => ({
-  fontFamily:
-    weight === 500 ? "PlusJakartaSans_500Medium"  :
-    weight === 600 ? "PlusJakartaSans_600SemiBold" :
-    weight === 700 ? "PlusJakartaSans_700Bold"     :
-                     "PlusJakartaSans_800ExtraBold",
-});
+/** Route-rail node — a tinted map-pin circle, colored by leg endpoint. */
+function RouteNode({ kind }: { kind: "origin" | "dest" | "relay" }) {
+  const tint =
+    kind === "origin" ? { bg: C.greenBg, fg: C.green } :
+    kind === "relay"  ? { bg: C.purpleBg, fg: C.purple } :
+                        { bg: C.redBg, fg: C.red };
+  return (
+    <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: tint.bg, alignItems: "center", justifyContent: "center" }}>
+      <MapPin size={12} color={tint.fg} strokeWidth={2.6} />
+    </View>
+  );
+}
+
+/** APPT / WINDOW / FCFS mini-chip. */
+function MiniSched({ stop }: { stop?: Stop }) {
+  const label = fmtScheduleType(stop);
+  if (!label) return null;
+  const tint = SCHED_TINT[label as "APPT" | "WINDOW" | "FCFS"] ?? SCHED_TINT.FCFS;
+  return (
+    <View style={{ height: 16, paddingHorizontal: 6, borderRadius: 5, backgroundColor: tint.bg, justifyContent: "center" }}>
+      <Text style={[f(800), { fontSize: 9, color: tint.fg, letterSpacing: 0.4 }]}>{label}</Text>
+    </View>
+  );
+}
 
 export function LoadCard({ load }: Props) {
   const router = useRouter();
   const session = useDriverSession();
   const driver = session.status === "matched" ? session.driver : null;
-  const pickup     = originStop(load);
-  const delivery   = destinationStop(load);
-  const isRelayPickup   = load.relayRole === "pickup";
+
+  const pickup = originStop(load);
+  const delivery = destinationStop(load);
+  const isRelayPickup = load.relayRole === "pickup";
   const isRelayDelivery = load.relayRole === "delivery";
-  const needsAction = needsConfirmation(load);
-  const isNonRev   = load.eventKind === "non_revenue";
-  // Pending dispatcher nudges — populated by the loads list endpoint
-  // from load_notifications WHERE acknowledged_at IS NULL.
-  const pendingNudges = load.pendingNotificationKinds ?? [];
-  const pendingCount  = pendingNudges.length;
-  // "Delivered without paperwork" warning. POD is the canonical
-  // billing doc; we surface a chip on the card so the driver sees it
-  // before opening the load. Skip:
-  //  - TONU loads (no POD expected by design)
-  //  - non-revenue events
-  //  - the pickup leg of a relay (delivery leg is responsible for POD)
+  const isNonRev = load.eventKind === "non_revenue";
+  const destKind: "dest" | "relay" = delivery?.type === "relay" ? "relay" : "dest";
+
+  // Pending dispatcher nudges (load_notifications WHERE acknowledged_at IS NULL).
+  const pendingCount = (load.pendingNotificationKinds ?? []).length;
+
+  // Delivered-without-POD warning (skips TONU, non-rev, and the relay
+  // pickup leg, which isn't responsible for the POD).
   const podCount = load.documentCounts?.pod ?? 0;
   const missingPaperwork =
-    load.status === "delivered" &&
-    !load.isTonu &&
-    !isNonRev &&
-    !isRelayPickup &&
-    podCount === 0;
+    load.status === "delivered" && !load.isTonu && !isNonRev && !isRelayPickup && podCount === 0;
+
   const { data: orgSettings } = useQuery({
     queryKey: ["org-settings", driver?.orgId],
-    queryFn:  () => fetchOrgSettings(driver!.orgId),
-    enabled:  !!driver,
+    queryFn: () => fetchOrgSettings(driver!.orgId),
+    enabled: !!driver,
     staleTime: 5 * 60 * 1000,
   });
   const showPay = !!orgSettings?.showDriverPay && load.driverPay != null;
 
+  const miles = load.loadedMiles ?? load.miles;
+  const metaLeft =
+    miles != null || load.commodity
+      ? `${miles != null ? `${miles} mi` : ""}${miles != null && load.commodity ? " · " : ""}${load.commodity ?? ""}`
+      : fmtTimeRangeShort(load);
+
+  // Eyebrow trailing text (date + appt window) per leg.
+  const originExtra = isRelayDelivery
+    ? `${relayHandoffAction("delivery").toUpperCase()}${fmtRelayHandoffTime(pickup, "delivery") ? ` · ${fmtRelayHandoffTime(pickup, "delivery")}` : ""}`
+    : fmtStopAppt(pickup);
+  const destExtra = isRelayPickup
+    ? `${relayHandoffAction("pickup").toUpperCase()}${fmtRelayHandoffTime(delivery, "pickup") ? ` · ${fmtRelayHandoffTime(delivery, "pickup")}` : ""}`
+    : fmtStopAppt(delivery);
+
   return (
     <TouchableOpacity
-      activeOpacity={0.85}
+      activeOpacity={0.9}
       onPress={() => router.push({ pathname: "/load/[id]", params: { id: load.id } })}
       style={{
-        backgroundColor: "#ffffff",
-        borderRadius:    14,
-        marginBottom:    10,
-        overflow:        "hidden",
-        borderWidth:     1,
-        borderColor:     "#e8eaed",
-        shadowColor:     "#000",
-        shadowOpacity:   0.04,
-        shadowRadius:    6,
-        shadowOffset:    { width: 0, height: 2 },
+        backgroundColor: C.surface,
+        borderRadius: RADIUS.card,
+        marginBottom: SP.cgap,
+        overflow: "hidden",
+        borderWidth: 1,
+        borderColor: C.border,
+        ...SHADOW.card,
       }}
     >
-      <View style={{ flexDirection: "row" }}>
-        <View style={{ width: 4, backgroundColor: pendingCount > 0 ? "#dc2626" : missingPaperwork ? "#d97706" : needsAction ? "#dc2626" : "#1a73e8" }} />
-
-        <View style={{ flex: 1, padding: 14 }}>
-          {isNonRev ? <DiagonalStripes /> : null}
-
-          {/* Title row — title + relay/non-rev chips + pending nudges */}
-          <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 6, flexWrap: "wrap" }}>
-            <Text style={[txt(800), { fontSize: 15, color: "#202124", flex: 1, lineHeight: 20 }]} numberOfLines={2}>
-              {load.title}
-            </Text>
-            {pendingCount > 0 ? (
-              <View style={{
-                flexDirection: "row", alignItems: "center", gap: 4,
-                paddingHorizontal: 8, paddingVertical: 3,
-                borderRadius: 999, backgroundColor: "#dc2626",
-              }}>
-                <Bell size={11} color="#ffffff" strokeWidth={2.6} />
-                <Text style={[txt(800), { fontSize: 11, color: "#ffffff" }]}>
-                  {pendingCount}
-                </Text>
-              </View>
-            ) : null}
-            {isNonRev ? <NonRevChip size="small" /> : null}
-            {load.relayRole ? <RelayChip role={load.relayRole} size="small" /> : null}
-          </View>
-
-          {/* Paperwork warning — load is delivered but no POD on file.
-              Strip across the top of the card so it's visible without
-              opening the load. Sits below the title row so it doesn't
-              compete with the relay / non-rev chips. */}
-          {missingPaperwork ? (
-            <View
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                gap: 6,
-                marginTop: 8,
-                paddingHorizontal: 10,
-                paddingVertical: 6,
-                borderRadius: 8,
-                backgroundColor: "#fff7ed",
-                borderWidth: 1,
-                borderColor: "#fdba74",
-              }}
-            >
-              <AlertTriangle size={12} color="#9a3412" strokeWidth={2.4} />
-              <Text style={[txt(700), { fontSize: 12, color: "#9a3412", flex: 1 }]} numberOfLines={1}>
-                Upload paperwork — no POD on file
-              </Text>
+      {/* Title row */}
+      <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 10, paddingHorizontal: SP.cpad, paddingTop: SP.cpad }}>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={[f(800), { fontSize: 16.5, color: C.t1, letterSpacing: -0.3, lineHeight: 21 }]} numberOfLines={2}>
+            {load.title}
+          </Text>
+          <Text style={[f(700), { fontSize: 12, color: C.blueInk, marginTop: 3 }]} numberOfLines={1}>
+            {loadNumLabel(load)}{load.broker ? ` · ${load.broker}` : ""}
+          </Text>
+        </View>
+        <View style={{ alignItems: "flex-end", gap: 6 }}>
+          <StatusPill status={load.status} size="small" />
+          {pendingCount > 0 ? (
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, height: 21, borderRadius: 7, backgroundColor: C.red }}>
+              <Bell size={11} color="#ffffff" strokeWidth={2.6} />
+              <Text style={[f(800), { fontSize: 11, color: "#ffffff" }]}>{pendingCount > 99 ? "99+" : pendingCount}</Text>
             </View>
           ) : null}
+          {isNonRev ? <NonRevChip size="small" /> : null}
+          {load.relayRole ? <RelayChip role={load.relayRole} size="small" /> : null}
+        </View>
+      </View>
 
-          {/* Equipment row — asset · trailer */}
-          {(load.assetName || load.trailerType) ? (
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginTop: 6 }}>
-              {load.assetName ? (
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-                  <Truck size={11} color="#5f6368" strokeWidth={2.2} />
-                  <Text style={[txt(700), { fontSize: 12, color: "#3c4043" }]} numberOfLines={1}>
-                    {load.assetName}
-                  </Text>
-                </View>
-              ) : null}
-              {load.trailerType ? (
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-                  <Container size={11} color="#5f6368" strokeWidth={2.2} />
-                  <Text style={[txt(700), { fontSize: 12, color: "#3c4043" }]} numberOfLines={1}>
-                    {load.trailerType}
-                  </Text>
-                </View>
-              ) : null}
+      {/* Paperwork warning strip */}
+      {missingPaperwork ? (
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginHorizontal: SP.cpad, marginTop: 10, paddingHorizontal: 11, paddingVertical: 9, borderRadius: 11, backgroundColor: C.amberBg }}>
+          <AlertTriangle size={14} color={C.amberInk} strokeWidth={2.4} />
+          <Text style={[f(700), { fontSize: 12, color: C.amberInk, flex: 1 }]} numberOfLines={1}>
+            Upload paperwork — no POD on file
+          </Text>
+        </View>
+      ) : null}
+
+      {/* Equipment row */}
+      {load.assetName || load.trailerType ? (
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 14, paddingHorizontal: SP.cpad, paddingTop: 10 }}>
+          {load.assetName ? (
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
+              <Truck size={13} color={C.t3} strokeWidth={2.2} />
+              <Text style={[f(700), { fontSize: 12, color: C.t2 }]} numberOfLines={1}>{load.assetName}</Text>
             </View>
           ) : null}
-
-          {/* Route timeline — pickup + delivery with date / appt window */}
-          <View style={{ flexDirection: "row", alignItems: "stretch", marginTop: 12 }}>
-            <View style={{ alignItems: "center", paddingTop: 4, marginRight: 12 }}>
-              <View
-                style={{
-                  width: 20, height: 20, borderRadius: 10,
-                  backgroundColor: isRelayDelivery ? "#ede9fe" : "#dcfce7",
-                  alignItems: "center", justifyContent: "center",
-                }}
-              >
-                <MapPin size={11} color={isRelayDelivery ? "#5b21b6" : "#16a34a"} strokeWidth={2.5} />
-              </View>
-              <View style={{ width: 2, flex: 1, backgroundColor: "#e8eaed", marginVertical: 4 }} />
-              <View
-                style={{
-                  width: 20, height: 20, borderRadius: 10,
-                  backgroundColor: isRelayPickup ? "#ede9fe" : "#fee2e2",
-                  alignItems: "center", justifyContent: "center",
-                }}
-              >
-                <MapPin size={11} color={isRelayPickup ? "#5b21b6" : "#dc2626"} strokeWidth={2.5} />
-              </View>
+          {load.trailerType ? (
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
+              <Container size={13} color={C.t3} strokeWidth={2.2} />
+              <Text style={[f(700), { fontSize: 12, color: C.t2 }]} numberOfLines={1}>{load.trailerType}</Text>
             </View>
+          ) : null}
+        </View>
+      ) : null}
 
-            <View style={{ flex: 1 }}>
-              <View style={{ marginBottom: 12 }}>
-                <Text style={[txt(700), {
-                  fontSize: 10,
-                  color: isRelayDelivery ? "#5b21b6" : "#16a34a",
-                  letterSpacing: 0.6,
-                }]}>
-                  {originLabel(pickup, isRelayDelivery)} · {fmtShortDate(load.start)}
-                  {isRelayDelivery
-                    // Delivery leg: origin IS the relay handoff. Driver 2
-                    // picks up here at apptEnd. Show that single time
-                    // with a "PICKUP" subtype label; skip schedule-type
-                    // since the relay handoff is a fixed-time exchange.
-                    ? ` · ${relayHandoffAction("delivery").toUpperCase()}${fmtRelayHandoffTime(pickup, "delivery") ? ` · ${fmtRelayHandoffTime(pickup, "delivery")}` : ""}`
-                    : `${fmtStopAppt(pickup) ? ` · ${fmtStopAppt(pickup)}` : ""}${fmtScheduleType(pickup) ? ` · ${fmtScheduleType(pickup)}` : ""}`}
-                </Text>
-                <Text style={[txt(700), { fontSize: 14, color: "#202124", marginTop: 2 }]} numberOfLines={2}>
-                  {locLabel(pickup)}
-                </Text>
-              </View>
+      {/* Route timeline */}
+      <View style={{ flexDirection: "row", gap: 12, padding: SP.cpad }}>
+        <View style={{ alignItems: "center", paddingTop: 3 }}>
+          <RouteNode kind="origin" />
+          <View style={{ width: 2.5, flex: 1, minHeight: 26, marginVertical: 4, borderRadius: 2, borderLeftWidth: 2.5, borderColor: C.borderStrong, borderStyle: "dashed" }} />
+          <RouteNode kind={isRelayPickup ? "relay" : destKind === "relay" ? "relay" : "dest"} />
+        </View>
 
-              <View>
-                <Text style={[txt(700), {
-                  fontSize: 10,
-                  color: isRelayPickup ? "#5b21b6" : "#dc2626",
-                  letterSpacing: 0.6,
-                }]}>
-                  {destLabel(delivery, isRelayPickup)} · {fmtShortDate(load.end)}
-                  {isRelayPickup
-                    // Pickup leg: destination IS the relay handoff. Driver 1
-                    // drops at apptStart. Show that single time with a
-                    // "DROP" subtype label, skip schedule-type.
-                    ? ` · ${relayHandoffAction("pickup").toUpperCase()}${fmtRelayHandoffTime(delivery, "pickup") ? ` · ${fmtRelayHandoffTime(delivery, "pickup")}` : ""}`
-                    : `${fmtStopAppt(delivery) ? ` · ${fmtStopAppt(delivery)}` : ""}${fmtScheduleType(delivery) ? ` · ${fmtScheduleType(delivery)}` : ""}`}
-                </Text>
-                <Text style={[txt(700), { fontSize: 14, color: "#202124", marginTop: 2 }]} numberOfLines={2}>
-                  {locLabel(delivery)}
-                </Text>
-              </View>
+        <View style={{ flex: 1, gap: 16 }}>
+          {/* origin */}
+          <View>
+            <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 5 }}>
+              <Text style={[f(800), { fontSize: 10, letterSpacing: 0.5, color: isRelayDelivery ? C.purpleInk : C.greenInk }]}>
+                {originLabel(pickup, isRelayDelivery)} · {fmtShortDate(load.start)}{originExtra ? ` · ${originExtra}` : ""}
+              </Text>
+              {!isRelayDelivery ? <MiniSched stop={pickup} /> : null}
             </View>
+            <Text style={[f(700), { fontSize: 15, color: C.t1, marginTop: 2, letterSpacing: -0.2 }]} numberOfLines={1}>
+              {locLabel(pickup)}
+            </Text>
+            {facilitySub(pickup) ? (
+              <Text style={[f(600), { fontSize: 12, color: C.t3, marginTop: 1 }]} numberOfLines={1}>{facilitySub(pickup)}</Text>
+            ) : null}
           </View>
 
-          {/* Meta row — load # · time range · [status] · [pay] · chevron */}
-          <View
-            style={{
-              flexDirection:  "row",
-              alignItems:     "center",
-              marginTop:      12,
-              paddingTop:     12,
-              borderTopWidth: 1,
-              borderTopColor: "#f1f3f4",
-              gap:            6,
-            }}
-          >
-            <Text style={[txt(700), { fontSize: 12, color: "#1a73e8" }]} numberOfLines={1}>
-              {loadNumLabel(load)}
-            </Text>
-            <Text style={[txt(600), { fontSize: 12, color: "#9aa0a6" }]}>·</Text>
-            <Text style={[txt(600), { fontSize: 12, color: "#5f6368", flex: 1 }]} numberOfLines={1}>
-              {fmtTimeRangeShort(load)}
-            </Text>
-            <StatusPill status={load.status} size="small" />
-            {showPay ? (
-              <Text style={[txt(800), { fontSize: 13, color: "#15803d" }]}>
-                ${load.driverPay!.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+          {/* destination */}
+          <View>
+            <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 5 }}>
+              <Text style={[f(800), { fontSize: 10, letterSpacing: 0.5, color: isRelayPickup ? C.purpleInk : C.redInk }]}>
+                {destLabel(delivery, isRelayPickup)} · {fmtShortDate(load.end)}{destExtra ? ` · ${destExtra}` : ""}
               </Text>
+              {!isRelayPickup && destKind !== "relay" ? <MiniSched stop={delivery} /> : null}
+            </View>
+            <Text style={[f(700), { fontSize: 15, color: C.t1, marginTop: 2, letterSpacing: -0.2 }]} numberOfLines={1}>
+              {locLabel(delivery)}
+            </Text>
+            {facilitySub(delivery) ? (
+              <Text style={[f(600), { fontSize: 12, color: C.t3, marginTop: 1 }]} numberOfLines={1}>{facilitySub(delivery)}</Text>
             ) : null}
-            <ChevronRight size={16} color="#9aa0a6" strokeWidth={2.2} />
           </View>
         </View>
+      </View>
+
+      {/* Footer */}
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: SP.cpad, paddingVertical: 12, borderTopWidth: 1, borderTopColor: C.borderSoft, backgroundColor: C.surface2 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flex: 1 }}>
+          <Route size={13} color={C.t3} strokeWidth={2.2} />
+          <Text style={[f(700), { fontSize: 12, color: C.t2, flex: 1 }]} numberOfLines={1}>{metaLeft}</Text>
+        </View>
+        {showPay ? (
+          <Text style={[f(800), { fontSize: 15, color: C.greenInk, letterSpacing: -0.3 }]}>
+            ${load.driverPay!.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+          </Text>
+        ) : null}
+        <ChevronRight size={17} color={C.t4} strokeWidth={2.4} />
       </View>
     </TouchableOpacity>
   );

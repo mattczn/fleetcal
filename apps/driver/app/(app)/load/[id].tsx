@@ -11,7 +11,8 @@ import {
   Dimensions,
   InteractionManager,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { StatusBar } from "expo-status-bar";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -58,6 +59,8 @@ import { ExpandableInstructions } from "@/components/ExpandableInstructions";
 import { useDriverSession } from "@/lib/useDriverSession";
 import { ScheduleTypeChip } from "@/lib/loadCard";
 import type { LoadStatus, Stop } from "@/lib/types";
+import { Glass } from "@/components/Glass";
+import { C, SP, RADIUS, SHADOW, ACCENT } from "@/lib/theme";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
   fontFamily:
@@ -156,7 +159,7 @@ function MetaRow({
   Icon: typeof Truck; label: string; value: string; color?: string;
 }) {
   return (
-    <View style={{ flexDirection: "row", alignItems: "center", paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: "#f1f3f4" }}>
+    <View style={{ flexDirection: "row", alignItems: "center", paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: C.borderSoft }}>
       <Icon size={15} color="#5f6368" strokeWidth={2} />
       <Text style={[txt(600), { fontSize: 13, color: "#5f6368", marginLeft: 10, flex: 1 }]}>
         {label}
@@ -181,7 +184,7 @@ function IdentifierRow({ label, value, onCopied }: { label: string; value: strin
         if (timer.current) clearTimeout(timer.current);
         timer.current = setTimeout(() => setCopied(false), 1500);
       }}
-      style={{ flexDirection: "row", alignItems: "center", paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: "#f1f3f4" }}
+      style={{ flexDirection: "row", alignItems: "center", paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: C.borderSoft }}
     >
       <Text style={[txt(600), { fontSize: 13, color: "#5f6368", flex: 1 }]}>
         {label}
@@ -191,7 +194,7 @@ function IdentifierRow({ label, value, onCopied }: { label: string; value: strin
       </Text>
       <View style={{
         width: 28, height: 28, borderRadius: 8,
-        backgroundColor: "#f1f3f4",
+        backgroundColor: C.borderSoft,
         alignItems: "center", justifyContent: "center",
       }}>
         {copied
@@ -213,7 +216,7 @@ function RelayHandoffBanner({
         marginTop: 6,
         marginBottom: 12,
         padding: 14,
-        borderRadius: 14,
+        borderRadius: 18,
         backgroundColor: "#fee2e2",
         borderWidth: 1.5,
         borderColor: "#dc2626",
@@ -364,7 +367,7 @@ function CheckInButton({
         justifyContent: "center",
         gap: 6,
         paddingVertical: 11,
-        backgroundColor: "#f8f9fa",
+        backgroundColor: C.bg,
       }}
     >
       {busy ? (
@@ -491,9 +494,9 @@ function CopyAddressButton({ value, onCopied }: { value: string; onCopied?: () =
       }}
       style={{
         width: 30, height: 30, borderRadius: 10,
-        backgroundColor: "#f1f3f4",
+        backgroundColor: C.borderSoft,
         alignItems: "center", justifyContent: "center",
-        borderWidth: 1, borderColor: "#e8eaed",
+        borderWidth: 1, borderColor: C.border,
       }}
     >
       {copied ? (
@@ -524,11 +527,11 @@ function TimeAnchor({
     <View
       style={{
         backgroundColor: "#ffffff",
-        borderRadius:    14,
+        borderRadius:    18,
         marginBottom:    10,
         padding:         14,
         borderWidth:     1,
-        borderColor:     "#e8eaed",
+        borderColor:     C.border,
         flexDirection:   "row",
         alignItems:      "center",
         gap:             12,
@@ -590,7 +593,7 @@ function StopCardInner({
   // ever returns a value outside the union (e.g. older clients
   // hitting newer data).
   const accent = STOP_ACCENT[stop.type] ?? {
-    bg: "#f1f3f4", fg: "#5f6368", iconBg: "#80868b",
+    bg: C.borderSoft, fg: "#5f6368", iconBg: "#80868b",
   };
   const facility = stop.facilityName ?? stop.city ?? stop.address ?? "—";
   const copyValue = stop.address ?? stop.city ?? stop.facilityName ?? "";
@@ -632,11 +635,11 @@ function StopCardInner({
     <View
       style={{
         backgroundColor: "#ffffff",
-        borderRadius: 14,
+        borderRadius: 18,
         marginBottom: 10,
         overflow: "hidden",
         borderWidth: 1,
-        borderColor: "#e8eaed",
+        borderColor: C.border,
       }}
     >
       {copyValue ? (
@@ -698,7 +701,7 @@ function StopCardInner({
       </View>
 
       {/* Navigate + Check In row */}
-      <View style={{ flexDirection: "row", borderTopWidth: 1, borderTopColor: "#f1f3f4" }}>
+      <View style={{ flexDirection: "row", borderTopWidth: 1, borderTopColor: C.borderSoft }}>
         <TouchableOpacity
           onPress={openMaps}
           activeOpacity={0.85}
@@ -709,14 +712,14 @@ function StopCardInner({
             justifyContent: "center",
             gap: 6,
             paddingVertical: 11,
-            backgroundColor: "#f8f9fa",
+            backgroundColor: C.bg,
           }}
         >
           <Navigation size={13} color="#1a73e8" strokeWidth={2.4} />
           <Text style={[txt(700), { fontSize: 13, color: "#1a73e8" }]}>Navigate</Text>
         </TouchableOpacity>
 
-        <View style={{ width: 1, backgroundColor: "#f1f3f4" }} />
+        <View style={{ width: 1, backgroundColor: C.borderSoft }} />
 
         {stop.arrivedAt
           ? <CheckedInChip stop={stop} orgId={orgId} onUpdated={onCheckedIn} eventId={eventId} driverName={driverName} />
@@ -736,7 +739,7 @@ function StopCardInner({
               gap: 8,
               paddingVertical: 12,
               backgroundColor: "#faf5ff",
-              borderTopWidth: 1, borderTopColor: "#f1f3f4",
+              borderTopWidth: 1, borderTopColor: C.borderSoft,
             }}
           >
             <FileText size={14} color="#6b21a8" strokeWidth={2.4} />
@@ -753,7 +756,7 @@ function StopCardInner({
               gap: 8,
               paddingVertical: 12,
               backgroundColor: "#faf5ff",
-              borderTopWidth: 1, borderTopColor: "#f1f3f4",
+              borderTopWidth: 1, borderTopColor: C.borderSoft,
             }}
           >
             <Camera size={14} color="#6b21a8" strokeWidth={2.4} />
@@ -765,7 +768,7 @@ function StopCardInner({
       ) : null}
 
       {stop.instructions ? (
-        <View style={{ paddingHorizontal: 14, paddingVertical: 12, backgroundColor: "#fff7ed", borderTopWidth: 1, borderTopColor: "#f1f3f4" }}>
+        <View style={{ paddingHorizontal: 14, paddingVertical: 12, backgroundColor: "#fff7ed", borderTopWidth: 1, borderTopColor: C.borderSoft }}>
           <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 8 }}>
             <Info size={13} color="#9a3412" strokeWidth={2.2} style={{ marginTop: 2 }} />
             <ExpandableInstructions
@@ -812,6 +815,7 @@ export default function LoadDetailScreen() {
   const queryClient = useQueryClient();
   const session = useDriverSession();
   const driver = session.status === "matched" ? session.driver : null;
+  const insets = useSafeAreaInsets();
   const [uploadVisible,         setUploadVisible]        = useState(false);
   const [statusPickerVisible,   setStatusPickerVisible]  = useState(false);
   const [trailerPickerVisible,  setTrailerPickerVisible] = useState(false);
@@ -933,9 +937,9 @@ export default function LoadDetailScreen() {
 
   if (isLoading || !load) {
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: "#f8f9fa", alignItems: "center", justifyContent: "center" }}>
-        <ActivityIndicator size="large" color="#1a73e8" />
-      </SafeAreaView>
+      <View style={{ flex: 1, backgroundColor: C.bg, alignItems: "center", justifyContent: "center" }}>
+        <ActivityIndicator size="large" color={ACCENT} />
+      </View>
     );
   }
 
@@ -1014,17 +1018,14 @@ export default function LoadDetailScreen() {
   }
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: "#1a73e8" }} edges={["top"]}>
-      {/* Nav bar */}
-      <View
-        style={{
-          backgroundColor: "#1a73e8",
-          flexDirection: "row",
-          alignItems: "center",
-          paddingHorizontal: 16,
-          paddingVertical: 14,
-          gap: 12,
-        }}
+    <View style={{ flex: 1, backgroundColor: C.bg }}>
+      <StatusBar style="dark" />
+
+      {/* Glass header */}
+      <Glass
+        deep
+        radii={{ borderBottomLeftRadius: RADIUS.headerDetail, borderBottomRightRadius: RADIUS.headerDetail }}
+        style={{ paddingTop: insets.top + 6, paddingHorizontal: SP.screenPx, paddingBottom: 11, flexDirection: "row", alignItems: "center", gap: 10, zIndex: 10 }}
       >
         <TouchableOpacity
           onPress={() => {
@@ -1032,16 +1033,12 @@ export default function LoadDetailScreen() {
             else router.replace("/");
           }}
           activeOpacity={0.7}
-          style={{
-            width: 36, height: 36, borderRadius: 18,
-            backgroundColor: "rgba(255,255,255,0.1)",
-            alignItems: "center", justifyContent: "center",
-          }}
+          style={{ width: 40, height: 40, borderRadius: RADIUS.iconBtn, backgroundColor: C.surface2, alignItems: "center", justifyContent: "center" }}
         >
-          <ArrowLeft size={18} color="#ffffff" strokeWidth={2.2} />
+          <ArrowLeft size={20} color={C.t2} strokeWidth={2.4} />
         </TouchableOpacity>
-        <View style={{ flex: 1 }}>
-          <Text style={[txt(800), { fontSize: 16, color: "#ffffff" }]} numberOfLines={1}>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={[txt(800), { fontSize: 17, color: C.t1, letterSpacing: -0.3 }]} numberOfLines={1}>
             {load.title}
           </Text>
           {load.eventKind === "non_revenue" ? (
@@ -1049,61 +1046,61 @@ export default function LoadDetailScreen() {
               alignSelf: "flex-start",
               flexDirection: "row", alignItems: "center", gap: 5,
               paddingHorizontal: 7, paddingVertical: 2,
-              marginTop: 4,
+              marginTop: 3,
               borderRadius: 999,
-              backgroundColor: "rgba(255,255,255,0.18)",
+              backgroundColor: C.amberBg,
             }}>
-              <Text style={[txt(800), { fontSize: 9, color: "#ffffff", letterSpacing: 0.4 }]}>
+              <Text style={[txt(800), { fontSize: 9, color: C.amberInk, letterSpacing: 0.4 }]}>
                 NON-REVENUE
               </Text>
               {load.nonRevenueType ? (
                 <>
-                  <Text style={[txt(700), { fontSize: 9, color: "rgba(255,255,255,0.7)" }]}>·</Text>
-                  <Text style={[txt(800), { fontSize: 9, color: "#ffffff", letterSpacing: 0.3 }]} numberOfLines={1}>
+                  <Text style={[txt(700), { fontSize: 9, color: C.amberInk }]}>·</Text>
+                  <Text style={[txt(800), { fontSize: 9, color: C.amberInk, letterSpacing: 0.3 }]} numberOfLines={1}>
                     {load.nonRevenueType.toUpperCase()}
                   </Text>
                 </>
               ) : null}
             </View>
-          ) : null}
+          ) : (
+            <Text style={[txt(700), { fontSize: 12, color: C.blueInk, marginTop: 1 }]} numberOfLines={1}>
+              {load.loadNum ? `#${load.loadNum}` : load.internalLoadId ? `#${load.internalLoadId}` : ""}
+              {load.broker ? `${load.loadNum || load.internalLoadId ? " · " : ""}${load.broker}` : ""}
+            </Text>
+          )}
         </View>
         <TouchableOpacity
           onPress={() => setStatusPickerVisible(true)}
           activeOpacity={0.7}
-          style={{
-            width: 36, height: 36, borderRadius: 18,
-            backgroundColor: "rgba(255,255,255,0.1)",
-            alignItems: "center", justifyContent: "center",
-          }}
+          style={{ width: 40, height: 40, borderRadius: RADIUS.iconBtn, backgroundColor: C.surface2, alignItems: "center", justifyContent: "center" }}
         >
-          <CircleDot size={18} color="#ffffff" strokeWidth={2.2} />
+          <CircleDot size={20} color={C.t2} strokeWidth={2.4} />
         </TouchableOpacity>
-      </View>
+      </Glass>
 
-      {/* Tab bar */}
-      <View style={{ flexDirection: "row", backgroundColor: "#1a73e8", paddingHorizontal: 22 }}>
-        {(["Stops", "Details", "Documents"] as const).map((label, i) => {
-          const isActive = tab === i;
-          return (
-            <TouchableOpacity
-              key={label}
-              onPress={() => selectTab(i as 0 | 1 | 2)}
-              activeOpacity={0.7}
-              style={{ flex: 1, alignItems: "center", paddingBottom: 10 }}
-            >
-              <Text style={[
-                txt(isActive ? 800 : 600),
-                { fontSize: 13, color: isActive ? "#ffffff" : "rgba(255,255,255,0.55)", marginBottom: 8 },
-              ]}>
-                {label}
-              </Text>
-              <View style={{
-                height: 3, width: "60%", borderRadius: 2,
-                backgroundColor: isActive ? "#ffffff" : "transparent",
-              }} />
-            </TouchableOpacity>
-          );
-        })}
+      {/* Segmented control */}
+      <View style={{ paddingHorizontal: SP.screenPx, paddingTop: 12, paddingBottom: 2, zIndex: 5 }}>
+        <View style={{ flexDirection: "row", gap: 3, padding: 4, borderRadius: 18, backgroundColor: C.surface, borderWidth: 1, borderColor: C.border, ...SHADOW.card }}>
+          {(["Stops", "Details", "Documents"] as const).map((label, i) => {
+            const isActive = tab === i;
+            return (
+              <TouchableOpacity
+                key={label}
+                onPress={() => selectTab(i as 0 | 1 | 2)}
+                activeOpacity={0.8}
+                style={[
+                  { flex: 1, height: 34, borderRadius: 11, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5 },
+                  isActive && { backgroundColor: ACCENT },
+                ]}
+              >
+                <Text style={[txt(700), { fontSize: 13, color: isActive ? "#ffffff" : C.t3 }]}>{label}</Text>
+                {label === "Stops" ? (
+                  <Text style={[txt(800), { fontSize: 11, color: isActive ? "rgba(255,255,255,0.85)" : C.t4 }]}>{load.stops.length}</Text>
+                ) : null}
+              </TouchableOpacity>
+            );
+          })}
+        </View>
       </View>
 
       <ScrollView
@@ -1121,7 +1118,7 @@ export default function LoadDetailScreen() {
       {/* Stops tab — route map + timeline */}
       <ScrollView
         ref={stopsScrollRef}
-        style={{ width: SCREEN_W, backgroundColor: "#f8f9fa" }}
+        style={{ width: SCREEN_W, backgroundColor: C.bg }}
         contentContainerStyle={{ padding: 16, paddingBottom: 120 }}
         nestedScrollEnabled
         // Detach off-screen subviews from the native view hierarchy.
@@ -1190,7 +1187,7 @@ export default function LoadDetailScreen() {
             disabled={isConfirming}
             style={{
               backgroundColor: "#0f9d58",
-              borderRadius: 14,
+              borderRadius: 18,
               paddingVertical: 14,
               paddingHorizontal: 16,
               flexDirection: "row",
@@ -1302,12 +1299,12 @@ export default function LoadDetailScreen() {
             <View
               style={{
                 height: 220,
-                backgroundColor: "#f1f3f4",
-                borderRadius: 14,
+                backgroundColor: C.borderSoft,
+                borderRadius: 18,
                 alignItems: "center",
                 justifyContent: "center",
                 borderWidth: 1,
-                borderColor: "#e8eaed",
+                borderColor: C.border,
               }}
             >
               <ActivityIndicator color="#9aa0a6" />
@@ -1391,7 +1388,7 @@ export default function LoadDetailScreen() {
                     <View style={{ position: "relative" }}>
                       <View
                         pointerEvents="none"
-                        style={{ position: "absolute", left: 28, width: 12, top: 0, bottom: 0, backgroundColor: "#f8f9fa" }}
+                        style={{ position: "absolute", left: 28, width: 12, top: 0, bottom: 0, backgroundColor: C.bg }}
                       />
                       <View style={{ opacity: 0.35 }} pointerEvents="none">
                         {partner.map((s, i) => (
@@ -1424,7 +1421,7 @@ export default function LoadDetailScreen() {
                   <View style={{ position: "relative" }}>
                     <View
                       pointerEvents="none"
-                      style={{ position: "absolute", left: 28, width: 12, top: 0, bottom: 0, backgroundColor: "#f8f9fa" }}
+                      style={{ position: "absolute", left: 28, width: 12, top: 0, bottom: 0, backgroundColor: C.bg }}
                     />
                     <View style={{ opacity: 0.35 }} pointerEvents="none">
                       {partner.map((s, i) => (
@@ -1475,7 +1472,7 @@ export default function LoadDetailScreen() {
       </ScrollView>
 
       {/* Details tab */}
-      <ScrollView style={{ width: SCREEN_W, backgroundColor: "#f8f9fa" }} contentContainerStyle={{ padding: 16, paddingBottom: 120 }} nestedScrollEnabled>
+      <ScrollView style={{ width: SCREEN_W, backgroundColor: C.bg }} contentContainerStyle={{ padding: 16, paddingBottom: 120 }} nestedScrollEnabled>
         {/* Relay disclaimer + handoff photos. Photos are shared
             across both legs (`kind='relay_handoff'` on load_documents).
             Pickup driver leaves "where I parked the trailer" / paperwork
@@ -1484,7 +1481,7 @@ export default function LoadDetailScreen() {
           <View
             style={{
               backgroundColor: "#f3e8fd",
-              borderRadius: 14,
+              borderRadius: 18,
               padding: 14,
               borderWidth: 1, borderColor: "#ddd6fe",
               marginBottom: 14,
@@ -1516,9 +1513,9 @@ export default function LoadDetailScreen() {
           <View
             style={{
               backgroundColor: "#ffffff",
-              borderRadius: 14,
+              borderRadius: 18,
               paddingHorizontal: 14,
-              borderWidth: 1, borderColor: "#e8eaed",
+              borderWidth: 1, borderColor: C.border,
               marginBottom: 16,
             }}
           >
@@ -1543,9 +1540,9 @@ export default function LoadDetailScreen() {
         <View
           style={{
             backgroundColor: "#ffffff",
-            borderRadius: 14,
+            borderRadius: 18,
             padding: 14,
-            borderWidth: 1, borderColor: "#e8eaed",
+            borderWidth: 1, borderColor: C.border,
             marginBottom: 18,
           }}
         >
@@ -1620,39 +1617,49 @@ export default function LoadDetailScreen() {
       )}
       </ScrollView>
 
-      {/* Sticky CTA */}
-      {ctaLabel && nextStatus && (
-        <View
-          style={{
-            position: "absolute",
-            left: 16, right: 16, bottom: 18,
-          }}
+      {/* Floating status dock */}
+      {ctaLabel && nextStatus ? (
+        <Glass
+          deep
+          radii={{ borderRadius: 22 }}
+          style={{ position: "absolute", left: 14, right: 14, bottom: Math.max(insets.bottom, 12) + 6, padding: 11, flexDirection: "row", alignItems: "center", gap: 11 }}
         >
+          <View style={{ flex: 1, minWidth: 0, paddingLeft: 6 }}>
+            <Text style={[txt(800), { fontSize: 10, letterSpacing: 0.5, color: C.t3 }]}>STATUS</Text>
+            <Text style={[txt(800), { fontSize: 15, color: C.t1, marginTop: 1, letterSpacing: -0.2 }]} numberOfLines={1}>
+              {load.status.replace("_", " ").replace(/\b\w/g, (c) => c.toUpperCase())}
+            </Text>
+          </View>
           <TouchableOpacity
             onPress={handleStatusUpdate}
-            activeOpacity={0.88}
+            activeOpacity={0.92}
             disabled={isPending}
             style={{
-              backgroundColor: "#1a73e8",
-              borderRadius: 16,
-              paddingVertical: 18,
-              alignItems: "center",
-              shadowColor: "#1a73e8",
-              shadowOpacity: 0.4,
-              shadowRadius: 18,
-              shadowOffset: { width: 0, height: 8 },
+              height: 50, paddingHorizontal: 22, borderRadius: 15,
+              backgroundColor: nextStatus === "delivered" ? C.green : ACCENT,
+              alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8,
+              ...SHADOW.card,
             }}
           >
             {isPending ? (
               <ActivityIndicator color="#ffffff" />
             ) : (
-              <Text style={[txt(800), { fontSize: 15, color: "#ffffff", letterSpacing: 0.3 }]}>
-                {ctaLabel}
-              </Text>
+              <Text style={[txt(800), { fontSize: 15, color: "#ffffff", letterSpacing: -0.2 }]}>{ctaLabel}</Text>
             )}
           </TouchableOpacity>
-        </View>
-      )}
+        </Glass>
+      ) : load.status === "delivered" ? (
+        <Glass
+          deep
+          radii={{ borderRadius: 22 }}
+          style={{ position: "absolute", left: 14, right: 14, bottom: Math.max(insets.bottom, 12) + 6, padding: 11 }}
+        >
+          <View style={{ height: 50, borderRadius: 15, backgroundColor: C.green, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8 }}>
+            <CheckCircle2 size={18} color="#ffffff" strokeWidth={2.4} />
+            <Text style={[txt(800), { fontSize: 15, color: "#ffffff", letterSpacing: -0.2 }]}>Delivered</Text>
+          </View>
+        </Glass>
+      ) : null}
 
       <StatusPickerSheet
         visible={statusPickerVisible}
@@ -1693,6 +1700,6 @@ export default function LoadDetailScreen() {
       ) : null}
 
       <Toast message={toastMessage} />
-    </SafeAreaView>
+    </View>
   );
 }

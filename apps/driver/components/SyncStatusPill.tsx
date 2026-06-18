@@ -1,29 +1,20 @@
 import React from "react";
 import { View, Text } from "react-native";
-import { Wifi, WifiOff } from "lucide-react-native";
 import { useOnline } from "@/lib/useOnline";
-
-const txt = (weight: 500 | 600 | 700 | 800) => ({
-  fontFamily:
-    weight === 500 ? "PlusJakartaSans_500Medium"  :
-    weight === 600 ? "PlusJakartaSans_600SemiBold" :
-    weight === 700 ? "PlusJakartaSans_700Bold"     :
-                     "PlusJakartaSans_800ExtraBold",
-});
+import { C, f } from "@/lib/theme";
 
 /**
- * Binary online/offline pill driven by NetInfo. Treats the null
- * (probing / module-not-loaded) state as online so we don't flash an
- * offline indicator at startup — once NetInfo answers, it'll flip if
- * the radio is actually off.
+ * Online/offline pill driven by NetInfo. Treats the null (probing /
+ * module-not-loaded) state as online so we don't flash an offline
+ * indicator at startup. Styled for the light glass header: a green dot +
+ * "Synced", flipping to a red dot + "Offline" when the radio is off.
  */
 export function SyncStatusPill() {
   const online = useOnline();
   const offline = online === false;
-
-  const palette = offline
-    ? { bg: "rgba(220,38,38,0.28)", fg: "#fecaca" }
-    : { bg: "rgba(34,197,94,0.22)", fg: "#bbf7d0" };
+  const p = offline
+    ? { bg: C.redBg, fg: C.redInk, dot: C.red }
+    : { bg: C.greenBg, fg: C.greenInk, dot: C.green };
 
   return (
     <View
@@ -31,19 +22,15 @@ export function SyncStatusPill() {
         flexDirection: "row",
         alignItems: "center",
         gap: 6,
-        paddingHorizontal: 10,
-        paddingVertical: 5,
+        height: 30,
+        paddingHorizontal: 11,
         borderRadius: 999,
-        backgroundColor: palette.bg,
+        backgroundColor: p.bg,
       }}
     >
-      {offline ? (
-        <WifiOff size={11} color={palette.fg} strokeWidth={2.6} />
-      ) : (
-        <Wifi size={11} color={palette.fg} strokeWidth={2.6} />
-      )}
-      <Text style={[txt(800), { fontSize: 11, color: palette.fg, letterSpacing: 0.4 }]}>
-        {offline ? "Offline" : "Online"}
+      <View style={{ width: 7, height: 7, borderRadius: 999, backgroundColor: p.dot }} />
+      <Text style={[f(700), { fontSize: 11.5, color: p.fg, letterSpacing: 0.1 }]}>
+        {offline ? "Offline" : "Synced"}
       </Text>
     </View>
   );
