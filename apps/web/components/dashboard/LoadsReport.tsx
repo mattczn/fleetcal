@@ -283,30 +283,13 @@ interface Props {
   defaultTo?: string;
 }
 
-// One-time migration from the report's pre-OpsTable localStorage keys to
-// the OpsTable persistKey shape. Old keys stored VISIBLE column ids;
-// OpsTable stores HIDDEN ones. Migrates once per browser, then leaves
-// OpsTable in charge.
-function migrateLegacyColumnPrefs(allColumnIds: string[]) {
-  if (typeof window === 'undefined') return;
-  try {
-    if (window.localStorage.getItem('loadsReport:migrated:v1')) return;
-
-    const oldVisible = window.localStorage.getItem('loadsReport.columns');
-    if (oldVisible && !window.localStorage.getItem('loadsReport:hidden')) {
-      const visible = JSON.parse(oldVisible) as string[];
-      const hidden  = allColumnIds.filter(id => !visible.includes(id));
-      window.localStorage.setItem('loadsReport:hidden', JSON.stringify(hidden));
-    }
-
-    const oldOrder = window.localStorage.getItem('loadsReport.columnOrder');
-    if (oldOrder && !window.localStorage.getItem('loadsReport:order')) {
-      window.localStorage.setItem('loadsReport:order', oldOrder);
-    }
-
-    window.localStorage.setItem('loadsReport:migrated:v1', '1');
-  } catch { /* ignore — non-critical */ }
-}
+// Column structure has been reshaped twice (utility column moves,
+// docs/accessorials adds, pickup/delivery split). The OpsTable
+// persistKey is bumped to `loadsReport-v2` to force a clean column
+// order. The legacy pre-OpsTable migration helper that lived here
+// (writing v1 keys) is gone — any v1 user gets v2 defaults on next
+// open, which is what we want now that the column set has changed
+// underneath them anyway.
 
 export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
   const router = useRouter();
@@ -370,11 +353,6 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
   const [loads,     setLoads]     = useState<LoadSummary[] | null>(null);
   const [loading,   setLoading]   = useState(false);
   const [error,     setError]     = useState<string | null>(null);
-
-  // One-time pref migration from the pre-OpsTable storage shape.
-  useEffect(() => {
-    migrateLegacyColumnPrefs(COLUMNS.map(c => c.id));
-  }, []);
 
   // Distinct driver names from the active driver list — feeds the
   // OpsTable Driver filter chip's options.
@@ -1035,7 +1013,7 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
             defaultSort={{ key: 'pickupDate', dir: 'desc' }}
             columnPicker
             columnReorder
-            persistKey="loadsReport"
+            persistKey="loadsReport-v2"
             countLabel="load"
           />
         </div>
