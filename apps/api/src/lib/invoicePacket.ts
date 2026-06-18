@@ -478,18 +478,33 @@ export async function resolveDefaultPacketDocs(loadId: string, orgId: string): P
 }
 
 /**
- * Look up the dispatcher's explicit invoice-include flags from
- * load_documents.included_in_invoice and translate the picks into
- * storage paths. Falls back to resolveDefaultPacketDocs when no doc
- * on the load has been touched (every column value is NULL) so a
- * brand-new load still gets a reasonable default packet. This is how
- * dispatchers customize what goes into a particular invoice.
+ * Resolve the dispatcher-selected docs for a load's invoice packet.
  *
- * Selection rule:
- *   - if ANY doc on the load has a non-null included_in_invoice value,
- *     the dispatcher has touched this load — use ONLY the explicit
- *     TRUEs. Anything they left NULL stays out.
- *   - if every doc is NULL, fall back to the newest-per-kind heuristic.
+ * Selection rule (per-doc, kind-aware):
+ *
+ *   PODs:
+ *     - included_in_invoice = true   → INCLUDE
+ *     - included_in_invoice = false  → EXCLUDE
+ *     - included_in_invoice = null   → INCLUDE  (default: every POD belongs)
+ *
+ *   Other kinds (BOL, lumper, scale, receipt, driver_sheet):
+ *     - included_in_invoice = true   → INCLUDE  (explicit pick wins)
+ *     - included_in_invoice = false  → EXCLUDE
+ *     - included_in_invoice = null   → INCLUDE only if newest of its kind
+ *                                       (singleton fallback — multiple
+ *                                       drafts of the same BOL would
+ *                                       otherwise both attach)
+ *
+ * Why per-kind: PODs are commonly multiple-per-load (one photo per
+ * pallet, one per damage angle), and brokers want them all. Other
+ * kinds are singletons in practice; we don't want to attach an old
+ * BOL alongside a corrected one just because both rows exist.
+ *
+ * The previous version had an `anyTouched` global flag that flipped
+ * the WHOLE load into "explicit picks only" mode the moment ANY doc
+ * got ticked. That meant clicking two POD pills excluded the other
+ * four PODs on the load — the silent breakage that lost half of
+ * Curzon's 13092 PODs on 2026-06-17.
  *
  * Replaced the legacy loads.invoice_doc_ids array reader on
  * 2026-06-07 (see migration 20260607_load_documents_included_in_invoice
@@ -500,7 +515,9 @@ export async function resolvePacketDocsForLoad(loadId: string, orgId: string): P
     .from("load_documents")
     .select("id,storage_path,kind,uploaded_at,included_in_invoice")
     .eq("load_id", loadId)
-    .eq("org_id", orgId);
+    .eq("org_id", orgId)
+    .in("kind", PACKET_DOC_KINDS_ORDER)
+    .order("uploaded_at", { ascending: false });
   // The generated supabase types don't carry the new column yet (it
   // lands once the user reruns the type-pull post-migration). Cast
   // through unknown so the build stays clean; runtime returns the col.
@@ -508,24 +525,44 @@ export async function resolvePacketDocsForLoad(loadId: string, orgId: string): P
     id: string; storage_path: string; kind: string; uploaded_at: string;
     included_in_invoice: boolean | null;
   }>);
-  const anyTouched = allDocs.some(d => d.included_in_invoice !== null);
-  if (anyTouched) {
-    // Explicit picks only — order by kind preference + uploaded_at so
-    // the packet shape stays predictable across loads (POD before
-    // BOL before lumper etc., newest first within a kind).
-    const explicit = allDocs.filter(d => d.included_in_invoice === true);
-    explicit.sort((a, b) => {
-      const ai = PACKET_DOC_KINDS_ORDER.indexOf(a.kind as DocumentKind);
-      const bi = PACKET_DOC_KINDS_ORDER.indexOf(b.kind as DocumentKind);
-      const aRank = ai < 0 ? PACKET_DOC_KINDS_ORDER.length : ai;
-      const bRank = bi < 0 ? PACKET_DOC_KINDS_ORDER.length : bi;
-      if (aRank !== bRank) return aRank - bRank;
-      return b.uploaded_at.localeCompare(a.uploaded_at);
-    });
-    return explicit.map(d => d.storage_path);
+
+  // PODs: include unless explicit FALSE. Preserves uploaded_at-DESC
+  // ordering from the query so the broker sees the newest photo on top.
+  const podPaths = allDocs
+    .filter(d => d.kind === "pod" && d.included_in_invoice !== false)
+    .map(d => d.storage_path);
+
+  // Non-PODs: per-kind picker.
+  //   - First doc of the kind with TRUE wins (most recent explicit pick).
+  //   - Otherwise the newest doc of the kind that isn't explicitly FALSE
+  //     becomes the singleton default.
+  const nonPodPathsByKind = new Map<string, string>();
+  for (const kind of PACKET_DOC_KINDS_ORDER) {
+    if (kind === "pod") continue;
+    const ofKind = allDocs.filter(d => d.kind === kind);
+    const explicitTrue = ofKind.find(d => d.included_in_invoice === true);
+    if (explicitTrue) {
+      nonPodPathsByKind.set(kind, explicitTrue.storage_path);
+      continue;
+    }
+    const newestUntouched = ofKind.find(d => d.included_in_invoice !== false);
+    if (newestUntouched) {
+      nonPodPathsByKind.set(kind, newestUntouched.storage_path);
+    }
   }
-  // No dispatcher touch — heuristic default.
-  return resolveDefaultPacketDocs(loadId, orgId);
+
+  // Emit in canonical kind order so the merged packet shape stays
+  // predictable across loads. PODs come first per PACKET_DOC_KINDS_ORDER.
+  const out: string[] = [];
+  for (const kind of PACKET_DOC_KINDS_ORDER) {
+    if (kind === "pod") {
+      out.push(...podPaths);
+    } else {
+      const p = nonPodPathsByKind.get(kind);
+      if (p) out.push(p);
+    }
+  }
+  return out;
 }
 
 
