@@ -4313,6 +4313,10 @@ type UnifiedFuelRow = {
   report:         FuelReport | null;
 };
 
+// Round driver GPS to ~11m so the same fuel stop reverse-geocodes once and
+// caches across rows/sessions.
+const fuelCoordKey = (lat: number, lng: number) => `${lat.toFixed(4)},${lng.toFixed(4)}`;
+
 function FuelTabContent({
   drivers, assets, driverNameById, assetLabelById,
   panel, setPanel, reloadVersion,
@@ -4358,6 +4362,61 @@ function FuelTabContent({
   // fixtures fetch. Wrapped in fetchWithRetry so a Railway restart
   // doesn't permanently empty the table.
   const [fuelFetchError, setFuelFetchError] = useState<string | null>(null);
+
+  // Driver fuel reports carry only GPS + state (no station name). Reverse-
+  // geocode the coords to "City, ST" for the Location column, cached by
+  // rounded coords (in-memory + localStorage) so a stop is looked up once.
+  const [geoLabels, setGeoLabels] = useState<Map<string, string>>(() => {
+    if (typeof window === 'undefined') return new Map();
+    try { return new Map(JSON.parse(window.localStorage.getItem('fuelGeoLabels') || '[]')); }
+    catch { return new Map(); }
+  });
+  const geoInflight = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const need = new Map<string, { lat: number; lng: number }>();
+    for (const r of reports) {
+      if (r.latitude == null || r.longitude == null) continue;
+      const key = fuelCoordKey(r.latitude, r.longitude);
+      if (geoLabels.has(key) || geoInflight.current.has(key)) continue;
+      need.set(key, { lat: r.latitude, lng: r.longitude });
+    }
+    if (!need.size) return;
+    let cancelled = false;
+    const keys = [...need.keys()];
+    keys.forEach(k => geoInflight.current.add(k));
+    (async () => {
+      const resolved: [string, string][] = [];
+      let i = 0;
+      const worker = async () => {
+        while (i < keys.length && !cancelled) {
+          const k = keys[i++];
+          const { lat, lng } = need.get(k)!;
+          try {
+            const res = await fetch('/api/geocode', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ lat, lng }),
+            });
+            const { result } = await res.json();
+            const label = result?.city && result?.state ? `${result.city}, ${result.state}`
+              : (result?.state || result?.city || '');
+            if (label) resolved.push([k, label]);
+          } catch { /* leave it as state-only */ }
+          geoInflight.current.delete(k);
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(4, keys.length) }, worker));
+      if (cancelled || !resolved.length) return;
+      setGeoLabels(prev => {
+        const next = new Map(prev);
+        for (const [k, v] of resolved) next.set(k, v);
+        try { window.localStorage.setItem('fuelGeoLabels', JSON.stringify([...next])); } catch { /* ignore */ }
+        return next;
+      });
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reports]);
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -4538,13 +4597,18 @@ function FuelTabContent({
       const assetLabel = embedded.assetName as string | undefined
         ?? assetLabelById.get(r.assetId)
         ?? `Asset #${r.assetId}`;
+      // Where the driver fueled: the reverse-geocoded "City, ST" once resolved,
+      // else the report's state, else nothing.
+      const geoKey = (r.latitude != null && r.longitude != null)
+        ? fuelCoordKey(r.latitude, r.longitude) : null;
+      const driverLocation = (geoKey ? geoLabels.get(geoKey) : undefined) ?? (r.state || null);
       out.push({
         id:            r.id,
         kind:          'driver_only',
         date:          r.reportedAt,
         driverLabel,
         assetLabel,
-        location:      null,
+        location:      driverLocation,
         dieselGallons: r.dieselGallons,
         defGallons:    r.defGallons ?? null,
         totalCharged:  null,
@@ -4554,7 +4618,7 @@ function FuelTabContent({
       });
     }
     return out;
-  }, [transactions, reports, driverNameById, assetLabelById]);
+  }, [transactions, reports, driverNameById, assetLabelById, geoLabels]);
 
   const counts = useMemo(() => ({
     matched:     rows.filter(r => r.kind === 'matched').length,
