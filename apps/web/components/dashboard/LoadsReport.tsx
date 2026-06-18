@@ -951,12 +951,29 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
 
       {/* Results */}
       {loads !== null && (
-        // minWidth: 0 + overflow: hidden so the OpsTable card's own
-        // overflowX: 'auto' actually handles horizontal scroll instead
-        // of letting the row push the whole card wider than the
-        // dashboard tab. Mirrors how /accounting + /closeout keep the
-        // scrollbar contained inside the card.
-        <div style={{ padding: '16px 20px 20px', borderTop: '1px solid var(--gc-border-light)', minWidth: 0, overflow: 'hidden' }}>
+        // The Results wrapper caps to a fixed viewport-relative height
+        // so the OpsTable's horizontal scrollbar stays at the table's
+        // BOTTOM edge no matter how many rows there are. Vertical scroll
+        // happens inside the table body (via fillHeight on OpsTable);
+        // the scrollbar is anchored at the bottom of this card, which
+        // is always within the visible viewport. Without the cap, a
+        // wide column set + 200 rows pushes the scrollbar off-screen
+        // and the dispatcher has to scroll the WHOLE page down just to
+        // reach it.
+        //
+        // 260px subtracts the dashboard chrome above (KPI strip + nav
+        // header + report card header + filter row) so the cap lands
+        // just below the filter row. min(720px, ...) keeps a sensible
+        // floor on tall screens.
+        <div style={{
+          padding: '16px 20px 20px',
+          borderTop: '1px solid var(--gc-border-light)',
+          minWidth: 0,
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
+          maxHeight: 'min(720px, calc(100vh - 260px))',
+        }}>
           {/* Stats + export buttons */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, marginBottom: 12 }}>
             <div style={{ fontSize: 12, color: 'var(--gc-text-2)' }}>
@@ -995,9 +1012,16 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
 
           {/* OpsTable owns search chip, sorted headers, column picker
               (visibility + drag-to-reorder), and pagination. Persistence
-              is keyed at "loadsReport" so the user's hide/show + order +
-              sort survive across visits — identical convention to the
-              accounting + closeout tables. */}
+              is keyed at "loadsReport-v2" so the user's hide/show +
+              order + sort survive across visits — identical convention
+              to the accounting + closeout tables.
+
+              The flex-1 min-h-0 min-w-0 flex wrapper is what lets
+              fillHeight actually work — OpsTable claims the remaining
+              vertical space inside the Results card, and the body
+              scrolls internally so the horizontal scrollbar stays
+              pinned at the table's BOTTOM edge (always visible). */}
+          <div className="flex-1 min-h-0 min-w-0 flex">
           <OpsTable<LoadSummary>
             columns={tableColumns}
             filters={tableFilters}
@@ -1013,9 +1037,11 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
             defaultSort={{ key: 'pickupDate', dir: 'desc' }}
             columnPicker
             columnReorder
+            fillHeight
             persistKey="loadsReport-v2"
             countLabel="load"
           />
+          </div>
         </div>
       )}
 
