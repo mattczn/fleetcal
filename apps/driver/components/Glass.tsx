@@ -1,27 +1,29 @@
 /**
- * Liquid-glass surface — the design's frosted header / tab bar / status dock.
+ * Frosted surface — the design's "liquid glass" header / tab bar / status dock.
  *
- * CSS used `backdrop-filter: blur()` + a translucent white fill + an inner
- * hairline highlight. We reproduce that with `expo-blur`'s BlurView plus a
- * translucent overlay (so it still reads as frosted on Android, where blur
- * is weaker) and a 1px top highlight.
+ * We render it as a near-opaque translucent white panel (with a hairline top
+ * highlight + shadow) rather than a real `backdrop-filter` blur. In this
+ * layout the glass panels sit over the solid light background (the header is
+ * in-flow, the tab bar reserves its tray, the dock floats over a light list),
+ * so an actual blur adds almost nothing visible — and avoiding the native
+ * `expo-blur` module keeps the whole redesign shippable over-the-air (OTA),
+ * not gated behind a native rebuild.
  *
- * The blur is clipped by an absolutely-filled inner view (overflow hidden),
- * while the outer view carries the radius + shadow — shadows can't render
- * through `overflow: hidden`, so the two have to be separate layers.
+ * Outer view carries radius + shadow; an absolutely-filled inner view carries
+ * the translucent fill (clipped to the radii). Shadows can't render through
+ * `overflow: hidden`, which is why they're separate layers.
  */
 import React from "react";
 import { View, StyleSheet, type ViewStyle } from "react-native";
-import { BlurView } from "expo-blur";
 import { SHADOW } from "@/lib/theme";
 
 type Props = {
   children?: React.ReactNode;
   /** Outer style — position, padding, and the corner radii live here. */
   style?: ViewStyle | ViewStyle[];
-  /** Corner radii, applied to both the shadow layer and the blur clip. */
+  /** Corner radii, applied to both the shadow layer and the fill. */
   radii?: ViewStyle;
-  /** `.deep` in the design — a more opaque fill for headers/docks. */
+  /** `.deep` in the design — a more opaque fill for headers / docks. */
   deep?: boolean;
   /** Drop the glass shadow (e.g. for small inline pills). */
   withShadow?: boolean;
@@ -30,23 +32,21 @@ type Props = {
 export function Glass({ children, style, radii, deep = false, withShadow = true }: Props) {
   return (
     <View style={[withShadow && SHADOW.glass, radii, style]}>
-      {/* clipped frosted backdrop */}
-      <View style={[StyleSheet.absoluteFill, radii, { overflow: "hidden" }]}>
-        <BlurView intensity={deep ? 42 : 26} tint="light" style={StyleSheet.absoluteFill} />
-        <View
-          style={[
-            StyleSheet.absoluteFill,
-            { backgroundColor: deep ? "rgba(255,255,255,0.66)" : "rgba(255,255,255,0.55)" },
-          ]}
-        />
-      </View>
-      {/* inner hairline highlight + edge */}
+      {/* translucent frosted fill, clipped to the radii */}
+      <View
+        style={[
+          StyleSheet.absoluteFill,
+          radii,
+          { backgroundColor: deep ? "rgba(255,255,255,0.94)" : "rgba(255,255,255,0.85)", overflow: "hidden" },
+        ]}
+      />
+      {/* inner hairline highlight */}
       <View
         pointerEvents="none"
         style={[
           StyleSheet.absoluteFill,
           radii,
-          { borderTopWidth: StyleSheet.hairlineWidth, borderColor: "rgba(255,255,255,0.85)" },
+          { borderTopWidth: StyleSheet.hairlineWidth, borderColor: "rgba(255,255,255,0.9)" },
         ]}
       />
       {children}
