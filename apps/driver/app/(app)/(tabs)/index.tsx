@@ -66,14 +66,24 @@ export default function LoadsScreen() {
   const {
     data: loads,
     isLoading,
-    isRefetching,
     refetch,
     isError,
   } = useQuery({
     queryKey: ["loads", driver?.driverId],
     queryFn:  () => fetchLoadsForDriver(driver!.driverId, driver!.orgId),
     enabled:  !!driver,
+    // Reduce background refetches when hopping between tabs — the realtime
+    // subscription invalidates on real changes, so 30s of staleness is fine.
+    staleTime: 30_000,
   });
+  // Only show the pull-to-refresh spinner for USER-initiated refreshes, not
+  // background refetches (those were leaving a stale spinner spinning on
+  // navigation, on top of the loaded content).
+  const [refreshing, setRefreshing] = useState(false);
+  const onRefresh = async () => {
+    setRefreshing(true);
+    try { await refetch(); } finally { setRefreshing(false); }
+  };
 
   // Today's inspections drive the prompt card at the top of the
   // Active tab. Light query — driver-scoped + day-filtered server-side,
@@ -246,7 +256,7 @@ export default function LoadsScreen() {
               showsVerticalScrollIndicator={false}
               contentContainerStyle={{ paddingHorizontal: 0, paddingTop: SP.cgap, paddingBottom: 24, flexGrow: 1 }}
               refreshControl={
-                <RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor={ACCENT} />
+                <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={ACCENT} />
               }
               // Inspection card pinned to the top of the Active tab only.
               ListHeaderComponent={tabIdx === 0 ? (

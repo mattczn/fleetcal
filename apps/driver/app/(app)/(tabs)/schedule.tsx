@@ -85,11 +85,19 @@ export default function ScheduleScreen() {
   const orgTz = useOrgTz(driver?.driverId, driver?.orgId);
   const todayKey = todayKeyInTz(orgTz);
 
-  const { data: loads, isLoading, isError, isRefetching, refetch } = useQuery({
+  const { data: loads, isLoading, isError, refetch } = useQuery({
     queryKey: ["loads", driver?.driverId],
     queryFn:  () => fetchLoadsForDriver(driver!.driverId, driver!.orgId),
     enabled:  !!driver,
+    staleTime: 30_000,
   });
+  // Pull-to-refresh spinner only for user-initiated refreshes (background
+  // refetches were leaving a stale spinner on tab navigation).
+  const [refreshing, setRefreshing] = useState(false);
+  const onRefresh = async () => {
+    setRefreshing(true);
+    try { await refetch(); } finally { setRefreshing(false); }
+  };
 
   // Group loads by every calendar day they span (multi-day loads appear on each).
   const itemsByDay = useMemo(() => {
@@ -244,7 +252,7 @@ export default function ScheduleScreen() {
         <ScrollView
           style={{ flex: 1 }}
           contentContainerStyle={{ flexGrow: 1 }}
-          refreshControl={<RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor={ACCENT} />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={ACCENT} />}
         >
           <View style={{ paddingTop: 50 }}>
             <EmptyState title="No events scheduled" subtitle="Pick another day with a dot, or change weeks with the arrows." Icon={Inbox} />
@@ -255,7 +263,7 @@ export default function ScheduleScreen() {
           style={{ flex: 1 }}
           contentContainerStyle={{ paddingHorizontal: SP.screenPx, paddingTop: 8, paddingBottom: 130, gap: 12 }}
           showsVerticalScrollIndicator={false}
-          refreshControl={<RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor={ACCENT} />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={ACCENT} />}
         >
           {items.map((it) => <EventCard key={it.load.id + it.dayKeySel} item={it} onOpen={openLoad} />)}
         </ScrollView>
