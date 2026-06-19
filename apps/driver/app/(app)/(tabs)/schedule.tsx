@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  View, Text, ScrollView, TouchableOpacity, RefreshControl, ActivityIndicator, Dimensions,
+  View, Text, ScrollView, TouchableOpacity, RefreshControl, ActivityIndicator, Dimensions, PanResponder,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
@@ -141,6 +141,21 @@ export default function ScheduleScreen() {
     router.push({ pathname: "/load/[id]", params: { id } });
   }
 
+  // Swipe the day content left/right to move ±1 day. Only claims the
+  // gesture when it's clearly horizontal, so vertical list scrolling and
+  // pull-to-refresh are untouched. Functional setState reads the latest
+  // `selected`, so the once-created responder never goes stale.
+  const daySwipe = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_e, g) =>
+        Math.abs(g.dx) > 18 && Math.abs(g.dx) > Math.abs(g.dy) * 1.4,
+      onPanResponderRelease: (_e, g) => {
+        if (g.dx <= -45 || g.vx <= -0.5) setSelected((s) => shiftKey(s, 1));
+        else if (g.dx >= 45 || g.vx >= 0.5) setSelected((s) => shiftKey(s, -1));
+      },
+    }),
+  ).current;
+
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
       <StatusBar style={isDark ? "light" : "dark"} />
@@ -241,7 +256,8 @@ export default function ScheduleScreen() {
         </View>
       </View>
 
-      {/* Body */}
+      {/* Body — swipe left/right to change the day */}
+      <View style={{ flex: 1 }} {...daySwipe.panHandlers}>
       {isLoading ? (
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
           <ActivityIndicator size="large" color={ACCENT} />
@@ -270,6 +286,7 @@ export default function ScheduleScreen() {
       ) : (
         <DayGrid items={items} onOpen={openLoad} showNow={isToday} nowMin={isToday ? nowInTz(orgTz).getHours() * 60 + nowInTz(orgTz).getMinutes() : 0} selectedKey={selected} />
       )}
+      </View>
     </View>
   );
 }
