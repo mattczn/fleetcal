@@ -13,6 +13,7 @@ import { fetchDocuments, getSignedUrl, deleteDocument, type LoadDocument } from 
 import { UploadSheet } from "@/components/UploadSheet";
 import { EditDocumentKindSheet } from "@/components/EditDocumentKindSheet";
 import { subscribe as subscribeToUploadQueue, type PendingUpload } from "@/lib/uploadQueue";
+import { useTheme } from "@/lib/ThemeProvider";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
   fontFamily:
@@ -22,12 +23,14 @@ const txt = (weight: 500 | 600 | 700 | 800) => ({
                      "PlusJakartaSans_800ExtraBold",
 });
 
-const KIND_TINT: Record<string, { bg: string; fg: string }> = {
-  bol:   { bg: "#e8f0fe", fg: "#1558d6" },
-  pod:   { bg: "#dcfce7", fg: "#15803d" },
-  scale: { bg: "#fff7ed", fg: "#9a3412" },
-  other: { bg: "#f1f3f4", fg: "#3c4043" },
-};
+function kindTint(C: ReturnType<typeof useTheme>["C"]): Record<string, { bg: string; fg: string }> {
+  return {
+    bol:   { bg: C.blueBg, fg: C.blueInk },
+    pod:   { bg: C.greenBg, fg: C.greenInk },
+    scale: { bg: C.amberBg, fg: C.amberInk },
+    other: { bg: C.borderSoft, fg: C.t2 },
+  };
+}
 
 function fmtUploaded(iso: string): string {
   const d = new Date(iso);
@@ -73,6 +76,8 @@ async function shareDocument(url: string, doc: LoadDocument): Promise<void> {
 }
 
 function DocumentRow({ doc, onPress, onEdit, onDelete }: { doc: LoadDocument; onPress: () => void; onEdit: () => void; onDelete: () => void }) {
+  const { C, SHADOW, ACCENT } = useTheme();
+  const KIND_TINT = kindTint(C);
   const [thumbUrl, setThumbUrl] = useState<string | null>(null);
   const tint = KIND_TINT[doc.kind] ?? KIND_TINT.other;
 
@@ -87,18 +92,18 @@ function DocumentRow({ doc, onPress, onEdit, onDelete }: { doc: LoadDocument; on
       style={{
         flexDirection: "row",
         gap: 12,
-        backgroundColor: "#ffffff",
+        backgroundColor: C.surface,
         borderRadius: 14,
         padding: 12,
         marginBottom: 10,
-        borderWidth: 1, borderColor: "#e8eaed",
+        borderWidth: 1, borderColor: C.border,
       }}
     >
       {isImage(doc) && thumbUrl ? (
         <Image source={{ uri: thumbUrl }} style={{ width: 56, height: 56, borderRadius: 10 }} />
       ) : (
-        <View style={{ width: 56, height: 56, borderRadius: 10, backgroundColor: "#f1f3f4", alignItems: "center", justifyContent: "center" }}>
-          <FileText size={22} color="#5f6368" strokeWidth={2.2} />
+        <View style={{ width: 56, height: 56, borderRadius: 10, backgroundColor: C.borderSoft, alignItems: "center", justifyContent: "center" }}>
+          <FileText size={22} color={C.t3} strokeWidth={2.2} />
         </View>
       )}
 
@@ -110,27 +115,28 @@ function DocumentRow({ doc, onPress, onEdit, onDelete }: { doc: LoadDocument; on
             </Text>
           </View>
         </View>
-        <Text style={[txt(700), { fontSize: 14, color: "#202124" }]} numberOfLines={1}>
+        <Text style={[txt(700), { fontSize: 14, color: C.t1 }]} numberOfLines={1}>
           {doc.fileName}
         </Text>
-        <Text style={[txt(500), { fontSize: 12, color: "#5f6368", marginTop: 1 }]}>
+        <Text style={[txt(500), { fontSize: 12, color: C.t3, marginTop: 1 }]}>
           {fmtUploaded(doc.uploadedAt)}{doc.sizeBytes ? ` · ${fmtBytes(doc.sizeBytes)}` : ""}
         </Text>
       </View>
 
       <TouchableOpacity onPress={onEdit} hitSlop={10}
         style={{ alignItems: "center", justifyContent: "center", paddingHorizontal: 4 }}>
-        <Pencil size={16} color="#5f6368" strokeWidth={2.2} />
+        <Pencil size={16} color={C.t3} strokeWidth={2.2} />
       </TouchableOpacity>
       <TouchableOpacity onPress={onDelete} hitSlop={10}
         style={{ alignItems: "center", justifyContent: "center", paddingHorizontal: 4 }}>
-        <Trash2 size={16} color="#9aa0a6" strokeWidth={2.2} />
+        <Trash2 size={16} color={C.t4} strokeWidth={2.2} />
       </TouchableOpacity>
     </TouchableOpacity>
   );
 }
 
 function ViewerModal({ doc, visible, onClose }: { doc: LoadDocument | null; visible: boolean; onClose: () => void }) {
+  const { C, SHADOW, ACCENT } = useTheme();
   const [url, setUrl] = useState<string | null>(null);
   const [sharing, setSharing] = useState(false);
   const insets = useSafeAreaInsets();
@@ -233,6 +239,7 @@ export function DocumentsView({
   uploadVisible, setUploadVisible,
   width,
 }: Props) {
+  const { C, SHADOW, ACCENT } = useTheme();
   const queryClient = useQueryClient();
   const [viewerDoc, setViewerDoc] = useState<LoadDocument | null>(null);
   // Per-row edit: kind-only. Filename is server-controlled (auto-named
@@ -269,7 +276,7 @@ export function DocumentsView({
 
   return (
     <View style={{ width, flex: 1 }}>
-      <ScrollView style={{ flex: 1, backgroundColor: "#f8f9fa" }} contentContainerStyle={{ padding: 16, paddingBottom: 120 }}>
+      <ScrollView style={{ flex: 1, backgroundColor: C.bg }} contentContainerStyle={{ padding: 16, paddingBottom: 120 }}>
         <TouchableOpacity onPress={() => setUploadVisible(true)} activeOpacity={0.85}
           style={{
             flexDirection: "row",
@@ -278,8 +285,8 @@ export function DocumentsView({
             gap: 8,
             paddingVertical: 16,
             borderRadius: 16,
-            backgroundColor: "#1a73e8",
-            shadowColor: "#1a73e8", shadowOpacity: 0.35, shadowRadius: 14, shadowOffset: { width: 0, height: 6 },
+            backgroundColor: ACCENT,
+            shadowColor: ACCENT, shadowOpacity: 0.35, shadowRadius: 14, shadowOffset: { width: 0, height: 6 },
             marginBottom: 18,
           }}>
           <Plus size={16} color="#ffffff" strokeWidth={2.6} />
@@ -295,40 +302,40 @@ export function DocumentsView({
             gap: 10,
             padding: 12,
             borderRadius: 12,
-            backgroundColor: "#fef9c3",
+            backgroundColor: C.amberBg,
             borderWidth: 1,
-            borderColor: "#fde68a",
+            borderColor: C.amberBg,
             marginBottom: 14,
           }}>
-            <UploadCloud size={16} color="#854d0e" strokeWidth={2.4} />
+            <UploadCloud size={16} color={C.amberInk} strokeWidth={2.4} />
             <View style={{ flex: 1 }}>
-              <Text style={[txt(700), { fontSize: 13, color: "#854d0e" }]}>
+              <Text style={[txt(700), { fontSize: 13, color: C.amberInk }]}>
                 {pendingForLoad.length} pending upload{pendingForLoad.length === 1 ? "" : "s"}
               </Text>
-              <Text style={[txt(500), { fontSize: 11, color: "#854d0e", marginTop: 1 }]}>
+              <Text style={[txt(500), { fontSize: 11, color: C.amberInk, marginTop: 1 }]}>
                 Will retry automatically when you're back online
               </Text>
             </View>
           </View>
         )}
 
-        <Text style={[txt(800), { fontSize: 11, letterSpacing: 1.1, color: "#5f6368", textTransform: "uppercase", marginBottom: 10 }]}>
+        <Text style={[txt(800), { fontSize: 11, letterSpacing: 1.1, color: C.t3, textTransform: "uppercase", marginBottom: 10 }]}>
           Uploaded · {docs.length}
         </Text>
 
         {isLoading ? (
           <View style={{ paddingVertical: 30, alignItems: "center" }}>
-            <ActivityIndicator color="#1a73e8" />
+            <ActivityIndicator color={ACCENT} />
           </View>
         ) : docs.length === 0 ? (
           <View style={{ paddingVertical: 40, alignItems: "center" }}>
-            <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: "#e8f0fe", alignItems: "center", justifyContent: "center", marginBottom: 12 }}>
-              <FileText size={26} color="#1a73e8" strokeWidth={2} />
+            <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: C.blueBg, alignItems: "center", justifyContent: "center", marginBottom: 12 }}>
+              <FileText size={26} color={ACCENT} strokeWidth={2} />
             </View>
-            <Text style={[txt(700), { fontSize: 15, color: "#3c4043", textAlign: "center" }]}>
+            <Text style={[txt(700), { fontSize: 15, color: C.t2, textAlign: "center" }]}>
               No documents yet
             </Text>
-            <Text style={[txt(500), { fontSize: 13, color: "#9aa0a6", marginTop: 4, textAlign: "center" }]}>
+            <Text style={[txt(500), { fontSize: 13, color: C.t4, marginTop: 4, textAlign: "center" }]}>
               Add a BOL, POD, or any other paperwork
             </Text>
           </View>

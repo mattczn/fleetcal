@@ -4,6 +4,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import WebView from "react-native-webview";
 import { Maximize2, X, MapPin, Clock } from "lucide-react-native";
 import { ExpandableInstructions } from "@/components/ExpandableInstructions";
+import { useTheme } from "@/lib/ThemeProvider";
 import type { Stop, StopType } from "@/lib/types";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
@@ -21,15 +22,6 @@ const STOP_COLOR: Record<StopType, string> = {
   drop_hook: "#2563eb",
   stop:      "#eab308",
   relay:     "#8b5cf6",
-};
-
-const STOP_ACCENT: Record<StopType, { bg: string; fg: string }> = {
-  pickup:    { bg: "#dcfce7", fg: "#15803d" },
-  delivery:  { bg: "#fee2e2", fg: "#b91c1c" },
-  drop:      { bg: "#cffafe", fg: "#0e7490" },
-  drop_hook: { bg: "#dbeafe", fg: "#1e40af" },
-  stop:      { bg: "#fef9c3", fg: "#854d0e" },
-  relay:     { bg: "#f3e8fd", fg: "#6b21a8" },
 };
 
 const STOP_LABEL: Record<StopType, string> = {
@@ -343,6 +335,7 @@ export const RouteMap = forwardRef<RouteMapHandle, Props>(function RouteMap(
   { stops, height = 220, truckLat, truckLng, assetColor, truckDescription, truckLocatedAt }: Props,
   ref,
 ) {
+  const { C, ACCENT, STOP_SOLID, STOP_TINT } = useTheme();
   const [fullscreen, setFullscreen]   = useState(false);
   const [selectedIdx, setSelectedIdx] = useState<number>(0);
   const insets = useSafeAreaInsets();
@@ -417,8 +410,8 @@ export const RouteMap = forwardRef<RouteMapHandle, Props>(function RouteMap(
 
   if (!GOOGLE_KEY) {
     return (
-      <View style={{ height, backgroundColor: "#fef3c7", borderRadius: 14, alignItems: "center", justifyContent: "center", padding: 16 }}>
-        <Text style={[txt(700), { fontSize: 13, color: "#92400e", textAlign: "center" }]}>
+      <View style={{ height, backgroundColor: C.amberBg, borderRadius: 14, alignItems: "center", justifyContent: "center", padding: 16 }}>
+        <Text style={[txt(700), { fontSize: 13, color: C.amberInk, textAlign: "center" }]}>
           Google Maps key not configured (EXPO_PUBLIC_GOOGLE_MAPS_API_KEY)
         </Text>
       </View>
@@ -430,14 +423,14 @@ export const RouteMap = forwardRef<RouteMapHandle, Props>(function RouteMap(
       <View
         style={{
           height,
-          backgroundColor: "#f1f3f4",
+          backgroundColor: C.surfaceSunk,
           borderRadius: 14,
           alignItems: "center",
           justifyContent: "center",
-          borderWidth: 1, borderColor: "#e8eaed",
+          borderWidth: 1, borderColor: C.border,
         }}
       >
-        <Text style={[txt(600), { fontSize: 13, color: "#9aa0a6" }]}>
+        <Text style={[txt(600), { fontSize: 13, color: C.t4 }]}>
           No coordinates available for this route
         </Text>
       </View>
@@ -453,7 +446,7 @@ export const RouteMap = forwardRef<RouteMapHandle, Props>(function RouteMap(
       <TouchableOpacity
         activeOpacity={0.95}
         onPress={() => { setSelectedIdx(0); setFullscreen(true); }}
-        style={{ height, borderRadius: 14, overflow: "hidden", borderWidth: 1, borderColor: "#e8eaed" }}
+        style={{ height, borderRadius: 14, overflow: "hidden", borderWidth: 1, borderColor: C.border }}
       >
         <WebView
           source={{ html: thumbnailHtml }}
@@ -461,7 +454,7 @@ export const RouteMap = forwardRef<RouteMapHandle, Props>(function RouteMap(
           javaScriptEnabled
           domStorageEnabled
           scrollEnabled={false}
-          style={{ flex: 1, backgroundColor: "#ffffff" }}
+          style={{ flex: 1, backgroundColor: C.surface }}
         />
         <View pointerEvents="none" style={{
           position: "absolute", top: 10, right: 10,
@@ -479,7 +472,7 @@ export const RouteMap = forwardRef<RouteMapHandle, Props>(function RouteMap(
         presentationStyle="overFullScreen"
         onRequestClose={() => setFullscreen(false)}
       >
-        <View style={{ flex: 1, backgroundColor: "#1a73e8" }}>
+        <View style={{ flex: 1, backgroundColor: ACCENT }}>
           <WebView
             ref={fullscreenWebRef}
             source={{ html: fullscreenHtml }}
@@ -535,7 +528,7 @@ export const RouteMap = forwardRef<RouteMapHandle, Props>(function RouteMap(
                 position: "absolute",
                 left: 12, right: 12,
                 bottom: insets.bottom + 12,
-                backgroundColor: "#ffffff",
+                backgroundColor: C.surface,
                 borderRadius: 16,
                 padding: 14,
                 shadowColor: "#000", shadowOpacity: 0.2, shadowRadius: 14, shadowOffset: { width: 0, height: -2 },
@@ -544,7 +537,7 @@ export const RouteMap = forwardRef<RouteMapHandle, Props>(function RouteMap(
               <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
                 <View style={{
                   width: 44, height: 44, borderRadius: 12,
-                  backgroundColor: STOP_COLOR[selectedStop.type] ?? "#5f6368",
+                  backgroundColor: STOP_SOLID[selectedStop.type] ?? C.t3,
                   alignItems: "center", justifyContent: "center",
                   flexShrink: 0,
                 }}>
@@ -552,26 +545,26 @@ export const RouteMap = forwardRef<RouteMapHandle, Props>(function RouteMap(
                 </View>
 
                 <View style={{ flex: 1 }}>
-                  <View style={{ alignSelf: "flex-start", paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999, backgroundColor: STOP_ACCENT[selectedStop.type].bg, marginBottom: 3 }}>
-                    <Text style={[txt(800), { fontSize: 10, color: STOP_ACCENT[selectedStop.type].fg, letterSpacing: 0.5 }]}>
+                  <View style={{ alignSelf: "flex-start", paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999, backgroundColor: STOP_TINT[selectedStop.type].bg, marginBottom: 3 }}>
+                    <Text style={[txt(800), { fontSize: 10, color: STOP_TINT[selectedStop.type].fg, letterSpacing: 0.5 }]}>
                       {STOP_LABEL[selectedStop.type].toUpperCase()}
                     </Text>
                   </View>
-                  <Text style={[txt(700), { fontSize: 15, color: "#202124" }]} numberOfLines={1}>
+                  <Text style={[txt(700), { fontSize: 15, color: C.t1 }]} numberOfLines={1}>
                     {selectedStop.facilityName ?? selectedStop.city ?? selectedStop.address ?? "—"}
                   </Text>
                   {(selectedStop.address || selectedStop.city) ? (
                     <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 2 }}>
-                      <MapPin size={11} color="#5f6368" strokeWidth={2.2} />
-                      <Text style={[txt(500), { fontSize: 12, color: "#5f6368" }]} numberOfLines={1}>
+                      <MapPin size={11} color={C.t3} strokeWidth={2.2} />
+                      <Text style={[txt(500), { fontSize: 12, color: C.t3 }]} numberOfLines={1}>
                         {selectedStop.address ?? selectedStop.city}
                       </Text>
                     </View>
                   ) : null}
                   {selectedStop.apptStart ? (
                     <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 3 }}>
-                      <Clock size={11} color="#5f6368" strokeWidth={2.2} />
-                      <Text style={[txt(500), { fontSize: 12, color: "#5f6368" }]}>
+                      <Clock size={11} color={C.t3} strokeWidth={2.2} />
+                      <Text style={[txt(500), { fontSize: 12, color: C.t3 }]}>
                         {selectedStop.apptEnd && selectedStop.apptEnd !== selectedStop.apptStart
                           ? `${fmtTime(selectedStop.apptStart)} – ${fmtTime(selectedStop.apptEnd)}`
                           : fmtTime(selectedStop.apptStart)}
@@ -584,16 +577,16 @@ export const RouteMap = forwardRef<RouteMapHandle, Props>(function RouteMap(
                   <TouchableOpacity
                     onPress={() => setSelectedIdx((i) => (i > 0 ? i - 1 : i))}
                     disabled={selectedIdx === 0}
-                    style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: selectedIdx === 0 ? "#f1f3f4" : "#e8f0fe", alignItems: "center", justifyContent: "center" }}
+                    style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: selectedIdx === 0 ? C.surfaceSunk : C.blueBg, alignItems: "center", justifyContent: "center" }}
                   >
-                    <Text style={[txt(800), { fontSize: 16, color: selectedIdx === 0 ? "#c0c4c8" : "#1a73e8" }]}>‹</Text>
+                    <Text style={[txt(800), { fontSize: 16, color: selectedIdx === 0 ? C.t4 : ACCENT }]}>‹</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
                     onPress={() => setSelectedIdx((i) => (i < geocoded.length - 1 ? i + 1 : i))}
                     disabled={selectedIdx === geocoded.length - 1}
-                    style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: selectedIdx === geocoded.length - 1 ? "#f1f3f4" : "#e8f0fe", alignItems: "center", justifyContent: "center" }}
+                    style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: selectedIdx === geocoded.length - 1 ? C.surfaceSunk : C.blueBg, alignItems: "center", justifyContent: "center" }}
                   >
-                    <Text style={[txt(800), { fontSize: 16, color: selectedIdx === geocoded.length - 1 ? "#c0c4c8" : "#1a73e8" }]}>›</Text>
+                    <Text style={[txt(800), { fontSize: 16, color: selectedIdx === geocoded.length - 1 ? C.t4 : ACCENT }]}>›</Text>
                   </TouchableOpacity>
                 </View>
               </View>
@@ -602,7 +595,7 @@ export const RouteMap = forwardRef<RouteMapHandle, Props>(function RouteMap(
                 <View style={{ marginTop: 10 }}>
                   <ExpandableInstructions
                     value={selectedStop.instructions}
-                    textStyle={{ ...txt(500), fontSize: 12, color: "#5f6368", lineHeight: 18 }}
+                    textStyle={{ ...txt(500), fontSize: 12, color: C.t3, lineHeight: 18 }}
                   />
                 </View>
               ) : null}

@@ -31,6 +31,7 @@ import {
 import * as ImagePicker from "expo-image-picker";
 import * as Location from "expo-location";
 import { railway, type InspectionItemPayload } from "@/lib/railway";
+import { useTheme } from "@/lib/ThemeProvider";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
   fontFamily:
@@ -177,6 +178,7 @@ interface Props {
 }
 
 export default function InspectionFormScreen({ initialAssetId, driverName, onClose, onSubmitted }: Props) {
+  const { C, SHADOW, ACCENT } = useTheme();
   // ── Equipment selection ───────────────────────────────────────────
   const [assets,        setAssets]        = useState<AssetOption[]>([]);
   const [trailers,      setTrailers]      = useState<TrailerOption[]>([]);
@@ -480,28 +482,28 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
   return (
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
       {/* Header */}
-      <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 12, gap: 10, borderBottomWidth: 1, borderBottomColor: "#e5e7eb" }}>
+      <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 12, gap: 10, borderBottomWidth: 1, borderBottomColor: C.border, backgroundColor: C.surface }}>
         <TouchableOpacity onPress={onClose} style={{ padding: 6, marginLeft: -6 }}>
-          <ArrowLeft size={22} color="#111827" />
+          <ArrowLeft size={22} color={C.t1} />
         </TouchableOpacity>
-        <Text style={[txt(700), { fontSize: 17, color: "#111827" }]}>Daily inspection</Text>
+        <Text style={[txt(700), { fontSize: 17, color: C.t1 }]}>Daily inspection</Text>
         <View style={{ flex: 1 }} />
-        <Text style={[txt(500), { fontSize: 12, color: "#6b7280" }]}>{driverName}</Text>
+        <Text style={[txt(500), { fontSize: 12, color: C.t3 }]}>{driverName}</Text>
       </View>
 
       <ScrollView
         ref={scrollRef}
-        style={{ flex: 1, backgroundColor: "#f8f9fa" }}
+        style={{ flex: 1, backgroundColor: C.bg }}
         contentContainerStyle={{ padding: 14, paddingBottom: 100 }}
         keyboardShouldPersistTaps="handled"
       >
         {/* Equipment pickers */}
-        <View style={{ backgroundColor: "white", borderRadius: 12, padding: 14, marginBottom: 14 }}>
-          <Text style={[txt(700), { fontSize: 12, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 10 }]}>
+        <View style={{ backgroundColor: C.surface, borderRadius: 12, padding: 14, marginBottom: 14 }}>
+          <Text style={[txt(700), { fontSize: 12, color: C.t3, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 10 }]}>
             Equipment
           </Text>
           <PickerRow
-            icon={<Truck size={16} color="#1a73e8" />}
+            icon={<Truck size={16} color={ACCENT} />}
             label="Truck"
             value={selectedAsset ? truckLabel(selectedAsset.name, selectedAsset.unit) : "Pick a truck"}
             onPress={() => setPickerOpen("asset")}
@@ -513,19 +515,19 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
             style={{ flexDirection: "row", alignItems: "center", paddingVertical: 4 }}
           >
             <View style={{
-              width: 18, height: 18, borderRadius: 4, borderWidth: 1.5, borderColor: "#1a73e8",
+              width: 18, height: 18, borderRadius: 4, borderWidth: 1.5, borderColor: ACCENT,
               alignItems: "center", justifyContent: "center",
-              backgroundColor: includeTrailer ? "#1a73e8" : "white",
+              backgroundColor: includeTrailer ? ACCENT : C.surface,
               marginRight: 8,
             }}>
               {includeTrailer && <Check size={12} color="white" />}
             </View>
-            <Text style={[txt(500), { fontSize: 14, color: "#374151" }]}>Inspecting a trailer too</Text>
+            <Text style={[txt(500), { fontSize: 14, color: C.t2 }]}>Inspecting a trailer too</Text>
           </TouchableOpacity>
           {includeTrailer && (
             <View style={{ marginTop: 8 }}>
               <PickerRow
-                icon={<Container size={16} color="#1a73e8" />}
+                icon={<Container size={16} color={ACCENT} />}
                 label="Trailer"
                 value={selectedTrailer ? trailerLabel(selectedTrailer.name, selectedTrailer.trailerNumber) : "Pick a trailer"}
                 onPress={() => setPickerOpen("trailer")}
@@ -538,21 +540,21 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
         {/* Helper banner — "default is pass, only mark failures" */}
         <View style={{
           flexDirection: "row", alignItems: "flex-start", gap: 10,
-          backgroundColor: "#eff6ff", borderColor: "#bfdbfe", borderWidth: 1,
+          backgroundColor: C.blueBg, borderColor: C.blue, borderWidth: 1,
           borderRadius: 12, padding: 14, marginBottom: 14,
         }}>
-          <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: "#1a73e8", alignItems: "center", justifyContent: "center" }}>
+          <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: ACCENT, alignItems: "center", justifyContent: "center" }}>
             <Check size={14} color="white" />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={[txt(700), { fontSize: 14, color: "#1e3a8a" }]}>
+            <Text style={[txt(700), { fontSize: 14, color: C.blueInk }]}>
               Everything starts as PASS
             </Text>
-            <Text style={[txt(500), { fontSize: 13, color: "#1e40af", marginTop: 3 }]}>
+            <Text style={[txt(500), { fontSize: 13, color: C.blueInk, marginTop: 3 }]}>
               Tap Fail on anything broken and snap a photo. N/A for items that don&apos;t apply to this truck.
             </Text>
             {failCount > 0 && (
-              <Text style={[txt(700), { fontSize: 13, color: "#dc2626", marginTop: 6 }]}>
+              <Text style={[txt(700), { fontSize: 13, color: C.red, marginTop: 6 }]}>
                 {failCount} defect{failCount === 1 ? "" : "s"} flagged
               </Text>
             )}
@@ -595,8 +597,8 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
         )}
 
         {/* General notes */}
-        <View style={{ backgroundColor: "white", borderRadius: 12, padding: 14, marginBottom: 14 }}>
-          <Text style={[txt(700), { fontSize: 12, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }]}>
+        <View style={{ backgroundColor: C.surface, borderRadius: 12, padding: 14, marginBottom: 14 }}>
+          <Text style={[txt(700), { fontSize: 12, color: C.t3, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }]}>
             General notes (optional)
           </Text>
           <TextInput
@@ -604,11 +606,11 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
             onChangeText={setNotes}
             onFocus={handleInputFocus}
             placeholder="Anything else worth noting…"
-            placeholderTextColor="#9ca3af"
+            placeholderTextColor={C.t4}
             multiline
             style={[txt(500), {
-              fontSize: 15, color: "#111827", minHeight: 70,
-              borderWidth: 1, borderColor: "#e5e7eb", borderRadius: 8, padding: 12,
+              fontSize: 15, color: C.t1, minHeight: 70,
+              borderWidth: 1, borderColor: C.border, borderRadius: 8, padding: 12,
               textAlignVertical: "top",
             }]}
           />
@@ -616,18 +618,18 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
 
         {/* Signature line */}
         <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 14 }}>
-          <Text style={[txt(500), { fontSize: 12, color: "#6b7280" }]}>Signed by </Text>
-          <Text style={[txt(700), { fontSize: 13, color: "#111827" }]}>{driverName}</Text>
+          <Text style={[txt(500), { fontSize: 12, color: C.t3 }]}>Signed by </Text>
+          <Text style={[txt(700), { fontSize: 13, color: C.t1 }]}>{driverName}</Text>
         </View>
       </ScrollView>
 
       {/* Submit button (sticky) */}
-      <View style={{ padding: 14, borderTopWidth: 1, borderTopColor: "#e5e7eb", backgroundColor: "white" }}>
+      <View style={{ padding: 14, borderTopWidth: 1, borderTopColor: C.border, backgroundColor: C.surface }}>
         <TouchableOpacity
           onPress={handleSubmit}
           disabled={submitting}
           style={{
-            backgroundColor: failCount > 0 ? "#dc2626" : "#1a73e8",
+            backgroundColor: failCount > 0 ? C.red : ACCENT,
             paddingVertical: 16, borderRadius: 12,
             alignItems: "center", opacity: submitting ? 0.6 : 1,
           }}
@@ -682,19 +684,20 @@ function ChecklistBlock({
   photos:             PendingPhoto[];
   onRemovePhoto:      (key: string)               => void;
 }) {
+  const { C, SHADOW, ACCENT } = useTheme();
   // Photos with no itemId are the "general" ones for this piece of
   // equipment — odometer shot, nameplate, the dirty wiring under the
   // dash, anything the driver wants on record but doesn't tie to a
   // single checklist row.
   const generalPhotos = photos.filter(p => p.itemId == null);
   return (
-    <View style={{ backgroundColor: "white", borderRadius: 12, padding: 14, marginBottom: 14 }}>
-      <Text style={[txt(700), { fontSize: 12, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 10 }]}>
+    <View style={{ backgroundColor: C.surface, borderRadius: 12, padding: 14, marginBottom: 14 }}>
+      <Text style={[txt(700), { fontSize: 12, color: C.t3, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 10 }]}>
         {title}
       </Text>
       {sections.map((section, sIdx) => (
         <View key={section.name} style={{ marginTop: sIdx > 0 ? 14 : 0 }}>
-          <Text style={[txt(700), { fontSize: 15, color: "#111827", marginBottom: 8 }]}>{section.name}</Text>
+          <Text style={[txt(700), { fontSize: 15, color: C.t1, marginBottom: 8 }]}>{section.name}</Text>
           {section.items.map(item => {
             const state = items[item.id];
             const isFail = state?.status === "fail";
@@ -706,16 +709,16 @@ function ChecklistBlock({
                   marginBottom: 10,
                   paddingVertical: 10, paddingHorizontal: 10,
                   borderRadius: 10,
-                  backgroundColor: isFail ? "#fff5f5" : "transparent",
+                  backgroundColor: isFail ? C.redBg : "transparent",
                   borderWidth: isFail ? 1 : 0,
-                  borderColor: isFail ? "#fecaca" : "transparent",
+                  borderColor: isFail ? C.red : "transparent",
                 }}
               >
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 8, minHeight: 38 }}>
-                  <Text style={[txt(500), { fontSize: 15, color: "#111827", flex: 1 }]}>{item.label}</Text>
-                  <StatusButton label="Pass" active={state?.status === "pass"} color="#16a34a" onPress={() => setStatus(item.id, "pass")} />
-                  <StatusButton label="Fail" active={state?.status === "fail"} color="#dc2626" onPress={() => setStatus(item.id, "fail")} />
-                  <StatusButton label="N/A"  active={state?.status === "na"}   color="#6b7280" onPress={() => setStatus(item.id, "na")} />
+                  <Text style={[txt(500), { fontSize: 15, color: C.t1, flex: 1 }]}>{item.label}</Text>
+                  <StatusButton label="Pass" active={state?.status === "pass"} color={C.green} onPress={() => setStatus(item.id, "pass")} />
+                  <StatusButton label="Fail" active={state?.status === "fail"} color={C.red} onPress={() => setStatus(item.id, "fail")} />
+                  <StatusButton label="N/A"  active={state?.status === "na"}   color={C.t3} onPress={() => setStatus(item.id, "na")} />
                 </View>
                 {isFail && (
                   <View style={{ marginTop: 10 }}>
@@ -724,11 +727,11 @@ function ChecklistBlock({
                       onChangeText={(t) => setItemNotes(item.id, t)}
                       onFocus={onInputFocus}
                       placeholder="Describe the issue…"
-                      placeholderTextColor="#9ca3af"
+                      placeholderTextColor={C.t4}
                       multiline
                       style={[txt(500), {
-                        fontSize: 14, color: "#111827",
-                        borderWidth: 1, borderColor: "#fecaca", backgroundColor: "white",
+                        fontSize: 14, color: C.t1,
+                        borderWidth: 1, borderColor: C.red, backgroundColor: C.surface,
                         borderRadius: 8, padding: 10, minHeight: 50, textAlignVertical: "top",
                       }]}
                     />
@@ -741,13 +744,13 @@ function ChecklistBlock({
                         onPress={() => onAddPhoto(item.id)}
                         style={{
                           width: 64, height: 64, borderRadius: 10,
-                          borderWidth: 1.5, borderColor: "#fca5a5", borderStyle: "dashed",
-                          backgroundColor: "white",
+                          borderWidth: 1.5, borderColor: C.red, borderStyle: "dashed",
+                          backgroundColor: C.surface,
                           alignItems: "center", justifyContent: "center", gap: 2,
                         }}
                       >
-                        <Camera size={18} color="#dc2626" />
-                        <Text style={[txt(700), { fontSize: 9, color: "#dc2626" }]}>PHOTO</Text>
+                        <Camera size={18} color={C.red} />
+                        <Text style={[txt(700), { fontSize: 9, color: C.red }]}>PHOTO</Text>
                       </TouchableOpacity>
                     </View>
                   </View>
@@ -762,9 +765,9 @@ function ChecklistBlock({
           so a truck+trailer combined inspection ends up with two
           distinct buckets. target prop is set in the parent so every
           photo added here is tagged correctly without re-derivation. */}
-      <View style={{ marginTop: 18, paddingTop: 14, borderTopWidth: 1, borderTopColor: "#f3f4f6" }}>
+      <View style={{ marginTop: 18, paddingTop: 14, borderTopWidth: 1, borderTopColor: C.borderSoft }}>
         <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 10 }}>
-          <Text style={[txt(700), { flex: 1, fontSize: 13, color: "#374151" }]}>
+          <Text style={[txt(700), { flex: 1, fontSize: 13, color: C.t2 }]}>
             General {target} photos
           </Text>
           <TouchableOpacity
@@ -772,15 +775,15 @@ function ChecklistBlock({
             style={{
               flexDirection: "row", alignItems: "center", gap: 4,
               paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8,
-              backgroundColor: "#eff6ff",
+              backgroundColor: C.blueBg,
             }}
           >
-            <Plus size={14} color="#1a73e8" />
-            <Text style={[txt(700), { fontSize: 12, color: "#1a73e8" }]}>Add photo</Text>
+            <Plus size={14} color={ACCENT} />
+            <Text style={[txt(700), { fontSize: 12, color: ACCENT }]}>Add photo</Text>
           </TouchableOpacity>
         </View>
         {generalPhotos.length === 0 ? (
-          <Text style={[txt(500), { fontSize: 12, color: "#9ca3af" }]}>
+          <Text style={[txt(500), { fontSize: 12, color: C.t4 }]}>
             {target === "truck"
               ? "Odometer, truck nameplate, anything worth a visual record."
               : "Trailer placard, load tag, any general trailer condition shots."}
@@ -798,6 +801,7 @@ function ChecklistBlock({
 }
 
 function PhotoThumb({ uri, onRemove }: { uri: string; onRemove: () => void }) {
+  const { C, SHADOW, ACCENT } = useTheme();
   return (
     <View style={{ width: 64, height: 64, borderRadius: 10, overflow: "hidden", position: "relative" }}>
       <Image source={{ uri }} style={{ width: 64, height: 64 }} resizeMode="cover" />
@@ -817,17 +821,18 @@ function PhotoThumb({ uri, onRemove }: { uri: string; onRemove: () => void }) {
 }
 
 function StatusButton({ label, active, color, onPress }: { label: string; active: boolean; color: string; onPress: () => void }) {
+  const { C, SHADOW, ACCENT } = useTheme();
   return (
     <TouchableOpacity
       onPress={onPress}
       style={{
         paddingHorizontal: 14, paddingVertical: 9, borderRadius: 8,
         backgroundColor: active ? color : "transparent",
-        borderWidth: 1, borderColor: active ? color : "#e5e7eb",
+        borderWidth: 1, borderColor: active ? color : C.border,
         minWidth: 56, alignItems: "center",
       }}
     >
-      <Text style={[txt(700), { fontSize: 13, color: active ? "white" : "#6b7280" }]}>{label}</Text>
+      <Text style={[txt(700), { fontSize: 13, color: active ? "white" : C.t3 }]}>{label}</Text>
     </TouchableOpacity>
   );
 }
@@ -835,6 +840,7 @@ function StatusButton({ label, active, color, onPress }: { label: string; active
 function PickerRow({ icon, label, value, onPress, disabled }: {
   icon: React.ReactNode; label: string; value: string; onPress: () => void; disabled?: boolean;
 }) {
+  const { C, SHADOW, ACCENT } = useTheme();
   return (
     <TouchableOpacity
       onPress={onPress}
@@ -842,16 +848,16 @@ function PickerRow({ icon, label, value, onPress, disabled }: {
       style={{
         flexDirection: "row", alignItems: "center", gap: 10,
         paddingVertical: 12, paddingHorizontal: 12,
-        borderWidth: 1, borderColor: "#e5e7eb", borderRadius: 10,
+        borderWidth: 1, borderColor: C.border, borderRadius: 10,
         opacity: disabled ? 0.6 : 1,
       }}
     >
       {icon}
       <View style={{ flex: 1 }}>
-        <Text style={[txt(500), { fontSize: 12, color: "#6b7280" }]}>{label}</Text>
-        <Text style={[txt(700), { fontSize: 16, color: "#111827" }]}>{value}</Text>
+        <Text style={[txt(500), { fontSize: 12, color: C.t3 }]}>{label}</Text>
+        <Text style={[txt(700), { fontSize: 16, color: C.t1 }]}>{value}</Text>
       </View>
-      <ChevronDown size={16} color="#9ca3af" />
+      <ChevronDown size={16} color={C.t4} />
     </TouchableOpacity>
   );
 }
@@ -867,6 +873,7 @@ function PickerOverlay({ title, options, onPick, onClose }: {
   // Splitting the query on whitespace lets a driver type "ford 312" and
   // match a "2024 Ford F-150 · #312" row even though those tokens are
   // far apart in the label.
+  const { C, SHADOW, ACCENT } = useTheme();
   const [query, setQuery] = useState("");
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -880,17 +887,17 @@ function PickerOverlay({ title, options, onPick, onClose }: {
 
   return (
     <View style={{
-      position: "absolute", inset: 0, backgroundColor: "white",
+      position: "absolute", inset: 0, backgroundColor: C.surface,
     }}>
       <View style={{
         flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 12,
-        borderBottomWidth: 1, borderBottomColor: "#e5e7eb", gap: 10,
+        borderBottomWidth: 1, borderBottomColor: C.border, gap: 10,
       }}>
         <TouchableOpacity onPress={onClose} style={{ padding: 6, marginLeft: -6 }}>
-          <X size={22} color="#111827" />
+          <X size={22} color={C.t1} />
         </TouchableOpacity>
-        <Text style={[txt(700), { fontSize: 16, color: "#111827", flex: 1 }]}>{title}</Text>
-        <Text style={[txt(500), { fontSize: 12, color: "#9ca3af" }]}>
+        <Text style={[txt(700), { fontSize: 16, color: C.t1, flex: 1 }]}>{title}</Text>
+        <Text style={[txt(500), { fontSize: 12, color: C.t4 }]}>
           {filtered.length}{query ? ` / ${options.length}` : ""}
         </Text>
       </View>
@@ -901,28 +908,28 @@ function PickerOverlay({ title, options, onPick, onClose }: {
         <View style={{
           flexDirection: "row", alignItems: "center", gap: 8,
           paddingHorizontal: 14, paddingVertical: 10,
-          borderBottomWidth: 1, borderBottomColor: "#f3f4f6",
+          borderBottomWidth: 1, borderBottomColor: C.borderSoft,
         }}>
           <View style={{
             flex: 1, flexDirection: "row", alignItems: "center", gap: 8,
             paddingHorizontal: 12, paddingVertical: 10,
-            borderWidth: 1, borderColor: "#e5e7eb", borderRadius: 10,
-            backgroundColor: "#f9fafb",
+            borderWidth: 1, borderColor: C.border, borderRadius: 10,
+            backgroundColor: C.surface2,
           }}>
-            <Search size={16} color="#9ca3af" />
+            <Search size={16} color={C.t4} />
             <TextInput
               value={query}
               onChangeText={setQuery}
               placeholder="Search by name or number…"
-              placeholderTextColor="#9ca3af"
+              placeholderTextColor={C.t4}
               autoCapitalize="none"
               autoCorrect={false}
               returnKeyType="search"
-              style={[txt(500), { flex: 1, fontSize: 15, color: "#111827", padding: 0 }]}
+              style={[txt(500), { flex: 1, fontSize: 15, color: C.t1, padding: 0 }]}
             />
             {query.length > 0 && (
               <TouchableOpacity onPress={() => setQuery("")} hitSlop={10}>
-                <X size={16} color="#9ca3af" />
+                <X size={16} color={C.t4} />
               </TouchableOpacity>
             )}
           </View>
@@ -932,13 +939,13 @@ function PickerOverlay({ title, options, onPick, onClose }: {
       <ScrollView keyboardShouldPersistTaps="handled">
         {options.length === 0 ? (
           <View style={{ padding: 24, flexDirection: "row", alignItems: "center", gap: 10, justifyContent: "center" }}>
-            <AlertTriangle size={16} color="#9ca3af" />
-            <Text style={[txt(500), { color: "#6b7280" }]}>No options available.</Text>
+            <AlertTriangle size={16} color={C.t4} />
+            <Text style={[txt(500), { color: C.t3 }]}>No options available.</Text>
           </View>
         ) : filtered.length === 0 ? (
           <View style={{ padding: 32, alignItems: "center", gap: 6 }}>
-            <Text style={[txt(700), { color: "#374151", fontSize: 15 }]}>No matches</Text>
-            <Text style={[txt(500), { color: "#9ca3af", fontSize: 13, textAlign: "center" }]}>
+            <Text style={[txt(700), { color: C.t2, fontSize: 15 }]}>No matches</Text>
+            <Text style={[txt(500), { color: C.t4, fontSize: 13, textAlign: "center" }]}>
               Nothing matched “{query.trim()}”. Try a different name or number.
             </Text>
           </View>
@@ -949,10 +956,10 @@ function PickerOverlay({ title, options, onPick, onClose }: {
               onPress={() => onPick(opt.id)}
               style={{
                 paddingHorizontal: 14, paddingVertical: 16,
-                borderBottomWidth: 1, borderBottomColor: "#f3f4f6",
+                borderBottomWidth: 1, borderBottomColor: C.borderSoft,
               }}
             >
-              <Text style={[txt(600), { fontSize: 16, color: "#111827" }]}>{opt.label}</Text>
+              <Text style={[txt(600), { fontSize: 16, color: C.t1 }]}>{opt.label}</Text>
             </TouchableOpacity>
           ))
         )}

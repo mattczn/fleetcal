@@ -2,6 +2,8 @@ import React, { useState, useRef } from "react";
 import { Text, TouchableOpacity, View } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import { Copy, Check } from "lucide-react-native";
+import { useTheme } from "@/lib/ThemeProvider";
+import type { Colors } from "@/lib/theme";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
   fontFamily:
@@ -18,7 +20,16 @@ type Props = {
   tint?: "blue" | "neutral" | "white";
 };
 
+function palettes(C: Colors) {
+  return {
+    blue:    { bg: C.blueBg,    fg: C.blueInk, border: C.blue },
+    neutral: { bg: C.surfaceSunk, fg: C.t2,    border: C.border },
+    white:   { bg: "rgba(255,255,255,0.12)", fg: "#ffffff", border: "rgba(255,255,255,0.2)" },
+  };
+}
+
 export function CopyChip({ label, value, size = "md", tint = "blue" }: Props) {
+  const { C } = useTheme();
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -29,11 +40,7 @@ export function CopyChip({ label, value, size = "md", tint = "blue" }: Props) {
     timer.current = setTimeout(() => setCopied(false), 1500);
   }
 
-  const palette = {
-    blue:    { bg: "#e8f0fe", fg: "#1558d6", border: "#c5d8fd" },
-    neutral: { bg: "#f1f3f4", fg: "#3c4043", border: "#dadce0" },
-    white:   { bg: "rgba(255,255,255,0.12)", fg: "#ffffff", border: "rgba(255,255,255,0.2)" },
-  }[tint];
+  const palette = palettes(C)[tint];
 
   const padY = size === "sm" ? 3 : 5;
   const padX = size === "sm" ? 8 : 10;

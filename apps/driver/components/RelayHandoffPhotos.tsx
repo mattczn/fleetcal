@@ -13,6 +13,7 @@ import {
 import { Camera, Plus, X, Trash2 } from "lucide-react-native";
 import * as ImagePicker from "expo-image-picker";
 import { railway } from "@/lib/railway";
+import { useTheme } from "@/lib/ThemeProvider";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
   fontFamily:
@@ -76,6 +77,7 @@ export function promptRelayHandoffUpload(loadId: string, onUploaded?: () => void
 }
 
 export function RelayHandoffPhotos({ loadId, reloadKey }: { loadId: string; reloadKey?: number }) {
+  const { C, SHADOW, ACCENT } = useTheme();
   const [photos,   setPhotos]   = useState<DocLike[]>([]);
   const [loading,  setLoading]  = useState(true);
   const [busy,     setBusy]     = useState(false);
@@ -133,9 +135,9 @@ export function RelayHandoffPhotos({ loadId, reloadKey }: { loadId: string; relo
   }
 
   return (
-    <View style={{ marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: "#ddd6fe" }}>
+    <View style={{ marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: C.purpleBg }}>
       <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 8 }}>
-        <Text style={[txt(800), { flex: 1, fontSize: 12, color: "#6b21a8", letterSpacing: 0.4, textTransform: "uppercase" }]}>
+        <Text style={[txt(800), { flex: 1, fontSize: 12, color: C.purpleInk, letterSpacing: 0.4, textTransform: "uppercase" }]}>
           Handoff Photos{photos.length > 0 ? ` · ${photos.length}` : ''}
         </Text>
         <TouchableOpacity onPress={addPhoto} disabled={busy}
@@ -144,7 +146,7 @@ export function RelayHandoffPhotos({ loadId, reloadKey }: { loadId: string; relo
             flexDirection: "row", alignItems: "center", gap: 4,
             paddingHorizontal: 10, paddingVertical: 5,
             borderRadius: 8,
-            backgroundColor: "#6b21a8",
+            backgroundColor: C.purpleInk,
             opacity: busy ? 0.6 : 1,
           }}>
           {busy
@@ -156,7 +158,7 @@ export function RelayHandoffPhotos({ loadId, reloadKey }: { loadId: string; relo
 
       {loading ? (
         <View style={{ paddingVertical: 12, alignItems: "center" }}>
-          <ActivityIndicator size="small" color="#6b21a8" />
+          <ActivityIndicator size="small" color={C.purpleInk} />
         </View>
       ) : photos.length === 0 ? (
         <TouchableOpacity onPress={addPhoto}
@@ -165,11 +167,11 @@ export function RelayHandoffPhotos({ loadId, reloadKey }: { loadId: string; relo
             flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
             paddingVertical: 14,
             borderRadius: 10,
-            borderWidth: 1.5, borderColor: "#8b5cf6", borderStyle: "dashed",
-            backgroundColor: "#faf5ff",
+            borderWidth: 1.5, borderColor: C.purple, borderStyle: "dashed",
+            backgroundColor: C.purpleBg,
           }}>
-          <Camera size={16} color="#6b21a8" strokeWidth={2.2} />
-          <Text style={[txt(700), { fontSize: 13, color: "#6b21a8" }]}>
+          <Camera size={16} color={C.purpleInk} strokeWidth={2.2} />
+          <Text style={[txt(700), { fontSize: 13, color: C.purpleInk }]}>
             Add the first handoff photo
           </Text>
         </TouchableOpacity>
@@ -182,13 +184,13 @@ export function RelayHandoffPhotos({ loadId, reloadKey }: { loadId: string; relo
               style={{
                 width: 76, height: 76, borderRadius: 8,
                 overflow: "hidden", position: "relative",
-                backgroundColor: "#f1f3f4",
+                backgroundColor: C.borderSoft,
               }}>
               {p.signedUrl ? (
                 <Image source={{ uri: p.signedUrl }} style={{ width: "100%", height: "100%" }} />
               ) : (
                 <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-                  <Text style={[txt(700), { fontSize: 9, color: "#9aa0a6" }]}>No URL</Text>
+                  <Text style={[txt(700), { fontSize: 9, color: C.t4 }]}>No URL</Text>
                 </View>
               )}
             </TouchableOpacity>

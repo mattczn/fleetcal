@@ -21,6 +21,8 @@ import { useRouter } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { Bell, BellOff, Check, X } from "lucide-react-native";
 import { railway } from "@/lib/railway";
+import { useTheme } from "@/lib/ThemeProvider";
+import type { Colors } from "@/lib/theme";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
   fontFamily:
@@ -45,17 +47,19 @@ const KIND_LABEL: Record<string, string> = {
   load_cancelled:   "Load cancelled",
 };
 
-const KIND_TINT: Record<string, { bg: string; fg: string }> = {
-  confirm:          { bg: "#dbeafe", fg: "#1e3a8a" },
-  mark_pickup:      { bg: "#fef3c7", fg: "#92400e" },
-  mark_delivery:    { bg: "#dcfce7", fg: "#166534" },
-  upload_pod:       { bg: "#ede9fe", fg: "#5b21b6" },
-  report_trailer:   { bg: "#fee2e2", fg: "#991b1b" },
-  upload_handoff:   { bg: "#fdf4ff", fg: "#86198f" },
-  assigned:         { bg: "#e0f2fe", fg: "#075985" },
-  reassigned_away:  { bg: "#fef3c7", fg: "#92400e" },
-  load_cancelled:   { bg: "#f3f4f6", fg: "#374151" },
-};
+function kindTint(C: Colors): Record<string, { bg: string; fg: string }> {
+  return {
+    confirm:          { bg: C.blueBg,     fg: C.blueInk },
+    mark_pickup:      { bg: C.amberBg,    fg: C.amberInk },
+    mark_delivery:    { bg: C.greenBg,    fg: C.greenInk },
+    upload_pod:       { bg: C.purpleBg,   fg: C.purpleInk },
+    report_trailer:   { bg: C.redBg,      fg: C.redInk },
+    upload_handoff:   { bg: C.purpleBg,   fg: C.purpleInk },
+    assigned:         { bg: C.blueBg,     fg: C.blueInk },
+    reassigned_away:  { bg: C.amberBg,    fg: C.amberInk },
+    load_cancelled:   { bg: C.borderSoft, fg: C.t2 },
+  };
+}
 
 function relativeTime(iso: string): string {
   const t = new Date(iso).getTime();
@@ -81,11 +85,12 @@ const SCREEN_W = Dimensions.get("window").width;
 const PANEL_W  = Math.min(380, Math.round(SCREEN_W * 0.88));
 
 export function NotificationsBell({ tint = "dark" }: Props = {}) {
+  const { C, SHADOW, ACCENT } = useTheme();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [open, setOpen] = useState(false);
-  const iconColorIdle    = tint === "light" ? "rgba(255,255,255,0.8)" : "#5f6368";
-  const iconColorActive  = tint === "light" ? "#ffffff" : "#202124";
+  const iconColorIdle    = tint === "light" ? "rgba(255,255,255,0.8)" : C.t3;
+  const iconColorActive  = tint === "light" ? "#ffffff" : C.t1;
   const buttonBg         = tint === "light" ? "rgba(255,255,255,0.12)" : "transparent";
   const buttonBorder     = tint === "light" ? "rgba(255,255,255,0.18)" : "transparent";
 
@@ -188,9 +193,9 @@ export function NotificationsBell({ tint = "dark" }: Props = {}) {
             top: 2, right: 2,
             minWidth: 16, height: 16, paddingHorizontal: 4,
             borderRadius: 8,
-            backgroundColor: "#dc2626",
+            backgroundColor: C.red,
             alignItems: "center", justifyContent: "center",
-            borderWidth: 1.5, borderColor: tint === "light" ? "#1a73e8" : "#ffffff",
+            borderWidth: 1.5, borderColor: tint === "light" ? "#1a73e8" : C.surface,
           }}>
             <Text style={[txt(800), { fontSize: 9, color: "#ffffff", lineHeight: 11 }]}>
               {pendingCount > 99 ? "99+" : pendingCount}
@@ -215,7 +220,7 @@ export function NotificationsBell({ tint = "dark" }: Props = {}) {
             position: "absolute",
             top: 0, bottom: 0, right: 0,
             width: PANEL_W,
-            backgroundColor: "#ffffff",
+            backgroundColor: C.surface,
             transform: [{ translateX: slideX }],
             shadowColor: "#000",
             shadowOffset: { width: -2, height: 0 },
@@ -224,19 +229,19 @@ export function NotificationsBell({ tint = "dark" }: Props = {}) {
             elevation: 16,
           }}
         >
-          <View style={{ flex: 1, paddingTop: insets.top, paddingBottom: insets.bottom, backgroundColor: "#ffffff" }}>
+          <View style={{ flex: 1, paddingTop: insets.top, paddingBottom: insets.bottom, backgroundColor: C.surface }}>
             {/* Header */}
-            <View style={{ paddingHorizontal: 18, paddingTop: 14, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: "#e8eaed", backgroundColor: "#ffffff" }}>
+            <View style={{ paddingHorizontal: 18, paddingTop: 14, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: C.border, backgroundColor: C.surface }}>
               <View style={{ flexDirection: "row", alignItems: "center" }}>
                 <View style={{ flex: 1 }}>
-                  <Text style={[txt(800), { fontSize: 18, color: "#202124" }]}>Notifications</Text>
-                  <Text style={[txt(500), { fontSize: 12, color: "#5f6368", marginTop: 2 }]}>
+                  <Text style={[txt(800), { fontSize: 18, color: C.t1 }]}>Notifications</Text>
+                  <Text style={[txt(500), { fontSize: 12, color: C.t3, marginTop: 2 }]}>
                     Last 48 hours
                     {pendingCount > 0 ? ` · ${pendingCount} pending` : ""}
                   </Text>
                 </View>
                 <TouchableOpacity onPress={() => setOpen(false)} hitSlop={10}>
-                  <X size={22} color="#5f6368" strokeWidth={2.2} />
+                  <X size={22} color={C.t3} strokeWidth={2.2} />
                 </TouchableOpacity>
               </View>
             </View>
@@ -245,21 +250,21 @@ export function NotificationsBell({ tint = "dark" }: Props = {}) {
             <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 30 }}>
               {isLoading && notifications.length === 0 ? (
                 <View style={{ paddingVertical: 50, alignItems: "center" }}>
-                  <ActivityIndicator size="small" color="#1a73e8" />
+                  <ActivityIndicator size="small" color={ACCENT} />
                 </View>
               ) : notifications.length === 0 ? (
                 <View style={{ paddingVertical: 50, alignItems: "center", paddingHorizontal: 30 }}>
-                  <BellOff size={28} color="#9aa0a6" strokeWidth={2} />
-                  <Text style={[txt(700), { fontSize: 14, color: "#3c4043", marginTop: 12, textAlign: "center" }]}>
+                  <BellOff size={28} color={C.t4} strokeWidth={2} />
+                  <Text style={[txt(700), { fontSize: 14, color: C.t2, marginTop: 12, textAlign: "center" }]}>
                     No notifications in the last 48 hours
                   </Text>
-                  <Text style={[txt(500), { fontSize: 12, color: "#9aa0a6", marginTop: 4, textAlign: "center" }]}>
+                  <Text style={[txt(500), { fontSize: 12, color: C.t4, marginTop: 4, textAlign: "center" }]}>
                     Pings from dispatch will appear here.
                   </Text>
                 </View>
               ) : (
                 notifications.map((n) => {
-                  const tint = KIND_TINT[n.kind] ?? { bg: "#f1f3f4", fg: "#3c4043" };
+                  const kt = kindTint(C)[n.kind] ?? { bg: C.borderSoft, fg: C.t2 };
                   const label = KIND_LABEL[n.kind] ?? n.kind;
                   const acked = !!n.acknowledgedAt;
                   return (
@@ -275,34 +280,34 @@ export function NotificationsBell({ tint = "dark" }: Props = {}) {
                         paddingHorizontal: 18,
                         paddingVertical: 14,
                         borderBottomWidth: 1,
-                        borderBottomColor: "#f1f3f4",
+                        borderBottomColor: C.borderSoft,
                         borderLeftWidth: acked ? 0 : 3,
-                        borderLeftColor: acked ? "transparent" : "#dc2626",
-                        backgroundColor: acked ? "#ffffff" : "#fffbf5",
+                        borderLeftColor: acked ? "transparent" : C.red,
+                        backgroundColor: acked ? C.surface : C.surface2,
                       }}
                     >
                       <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                        <View style={{ paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999, backgroundColor: tint.bg }}>
-                          <Text style={[txt(800), { fontSize: 10, color: tint.fg, letterSpacing: 0.5 }]}>
+                        <View style={{ paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999, backgroundColor: kt.bg }}>
+                          <Text style={[txt(800), { fontSize: 10, color: kt.fg, letterSpacing: 0.5 }]}>
                             {label.toUpperCase()}
                           </Text>
                         </View>
                         {acked ? (
                           <View style={{ flexDirection: "row", alignItems: "center", gap: 3 }}>
-                            <Check size={11} color="#16a34a" strokeWidth={2.6} />
-                            <Text style={[txt(700), { fontSize: 10, color: "#16a34a" }]}>Acknowledged</Text>
+                            <Check size={11} color={C.green} strokeWidth={2.6} />
+                            <Text style={[txt(700), { fontSize: 10, color: C.green }]}>Acknowledged</Text>
                           </View>
                         ) : null}
-                        <Text style={[txt(500), { fontSize: 11, color: "#9aa0a6", marginLeft: "auto" }]}>
+                        <Text style={[txt(500), { fontSize: 11, color: C.t4, marginLeft: "auto" }]}>
                           {relativeTime(n.sentAt)}
                         </Text>
                       </View>
-                      <Text style={[txt(700), { fontSize: 14, color: "#202124" }]} numberOfLines={1}>
+                      <Text style={[txt(700), { fontSize: 14, color: C.t1 }]} numberOfLines={1}>
                         {n.loadNum ? `#${n.loadNum}` : ""}
                         {n.loadNum && n.loadTitle ? " · " : ""}
                         {n.loadTitle ?? (n.loadNum ? "" : "Load")}
                       </Text>
-                      <Text style={[txt(500), { fontSize: 11, color: "#5f6368", marginTop: 2 }]}>
+                      <Text style={[txt(500), { fontSize: 11, color: C.t3, marginTop: 2 }]}>
                         Sent by {n.sentByName || "dispatch"}
                       </Text>
                     </TouchableOpacity>

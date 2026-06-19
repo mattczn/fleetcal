@@ -73,7 +73,7 @@ const darkC: Colors = {
   bg: "#0a0e14", bgGradA: "#0c1118", bgGradB: "#080b10",
   surface: "#151b24", surface2: "#1b222c", surfaceSunk: "#0e131a",
   border: "#262e3a", borderSoft: "#1f2630", borderStrong: "#323c4a",
-  t1: "#f0f3f8", t2: "#aab3bf", t3: "#79828f", t4: "#5a6470",
+  t1: "#f1f4f9", t2: "#b6bfca", t3: "#9aa3af", t4: "#78818d",
   blue: "#5b9bff", blueInk: "#8fbaff", blueBg: "rgba(91,155,255,0.16)",
   green: "#46c178", greenInk: "#7fd6a1", greenBg: "rgba(70,193,120,0.16)",
   red: "#ff6a5e", redInk: "#ff968d", redBg: "rgba(255,106,94,0.15)",

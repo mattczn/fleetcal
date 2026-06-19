@@ -3,6 +3,7 @@ import { Modal, View, Text, TouchableOpacity, Pressable, FlatList, ActivityIndic
 import { useQuery } from "@tanstack/react-query";
 import { Check, X, Container, Search } from "lucide-react-native";
 import { fetchTrailers } from "@/lib/api/loads";
+import { useTheme } from "@/lib/ThemeProvider";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
   fontFamily:
@@ -29,6 +30,7 @@ type Props = {
 };
 
 export function TrailerPickerSheet({ visible, orgId, currentId, onClose, onSelect, title, onSkip }: Props) {
+  const { C, SHADOW, ACCENT } = useTheme();
   const { data: trailers, isLoading, isError, refetch } = useQuery({
     queryKey: ["trailers", orgId],
     queryFn:  () => fetchTrailers(orgId),
@@ -67,7 +69,7 @@ export function TrailerPickerSheet({ visible, orgId, currentId, onClose, onSelec
         <Pressable
           onPress={(e) => e.stopPropagation()}
           style={{
-            backgroundColor: "#ffffff",
+            backgroundColor: C.surface,
             borderTopLeftRadius: 20,
             borderTopRightRadius: 20,
             maxHeight: "80%",
@@ -82,14 +84,14 @@ export function TrailerPickerSheet({ visible, orgId, currentId, onClose, onSelec
               paddingHorizontal: 18,
               paddingVertical: 14,
               borderBottomWidth: 1,
-              borderBottomColor: "#f1f3f4",
+              borderBottomColor: C.borderSoft,
             }}
           >
-            <Text style={[txt(800), { fontSize: 16, color: "#202124", flex: 1 }]}>
+            <Text style={[txt(800), { fontSize: 16, color: C.t1, flex: 1 }]}>
               {title ?? "Select trailer"}
             </Text>
             <TouchableOpacity onPress={onClose} hitSlop={10}>
-              <X size={20} color="#5f6368" strokeWidth={2.2} />
+              <X size={20} color={C.t3} strokeWidth={2.2} />
             </TouchableOpacity>
           </View>
 
@@ -102,55 +104,55 @@ export function TrailerPickerSheet({ visible, orgId, currentId, onClose, onSelec
                 gap: 8,
                 paddingHorizontal: 12,
                 paddingVertical: 10,
-                backgroundColor: "#f1f3f4",
+                backgroundColor: C.borderSoft,
                 borderRadius: 10,
               }}
             >
-              <Search size={16} color="#5f6368" strokeWidth={2.2} />
+              <Search size={16} color={C.t3} strokeWidth={2.2} />
               <TextInput
                 placeholder="Search by trailer number or name"
-                placeholderTextColor="#9aa0a6"
+                placeholderTextColor={C.t4}
                 value={query}
                 onChangeText={setQuery}
                 autoCapitalize="none"
                 autoCorrect={false}
                 clearButtonMode="while-editing"
-                style={[txt(600), { flex: 1, fontSize: 14, color: "#202124", padding: 0 }]}
+                style={[txt(600), { flex: 1, fontSize: 14, color: C.t1, padding: 0 }]}
               />
             </View>
           </View>
 
           {isLoading ? (
             <View style={{ paddingVertical: 50, alignItems: "center" }}>
-              <ActivityIndicator color="#1a73e8" />
+              <ActivityIndicator color={ACCENT} />
             </View>
           ) : isError ? (
             // Fetch failed (network blip mid-drive, server hiccup, etc).
             // Without this branch the picker collapses to the "No
             // trailers configured" message — wrong and misleading.
             <View style={{ paddingVertical: 30, paddingHorizontal: 24, alignItems: "center" }}>
-              <Text style={[txt(700), { fontSize: 14, color: "#b91c1c", marginBottom: 6, textAlign: "center" }]}>
+              <Text style={[txt(700), { fontSize: 14, color: C.redInk, marginBottom: 6, textAlign: "center" }]}>
                 Could not load trailers
               </Text>
-              <Text style={[txt(500), { fontSize: 12, color: "#5f6368", textAlign: "center", marginBottom: 14 }]}>
+              <Text style={[txt(500), { fontSize: 12, color: C.t3, textAlign: "center", marginBottom: 14 }]}>
                 Check your connection and try again. {onSkip ? "Or continue without a trailer." : ""}
               </Text>
               <TouchableOpacity
                 onPress={() => void refetch()}
-                style={{ backgroundColor: "#1a73e8", paddingHorizontal: 18, paddingVertical: 10, borderRadius: 8 }}
+                style={{ backgroundColor: ACCENT, paddingHorizontal: 18, paddingVertical: 10, borderRadius: 8 }}
               >
                 <Text style={[txt(700), { color: "#fff", fontSize: 13 }]}>Retry</Text>
               </TouchableOpacity>
             </View>
           ) : (trailers ?? []).length === 0 ? (
             <View style={{ paddingVertical: 50, alignItems: "center" }}>
-              <Text style={[txt(600), { fontSize: 13, color: "#9aa0a6" }]}>
+              <Text style={[txt(600), { fontSize: 13, color: C.t4 }]}>
                 No trailers configured for this org.
               </Text>
             </View>
           ) : filtered.length === 0 ? (
             <View style={{ paddingVertical: 40, alignItems: "center" }}>
-              <Text style={[txt(600), { fontSize: 13, color: "#9aa0a6" }]}>
+              <Text style={[txt(600), { fontSize: 13, color: C.t4 }]}>
                 No trailers match &ldquo;{query}&rdquo;
               </Text>
             </View>
@@ -172,27 +174,27 @@ export function TrailerPickerSheet({ visible, orgId, currentId, onClose, onSelec
                       paddingHorizontal: 18,
                       paddingVertical: 14,
                       borderBottomWidth: 1,
-                      borderBottomColor: "#f1f3f4",
+                      borderBottomColor: C.borderSoft,
                     }}
                   >
                     <View
                       style={{
                         width: 36, height: 36, borderRadius: 10,
-                        backgroundColor: "#e8f0fe",
+                        backgroundColor: C.blueBg,
                         alignItems: "center", justifyContent: "center",
                       }}
                     >
-                      <Container size={16} color="#1a73e8" strokeWidth={2.2} />
+                      <Container size={16} color={ACCENT} strokeWidth={2.2} />
                     </View>
                     <View style={{ flex: 1 }}>
-                      <Text style={[txt(700), { fontSize: 14, color: "#202124" }]}>
+                      <Text style={[txt(700), { fontSize: 14, color: C.t1 }]}>
                         #{item.trailerNumber ?? item.name}
                       </Text>
-                      <Text style={[txt(500), { fontSize: 12, color: "#5f6368", marginTop: 1 }]}>
+                      <Text style={[txt(500), { fontSize: 12, color: C.t3, marginTop: 1 }]}>
                         {item.category}
                       </Text>
                     </View>
-                    {isCurrent ? <Check size={18} color="#1a73e8" strokeWidth={2.6} /> : null}
+                    {isCurrent ? <Check size={18} color={ACCENT} strokeWidth={2.6} /> : null}
                   </TouchableOpacity>
                 );
               }}
@@ -207,12 +209,12 @@ export function TrailerPickerSheet({ visible, orgId, currentId, onClose, onSelec
                 marginHorizontal: 18,
                 paddingVertical: 12,
                 alignItems: "center",
-                backgroundColor: "#f1f3f4",
+                backgroundColor: C.borderSoft,
                 borderRadius: 10,
-                borderWidth: 1, borderColor: "#dadce0",
+                borderWidth: 1, borderColor: C.borderStrong,
               }}
             >
-              <Text style={[txt(700), { fontSize: 13, color: "#3c4043" }]}>
+              <Text style={[txt(700), { fontSize: 13, color: C.t2 }]}>
                 Continue without trailer
               </Text>
             </TouchableOpacity>
@@ -224,12 +226,12 @@ export function TrailerPickerSheet({ visible, orgId, currentId, onClose, onSelec
                 marginHorizontal: 18,
                 paddingVertical: 12,
                 alignItems: "center",
-                backgroundColor: "#fef2f2",
+                backgroundColor: C.redBg,
                 borderRadius: 10,
-                borderWidth: 1, borderColor: "#fecaca",
+                borderWidth: 1, borderColor: C.redBg,
               }}
             >
-              <Text style={[txt(700), { fontSize: 13, color: "#b91c1c" }]}>
+              <Text style={[txt(700), { fontSize: 13, color: C.redInk }]}>
                 Clear trailer
               </Text>
             </TouchableOpacity>
@@ -245,12 +247,12 @@ export function TrailerPickerSheet({ visible, orgId, currentId, onClose, onSelec
                 marginHorizontal: 18,
                 paddingVertical: 12,
                 alignItems: "center",
-                backgroundColor: "#f1f3f4",
+                backgroundColor: C.borderSoft,
                 borderRadius: 10,
-                borderWidth: 1, borderColor: "#dadce0",
+                borderWidth: 1, borderColor: C.borderStrong,
               }}
             >
-              <Text style={[txt(700), { fontSize: 13, color: "#3c4043" }]}>
+              <Text style={[txt(700), { fontSize: 13, color: C.t2 }]}>
                 Close
               </Text>
             </TouchableOpacity>

@@ -15,6 +15,7 @@
 import React, { useState } from "react";
 import { View, Text, TouchableOpacity, Linking, Platform, ActionSheetIOS, Alert, ActivityIndicator } from "react-native";
 import { Truck, MapPin, Navigation, AlertTriangle, RefreshCw } from "lucide-react-native";
+import { useTheme } from "@/lib/ThemeProvider";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
   fontFamily:
@@ -62,7 +63,8 @@ interface Props {
 }
 
 export function AssignedTruckCard({ assetName, assetColor, truck, onViewOnMap, onRefresh }: Props) {
-  const color = assetColor ?? "#1a73e8";
+  const { C, SHADOW, ACCENT } = useTheme();
+  const color = assetColor ?? ACCENT;
   const hasLocation = truck != null;
   const [refreshing, setRefreshing] = useState(false);
 
@@ -116,16 +118,13 @@ export function AssignedTruckCard({ assetName, assetColor, truck, onViewOnMap, o
 
   return (
     <View style={{
-      backgroundColor: "#ffffff",
+      backgroundColor: C.surface,
       borderRadius: 14,
       padding: 14,
       marginBottom: 14,
       borderWidth: 1,
-      borderColor: "#e8eaed",
-      shadowColor: "#000",
-      shadowOpacity: 0.04,
-      shadowRadius: 8,
-      shadowOffset: { width: 0, height: 2 },
+      borderColor: C.border,
+      ...SHADOW.card,
     }}>
       {/* Header row: color swatch + truck icon + name */}
       <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
@@ -138,10 +137,10 @@ export function AssignedTruckCard({ assetName, assetColor, truck, onViewOnMap, o
           <Truck size={20} color="#ffffff" strokeWidth={2.4} />
         </View>
         <View style={{ flex: 1, minWidth: 0 }}>
-          <Text style={[txt(500), { fontSize: 11, color: "#5f6368", textTransform: "uppercase", letterSpacing: 0.6 }]}>
+          <Text style={[txt(500), { fontSize: 11, color: C.t3, textTransform: "uppercase", letterSpacing: 0.6 }]}>
             Assigned Truck
           </Text>
-          <Text style={[txt(800), { fontSize: 16, color: "#202124", marginTop: 1 }]} numberOfLines={1}>
+          <Text style={[txt(800), { fontSize: 16, color: C.t1, marginTop: 1 }]} numberOfLines={1}>
             {assetName}
           </Text>
         </View>
@@ -153,13 +152,13 @@ export function AssignedTruckCard({ assetName, assetColor, truck, onViewOnMap, o
           old. Spinner replaces the icon while the refetch is in flight. */}
       <View style={{ marginTop: 10, paddingLeft: 52, flexDirection: "row", alignItems: "center" }}>
         {hasLocation ? (
-          <Text style={[txt(500), { flex: 1, fontSize: 12, color: "#5f6368" }]} numberOfLines={1}>
-            <MapPin size={11} color="#5f6368" strokeWidth={2.2} />{" "}
+          <Text style={[txt(500), { flex: 1, fontSize: 12, color: C.t3 }]} numberOfLines={1}>
+            <MapPin size={11} color={C.t3} strokeWidth={2.2} />{" "}
             {truck.description?.trim() || "Location available"}
-            <Text style={[txt(500), { color: "#9aa0a6" }]}>{"  ·  "}{relTime(truck.locatedAt)}</Text>
+            <Text style={[txt(500), { color: C.t4 }]}>{"  ·  "}{relTime(truck.locatedAt)}</Text>
           </Text>
         ) : (
-          <Text style={[txt(500), { flex: 1, fontSize: 12, color: "#9aa0a6" }]}>
+          <Text style={[txt(500), { flex: 1, fontSize: 12, color: C.t4 }]}>
             No live location available
           </Text>
         )}
@@ -176,8 +175,8 @@ export function AssignedTruckCard({ assetName, assetColor, truck, onViewOnMap, o
             accessibilityLabel="Refresh truck location"
           >
             {refreshing
-              ? <ActivityIndicator size="small" color="#5f6368" />
-              : <RefreshCw size={14} color="#5f6368" strokeWidth={2.2} />}
+              ? <ActivityIndicator size="small" color={C.t3} />
+              : <RefreshCw size={14} color={C.t3} strokeWidth={2.2} />}
           </TouchableOpacity>
         )}
       </View>
@@ -195,11 +194,11 @@ export function AssignedTruckCard({ assetName, assetColor, truck, onViewOnMap, o
             gap: 6,
             paddingVertical: 10,
             borderRadius: 10,
-            backgroundColor: "#e8f0fe",
+            backgroundColor: C.blueBg,
           }}
         >
-          <MapPin size={14} color="#1a73e8" strokeWidth={2.4} />
-          <Text style={[txt(700), { fontSize: 13, color: "#1a73e8" }]}>View on Map</Text>
+          <MapPin size={14} color={ACCENT} strokeWidth={2.4} />
+          <Text style={[txt(700), { fontSize: 13, color: ACCENT }]}>View on Map</Text>
         </TouchableOpacity>
         <TouchableOpacity
           onPress={handleNavigate}
@@ -213,11 +212,11 @@ export function AssignedTruckCard({ assetName, assetColor, truck, onViewOnMap, o
             gap: 6,
             paddingVertical: 10,
             borderRadius: 10,
-            backgroundColor: hasLocation ? "#0f9d58" : "#f1f3f4",
+            backgroundColor: hasLocation ? C.greenInk : C.borderSoft,
           }}
         >
-          <Navigation size={14} color={hasLocation ? "#ffffff" : "#9aa0a6"} strokeWidth={2.4} />
-          <Text style={[txt(700), { fontSize: 13, color: hasLocation ? "#ffffff" : "#9aa0a6" }]}>
+          <Navigation size={14} color={hasLocation ? "#ffffff" : C.t4} strokeWidth={2.4} />
+          <Text style={[txt(700), { fontSize: 13, color: hasLocation ? "#ffffff" : C.t4 }]}>
             Navigate
           </Text>
         </TouchableOpacity>
@@ -229,12 +228,12 @@ export function AssignedTruckCard({ assetName, assetColor, truck, onViewOnMap, o
         flexDirection: "row",
         alignItems: "flex-start",
         gap: 6,
-        backgroundColor: "#fffbf0",
+        backgroundColor: C.amberBg,
         borderRadius: 8,
         padding: 9,
       }}>
-        <AlertTriangle size={12} color="#a16207" strokeWidth={2.2} style={{ marginTop: 1 }} />
-        <Text style={[txt(500), { flex: 1, fontSize: 11, color: "#854d0e", lineHeight: 16 }]}>
+        <AlertTriangle size={12} color={C.amberInk} strokeWidth={2.2} style={{ marginTop: 1 }} />
+        <Text style={[txt(500), { flex: 1, fontSize: 11, color: C.amberInk, lineHeight: 16 }]}>
           Truck and location may have changed. Double-check with dispatch before leaving for the truck.
         </Text>
       </View>

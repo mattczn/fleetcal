@@ -16,6 +16,7 @@ import { useQuery } from "@tanstack/react-query";
 import { X, Check } from "lucide-react-native";
 import { updateDocumentKind, type DocumentKind, type LoadDocument } from "@/lib/api/documents";
 import { fetchOrgSettings } from "@/lib/api/orgSettings";
+import { useTheme } from "@/lib/ThemeProvider";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
   fontFamily:
@@ -25,18 +26,20 @@ const txt = (weight: 500 | 600 | 700 | 800) => ({
                      "PlusJakartaSans_800ExtraBold",
 });
 
-const KIND_PRESETS: Record<DocumentKind, { label: string; tint: string }> = {
-  pod:           { label: "POD",      tint: "#15803d" },
-  bol:           { label: "BOL",      tint: "#1a73e8" },
-  scale:         { label: "Scale",    tint: "#9a3412" },
-  lumper:        { label: "Lumper",   tint: "#92400e" },
-  receipt:       { label: "Receipt",  tint: "#9d174d" },
-  driver_sheet:  { label: "Sheet",    tint: "#6d28d9" },
-  relay_handoff: { label: "Handoff",  tint: "#8b5cf6" },
-  other:         { label: "Other",    tint: "#5f6368" },
-  rate_con:      { label: "Rate Con", tint: "#92400e" },
-  invoice:       { label: "Invoice",  tint: "#9d174d" },
-};
+function kindPresets(C: ReturnType<typeof useTheme>["C"]): Record<DocumentKind, { label: string; tint: string }> {
+  return {
+    pod:           { label: "POD",      tint: C.greenInk },
+    bol:           { label: "BOL",      tint: C.blue },
+    scale:         { label: "Scale",    tint: C.amberInk },
+    lumper:        { label: "Lumper",   tint: C.amberInk },
+    receipt:       { label: "Receipt",  tint: C.redInk },
+    driver_sheet:  { label: "Sheet",    tint: C.purple },
+    relay_handoff: { label: "Handoff",  tint: C.purple },
+    other:         { label: "Other",    tint: C.t3 },
+    rate_con:      { label: "Rate Con", tint: C.amberInk },
+    invoice:       { label: "Invoice",  tint: C.redInk },
+  };
+}
 
 interface Props {
   doc:       LoadDocument | null;
@@ -47,6 +50,8 @@ interface Props {
 }
 
 export function EditDocumentKindSheet({ doc, orgId, visible, onClose, onUpdated }: Props) {
+  const { C, SHADOW, ACCENT } = useTheme();
+  const KIND_PRESETS = kindPresets(C);
   // Allowed kinds come from /v1/driver/org-settings — same source as
   // UploadSheet so the picker shape is consistent across upload + edit.
   const { data: orgSettings } = useQuery({
@@ -94,24 +99,24 @@ export function EditDocumentKindSheet({ doc, orgId, visible, onClose, onUpdated 
         <Pressable
           onPress={(e) => e.stopPropagation()}
           style={{
-            backgroundColor: "#ffffff",
+            backgroundColor: C.surface,
             borderTopLeftRadius: 22, borderTopRightRadius: 22,
             paddingHorizontal: 18, paddingTop: 8, paddingBottom: 28,
           }}
         >
-          <View style={{ width: 36, height: 4, borderRadius: 2, backgroundColor: "#e8eaed", alignSelf: "center", marginBottom: 14 }} />
+          <View style={{ width: 36, height: 4, borderRadius: 2, backgroundColor: C.border, alignSelf: "center", marginBottom: 14 }} />
 
           <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 4 }}>
-            <Text style={[txt(800), { fontSize: 18, color: "#202124", flex: 1 }]}>Change document type</Text>
+            <Text style={[txt(800), { fontSize: 18, color: C.t1, flex: 1 }]}>Change document type</Text>
             <TouchableOpacity onPress={onClose} hitSlop={10} disabled={saving}>
-              <X size={20} color="#5f6368" strokeWidth={2.2} />
+              <X size={20} color={C.t3} strokeWidth={2.2} />
             </TouchableOpacity>
           </View>
-          <Text style={[txt(500), { fontSize: 13, color: "#5f6368", marginBottom: 16 }]} numberOfLines={1}>
+          <Text style={[txt(500), { fontSize: 13, color: C.t3, marginBottom: 16 }]} numberOfLines={1}>
             {doc.fileName}
           </Text>
 
-          <Text style={[txt(800), { fontSize: 11, letterSpacing: 1, color: "#5f6368", textTransform: "uppercase", marginBottom: 8 }]}>
+          <Text style={[txt(800), { fontSize: 11, letterSpacing: 1, color: C.t3, textTransform: "uppercase", marginBottom: 8 }]}>
             Document type
           </Text>
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 18 }}>
@@ -128,16 +133,16 @@ export function EditDocumentKindSheet({ doc, orgId, visible, onClose, onUpdated 
                     paddingVertical: 9,
                     paddingHorizontal: 12,
                     borderRadius: 10,
-                    backgroundColor: active ? `${preset.tint}15` : "#f8f9fa",
+                    backgroundColor: active ? `${preset.tint}15` : C.bg,
                     borderWidth: 1.5,
-                    borderColor: active ? preset.tint : "#e8eaed",
+                    borderColor: active ? preset.tint : C.border,
                     flexDirection: "row",
                     alignItems: "center",
                     gap: 4,
                   }}
                 >
                   {active ? <Check size={12} color={preset.tint} strokeWidth={2.6} /> : null}
-                  <Text style={[txt(800), { fontSize: 12, color: active ? preset.tint : "#5f6368", letterSpacing: 0.3 }]}>
+                  <Text style={[txt(800), { fontSize: 12, color: active ? preset.tint : C.t3, letterSpacing: 0.3 }]}>
                     {preset.label}
                   </Text>
                 </TouchableOpacity>
@@ -156,9 +161,9 @@ export function EditDocumentKindSheet({ doc, orgId, visible, onClose, onUpdated 
               gap: 8,
               paddingVertical: 14,
               borderRadius: 12,
-              backgroundColor: "#1a73e8",
+              backgroundColor: ACCENT,
               opacity: saving || kind === doc.kind ? 0.5 : 1,
-              shadowColor: "#1a73e8", shadowOpacity: 0.3, shadowRadius: 10, shadowOffset: { width: 0, height: 4 },
+              shadowColor: ACCENT, shadowOpacity: 0.3, shadowRadius: 10, shadowOffset: { width: 0, height: 4 },
             }}
           >
             {saving ? <ActivityIndicator color="#ffffff" /> : <Check size={16} color="#ffffff" strokeWidth={2.6} />}

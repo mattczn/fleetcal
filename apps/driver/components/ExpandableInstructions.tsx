@@ -10,6 +10,7 @@
 import React, { useState } from "react";
 import { View, Text, TouchableOpacity, TextInput, type TextStyle } from "react-native";
 import { ChevronDown, ChevronUp } from "lucide-react-native";
+import { useTheme } from "@/lib/ThemeProvider";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
   fontFamily:
@@ -28,8 +29,10 @@ export interface ExpandableInstructionsProps {
 }
 
 export function ExpandableInstructions({
-  value, textStyle, toggleColor = "#5f6368",
+  value, textStyle, toggleColor,
 }: ExpandableInstructionsProps) {
+  const { C } = useTheme();
+  const toggle = toggleColor ?? C.t3;
   const [expanded, setExpanded] = useState(false);
   // Heuristic — only show the toggle when the text is plausibly more
   // than two lines. ~50 chars/line on a phone, so > 100 chars is a
@@ -58,12 +61,12 @@ export function ExpandableInstructions({
           activeOpacity={0.7}
           style={{ flexDirection: "row", alignItems: "center", gap: 3, marginTop: 6, alignSelf: "flex-start" }}
         >
-          <Text style={[txt(800), { fontSize: 11, color: toggleColor, letterSpacing: 0.3 }]}>
+          <Text style={[txt(800), { fontSize: 11, color: toggle, letterSpacing: 0.3 }]}>
             {expanded ? "Show less" : "Show more"}
           </Text>
           {expanded
-            ? <ChevronUp   size={12} color={toggleColor} strokeWidth={2.6} />
-            : <ChevronDown size={12} color={toggleColor} strokeWidth={2.6} />}
+            ? <ChevronUp   size={12} color={toggle} strokeWidth={2.6} />
+            : <ChevronDown size={12} color={toggle} strokeWidth={2.6} />}
         </TouchableOpacity>
       ) : null}
     </View>

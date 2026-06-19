@@ -18,6 +18,7 @@ import * as ImagePicker from "expo-image-picker";
 import { railway } from "@/lib/railway";
 import type { MaintenanceReport } from "@fleetcal/types";
 import { MaintenanceReportDetailSheet } from "@/components/MaintenanceReportDetailSheet";
+import { useTheme } from "@/lib/ThemeProvider";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
   fontFamily:
@@ -40,6 +41,7 @@ interface LocalPhoto {
 }
 
 export default function MaintenanceScreen() {
+  const { C, SHADOW, ACCENT } = useTheme();
   const [targetKind, setTargetKind] = useState<TargetKind>("asset");
 
   const [assets,         setAssets]         = useState<AssetOption[]>([]);
@@ -299,7 +301,7 @@ export default function MaintenanceScreen() {
 
   return (
     <>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1, backgroundColor: '#f8f9fa' }}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1, backgroundColor: C.bg }}>
         <ScrollView
           contentContainerStyle={{ padding: 16, paddingBottom: 80 }}
           keyboardShouldPersistTaps="handled"
@@ -313,10 +315,10 @@ export default function MaintenanceScreen() {
           }>
 
           {/* Form card */}
-          <View style={{ backgroundColor: '#fff', borderRadius: 14, padding: 16 }}>
+          <View style={{ backgroundColor: C.surface, borderRadius: 14, padding: 16 }}>
 
             {/* Target kind toggle */}
-            <Text style={[txt(800), { fontSize: 11, color: '#202124', letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 8 }]}>
+            <Text style={[txt(800), { fontSize: 11, color: C.t1, letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 8 }]}>
               What's affected?
             </Text>
             <View style={{ flexDirection: 'row', gap: 8, marginBottom: 14 }}>
@@ -343,27 +345,27 @@ export default function MaintenanceScreen() {
                 flexDirection: 'row',
                 alignItems: 'center',
                 justifyContent: 'space-between',
-                backgroundColor: '#fff',
+                backgroundColor: C.surface,
                 borderRadius: 10,
                 borderWidth: 1,
-                borderColor: '#e8eaed',
+                borderColor: C.border,
                 paddingHorizontal: 12,
                 paddingVertical: 12,
               }}>
-              <Text style={[txt(selectedLabel ? 700 : 500), { fontSize: 15, color: selectedLabel ? '#202124' : '#9aa0a6' }]}>
+              <Text style={[txt(selectedLabel ? 700 : 500), { fontSize: 15, color: selectedLabel ? C.t1 : C.t4 }]}>
                 {selectedLabel ?? (optsLoading ? 'Loading…' : 'Select')}
               </Text>
-              <ChevronDown size={16} color="#5f6368" />
+              <ChevronDown size={16} color={C.t3} />
             </TouchableOpacity>
             {optsError && (
               // Surface load failure + offer retry. Without this the
               // picker just stays empty and the driver has no way to
               // recover except to leave + come back.
-              <View style={{ marginTop: 6, padding: 10, backgroundColor: "#fef2f2", borderRadius: 8, flexDirection: "row", alignItems: "center", gap: 10 }}>
-                <Text style={{ flex: 1, fontSize: 12, color: "#991b1b" }}>{optsError}</Text>
+              <View style={{ marginTop: 6, padding: 10, backgroundColor: C.redBg, borderRadius: 8, flexDirection: "row", alignItems: "center", gap: 10 }}>
+                <Text style={{ flex: 1, fontSize: 12, color: C.redInk }}>{optsError}</Text>
                 <TouchableOpacity
                   onPress={() => void loadOpts()}
-                  style={{ backgroundColor: "#dc2626", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6 }}
+                  style={{ backgroundColor: C.red, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6 }}
                 >
                   <Text style={{ color: "#fff", fontSize: 12, fontWeight: "700" }}>Retry</Text>
                 </TouchableOpacity>
@@ -371,8 +373,8 @@ export default function MaintenanceScreen() {
             )}
             {pickerOpen && (
               <View style={{
-                marginTop: 6, backgroundColor: '#fff', borderRadius: 10,
-                borderWidth: 1, borderColor: '#e8eaed', maxHeight: 260, overflow: 'hidden',
+                marginTop: 6, backgroundColor: C.surface, borderRadius: 10,
+                borderWidth: 1, borderColor: C.border, maxHeight: 260, overflow: 'hidden',
               }}>
                 <ScrollView nestedScrollEnabled>
                   {targetKind === 'asset'
@@ -380,16 +382,16 @@ export default function MaintenanceScreen() {
                         <TouchableOpacity key={a.id}
                           onPress={() => { setAssetId(a.id); setPickerOpen(false); }}
                           activeOpacity={0.6}
-                          style={{ paddingHorizontal: 14, paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: '#f1f3f4' }}>
-                          <Text style={[txt(600), { fontSize: 14, color: '#202124' }]}>{formatAssetLabel(a)}</Text>
+                          style={{ paddingHorizontal: 14, paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: C.borderSoft }}>
+                          <Text style={[txt(600), { fontSize: 14, color: C.t1 }]}>{formatAssetLabel(a)}</Text>
                         </TouchableOpacity>
                       ))
                     : trailers.map(t => (
                         <TouchableOpacity key={t.id}
                           onPress={() => { setTrailerId(t.id); setPickerOpen(false); }}
                           activeOpacity={0.6}
-                          style={{ paddingHorizontal: 14, paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: '#f1f3f4' }}>
-                          <Text style={[txt(600), { fontSize: 14, color: '#202124' }]}>{formatTrailerLabel(t)}</Text>
+                          style={{ paddingHorizontal: 14, paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: C.borderSoft }}>
+                          <Text style={[txt(600), { fontSize: 14, color: C.t1 }]}>{formatTrailerLabel(t)}</Text>
                         </TouchableOpacity>
                       ))}
                 </ScrollView>
@@ -402,19 +404,19 @@ export default function MaintenanceScreen() {
               value={description}
               onChangeText={setDescription}
               placeholder="What's wrong? Where on the truck/trailer? When did you notice?"
-              placeholderTextColor="#9aa0a6"
+              placeholderTextColor={C.t4}
               multiline
               style={[
                 txt(600),
                 {
-                  backgroundColor: '#fff',
+                  backgroundColor: C.surface,
                   borderRadius: 10,
                   borderWidth: 1,
-                  borderColor: '#e8eaed',
+                  borderColor: C.border,
                   paddingHorizontal: 12,
                   paddingVertical: 10,
                   fontSize: 15,
-                  color: '#202124',
+                  color: C.t1,
                   minHeight: 110,
                   textAlignVertical: 'top',
                 },
@@ -448,14 +450,14 @@ export default function MaintenanceScreen() {
                   width: '100%',
                   paddingVertical: 18,
                   borderRadius: 10,
-                  borderWidth: 1.5, borderColor: '#1a73e8', borderStyle: 'dashed',
+                  borderWidth: 1.5, borderColor: ACCENT, borderStyle: 'dashed',
                   alignItems: 'center', justifyContent: 'center',
                   flexDirection: 'row',
                   gap: 8,
-                  backgroundColor: '#e8f0fe',
+                  backgroundColor: C.blueBg,
                 }}>
-                <Camera size={18} color="#1a73e8" strokeWidth={2.2} />
-                <Text style={[txt(700), { fontSize: 14, color: '#1a73e8' }]}>
+                <Camera size={18} color={ACCENT} strokeWidth={2.2} />
+                <Text style={[txt(700), { fontSize: 14, color: ACCENT }]}>
                   {photos.length === 0 ? 'Upload Photo' : 'Add Another Photo'}
                 </Text>
               </TouchableOpacity>
@@ -468,7 +470,7 @@ export default function MaintenanceScreen() {
               activeOpacity={0.85}
               style={{
                 marginTop: 18,
-                backgroundColor: canSubmit ? '#1a73e8' : '#c5cae9',
+                backgroundColor: canSubmit ? ACCENT : C.borderStrong,
                 borderRadius: 12,
                 paddingVertical: 14,
                 alignItems: 'center',
@@ -489,11 +491,11 @@ export default function MaintenanceScreen() {
               selected. Surfaces reports from any driver against the
               same vehicle so they don't double-report. */}
           <View style={{ marginTop: 24 }}>
-            <Text style={[txt(800), { fontSize: 11, color: '#202124', letterSpacing: 1.1, marginBottom: 8 }]}>
+            <Text style={[txt(800), { fontSize: 11, color: C.t1, letterSpacing: 1.1, marginBottom: 8 }]}>
               {selectedLabel ? `RECENT REPORTS · ${selectedLabel.toUpperCase()}` : 'RECENT REPORTS'}
             </Text>
             {!selectedLabel ? (
-              <Text style={[txt(500), { fontSize: 13, color: '#9aa0a6', padding: 12 }]}>
+              <Text style={[txt(500), { fontSize: 13, color: C.t4, padding: 12 }]}>
                 Select a {targetKind === 'asset' ? 'truck' : 'trailer'} above to see recent reports.
               </Text>
             ) : historyLoading ? (
@@ -501,7 +503,7 @@ export default function MaintenanceScreen() {
                 <ActivityIndicator />
               </View>
             ) : history.length === 0 ? (
-              <Text style={[txt(500), { fontSize: 13, color: '#9aa0a6', padding: 12 }]}>
+              <Text style={[txt(500), { fontSize: 13, color: C.t4, padding: 12 }]}>
                 No prior reports.
               </Text>
             ) : (
@@ -515,7 +517,7 @@ export default function MaintenanceScreen() {
               truck/trailer selection so they can scroll back through
               everything they've filed across assets and review photos. */}
           <View style={{ marginTop: 24 }}>
-            <Text style={[txt(800), { fontSize: 11, color: '#202124', letterSpacing: 1.1, marginBottom: 8 }]}>
+            <Text style={[txt(800), { fontSize: 11, color: C.t1, letterSpacing: 1.1, marginBottom: 8 }]}>
               YOUR RECENT REPORTS
             </Text>
             {myReportsLoading ? (
@@ -523,7 +525,7 @@ export default function MaintenanceScreen() {
                 <ActivityIndicator />
               </View>
             ) : myReports.length === 0 ? (
-              <Text style={[txt(500), { fontSize: 13, color: '#9aa0a6', padding: 12 }]}>
+              <Text style={[txt(500), { fontSize: 13, color: C.t4, padding: 12 }]}>
                 You haven't submitted any reports yet.
               </Text>
             ) : (
@@ -569,6 +571,7 @@ function ToggleChip({
 }: {
   Icon: typeof Truck; label: string; active: boolean; onPress: () => void;
 }) {
+  const { C, ACCENT } = useTheme();
   return (
     <TouchableOpacity onPress={onPress} activeOpacity={0.7}
       style={{
@@ -579,42 +582,44 @@ function ToggleChip({
         gap: 6,
         paddingVertical: 12,
         borderRadius: 10,
-        backgroundColor: active ? '#1a73e8' : '#fff',
+        backgroundColor: active ? ACCENT : C.surface,
         borderWidth: 1,
-        borderColor: active ? '#1a73e8' : '#e8eaed',
+        borderColor: active ? ACCENT : C.border,
       }}>
-      <Icon size={16} color={active ? '#fff' : '#5f6368'} strokeWidth={2.2} />
-      <Text style={[txt(700), { fontSize: 14, color: active ? '#fff' : '#5f6368' }]}>{label}</Text>
+      <Icon size={16} color={active ? '#fff' : C.t3} strokeWidth={2.2} />
+      <Text style={[txt(700), { fontSize: 14, color: active ? '#fff' : C.t3 }]}>{label}</Text>
     </TouchableOpacity>
   );
 }
 
 function FieldLabel({ label, required }: { label: string; required?: boolean }) {
+  const { C } = useTheme();
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 14, marginBottom: 6, gap: 4 }}>
-      <Text style={[txt(800), { fontSize: 11, color: '#202124', letterSpacing: 0.5, textTransform: 'uppercase' }]}>{label}</Text>
-      {required && <Text style={[txt(700), { fontSize: 11, color: '#c62828' }]}>*</Text>}
+      <Text style={[txt(800), { fontSize: 11, color: C.t1, letterSpacing: 0.5, textTransform: 'uppercase' }]}>{label}</Text>
+      {required && <Text style={[txt(700), { fontSize: 11, color: C.redInk }]}>*</Text>}
     </View>
   );
 }
 
 function HistoryRow({ report, onPress }: { report: MaintenanceReport; onPress?: () => void }) {
+  const { C } = useTheme();
   const date = new Date(report.reportedAt);
   const dateLabel = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
   const statusColor =
-    report.status === 'open'        ? { bg: '#fef3c7', fg: '#92400e', label: 'Open' } :
-    report.status === 'reviewed'    ? { bg: '#dbeafe', fg: '#1e40af', label: 'Reviewed' } :
-    report.status === 'converted'   ? { bg: '#dcfce7', fg: '#15803d', label: 'Scheduled' } :
-                                      { bg: '#f3f4f6', fg: '#4b5563', label: 'Dismissed' };
+    report.status === 'open'        ? { bg: C.amberBg, fg: C.amberInk, label: 'Open' } :
+    report.status === 'reviewed'    ? { bg: C.blueBg,  fg: C.blueInk,  label: 'Reviewed' } :
+    report.status === 'converted'   ? { bg: C.greenBg, fg: C.greenInk, label: 'Scheduled' } :
+                                      { bg: C.borderSoft, fg: C.t2,     label: 'Dismissed' };
   const photoCount = report.photos?.length ?? 0;
   return (
     <TouchableOpacity
       activeOpacity={0.75}
       onPress={onPress}
-      style={{ backgroundColor: '#fff', borderRadius: 10, padding: 12, marginBottom: 8 }}
+      style={{ backgroundColor: C.surface, borderRadius: 10, padding: 12, marginBottom: 8 }}
     >
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <Text style={[txt(600), { fontSize: 12, color: '#202124' }]}>{dateLabel}</Text>
+        <Text style={[txt(600), { fontSize: 12, color: C.t1 }]}>{dateLabel}</Text>
         <View style={{
           paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8,
           backgroundColor: statusColor.bg,
@@ -622,11 +627,11 @@ function HistoryRow({ report, onPress }: { report: MaintenanceReport; onPress?: 
           <Text style={[txt(700), { fontSize: 10, color: statusColor.fg }]}>{statusColor.label}</Text>
         </View>
       </View>
-      <Text style={[txt(600), { fontSize: 14, color: '#202124', marginTop: 4 }]} numberOfLines={3}>
+      <Text style={[txt(600), { fontSize: 14, color: C.t1, marginTop: 4 }]} numberOfLines={3}>
         {report.description}
       </Text>
       {photoCount > 0 && (
-        <Text style={[txt(500), { fontSize: 11, color: '#5f6368', marginTop: 6 }]}>
+        <Text style={[txt(500), { fontSize: 11, color: C.t3, marginTop: 6 }]}>
           📎 {photoCount} {photoCount === 1 ? 'photo' : 'photos'} — tap to view
         </Text>
       )}

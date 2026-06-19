@@ -14,6 +14,7 @@ import { fetchOrgSettings } from "@/lib/api/orgSettings";
 import { enqueueUpload } from "@/lib/uploadQueue";
 import { useOnline } from "@/lib/useOnline";
 import { useQuery } from "@tanstack/react-query";
+import { useTheme } from "@/lib/ThemeProvider";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
   fontFamily:
@@ -97,21 +98,25 @@ type Step = "idle" | "scanning" | "converting" | "uploading";
 // rate_con and invoice are intentionally absent (dispatcher-only). The
 // runtime list passed to the picker is filtered further by the org's
 // document_types config (Settings → Documents).
-const KIND_PRESETS: Record<DocumentKind, { label: string; tint: string }> = {
-  pod:           { label: "POD",     tint: "#15803d" },
-  bol:           { label: "BOL",     tint: "#1a73e8" },
-  scale:         { label: "Scale",   tint: "#9a3412" },
-  lumper:        { label: "Lumper",  tint: "#92400e" },
-  receipt:       { label: "Receipt", tint: "#9d174d" },
-  driver_sheet:  { label: "Sheet",   tint: "#6d28d9" },
-  relay_handoff: { label: "Handoff", tint: "#8b5cf6" },
-  other:         { label: "Other",   tint: "#5f6368" },
-  // Listed for type-completeness only. Filtered out before render.
-  rate_con:      { label: "Rate Con", tint: "#92400e" },
-  invoice:       { label: "Invoice",  tint: "#9d174d" },
-};
+function kindPresets(C: ReturnType<typeof useTheme>["C"]): Record<DocumentKind, { label: string; tint: string }> {
+  return {
+    pod:           { label: "POD",     tint: C.greenInk },
+    bol:           { label: "BOL",     tint: C.blue },
+    scale:         { label: "Scale",   tint: C.amberInk },
+    lumper:        { label: "Lumper",  tint: C.amberInk },
+    receipt:       { label: "Receipt", tint: C.redInk },
+    driver_sheet:  { label: "Sheet",   tint: C.purple },
+    relay_handoff: { label: "Handoff", tint: C.purple },
+    other:         { label: "Other",   tint: C.t3 },
+    // Listed for type-completeness only. Filtered out before render.
+    rate_con:      { label: "Rate Con", tint: C.amberInk },
+    invoice:       { label: "Invoice",  tint: C.redInk },
+  };
+}
 
 export function UploadSheet({ eventId, loadNum, orgId, driverId, driverName, visible, onClose, onUploaded }: Props) {
+  const { C, SHADOW, ACCENT } = useTheme();
+  const KIND_PRESETS = kindPresets(C);
   const [step, setStep] = useState<Step>("idle");
   const online = useOnline();
 
@@ -360,22 +365,22 @@ export function UploadSheet({ eventId, loadNum, orgId, driverId, driverName, vis
       <Pressable onPress={onClose} style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "flex-end" }}>
         <Pressable onPress={(e) => e.stopPropagation()}
           style={{
-            backgroundColor: "#ffffff",
+            backgroundColor: C.surface,
             borderTopLeftRadius: 22, borderTopRightRadius: 22,
             paddingHorizontal: 18, paddingTop: 8, paddingBottom: 28,
           }}
         >
           {/* Handle */}
-          <View style={{ width: 36, height: 4, borderRadius: 2, backgroundColor: "#e8eaed", alignSelf: "center", marginBottom: 14 }} />
+          <View style={{ width: 36, height: 4, borderRadius: 2, backgroundColor: C.border, alignSelf: "center", marginBottom: 14 }} />
 
           {/* Header */}
           <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 4 }}>
-            <Text style={[txt(800), { fontSize: 18, color: "#202124", flex: 1 }]}>Add document</Text>
+            <Text style={[txt(800), { fontSize: 18, color: C.t1, flex: 1 }]}>Add document</Text>
             <TouchableOpacity onPress={onClose} hitSlop={10}>
-              <X size={20} color="#5f6368" strokeWidth={2.2} />
+              <X size={20} color={C.t3} strokeWidth={2.2} />
             </TouchableOpacity>
           </View>
-          <Text style={[txt(500), { fontSize: 13, color: "#5f6368", marginBottom: 14 }]}>
+          <Text style={[txt(500), { fontSize: 13, color: C.t3, marginBottom: 14 }]}>
             Pick a document type, then choose a source. Your file is named for you using the load number and type.
           </Text>
 
@@ -384,7 +389,7 @@ export function UploadSheet({ eventId, loadNum, orgId, driverId, driverName, vis
               → Documents). rate_con + invoice are excluded by hard
               policy at the API too, so even a tampered list can't
               upload as those kinds. */}
-          <Text style={[txt(800), { fontSize: 11, letterSpacing: 1, color: "#5f6368", textTransform: "uppercase", marginBottom: 8 }]}>
+          <Text style={[txt(800), { fontSize: 11, letterSpacing: 1, color: C.t3, textTransform: "uppercase", marginBottom: 8 }]}>
             Document type
           </Text>
           {/* Defense-in-depth: if the server's allow-list arrives empty
@@ -394,12 +399,12 @@ export function UploadSheet({ eventId, loadNum, orgId, driverId, driverName, vis
           {allowedKinds.length === 0 && (
             <View style={{
               padding: 12, borderRadius: 10, marginBottom: 12,
-              backgroundColor: "#fef3c7", borderWidth: 1, borderColor: "#fde68a",
+              backgroundColor: C.amberBg, borderWidth: 1, borderColor: C.amberBg,
             }}>
-              <Text style={[txt(700), { fontSize: 13, color: "#92400e", marginBottom: 2 }]}>
+              <Text style={[txt(700), { fontSize: 13, color: C.amberInk, marginBottom: 2 }]}>
                 No document types configured
               </Text>
-              <Text style={[txt(500), { fontSize: 12, color: "#92400e" }]}>
+              <Text style={[txt(500), { fontSize: 12, color: C.amberInk }]}>
                 Ask dispatch to enable document types in Settings → Documents.
               </Text>
             </View>
@@ -417,16 +422,16 @@ export function UploadSheet({ eventId, loadNum, orgId, driverId, driverName, vis
                     paddingVertical: 9,
                     paddingHorizontal: 12,
                     borderRadius: 10,
-                    backgroundColor: active ? `${preset.tint}15` : "#f8f9fa",
+                    backgroundColor: active ? `${preset.tint}15` : C.bg,
                     borderWidth: 1.5,
-                    borderColor: active ? preset.tint : "#e8eaed",
+                    borderColor: active ? preset.tint : C.border,
                     flexDirection: "row",
                     alignItems: "center",
                     gap: 4,
                   }}
                 >
                   {active ? <Check size={12} color={preset.tint} strokeWidth={2.6} /> : null}
-                  <Text style={[txt(800), { fontSize: 12, color: active ? preset.tint : "#5f6368", letterSpacing: 0.3 }]}>
+                  <Text style={[txt(800), { fontSize: 12, color: active ? preset.tint : C.t3, letterSpacing: 0.3 }]}>
                     {preset.label}
                   </Text>
                 </TouchableOpacity>
@@ -437,11 +442,11 @@ export function UploadSheet({ eventId, loadNum, orgId, driverId, driverName, vis
           {/* Sources */}
           {busy ? (
             <View style={{ paddingVertical: 36, alignItems: "center" }}>
-              <ActivityIndicator size="large" color="#1a73e8" />
-              <Text style={[txt(700), { fontSize: 13, color: "#3c4043", marginTop: 12 }]}>{busyLabel}</Text>
+              <ActivityIndicator size="large" color={ACCENT} />
+              <Text style={[txt(700), { fontSize: 13, color: C.t2, marginTop: 12 }]}>{busyLabel}</Text>
             </View>
           ) : (
-            <View style={{ borderRadius: 12, overflow: "hidden", borderWidth: 1, borderColor: "#e8eaed" }}>
+            <View style={{ borderRadius: 12, overflow: "hidden", borderWidth: 1, borderColor: C.border }}>
               {options.map((opt, i) => (
                 <TouchableOpacity key={opt.label} onPress={opt.action} activeOpacity={0.7}
                   style={{
@@ -450,25 +455,25 @@ export function UploadSheet({ eventId, loadNum, orgId, driverId, driverName, vis
                     gap: 14,
                     paddingHorizontal: 14,
                     paddingVertical: 14,
-                    backgroundColor: "#ffffff",
+                    backgroundColor: C.surface,
                     borderTopWidth: i === 0 ? 0 : 1,
-                    borderTopColor: "#f1f3f4",
+                    borderTopColor: C.borderSoft,
                   }}
                 >
                   <View
                     style={{
                       width: 40, height: 40, borderRadius: 12,
-                      backgroundColor: opt.primary ? "#e8f0fe" : "#f1f3f4",
+                      backgroundColor: opt.primary ? C.blueBg : C.borderSoft,
                       alignItems: "center", justifyContent: "center",
                     }}
                   >
-                    <opt.Icon size={18} color={opt.primary ? "#1a73e8" : "#3c4043"} strokeWidth={2.2} />
+                    <opt.Icon size={18} color={opt.primary ? ACCENT : C.t2} strokeWidth={2.2} />
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={[txt(800), { fontSize: 14, color: opt.primary ? "#1a73e8" : "#202124" }]}>
+                    <Text style={[txt(800), { fontSize: 14, color: opt.primary ? ACCENT : C.t1 }]}>
                       {opt.label}
                     </Text>
-                    <Text style={[txt(500), { fontSize: 12, color: "#5f6368", marginTop: 1 }]}>
+                    <Text style={[txt(500), { fontSize: 12, color: C.t3, marginTop: 1 }]}>
                       {opt.sub}
                     </Text>
                   </View>

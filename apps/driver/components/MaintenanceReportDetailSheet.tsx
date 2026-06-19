@@ -14,6 +14,7 @@ import {
 } from "react-native";
 import { X, MapPin, Calendar, Truck, Container, FileText } from "lucide-react-native";
 import type { MaintenanceReport } from "@fleetcal/types";
+import { useTheme } from "@/lib/ThemeProvider";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
   fontFamily:
@@ -44,12 +45,14 @@ interface Props {
   onClose:    () => void;
 }
 
-const STATUS_TINT: Record<string, { bg: string; fg: string; label: string }> = {
-  open:      { bg: "#fef3c7", fg: "#92400e", label: "Open" },
-  reviewed:  { bg: "#dbeafe", fg: "#1e40af", label: "Reviewed" },
-  converted: { bg: "#dcfce7", fg: "#15803d", label: "Scheduled" },
-  dismissed: { bg: "#f3f4f6", fg: "#4b5563", label: "Dismissed" },
-};
+function statusTint(C: ReturnType<typeof useTheme>["C"]): Record<string, { bg: string; fg: string; label: string }> {
+  return {
+    open:      { bg: C.amberBg, fg: C.amberInk, label: "Open" },
+    reviewed:  { bg: C.blueBg,  fg: C.blueInk,  label: "Reviewed" },
+    converted: { bg: C.greenBg, fg: C.greenInk, label: "Scheduled" },
+    dismissed: { bg: C.borderSoft, fg: C.t2,    label: "Dismissed" },
+  };
+}
 
 function fmtDate(iso: string): string {
   const d = new Date(iso);
@@ -63,6 +66,7 @@ function fmtDate(iso: string): string {
 export function MaintenanceReportDetailSheet({
   visible, report, targetLabel, targetKind, reporterName, onClose,
 }: Props) {
+  const { C, SHADOW, ACCENT } = useTheme();
   // Full-screen photo viewer state — index into report.photos.
   const [photoIndex, setPhotoIndex] = useState<number | null>(null);
 
@@ -74,6 +78,7 @@ export function MaintenanceReportDetailSheet({
 
   if (!report) return null;
 
+  const STATUS_TINT = statusTint(C);
   const status = STATUS_TINT[report.status] ?? STATUS_TINT.open;
   const photos = report.photos ?? [];
   const TargetIcon = targetKind === "trailer" ? Container : Truck;
@@ -87,21 +92,21 @@ export function MaintenanceReportDetailSheet({
         <Pressable
           onPress={(e) => e.stopPropagation()}
           style={{
-            backgroundColor: "#ffffff",
+            backgroundColor: C.surface,
             borderTopLeftRadius: 22, borderTopRightRadius: 22,
             maxHeight: "92%",
             minHeight: 400,
           }}
         >
           {/* Header */}
-          <View style={{ paddingHorizontal: 18, paddingTop: 14, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: "#e8eaed" }}>
-            <View style={{ width: 36, height: 4, borderRadius: 2, backgroundColor: "#e8eaed", alignSelf: "center", marginBottom: 12 }} />
+          <View style={{ paddingHorizontal: 18, paddingTop: 14, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: C.border }}>
+            <View style={{ width: 36, height: 4, borderRadius: 2, backgroundColor: C.border, alignSelf: "center", marginBottom: 12 }} />
             <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
               <View style={{ flex: 1 }}>
-                <Text style={[txt(800), { fontSize: 18, color: "#202124" }]}>
+                <Text style={[txt(800), { fontSize: 18, color: C.t1 }]}>
                   Maintenance Report
                 </Text>
-                <Text style={[txt(500), { fontSize: 12, color: "#5f6368", marginTop: 2 }]}>
+                <Text style={[txt(500), { fontSize: 12, color: C.t3, marginTop: 2 }]}>
                   {fmtDate(report.reportedAt)}
                 </Text>
               </View>
@@ -109,7 +114,7 @@ export function MaintenanceReportDetailSheet({
                 <Text style={[txt(700), { fontSize: 11, color: status.fg }]}>{status.label}</Text>
               </View>
               <TouchableOpacity onPress={onClose} hitSlop={10}>
-                <X size={22} color="#5f6368" strokeWidth={2.2} />
+                <X size={22} color={C.t3} strokeWidth={2.2} />
               </TouchableOpacity>
             </View>
           </View>
@@ -117,21 +122,21 @@ export function MaintenanceReportDetailSheet({
           <ScrollView contentContainerStyle={{ padding: 18, paddingBottom: 30 }}>
             {/* Target (asset or trailer) */}
             {(targetLabel || report.assetId || report.trailerId) && (
-              <Row icon={<TargetIcon size={14} color="#1a73e8" strokeWidth={2.2} />}
+              <Row icon={<TargetIcon size={14} color={ACCENT} strokeWidth={2.2} />}
                    label={targetKind === "trailer" ? "Trailer" : "Truck"}
                    value={targetLabel ?? (report.assetId ? `#${report.assetId}` : `#${report.trailerId}`)} />
             )}
 
             {/* Reporter */}
             {reporterName && (
-              <Row icon={<FileText size={14} color="#1a73e8" strokeWidth={2.2} />}
+              <Row icon={<FileText size={14} color={ACCENT} strokeWidth={2.2} />}
                    label="Reported by"
                    value={reporterName} />
             )}
 
             {/* Location — state + lat/lng if captured */}
             {(report.state || report.latitude != null) && (
-              <Row icon={<MapPin size={14} color="#1a73e8" strokeWidth={2.2} />}
+              <Row icon={<MapPin size={14} color={ACCENT} strokeWidth={2.2} />}
                    label="Location"
                    value={[
                      report.state,
@@ -144,18 +149,18 @@ export function MaintenanceReportDetailSheet({
             {/* Created timestamp — distinct from reported_at when
                 offline-queued reports are submitted later. */}
             {report.createdAt && report.createdAt !== report.reportedAt && (
-              <Row icon={<Calendar size={14} color="#1a73e8" strokeWidth={2.2} />}
+              <Row icon={<Calendar size={14} color={ACCENT} strokeWidth={2.2} />}
                    label="Submitted"
                    value={fmtDate(report.createdAt)} />
             )}
 
             {/* Description — the meat of the report */}
             <View style={{ marginTop: 16 }}>
-              <Text style={[txt(800), { fontSize: 11, color: "#5f6368", letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 6 }]}>
+              <Text style={[txt(800), { fontSize: 11, color: C.t3, letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 6 }]}>
                 Description
               </Text>
-              <View style={{ backgroundColor: "#f8f9fa", borderRadius: 10, padding: 12 }}>
-                <Text style={[txt(500), { fontSize: 14, color: "#202124", lineHeight: 20 }]}>
+              <View style={{ backgroundColor: C.bg, borderRadius: 10, padding: 12 }}>
+                <Text style={[txt(500), { fontSize: 14, color: C.t1, lineHeight: 20 }]}>
                   {report.description || "—"}
                 </Text>
               </View>
@@ -163,11 +168,11 @@ export function MaintenanceReportDetailSheet({
 
             {/* Photo grid */}
             <View style={{ marginTop: 18 }}>
-              <Text style={[txt(800), { fontSize: 11, color: "#5f6368", letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 8 }]}>
+              <Text style={[txt(800), { fontSize: 11, color: C.t3, letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 8 }]}>
                 Photos {photos.length > 0 ? `(${photos.length})` : ""}
               </Text>
               {photos.length === 0 ? (
-                <Text style={[txt(500), { fontSize: 13, color: "#9aa0a6", paddingVertical: 8 }]}>
+                <Text style={[txt(500), { fontSize: 13, color: C.t4, paddingVertical: 8 }]}>
                   No photos attached.
                 </Text>
               ) : (
@@ -177,7 +182,7 @@ export function MaintenanceReportDetailSheet({
                       key={p.id}
                       onPress={() => setPhotoIndex(idx)}
                       activeOpacity={0.85}
-                      style={{ width: PHOTO_SIZE, height: PHOTO_SIZE, borderRadius: 8, overflow: "hidden", backgroundColor: "#f1f3f4" }}
+                      style={{ width: PHOTO_SIZE, height: PHOTO_SIZE, borderRadius: 8, overflow: "hidden", backgroundColor: C.borderSoft }}
                     >
                       {p.signedUrl ? (
                         <Image
@@ -187,7 +192,7 @@ export function MaintenanceReportDetailSheet({
                         />
                       ) : (
                         <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-                          <Text style={[txt(500), { fontSize: 10, color: "#9aa0a6", textAlign: "center" }]}>
+                          <Text style={[txt(500), { fontSize: 10, color: C.t4, textAlign: "center" }]}>
                             No preview
                           </Text>
                         </View>
@@ -235,13 +240,14 @@ export function MaintenanceReportDetailSheet({
 }
 
 function Row({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
+  const { C } = useTheme();
   return (
-    <View style={{ flexDirection: "row", alignItems: "center", paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: "#f1f3f4" }}>
+    <View style={{ flexDirection: "row", alignItems: "center", paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: C.borderSoft }}>
       <View style={{ width: 22, alignItems: "center" }}>{icon}</View>
-      <Text style={[txt(700), { fontSize: 12, color: "#5f6368", width: 100 }]}>
+      <Text style={[txt(700), { fontSize: 12, color: C.t3, width: 100 }]}>
         {label}
       </Text>
-      <Text style={[txt(600), { fontSize: 14, color: "#202124", flex: 1 }]}>
+      <Text style={[txt(600), { fontSize: 14, color: C.t1, flex: 1 }]}>
         {value}
       </Text>
     </View>

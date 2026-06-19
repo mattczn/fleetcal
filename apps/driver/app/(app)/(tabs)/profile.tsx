@@ -32,6 +32,7 @@ import {
   type NotificationRuleKey,
 } from "@fleetcal/types";
 import { useOrgTz, describeTz } from "@/lib/orgTz";
+import { useTheme } from "@/lib/ThemeProvider";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
   fontFamily:
@@ -55,12 +56,18 @@ const DOC_KIND_LABEL: Record<DriverDocumentKind, string> = {
   other:        "Other",
 };
 
-const DOC_KIND_TINT: Record<DriverDocumentKind, { bg: string; fg: string }> = {
-  license:      { bg: "#e8f0fe", fg: "#1a73e8" },
-  medical_card: { bg: "#fce8e8", fg: "#c5221f" },
-  mvr:          { bg: "#fef3c7", fg: "#92400e" },
-  other:        { bg: "#f1f3f4", fg: "#5f6368" },
-};
+// Theme-aware badge tints, keyed by document kind. Called inside the
+// component with the active palette so the badges follow light/dark.
+function docKindTint(C: ReturnType<typeof useTheme>["C"]): Record<DriverDocumentKind, { bg: string; fg: string }> {
+  return {
+    license:      { bg: C.blueBg,  fg: ACCENT_OF(C) },
+    medical_card: { bg: C.redBg,   fg: C.redInk },
+    mvr:          { bg: C.amberBg, fg: C.amberInk },
+    other:        { bg: C.borderSoft, fg: C.t3 },
+  };
+}
+// `ACCENT` equals `C.blue`; helper keeps the map readable.
+function ACCENT_OF(C: ReturnType<typeof useTheme>["C"]) { return C.blue; }
 
 // ── Address ⇄ structured parts ──────────────────────────────────────────
 
@@ -109,6 +116,7 @@ function isoToDisplay(iso?: string): string {
 // ── Screen ──────────────────────────────────────────────────────────────
 
 export default function ProfileScreen() {
+  const { C, SHADOW, ACCENT, mode, setMode } = useTheme();
   const [me,         setMe]         = useState<DriverMeResponse | null>(null);
   const [docs,       setDocs]       = useState<DriverDocument[]>([]);
   const [loading,    setLoading]    = useState(true);
@@ -318,12 +326,12 @@ export default function ProfileScreen() {
     .split(" ").map(s => s[0]).slice(0, 2).join("").toUpperCase();
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: "#1a73e8" }} edges={["top"]}>
-      {/* Blue header */}
-      <View style={{ backgroundColor: "#1a73e8", paddingTop: 8, paddingBottom: 28, alignItems: "center" }}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }} edges={["top"]}>
+      {/* Light header — matches the rest of the app */}
+      <View style={{ backgroundColor: C.bg, paddingTop: 8, paddingBottom: 28, alignItems: "center" }}>
         <View style={{
           width: 84, height: 84, borderRadius: 26,
-          backgroundColor: "rgba(255,255,255,0.18)",
+          backgroundColor: ACCENT,
           alignItems: "center", justifyContent: "center",
           marginBottom: 12,
         }}>
@@ -333,13 +341,13 @@ export default function ProfileScreen() {
             <User size={36} color="#fff" strokeWidth={2.2} />
           )}
         </View>
-        <Text style={[txt(800), { fontSize: 22, color: "#fff", letterSpacing: -0.3 }]}>{me?.name ?? "—"}</Text>
-        <Text style={[txt(500), { fontSize: 13, color: "rgba(255,255,255,0.65)", marginTop: 2 }]}>
+        <Text style={[txt(800), { fontSize: 22, color: C.t1, letterSpacing: -0.3 }]}>{me?.name ?? "—"}</Text>
+        <Text style={[txt(500), { fontSize: 13, color: C.t3, marginTop: 2 }]}>
           {me?.phone ?? "—"}
         </Text>
       </View>
 
-      <KeyboardAvoidingView style={{ flex: 1, backgroundColor: "#f8f9fa" }}
+      <KeyboardAvoidingView style={{ flex: 1, backgroundColor: C.bg }}
         behavior={Platform.OS === "ios" ? "padding" : undefined}>
         <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 60 }}
           refreshControl={
@@ -357,21 +365,52 @@ export default function ProfileScreen() {
             // would start re-entering data over top of values that
             // were still on the server.
             <View style={{ padding: 24, alignItems: "center" }}>
-              <Text style={[txt(700), { fontSize: 15, color: "#b91c1c", marginBottom: 8, textAlign: "center" }]}>
+              <Text style={[txt(700), { fontSize: 15, color: C.redInk, marginBottom: 8, textAlign: "center" }]}>
                 Could not load your profile
               </Text>
-              <Text style={[txt(500), { fontSize: 13, color: "#6b7280", textAlign: "center", marginBottom: 16 }]}>
+              <Text style={[txt(500), { fontSize: 13, color: C.t3, textAlign: "center", marginBottom: 16 }]}>
                 {loadError}
               </Text>
               <TouchableOpacity
                 onPress={() => { setLoading(true); void loadAll(); }}
-                style={{ backgroundColor: "#1a73e8", paddingHorizontal: 18, paddingVertical: 10, borderRadius: 8 }}
+                style={{ backgroundColor: ACCENT, paddingHorizontal: 18, paddingVertical: 10, borderRadius: 8 }}
               >
                 <Text style={[txt(700), { color: "#fff", fontSize: 13 }]}>Retry</Text>
               </TouchableOpacity>
             </View>
           ) : (
             <>
+              {/* Appearance — in-app light/dark toggle */}
+              <SectionHeader label="Appearance" />
+              <Card>
+                <View style={{ flexDirection: "row", gap: 10, paddingVertical: 6 }}>
+                  <TouchableOpacity
+                    onPress={() => setMode("light")}
+                    activeOpacity={0.8}
+                    style={{
+                      flex: 1, alignItems: "center", justifyContent: "center",
+                      paddingVertical: 12, borderRadius: 999,
+                      backgroundColor: mode === "light" ? ACCENT : C.surfaceSunk,
+                    }}>
+                    <Text style={[txt(700), { fontSize: 14, color: mode === "light" ? "#fff" : C.t2 }]}>
+                      Light
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => setMode("dark")}
+                    activeOpacity={0.8}
+                    style={{
+                      flex: 1, alignItems: "center", justifyContent: "center",
+                      paddingVertical: 12, borderRadius: 999,
+                      backgroundColor: mode === "dark" ? ACCENT : C.surfaceSunk,
+                    }}>
+                    <Text style={[txt(700), { fontSize: 14, color: mode === "dark" ? "#fff" : C.t2 }]}>
+                      Dark
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </Card>
+
               {/* Account */}
               <SectionHeader label="Account" />
               <Card>
@@ -536,15 +575,15 @@ export default function ProfileScreen() {
                     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
                     paddingVertical: 14,
                     borderRadius: 10,
-                    borderWidth: 1.5, borderColor: '#1a73e8', borderStyle: 'dashed',
-                    backgroundColor: '#e8f0fe',
+                    borderWidth: 1.5, borderColor: ACCENT, borderStyle: 'dashed',
+                    backgroundColor: C.blueBg,
                     marginBottom: docs.length > 0 ? 12 : 0,
                   }}>
-                  <Plus size={16} color="#1a73e8" strokeWidth={2.4} />
-                  <Text style={[txt(700), { fontSize: 14, color: '#1a73e8' }]}>Upload Document</Text>
+                  <Plus size={16} color={ACCENT} strokeWidth={2.4} />
+                  <Text style={[txt(700), { fontSize: 14, color: ACCENT }]}>Upload Document</Text>
                 </TouchableOpacity>
                 {docs.length === 0 ? (
-                  <Text style={[txt(500), { fontSize: 12, color: '#9aa0a6', textAlign: 'center', paddingVertical: 12 }]}>
+                  <Text style={[txt(500), { fontSize: 12, color: C.t4, textAlign: 'center', paddingVertical: 12 }]}>
                     No documents uploaded yet.
                   </Text>
                 ) : (
@@ -564,15 +603,15 @@ export default function ProfileScreen() {
                   <FieldLabel label="Timezone" />
                   <View style={{
                     paddingVertical: 10, paddingHorizontal: 12,
-                    backgroundColor: "#f1f3f4",
+                    backgroundColor: C.borderSoft,
                     borderRadius: 8,
-                    borderWidth: 1, borderColor: "#e8eaed",
+                    borderWidth: 1, borderColor: C.border,
                   }}>
-                    <Text style={[txt(700), { fontSize: 14, color: "#3c4043" }]}>
+                    <Text style={[txt(700), { fontSize: 14, color: C.t2 }]}>
                       {describeTz(orgTz)}
                     </Text>
                   </View>
-                  <Text style={[txt(500), { fontSize: 11, color: "#9aa0a6", marginTop: 6 }]}>
+                  <Text style={[txt(500), { fontSize: 11, color: C.t4, marginTop: 6 }]}>
                     Set by your dispatcher. All times in this app display in this timezone.
                   </Text>
                 </View>
@@ -590,12 +629,12 @@ export default function ProfileScreen() {
                   marginTop: 8,
                   flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
                   paddingVertical: 16,
-                  backgroundColor: "#fef2f2",
+                  backgroundColor: C.redBg,
                   borderRadius: 14,
-                  borderWidth: 1, borderColor: "#fecaca",
+                  borderWidth: 1, borderColor: C.redBg,
                 }}>
-                <LogOut size={16} color="#b91c1c" strokeWidth={2.2} />
-                <Text style={[txt(800), { fontSize: 14, color: "#b91c1c", letterSpacing: 0.2 }]}>Sign Out</Text>
+                <LogOut size={16} color={C.redInk} strokeWidth={2.2} />
+                <Text style={[txt(800), { fontSize: 14, color: C.redInk, letterSpacing: 0.2 }]}>Sign Out</Text>
               </TouchableOpacity>
             </>
           )}
@@ -715,9 +754,10 @@ function DriverDocumentViewer({ doc, onClose }: { doc: DriverDocument | null; on
 // ── Subcomponents ───────────────────────────────────────────────────────
 
 function SectionHeader({ label }: { label: string }) {
+  const { C } = useTheme();
   return (
     <Text style={[txt(800), {
-      fontSize: 11, letterSpacing: 1.1, color: "#5f6368",
+      fontSize: 11, letterSpacing: 1.1, color: C.t3,
       marginBottom: 8, marginTop: 16, textTransform: "uppercase",
     }]}>
       {label}
@@ -726,13 +766,14 @@ function SectionHeader({ label }: { label: string }) {
 }
 
 function Card({ children }: { children: React.ReactNode }) {
+  const { C } = useTheme();
   return (
     <View style={{
-      backgroundColor: "#fff",
+      backgroundColor: C.surface,
       borderRadius: 14,
       paddingHorizontal: 14,
       paddingVertical: 8,
-      borderWidth: 1, borderColor: "#e8eaed",
+      borderWidth: 1, borderColor: C.border,
     }}>
       {children}
     </View>
@@ -740,9 +781,10 @@ function Card({ children }: { children: React.ReactNode }) {
 }
 
 function FieldLabel({ label }: { label: string }) {
+  const { C } = useTheme();
   return (
     <Text style={[txt(700), {
-      fontSize: 11, color: "#5f6368", letterSpacing: 0.5,
+      fontSize: 11, color: C.t3, letterSpacing: 0.5,
       textTransform: "uppercase",
       marginTop: 10, marginBottom: 4,
     }]}>
@@ -764,24 +806,25 @@ interface TextFieldProps {
 function TextField({
   value, onChangeText, onBlur, placeholder, keyboardType, autoCapitalize, maxLength,
 }: TextFieldProps) {
+  const { C } = useTheme();
   return (
     <TextInput
       value={value}
       onChangeText={onChangeText}
       onBlur={onBlur}
       placeholder={placeholder}
-      placeholderTextColor="#9aa0a6"
+      placeholderTextColor={C.t4}
       keyboardType={keyboardType ?? "default"}
       autoCapitalize={autoCapitalize ?? "sentences"}
       maxLength={maxLength}
       style={[
         txt(600),
         {
-          backgroundColor: "#fff",
+          backgroundColor: C.surface,
           borderRadius: 10,
-          borderWidth: 1, borderColor: "#e8eaed",
+          borderWidth: 1, borderColor: C.border,
           paddingHorizontal: 12, paddingVertical: 10,
-          fontSize: 15, color: "#202124",
+          fontSize: 15, color: C.t1,
           marginBottom: 4,
         },
       ]}
@@ -799,6 +842,7 @@ function DateField({
   setOpen:      (v: boolean) => void;
   maximumDate?: Date;
 }) {
+  const { C, ACCENT } = useTheme();
   const display = isoToDisplay(value);
 
   function onPickerChange(_event: unknown, selected?: Date) {
@@ -814,30 +858,30 @@ function DateField({
         activeOpacity={0.7}
         style={{
           flexDirection: "row", alignItems: "center", justifyContent: "space-between",
-          backgroundColor: "#fff",
+          backgroundColor: C.surface,
           borderRadius: 10,
-          borderWidth: 1, borderColor: "#e8eaed",
+          borderWidth: 1, borderColor: C.border,
           paddingHorizontal: 12, paddingVertical: 12,
           marginBottom: 4,
         }}>
-        <Text style={[txt(display ? 700 : 500), { fontSize: 15, color: display ? "#202124" : "#9aa0a6" }]}>
+        <Text style={[txt(display ? 700 : 500), { fontSize: 15, color: display ? C.t1 : C.t4 }]}>
           {display || "Select date"}
         </Text>
-        <CalendarIcon size={16} color="#5f6368" />
+        <CalendarIcon size={16} color={C.t3} />
       </TouchableOpacity>
       {open && Platform.OS === 'ios' && (
         <Modal transparent animationType="slide" visible onRequestClose={() => setOpen(false)}>
           <TouchableOpacity activeOpacity={1} onPress={() => setOpen(false)}
             style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.35)' }}>
-            <TouchableOpacity activeOpacity={1} style={{ backgroundColor: '#fff', paddingTop: 8, paddingBottom: 24 }}>
+            <TouchableOpacity activeOpacity={1} style={{ backgroundColor: C.surface, paddingTop: 8, paddingBottom: 24 }}>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 8 }}>
                 {value
                   ? <TouchableOpacity onPress={() => { onChange(undefined); setOpen(false); }}>
-                      <Text style={[txt(700), { fontSize: 14, color: '#b91c1c' }]}>Clear</Text>
+                      <Text style={[txt(700), { fontSize: 14, color: C.redInk }]}>Clear</Text>
                     </TouchableOpacity>
                   : <View />}
                 <TouchableOpacity onPress={() => setOpen(false)}>
-                  <Text style={[txt(800), { fontSize: 14, color: '#1a73e8' }]}>Done</Text>
+                  <Text style={[txt(800), { fontSize: 14, color: ACCENT }]}>Done</Text>
                 </TouchableOpacity>
               </View>
               <DateTimePicker
@@ -875,37 +919,38 @@ function StateField({
   open: boolean;
   setOpen: (v: boolean) => void;
 }) {
+  const { C, ACCENT } = useTheme();
   return (
     <>
       <TouchableOpacity onPress={() => setOpen(!open)}
         activeOpacity={0.7}
         style={{
           flexDirection: "row", alignItems: "center", justifyContent: "space-between",
-          backgroundColor: "#fff",
+          backgroundColor: C.surface,
           borderRadius: 10,
-          borderWidth: 1, borderColor: "#e8eaed",
+          borderWidth: 1, borderColor: C.border,
           paddingHorizontal: 12, paddingVertical: 12,
           marginBottom: 4,
         }}>
-        <Text style={[txt(value ? 700 : 500), { fontSize: 15, color: value ? "#202124" : "#9aa0a6" }]}>
+        <Text style={[txt(value ? 700 : 500), { fontSize: 15, color: value ? C.t1 : C.t4 }]}>
           {value || "Select"}
         </Text>
-        <ChevronDown size={16} color="#5f6368" />
+        <ChevronDown size={16} color={C.t3} />
       </TouchableOpacity>
       {open && (
         <Modal transparent animationType="slide" visible onRequestClose={() => setOpen(false)}>
           <TouchableOpacity activeOpacity={1} onPress={() => setOpen(false)}
             style={{ flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.35)" }}>
-            <TouchableOpacity activeOpacity={1} style={{ backgroundColor: "#fff", paddingBottom: 24, maxHeight: "70%" }}>
-              <View style={{ flexDirection: "row", justifyContent: "space-between", paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: "#f1f3f4" }}>
+            <TouchableOpacity activeOpacity={1} style={{ backgroundColor: C.surface, paddingBottom: 24, maxHeight: "70%" }}>
+              <View style={{ flexDirection: "row", justifyContent: "space-between", paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: C.borderSoft }}>
                 {value
                   ? <TouchableOpacity onPress={() => { onChange(""); setOpen(false); }}>
-                      <Text style={[txt(700), { fontSize: 14, color: "#b91c1c" }]}>Clear</Text>
+                      <Text style={[txt(700), { fontSize: 14, color: C.redInk }]}>Clear</Text>
                     </TouchableOpacity>
                   : <View />}
-                <Text style={[txt(800), { fontSize: 14, color: "#202124" }]}>Select State</Text>
+                <Text style={[txt(800), { fontSize: 14, color: C.t1 }]}>Select State</Text>
                 <TouchableOpacity onPress={() => setOpen(false)}>
-                  <Text style={[txt(800), { fontSize: 14, color: "#1a73e8" }]}>Done</Text>
+                  <Text style={[txt(800), { fontSize: 14, color: ACCENT }]}>Done</Text>
                 </TouchableOpacity>
               </View>
               <ScrollView>
@@ -917,10 +962,10 @@ function StateField({
                       activeOpacity={0.6}
                       style={{
                         paddingHorizontal: 18, paddingVertical: 13,
-                        borderBottomWidth: 1, borderBottomColor: "#f8f9fa",
-                        backgroundColor: selected ? "#e8f0fe" : "transparent",
+                        borderBottomWidth: 1, borderBottomColor: C.bg,
+                        backgroundColor: selected ? C.blueBg : "transparent",
                       }}>
-                      <Text style={[txt(selected ? 800 : 600), { fontSize: 15, color: selected ? "#1a73e8" : "#202124" }]}>
+                      <Text style={[txt(selected ? 800 : 600), { fontSize: 15, color: selected ? ACCENT : C.t1 }]}>
                         {s}
                       </Text>
                     </TouchableOpacity>
@@ -948,20 +993,21 @@ function DocRow({
 }: {
   doc: DriverDocument; isLast: boolean; onView: () => void; onDelete: () => void;
 }) {
-  const tint = DOC_KIND_TINT[doc.kind];
+  const { C, ACCENT } = useTheme();
+  const tint = docKindTint(C)[doc.kind];
   const date = new Date(doc.uploadedAt);
   return (
     <View style={{
       flexDirection: "row", alignItems: "center", gap: 10,
       paddingVertical: 10,
-      borderBottomWidth: isLast ? 0 : 1, borderBottomColor: '#f1f3f4',
+      borderBottomWidth: isLast ? 0 : 1, borderBottomColor: C.borderSoft,
     }}>
       <View style={{
         width: 32, height: 32, borderRadius: 8,
-        backgroundColor: '#f8f9fa',
+        backgroundColor: C.bg,
         alignItems: 'center', justifyContent: 'center',
       }}>
-        <FileText size={15} color="#5f6368" strokeWidth={2.2} />
+        <FileText size={15} color={C.t3} strokeWidth={2.2} />
       </View>
       <View style={{ flex: 1 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 }}>
@@ -970,19 +1016,19 @@ function DocRow({
               {DOC_KIND_LABEL[doc.kind]}
             </Text>
           </View>
-          <Text style={[txt(500), { fontSize: 11, color: '#9aa0a6' }]}>
+          <Text style={[txt(500), { fontSize: 11, color: C.t4 }]}>
             {date.toLocaleDateString()}
           </Text>
         </View>
-        <Text style={[txt(600), { fontSize: 13, color: '#202124' }]} numberOfLines={1}>
+        <Text style={[txt(600), { fontSize: 13, color: C.t1 }]} numberOfLines={1}>
           {doc.fileName}
         </Text>
       </View>
       <TouchableOpacity onPress={onView} style={{ padding: 6 }}>
-        <Eye size={16} color="#1a73e8" />
+        <Eye size={16} color={ACCENT} />
       </TouchableOpacity>
       <TouchableOpacity onPress={onDelete} style={{ padding: 6 }}>
-        <Trash2 size={16} color="#b91c1c" />
+        <Trash2 size={16} color={C.redInk} />
       </TouchableOpacity>
     </View>
   );
@@ -996,6 +1042,7 @@ function DocRow({
  * nudges bypass these and always send.
  */
 function NotificationsPrefs() {
+  const { C, ACCENT } = useTheme();
   const [prefs, setPrefs] = useState<Record<string, boolean> | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
 
@@ -1040,14 +1087,14 @@ function NotificationsPrefs() {
   if (prefs == null) {
     return (
       <View style={{ paddingVertical: 18, alignItems: "center" }}>
-        <ActivityIndicator color="#1a73e8" />
+        <ActivityIndicator color={ACCENT} />
       </View>
     );
   }
 
   return (
     <View style={{ paddingVertical: 6 }}>
-      <Text style={[txt(500), { fontSize: 12, color: "#5f6368", marginBottom: 12 }]}>
+      <Text style={[txt(500), { fontSize: 12, color: C.t3, marginBottom: 12 }]}>
         Choose which automatic alerts you'll get. Your dispatcher can still
         send you direct messages — those always come through.
       </Text>
@@ -1059,12 +1106,12 @@ function NotificationsPrefs() {
             alignItems: "flex-start",
             paddingVertical: 12,
             borderTopWidth: i === 0 ? 0 : 1,
-            borderTopColor: "#f1f3f4",
+            borderTopColor: C.borderSoft,
             gap: 12,
           }}
         >
           <View style={{ flex: 1, justifyContent: "center" }}>
-            <Text style={[txt(700), { fontSize: 14, color: "#202124" }]}>
+            <Text style={[txt(700), { fontSize: 14, color: C.t1 }]}>
               {NOTIFICATION_RULE_LABEL[ruleKey]}
             </Text>
           </View>
@@ -1083,13 +1130,14 @@ function NotificationsPrefs() {
 function PrefSwitch({
   value, disabled, onChange,
 }: { value: boolean; disabled: boolean; onChange: () => void }) {
+  const { C, ACCENT } = useTheme();
   return (
     <TouchableOpacity
       onPress={onChange}
       disabled={disabled}
       style={{
         width: 50, height: 28, borderRadius: 14,
-        backgroundColor: value ? "#1a73e8" : "#dadce0",
+        backgroundColor: value ? ACCENT : C.borderStrong,
         opacity: disabled ? 0.5 : 1,
         padding: 2,
         justifyContent: "center",

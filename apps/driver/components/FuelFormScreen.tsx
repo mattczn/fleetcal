@@ -14,6 +14,7 @@ import * as Location from "expo-location";
 import * as ImagePicker from "expo-image-picker";
 import { railway } from "@/lib/railway";
 import type { FuelReport } from "@fleetcal/types";
+import { useTheme } from "@/lib/ThemeProvider";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
   fontFamily:
@@ -72,6 +73,7 @@ function normalizeStateValue(raw?: string | null): string | null {
 // ── Screen ──────────────────────────────────────────────────────────────
 
 export default function FuelScreen() {
+  const { C, SHADOW, ACCENT } = useTheme();
   const [assets,         setAssets]         = useState<AssetOption[]>([]);
   const [assetsLoading,  setAssetsLoading]  = useState(true);
   const [assetId,        setAssetId]        = useState<number | null>(null);
@@ -323,7 +325,7 @@ export default function FuelScreen() {
   return (
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : undefined}
-        style={{ flex: 1, backgroundColor: "#f8f9fa" }}>
+        style={{ flex: 1, backgroundColor: C.bg }}>
         <ScrollView
           contentContainerStyle={{ padding: 16, paddingBottom: 80 }}
           keyboardShouldPersistTaps="handled"
@@ -335,7 +337,7 @@ export default function FuelScreen() {
           }>
 
           {/* Form card */}
-          <View style={{ backgroundColor: "#fff", borderRadius: 14, padding: 16 }}>
+          <View style={{ backgroundColor: C.surface, borderRadius: 14, padding: 16 }}>
             {/* Asset */}
             <FieldLabel Icon={Truck} label="Asset" required />
             <PickerRow
@@ -349,11 +351,11 @@ export default function FuelScreen() {
               // Visible error + retry so the driver can recover. Without
               // this the picker just stays empty and Submit stays
               // disabled with no explanation.
-              <View style={{ marginTop: 6, padding: 10, backgroundColor: "#fef2f2", borderRadius: 8, flexDirection: "row", alignItems: "center", gap: 10 }}>
-                <Text style={{ flex: 1, fontSize: 12, color: "#991b1b" }}>{assetsError}</Text>
+              <View style={{ marginTop: 6, padding: 10, backgroundColor: C.redBg, borderRadius: 8, flexDirection: "row", alignItems: "center", gap: 10 }}>
+                <Text style={{ flex: 1, fontSize: 12, color: C.redInk }}>{assetsError}</Text>
                 <TouchableOpacity
                   onPress={() => void loadAssets()}
-                  style={{ backgroundColor: "#dc2626", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6 }}
+                  style={{ backgroundColor: C.red, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6 }}
                 >
                   <Text style={{ color: "#fff", fontSize: 12, fontWeight: "700" }}>Retry</Text>
                 </TouchableOpacity>
@@ -427,14 +429,14 @@ export default function FuelScreen() {
                   width: '100%',
                   paddingVertical: 18,
                   borderRadius: 10,
-                  borderWidth: 1.5, borderColor: '#1a73e8', borderStyle: 'dashed',
+                  borderWidth: 1.5, borderColor: ACCENT, borderStyle: 'dashed',
                   alignItems: 'center', justifyContent: 'center',
                   flexDirection: 'row',
                   gap: 8,
-                  backgroundColor: '#e8f0fe',
+                  backgroundColor: C.blueBg,
                 }}>
-                <Camera size={18} color="#1a73e8" strokeWidth={2.2} />
-                <Text style={[txt(700), { fontSize: 14, color: '#1a73e8' }]}>
+                <Camera size={18} color={ACCENT} strokeWidth={2.2} />
+                <Text style={[txt(700), { fontSize: 14, color: ACCENT }]}>
                   {receipts.length === 0 ? 'Upload Photo' : 'Add Another Photo'}
                 </Text>
               </TouchableOpacity>
@@ -447,7 +449,7 @@ export default function FuelScreen() {
               activeOpacity={0.85}
               style={{
                 marginTop: 16,
-                backgroundColor: canSubmit ? "#1a73e8" : "#c5cae9",
+                backgroundColor: canSubmit ? ACCENT : C.borderStrong,
                 borderRadius: 12,
                 paddingVertical: 14,
                 alignItems: "center",
@@ -468,11 +470,11 @@ export default function FuelScreen() {
 
           {/* Recent submissions */}
           <View style={{ marginTop: 24 }}>
-            <Text style={[txt(800), { fontSize: 11, color: "#202124", letterSpacing: 1.1, marginBottom: 8 }]}>
+            <Text style={[txt(800), { fontSize: 11, color: C.t1, letterSpacing: 1.1, marginBottom: 8 }]}>
               YOUR RECENT REPORTS
             </Text>
             {recent.length === 0 ? (
-              <Text style={[txt(500), { fontSize: 13, color: "#9aa0a6", padding: 12 }]}>
+              <Text style={[txt(500), { fontSize: 13, color: C.t4, padding: 12 }]}>
                 No submissions yet.
               </Text>
             ) : (
@@ -496,15 +498,16 @@ function FieldLabel({
 }: {
   Icon: typeof Truck; label: string; required?: boolean; hint?: string;
 }) {
+  const { C } = useTheme();
   return (
     <View style={{ flexDirection: "row", alignItems: "center", marginTop: 12, marginBottom: 6, gap: 6 }}>
-      <Icon size={12} color="#202124" strokeWidth={2.4} />
-      <Text style={[txt(800), { fontSize: 11, color: "#202124", letterSpacing: 0.5, textTransform: "uppercase" }]}>
+      <Icon size={12} color={C.t1} strokeWidth={2.4} />
+      <Text style={[txt(800), { fontSize: 11, color: C.t1, letterSpacing: 0.5, textTransform: "uppercase" }]}>
         {label}
       </Text>
-      {required && <Text style={[txt(700), { fontSize: 11, color: "#c62828" }]}>*</Text>}
+      {required && <Text style={[txt(700), { fontSize: 11, color: C.redInk }]}>*</Text>}
       {hint && (
-        <Text style={[txt(500), { fontSize: 10, color: "#9aa0a6", letterSpacing: 0.2 }]}>
+        <Text style={[txt(500), { fontSize: 10, color: C.t4, letterSpacing: 0.2 }]}>
           — {hint}
         </Text>
       )}
@@ -517,6 +520,7 @@ function PickerRow({
 }: {
   placeholder: string; value: string | null; onPress: () => void;
 }) {
+  const { C } = useTheme();
   return (
     <TouchableOpacity
       onPress={onPress}
@@ -525,17 +529,17 @@ function PickerRow({
         flexDirection: "row",
         alignItems: "center",
         justifyContent: "space-between",
-        backgroundColor: "#fff",
+        backgroundColor: C.surface,
         borderRadius: 10,
         borderWidth: 1,
-        borderColor: "#e8eaed",
+        borderColor: C.border,
         paddingHorizontal: 12,
         paddingVertical: 12,
       }}>
-      <Text style={[txt(value ? 700 : 500), { fontSize: 15, color: value ? "#202124" : "#9aa0a6" }]}>
+      <Text style={[txt(value ? 700 : 500), { fontSize: 15, color: value ? C.t1 : C.t4 }]}>
         {value ?? placeholder}
       </Text>
-      <ChevronDown size={16} color="#5f6368" />
+      <ChevronDown size={16} color={C.t3} />
     </TouchableOpacity>
   );
 }
@@ -546,14 +550,15 @@ function PickerList<T>({
   items: { key: string; label: string; value: T }[];
   onSelect: (value: T) => void;
 }) {
+  const { C } = useTheme();
   return (
     <View
       style={{
         marginTop: 6,
-        backgroundColor: "#fff",
+        backgroundColor: C.surface,
         borderRadius: 10,
         borderWidth: 1,
-        borderColor: "#e8eaed",
+        borderColor: C.border,
         maxHeight: 260,
         overflow: "hidden",
       }}>
@@ -563,8 +568,8 @@ function PickerList<T>({
             key={it.key}
             onPress={() => onSelect(it.value)}
             activeOpacity={0.6}
-            style={{ paddingHorizontal: 14, paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: "#f1f3f4" }}>
-            <Text style={[txt(600), { fontSize: 14, color: "#202124" }]}>{it.label}</Text>
+            style={{ paddingHorizontal: 14, paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: C.borderSoft }}>
+            <Text style={[txt(600), { fontSize: 14, color: C.t1 }]}>{it.label}</Text>
           </TouchableOpacity>
         ))}
       </ScrollView>
@@ -577,6 +582,7 @@ function NumberInput({
 }: {
   value: string; onChangeText: (v: string) => void; placeholder?: string; integer?: boolean;
 }) {
+  const { C } = useTheme();
   return (
     <TextInput
       value={value}
@@ -587,18 +593,18 @@ function NumberInput({
       }}
       keyboardType="decimal-pad"
       placeholder={placeholder}
-      placeholderTextColor="#9aa0a6"
+      placeholderTextColor={C.t4}
       style={[
         txt(700),
         {
-          backgroundColor: "#fff",
+          backgroundColor: C.surface,
           borderRadius: 10,
           borderWidth: 1,
-          borderColor: "#e8eaed",
+          borderColor: C.border,
           paddingHorizontal: 12,
           paddingVertical: 12,
           fontSize: 16,
-          color: "#202124",
+          color: C.t1,
           marginBottom: 4,
         },
       ]}
@@ -611,6 +617,7 @@ function RecentRow({
 }: {
   report: FuelReport; assets: AssetOption[];
 }) {
+  const { C, ACCENT } = useTheme();
   const asset = assets.find(a => a.id === report.assetId);
   const date  = new Date(report.reportedAt);
   const dateLabel = `${date.toLocaleDateString(undefined, { month: "short", day: "numeric" })} · ${
@@ -619,7 +626,7 @@ function RecentRow({
   return (
     <View
       style={{
-        backgroundColor: "#fff",
+        backgroundColor: C.surface,
         borderRadius: 10,
         padding: 12,
         marginBottom: 8,
@@ -627,20 +634,20 @@ function RecentRow({
         alignItems: "center",
       }}>
       <View style={{ flex: 1 }}>
-        <Text style={[txt(700), { fontSize: 14, color: "#202124" }]}>
+        <Text style={[txt(700), { fontSize: 14, color: C.t1 }]}>
           {asset ? formatAssetLabel(asset) : `Asset #${report.assetId}`} · {report.state}
         </Text>
-        <Text style={[txt(600), { fontSize: 12, color: "#202124", marginTop: 2 }]}>
+        <Text style={[txt(600), { fontSize: 12, color: C.t1, marginTop: 2 }]}>
           {dateLabel}
           {report.odometer != null ? ` · ${report.odometer.toLocaleString()} mi` : ""}
         </Text>
       </View>
       <View style={{ alignItems: "flex-end" }}>
-        <Text style={[txt(800), { fontSize: 14, color: "#1a73e8" }]}>
+        <Text style={[txt(800), { fontSize: 14, color: ACCENT }]}>
           {Number(report.dieselGallons).toFixed(1)} gal
         </Text>
         {report.defGallons != null && report.defGallons > 0 && (
-          <Text style={[txt(500), { fontSize: 11, color: "#9aa0a6" }]}>
+          <Text style={[txt(500), { fontSize: 11, color: C.t4 }]}>
             DEF {Number(report.defGallons).toFixed(1)}
           </Text>
         )}

@@ -2,9 +2,8 @@ import React from "react";
 import { View, Text } from "react-native";
 import { AlertCircle } from "lucide-react-native";
 import type { LoadStatus } from "@/lib/types";
-import { STATUS_TINT, STATUS_LABEL } from "@/lib/loadCard";
-
-const ACTION_TINT = { bg: "#dc2626", fg: "#ffffff" };
+import { STATUS_LABEL } from "@/lib/loadCard";
+import { useTheme } from "@/lib/ThemeProvider";
 
 /**
  * Always-visible status pill used on the load-detail screen. Distinct
@@ -20,7 +19,9 @@ export function StatusBadge({
   status: LoadStatus;
   needsAction?: boolean;
 }) {
-  const tint  = needsAction ? ACTION_TINT : (STATUS_TINT[status] ?? STATUS_TINT.scheduled);
+  const { C, STATUS_PILL } = useTheme();
+  const ACTION_TINT = { bg: C.red, fg: "#ffffff" };
+  const tint  = needsAction ? ACTION_TINT : (STATUS_PILL[status] ?? STATUS_PILL.scheduled);
   const label = needsAction ? "Confirm"   : (STATUS_LABEL[status] ?? STATUS_LABEL.scheduled);
   return (
     <View

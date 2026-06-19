@@ -19,6 +19,7 @@ import React from "react";
 import { View, Text, TouchableOpacity, ActivityIndicator } from "react-native";
 import { Check, ClipboardCheck, Plus, AlertTriangle, AlertCircle } from "lucide-react-native";
 import type { TodayInspectionSummary } from "@/lib/railway";
+import { useTheme } from "@/lib/ThemeProvider";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
   fontFamily:
@@ -35,12 +36,13 @@ interface Props {
 }
 
 export default function InspectionCard({ loading, inspections, onStart }: Props) {
+  const { C, SHADOW, ACCENT } = useTheme();
   if (loading) {
     return (
-      <View style={cardBase}>
+      <View style={[cardBase, { borderColor: C.border }]}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-          <ActivityIndicator size="small" color="#6b7280" />
-          <Text style={[txt(500), { color: "#6b7280", fontSize: 13 }]}>Checking today&apos;s inspections…</Text>
+          <ActivityIndicator size="small" color={C.t3} />
+          <Text style={[txt(500), { color: C.t3, fontSize: 13 }]}>Checking today&apos;s inspections…</Text>
         </View>
       </View>
     );
@@ -52,27 +54,27 @@ export default function InspectionCard({ loading, inspections, onStart }: Props)
   if (completed === 0) {
     return (
       <TouchableOpacity onPress={onStart} activeOpacity={0.85} style={[cardBase, {
-        backgroundColor: "#fef2f2",
-        borderColor: "#fecaca",
+        backgroundColor: C.redBg,
+        borderColor: C.red,
       }]}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
           <View style={{
             width: 36, height: 36, borderRadius: 18,
-            backgroundColor: "#dc2626", alignItems: "center", justifyContent: "center",
+            backgroundColor: C.red, alignItems: "center", justifyContent: "center",
           }}>
             <AlertTriangle size={18} color="white" />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={[txt(700), { fontSize: 16, color: "#7f1d1d" }]}>
+            <Text style={[txt(700), { fontSize: 16, color: C.redInk }]}>
               Complete today&apos;s inspection
             </Text>
-            <Text style={[txt(500), { fontSize: 13, color: "#991b1b", marginTop: 2 }]}>
+            <Text style={[txt(500), { fontSize: 13, color: C.redInk, marginTop: 2 }]}>
               Required before your first run.
             </Text>
           </View>
           <View style={{
             paddingHorizontal: 14, paddingVertical: 9, borderRadius: 999,
-            backgroundColor: "#dc2626",
+            backgroundColor: C.red,
           }}>
             <Text style={[txt(700), { color: "white", fontSize: 13 }]}>Start</Text>
           </View>
@@ -90,28 +92,28 @@ export default function InspectionCard({ loading, inspections, onStart }: Props)
   );
   return (
     <View style={[cardBase, {
-      backgroundColor: "#f0fdf4",
-      borderColor:     "#bbf7d0",
+      backgroundColor: C.greenBg,
+      borderColor:     C.green,
     }]}>
       <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
         <View style={{
           width: 36, height: 36, borderRadius: 18,
-          backgroundColor: "#16a34a",
+          backgroundColor: C.green,
           alignItems: "center", justifyContent: "center",
         }}>
           <Check size={20} color="white" />
         </View>
         <View style={{ flex: 1 }}>
-          <Text style={[txt(700), { fontSize: 16, color: "#14532d" }]}>
+          <Text style={[txt(700), { fontSize: 16, color: C.greenInk }]}>
             {completed > 1 ? `Inspected today (${completed})` : "Inspected today"}
           </Text>
-          <Text style={[txt(500), { fontSize: 13, color: "#166534", marginTop: 2 }]}>
+          <Text style={[txt(500), { fontSize: 13, color: C.greenInk, marginTop: 2 }]}>
             {summarize(inspections)}
           </Text>
           {defectCount > 0 && (
             <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 6 }}>
-              <AlertCircle size={12} color="#374151" />
-              <Text style={[txt(600), { fontSize: 12, color: "#374151" }]}>
+              <AlertCircle size={12} color={C.t2} />
+              <Text style={[txt(600), { fontSize: 12, color: C.t2 }]}>
                 {defectCount} defect{defectCount === 1 ? "" : "s"} reported
               </Text>
             </View>
@@ -121,10 +123,10 @@ export default function InspectionCard({ loading, inspections, onStart }: Props)
       <TouchableOpacity onPress={onStart} style={{
         flexDirection: "row", alignItems: "center", gap: 6, alignSelf: "flex-start",
         marginTop: 10, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999,
-        backgroundColor: "white", borderWidth: 1, borderColor: "#bbf7d0",
+        backgroundColor: C.surface, borderWidth: 1, borderColor: C.green,
       }}>
-        <Plus size={12} color="#166534" />
-        <Text style={[txt(700), { fontSize: 12, color: "#166534" }]}>
+        <Plus size={12} color={C.greenInk} />
+        <Text style={[txt(700), { fontSize: 12, color: C.greenInk }]}>
           Run another inspection
         </Text>
       </TouchableOpacity>
@@ -133,8 +135,8 @@ export default function InspectionCard({ loading, inspections, onStart }: Props)
         <View style={{ marginTop: 10, gap: 4 }}>
           {inspections.map(ins => (
             <View key={ins.id} style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-              <ClipboardCheck size={11} color="#166534" />
-              <Text style={[txt(500), { fontSize: 11, color: "#14532d" }]}>
+              <ClipboardCheck size={11} color={C.greenInk} />
+              <Text style={[txt(500), { fontSize: 11, color: C.greenInk }]}>
                 {labelFor(ins)} · {fmtTime(ins.submitted_at)}
                 {ins.has_defects ? " · defects" : ""}
               </Text>
