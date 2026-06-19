@@ -60,7 +60,8 @@ import { useDriverSession } from "@/lib/useDriverSession";
 import { ScheduleTypeChip } from "@/lib/loadCard";
 import type { LoadStatus, Stop } from "@/lib/types";
 import { Glass } from "@/components/Glass";
-import { C, SP, RADIUS, SHADOW, ACCENT } from "@/lib/theme";
+import { SP, RADIUS } from "@/lib/theme";
+import { useTheme } from "@/lib/ThemeProvider";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
   fontFamily:
@@ -111,18 +112,8 @@ const STOP_TYPE_LABEL: Record<Stop["type"], string> = {
   relay:     "Relay",
 };
 
-const STOP_ACCENT: Record<Stop["type"], { bg: string; fg: string; iconBg: string }> = {
-  pickup:    { bg: "#dcfce7", fg: "#15803d", iconBg: "#16a34a" }, // green
-  delivery:  { bg: "#fee2e2", fg: "#b91c1c", iconBg: "#dc2626" }, // red
-  // `drop` = trailer drop (no hook), distinct from drop_hook which is
-  // drop one trailer + grab another. Same blue family as drop_hook
-  // but slightly lighter to keep them visually distinguishable on
-  // the same screen.
-  drop:      { bg: "#e0f2fe", fg: "#075985", iconBg: "#0284c7" }, // sky blue
-  drop_hook: { bg: "#dbeafe", fg: "#1e40af", iconBg: "#2563eb" }, // indigo
-  stop:      { bg: "#fef9c3", fg: "#854d0e", iconBg: "#eab308" }, // yellow
-  relay:     { bg: "#f3e8fd", fg: "#6b21a8", iconBg: "#8b5cf6" },
-};
+// Stop-type colors come from the theme (STOP_TINT bg/fg + STOP_SOLID icon
+// tile) so they flip with light/dark mode — resolved in StopCardInner.
 
 /**
  * Notes block that supports partial-selection copy on iOS.
@@ -154,17 +145,18 @@ function fmtDate(iso: string | undefined): string {
 }
 
 function MetaRow({
-  Icon, label, value, color = "#202124",
+  Icon, label, value, color,
 }: {
   Icon: typeof Truck; label: string; value: string; color?: string;
 }) {
+  const { C } = useTheme();
   return (
     <View style={{ flexDirection: "row", alignItems: "center", paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: C.borderSoft }}>
-      <Icon size={15} color="#5f6368" strokeWidth={2} />
-      <Text style={[txt(600), { fontSize: 13, color: "#5f6368", marginLeft: 10, flex: 1 }]}>
+      <Icon size={15} color={C.t3} strokeWidth={2} />
+      <Text style={[txt(600), { fontSize: 13, color: C.t3, marginLeft: 10, flex: 1 }]}>
         {label}
       </Text>
-      <Text style={[txt(700), { fontSize: 14, color, maxWidth: "60%", textAlign: "right" }]}>
+      <Text style={[txt(700), { fontSize: 14, color: color ?? C.t1, maxWidth: "60%", textAlign: "right" }]}>
         {value}
       </Text>
     </View>
@@ -172,6 +164,7 @@ function MetaRow({
 }
 
 function IdentifierRow({ label, value, onCopied }: { label: string; value: string; onCopied?: () => void }) {
+  const { C } = useTheme();
   const [copied, setCopied] = React.useState(false);
   const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   return (
@@ -186,10 +179,10 @@ function IdentifierRow({ label, value, onCopied }: { label: string; value: strin
       }}
       style={{ flexDirection: "row", alignItems: "center", paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: C.borderSoft }}
     >
-      <Text style={[txt(600), { fontSize: 13, color: "#5f6368", flex: 1 }]}>
+      <Text style={[txt(600), { fontSize: 13, color: C.t3, flex: 1 }]}>
         {label}
       </Text>
-      <Text style={[txt(700), { fontSize: 14, color: "#202124", marginRight: 10 }]} numberOfLines={1}>
+      <Text style={[txt(700), { fontSize: 14, color: C.t1, marginRight: 10 }]} numberOfLines={1}>
         {value}
       </Text>
       <View style={{
@@ -198,8 +191,8 @@ function IdentifierRow({ label, value, onCopied }: { label: string; value: strin
         alignItems: "center", justifyContent: "center",
       }}>
         {copied
-          ? <Check size={13} color="#15803d" strokeWidth={2.6} />
-          : <Copy  size={13} color="#5f6368" strokeWidth={2.2} />}
+          ? <Check size={13} color={C.greenInk} strokeWidth={2.6} />
+          : <Copy  size={13} color={C.t3} strokeWidth={2.2} />}
       </View>
     </TouchableOpacity>
   );
@@ -210,6 +203,7 @@ function RelayHandoffBanner({
 }: {
   mode: "pickup" | "delivery"; partnerDriverName?: string;
 }) {
+  const { C } = useTheme();
   return (
     <View
       style={{
@@ -217,24 +211,24 @@ function RelayHandoffBanner({
         marginBottom: 12,
         padding: 14,
         borderRadius: 18,
-        backgroundColor: "#fee2e2",
+        backgroundColor: C.redBg,
         borderWidth: 1.5,
-        borderColor: "#dc2626",
+        borderColor: C.red,
         flexDirection: "row",
         alignItems: "center",
         gap: 10,
       }}
     >
-      <HandCoins size={20} color="#b91c1c" strokeWidth={2.4} />
+      <HandCoins size={20} color={C.redInk} strokeWidth={2.4} />
       <View style={{ flex: 1 }}>
-        <Text style={[txt(800), { fontSize: 13, color: "#b91c1c", letterSpacing: 0.4 }]}>
+        <Text style={[txt(800), { fontSize: 13, color: C.redInk, letterSpacing: 0.4 }]}>
           RELAY HANDOFF
         </Text>
-        <Text style={[txt(700), { fontSize: 14, color: "#b91c1c", marginTop: 2 }]}>
+        <Text style={[txt(700), { fontSize: 14, color: C.redInk, marginTop: 2 }]}>
           {mode === "pickup" ? "This is where you leave the load." : "You take over here."}
         </Text>
         {partnerDriverName ? (
-          <Text style={[txt(500), { fontSize: 12, color: "#7f1d1d", marginTop: 2 }]}>
+          <Text style={[txt(500), { fontSize: 12, color: C.redInk, marginTop: 2 }]}>
             {mode === "pickup"
               ? `${partnerDriverName} continues from here.`
               : `${partnerDriverName} brought it to this point.`}
@@ -324,6 +318,7 @@ function CheckInButton({
 }: {
   stop: Stop; orgId?: string; onCheckedIn?: (action: "checkin") => void; eventId?: string; driverName?: string;
 }) {
+  const { C } = useTheme();
   const [busy, setBusy] = React.useState(false);
 
   async function handleCheckIn() {
@@ -371,11 +366,11 @@ function CheckInButton({
       }}
     >
       {busy ? (
-        <ActivityIndicator size="small" color="#15803d" />
+        <ActivityIndicator size="small" color={C.greenInk} />
       ) : (
         <>
-          <MapPin size={13} color="#15803d" strokeWidth={2.4} />
-          <Text style={[txt(700), { fontSize: 13, color: "#15803d" }]}>Check In</Text>
+          <MapPin size={13} color={C.greenInk} strokeWidth={2.4} />
+          <Text style={[txt(700), { fontSize: 13, color: C.greenInk }]}>Check In</Text>
         </>
       )}
     </TouchableOpacity>
@@ -387,6 +382,7 @@ function CheckedInChip({
 }: {
   stop: Stop; orgId?: string; onUpdated?: (action: "redo" | "undo") => void; eventId?: string; driverName?: string;
 }) {
+  const { C } = useTheme();
   const [busy, setBusy] = React.useState(false);
   const distMi =
     stop.lat != null && stop.lng != null && stop.arrivedLat != null && stop.arrivedLng != null
@@ -394,8 +390,8 @@ function CheckedInChip({
       : null;
   const verified = distMi != null && distMi <= VERIFY_THRESHOLD_MI;
   const palette = verified
-    ? { bg: "#dcfce7", fg: "#15803d" }
-    : { bg: "#fef9c3", fg: "#854d0e" };
+    ? { bg: C.greenBg, fg: C.greenInk }
+    : { bg: C.amberBg, fg: C.amberInk };
   const distLabel =
     distMi == null ? null : distMi < 0.1 ? "on-site" : `${distMi.toFixed(1)} mi off`;
 
@@ -479,6 +475,7 @@ function CheckedInChip({
 }
 
 function CopyAddressButton({ value, onCopied }: { value: string; onCopied?: () => void }) {
+  const { C } = useTheme();
   const [copied, setCopied] = React.useState(false);
   const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   return (
@@ -500,9 +497,9 @@ function CopyAddressButton({ value, onCopied }: { value: string; onCopied?: () =
       }}
     >
       {copied ? (
-        <Check size={14} color="#15803d" strokeWidth={2.6} />
+        <Check size={14} color={C.greenInk} strokeWidth={2.6} />
       ) : (
-        <Copy size={14} color="#5f6368" strokeWidth={2.2} />
+        <Copy size={14} color={C.t3} strokeWidth={2.2} />
       )}
     </TouchableOpacity>
   );
@@ -511,8 +508,9 @@ function CopyAddressButton({ value, onCopied }: { value: string; onCopied?: () =
 function TimeAnchor({
   kind, iso,
 }: { kind: "start" | "end"; iso?: string }) {
+  const { C, ACCENT } = useTheme();
   const label = kind === "start" ? "START TIME" : "END TIME";
-  const tint  = { bg: "#e8f0fe", fg: "#1558d6", iconBg: "#1a73e8" };
+  const tint  = { bg: C.blueBg, fg: C.blueInk, iconBg: ACCENT };
   let display = "—";
   if (iso) {
     const d = new Date(iso.replace(" ", "T"));
@@ -526,7 +524,7 @@ function TimeAnchor({
   return (
     <View
       style={{
-        backgroundColor: "#ffffff",
+        backgroundColor: C.surface,
         borderRadius:    18,
         marginBottom:    10,
         padding:         14,
@@ -552,7 +550,7 @@ function TimeAnchor({
             {label}
           </Text>
         </View>
-        <Text style={[txt(800), { fontSize: 15, color: "#202124" }]} numberOfLines={1}>
+        <Text style={[txt(800), { fontSize: 15, color: C.t1 }]} numberOfLines={1}>
           {display}
         </Text>
       </View>
@@ -592,9 +590,9 @@ function StopCardInner({
   // TS check catches it at compile time, this catches it if a server
   // ever returns a value outside the union (e.g. older clients
   // hitting newer data).
-  const accent = STOP_ACCENT[stop.type] ?? {
-    bg: C.borderSoft, fg: "#5f6368", iconBg: "#80868b",
-  };
+  const { C, ACCENT, STOP_TINT, STOP_SOLID } = useTheme();
+  const stint = STOP_TINT[stop.type] ?? { bg: C.surfaceSunk, fg: C.t3 };
+  const accent = { bg: stint.bg, fg: stint.fg, iconBg: STOP_SOLID[stop.type] ?? C.t3 };
   const facility = stop.facilityName ?? stop.city ?? stop.address ?? "—";
   const copyValue = stop.address ?? stop.city ?? stop.facilityName ?? "";
   // Relay handoff stops carry two times in one row: apptStart = the
@@ -634,7 +632,7 @@ function StopCardInner({
   return (
     <View
       style={{
-        backgroundColor: "#ffffff",
+        backgroundColor: C.surface,
         borderRadius: 18,
         marginBottom: 10,
         overflow: "hidden",
@@ -676,19 +674,19 @@ function StopCardInner({
             </View>
           </View>
 
-          <Text style={[txt(800), { fontSize: 16, color: "#202124" }]} numberOfLines={2}>
+          <Text style={[txt(800), { fontSize: 16, color: C.t1 }]} numberOfLines={2}>
             {facility}
           </Text>
           {stop.address && stop.address !== facility ? (
-            <Text style={[txt(500), { fontSize: 12, color: "#5f6368", marginTop: 2 }]} numberOfLines={2}>
+            <Text style={[txt(500), { fontSize: 12, color: C.t3, marginTop: 2 }]} numberOfLines={2}>
               {stop.address}
             </Text>
           ) : null}
 
           <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-              <Clock size={12} color="#5f6368" strokeWidth={2.2} />
-              <Text style={[txt(700), { fontSize: 12, color: "#3c4043" }]}>
+              <Clock size={12} color={C.t3} strokeWidth={2.2} />
+              <Text style={[txt(700), { fontSize: 12, color: C.t2 }]}>
                 {fmtDate(stop.apptStart)} · {window}
               </Text>
             </View>
@@ -715,8 +713,8 @@ function StopCardInner({
             backgroundColor: C.bg,
           }}
         >
-          <Navigation size={13} color="#1a73e8" strokeWidth={2.4} />
-          <Text style={[txt(700), { fontSize: 13, color: "#1a73e8" }]}>Navigate</Text>
+          <Navigation size={13} color={ACCENT} strokeWidth={2.4} />
+          <Text style={[txt(700), { fontSize: 13, color: ACCENT }]}>Navigate</Text>
         </TouchableOpacity>
 
         <View style={{ width: 1, backgroundColor: C.borderSoft }} />
@@ -738,12 +736,12 @@ function StopCardInner({
               flexDirection: "row", alignItems: "center", justifyContent: "center",
               gap: 8,
               paddingVertical: 12,
-              backgroundColor: "#faf5ff",
+              backgroundColor: C.purpleBg,
               borderTopWidth: 1, borderTopColor: C.borderSoft,
             }}
           >
-            <FileText size={14} color="#6b21a8" strokeWidth={2.4} />
-            <Text style={[txt(700), { fontSize: 13, color: "#6b21a8", letterSpacing: 0.2 }]}>
+            <FileText size={14} color={C.purpleInk} strokeWidth={2.4} />
+            <Text style={[txt(700), { fontSize: 13, color: C.purpleInk, letterSpacing: 0.2 }]}>
               View Handoff Photos
             </Text>
           </TouchableOpacity>
@@ -755,12 +753,12 @@ function StopCardInner({
               flexDirection: "row", alignItems: "center", justifyContent: "center",
               gap: 8,
               paddingVertical: 12,
-              backgroundColor: "#faf5ff",
+              backgroundColor: C.purpleBg,
               borderTopWidth: 1, borderTopColor: C.borderSoft,
             }}
           >
-            <Camera size={14} color="#6b21a8" strokeWidth={2.4} />
-            <Text style={[txt(700), { fontSize: 13, color: "#6b21a8", letterSpacing: 0.2 }]}>
+            <Camera size={14} color={C.purpleInk} strokeWidth={2.4} />
+            <Text style={[txt(700), { fontSize: 13, color: C.purpleInk, letterSpacing: 0.2 }]}>
               Upload Pictures
             </Text>
           </TouchableOpacity>
@@ -768,13 +766,13 @@ function StopCardInner({
       ) : null}
 
       {stop.instructions ? (
-        <View style={{ paddingHorizontal: 14, paddingVertical: 12, backgroundColor: "#fff7ed", borderTopWidth: 1, borderTopColor: C.borderSoft }}>
+        <View style={{ paddingHorizontal: 14, paddingVertical: 12, backgroundColor: C.amberBg, borderTopWidth: 1, borderTopColor: C.borderSoft }}>
           <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 8 }}>
-            <Info size={13} color="#9a3412" strokeWidth={2.2} style={{ marginTop: 2 }} />
+            <Info size={13} color={C.amberInk} strokeWidth={2.2} style={{ marginTop: 2 }} />
             <ExpandableInstructions
               value={stop.instructions}
-              textStyle={{ ...txt(600), fontSize: 13, color: "#9a3412", lineHeight: 18 }}
-              toggleColor="#9a3412"
+              textStyle={{ ...txt(600), fontSize: 13, color: C.amberInk, lineHeight: 18 }}
+              toggleColor={C.amberInk}
             />
           </View>
         </View>
@@ -811,6 +809,7 @@ const StopCard = React.memo(StopCardInner, (prev, next) => (
 
 export default function LoadDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
+  const { C, SHADOW, ACCENT } = useTheme();
   const router = useRouter();
   const queryClient = useQueryClient();
   const session = useDriverSession();
@@ -1157,17 +1156,17 @@ export default function LoadDetailScreen() {
           };
           return (
             <View style={{
-              backgroundColor: "#fff7ed",
+              backgroundColor: C.amberBg,
               borderRadius: 12,
-              borderWidth: 1, borderColor: "#fdba74",
+              borderWidth: 1, borderColor: C.amberBg,
               paddingVertical: 12, paddingHorizontal: 14,
               marginBottom: 14,
             }}>
-              <Text style={[txt(800), { fontSize: 13, color: "#9a3412", marginBottom: 4 }]}>
+              <Text style={[txt(800), { fontSize: 13, color: C.amberInk, marginBottom: 4 }]}>
                 Dispatcher asked you to:
               </Text>
               {remaining.map((k) => (
-                <Text key={k} style={[txt(600), { fontSize: 13, color: "#9a3412", lineHeight: 18 }]}>
+                <Text key={k} style={[txt(600), { fontSize: 13, color: C.amberInk, lineHeight: 18 }]}>
                   • {KIND_LABEL[k] ?? k}
                 </Text>
               ))}
@@ -1185,7 +1184,7 @@ export default function LoadDetailScreen() {
             activeOpacity={0.85}
             disabled={isConfirming}
             style={{
-              backgroundColor: "#0f9d58",
+              backgroundColor: C.green,
               borderRadius: 18,
               paddingVertical: 14,
               paddingHorizontal: 16,
@@ -1193,7 +1192,7 @@ export default function LoadDetailScreen() {
               alignItems: "center",
               gap: 10,
               marginBottom: 14,
-              shadowColor: "#0f9d58",
+              shadowColor: C.green,
               shadowOpacity: 0.3,
               shadowRadius: 12,
               shadowOffset: { width: 0, height: 4 },
@@ -1215,7 +1214,7 @@ export default function LoadDetailScreen() {
           </TouchableOpacity>
         ) : load.confirmedAt ? (
           <View style={{
-            backgroundColor: "#e6f4ea",
+            backgroundColor: C.greenBg,
             borderRadius: 12,
             paddingVertical: 10,
             paddingHorizontal: 14,
@@ -1224,8 +1223,8 @@ export default function LoadDetailScreen() {
             gap: 8,
             marginBottom: 14,
           }}>
-            <CheckCircle2 size={16} color="#0f9d58" strokeWidth={2.4} />
-            <Text style={[txt(700), { fontSize: 13, color: "#137333" }]}>
+            <CheckCircle2 size={16} color={C.green} strokeWidth={2.4} />
+            <Text style={[txt(700), { fontSize: 13, color: C.greenInk }]}>
               Confirmed
             </Text>
           </View>
@@ -1306,7 +1305,7 @@ export default function LoadDetailScreen() {
                 borderColor: C.border,
               }}
             >
-              <ActivityIndicator color="#9aa0a6" />
+              <ActivityIndicator color={C.t4} />
             </View>
           )}
         </View>
@@ -1318,7 +1317,7 @@ export default function LoadDetailScreen() {
             style={{
               position: "absolute",
               left: 33, top: 30, bottom: 30, width: 2,
-              backgroundColor: "#c8d4ee",
+              backgroundColor: C.borderStrong,
               borderRadius: 1,
             }}
           />
@@ -1327,7 +1326,7 @@ export default function LoadDetailScreen() {
         <TimeAnchor kind="start" iso={load.start} />
 
         {load.stops.length === 0 ? (
-          <Text style={[txt(500), { fontSize: 13, color: "#9aa0a6", marginBottom: 14 }]}>
+          <Text style={[txt(500), { fontSize: 13, color: C.t4, marginBottom: 14 }]}>
             No stops on this load yet.
           </Text>
         ) : (() => {
@@ -1374,7 +1373,7 @@ export default function LoadDetailScreen() {
                     <Text
                       style={[
                         txt(800),
-                        { fontSize: 11, letterSpacing: 1.1, color: "#9aa0a6", marginBottom: 10, textTransform: "uppercase" },
+                        { fontSize: 11, letterSpacing: 1.1, color: C.t4, marginBottom: 10, textTransform: "uppercase" },
                       ]}
                     >
                       Continued by partner
@@ -1410,7 +1409,7 @@ export default function LoadDetailScreen() {
                   <Text
                     style={[
                       txt(800),
-                      { fontSize: 11, letterSpacing: 1.1, color: "#9aa0a6", marginBottom: 10, textTransform: "uppercase" },
+                      { fontSize: 11, letterSpacing: 1.1, color: C.t4, marginBottom: 10, textTransform: "uppercase" },
                     ]}
                   >
                     Completed by partner
@@ -1479,20 +1478,20 @@ export default function LoadDetailScreen() {
         {load.relayGroupId && load.loadId ? (
           <View
             style={{
-              backgroundColor: "#f3e8fd",
+              backgroundColor: C.purpleBg,
               borderRadius: 18,
               padding: 14,
-              borderWidth: 1, borderColor: "#ddd6fe",
+              borderWidth: 1, borderColor: C.purpleBg,
               marginBottom: 14,
             }}
           >
             <View style={{ flexDirection: "row", gap: 10 }}>
-              <Repeat2 size={20} color="#6b21a8" strokeWidth={2.2} style={{ marginTop: 2 }} />
+              <Repeat2 size={20} color={C.purpleInk} strokeWidth={2.2} style={{ marginTop: 2 }} />
               <View style={{ flex: 1 }}>
-                <Text style={[txt(800), { fontSize: 13, color: "#6b21a8", letterSpacing: 0.2 }]}>
+                <Text style={[txt(800), { fontSize: 13, color: C.purpleInk, letterSpacing: 0.2 }]}>
                   Relay Load — {load.relayRole === "pickup" ? "First Leg" : "Second Leg"}
                 </Text>
-                <Text style={[txt(500), { fontSize: 13, color: "#6b21a8", lineHeight: 19, marginTop: 4, opacity: 0.95 }]}>
+                <Text style={[txt(500), { fontSize: 13, color: C.purpleInk, lineHeight: 19, marginTop: 4, opacity: 0.95 }]}>
                   {load.relayRole === "pickup"
                     ? `You haul this load to the relay handoff point, then ${load.partnerDriverName ?? "another driver"} takes it the rest of the way.`
                     : `${load.partnerDriverName ?? "Another driver"} starts this load. You pick it up at the relay point and finish the delivery.`}
@@ -1511,7 +1510,7 @@ export default function LoadDetailScreen() {
         {(load.internalLoadId || load.loadNum || (load.refNums && load.refNums.length > 0)) && (
           <View
             style={{
-              backgroundColor: "#ffffff",
+              backgroundColor: C.surface,
               borderRadius: 18,
               paddingHorizontal: 14,
               borderWidth: 1, borderColor: C.border,
@@ -1538,7 +1537,7 @@ export default function LoadDetailScreen() {
         {/* Summary card */}
         <View
           style={{
-            backgroundColor: "#ffffff",
+            backgroundColor: C.surface,
             borderRadius: 18,
             padding: 14,
             borderWidth: 1, borderColor: C.border,
@@ -1553,7 +1552,7 @@ export default function LoadDetailScreen() {
               Icon={Container}
               label="Trailer"
               value={load.trailerName ?? "Tap to select"}
-              color={load.trailerName ? "#202124" : "#1a73e8"}
+              color={load.trailerName ? C.t1 : ACCENT}
             />
           </TouchableOpacity>
           {load.driverPay != null && orgSettings?.showDriverPay ? (
@@ -1561,7 +1560,7 @@ export default function LoadDetailScreen() {
               Icon={DollarSign}
               label="Pay"
               value={`$${load.driverPay.toLocaleString("en-US", { minimumFractionDigits: 2 })}`}
-              color="#15803d"
+              color={C.greenInk}
             />
           ) : null}
         </View>
@@ -1573,26 +1572,26 @@ export default function LoadDetailScreen() {
             <Text
               style={[
                 txt(800),
-                { fontSize: 11, letterSpacing: 1.1, color: "#5f6368", marginTop: 16, marginBottom: 10, textTransform: "uppercase" },
+                { fontSize: 11, letterSpacing: 1.1, color: C.t3, marginTop: 16, marginBottom: 10, textTransform: "uppercase" },
               ]}
             >
               Special Instructions
             </Text>
             <View
               style={{
-                backgroundColor: "#fef3c7",
+                backgroundColor: C.amberBg,
                 borderRadius: 12,
                 padding: 12,
                 flexDirection: "row",
                 gap: 10,
                 borderWidth: 1,
-                borderColor: "#fde68a",
+                borderColor: C.amberBg,
               }}
             >
-              <AlertTriangle size={15} color="#92400e" strokeWidth={2.2} style={{ marginTop: 2 }} />
+              <AlertTriangle size={15} color={C.amberInk} strokeWidth={2.2} style={{ marginTop: 2 }} />
               <SelectableText
                 value={load.notes ?? load.specialInstructions ?? ""}
-                style={{ ...txt(600), fontSize: 13, color: "#92400e", flex: 1, lineHeight: 18 }}
+                style={{ ...txt(600), fontSize: 13, color: C.amberInk, flex: 1, lineHeight: 18 }}
               />
             </View>
           </>
