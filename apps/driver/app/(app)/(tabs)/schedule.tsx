@@ -1,411 +1,470 @@
-import React, { useEffect, useMemo } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  View, Text, SectionList, TouchableOpacity, ActivityIndicator, RefreshControl, ScrollView,
+  View, Text, ScrollView, TouchableOpacity, RefreshControl, ActivityIndicator, Dimensions,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { StatusBar } from "expo-status-bar";
 import { useRouter } from "expo-router";
-import { Calendar, MapPin, CalendarCheck, Truck, CalendarDays, List } from "lucide-react-native";
-import { fetchLoadsForDriver, fetchLoad } from "@/lib/api/loads";
-import { EmptyState } from "@/components/EmptyState";
-import { DayView, type DayViewHandle } from "@/components/DayView";
-import { useDriverSession } from "@/lib/useDriverSession";
-import { needsConfirmation } from "@/lib/loadStatus";
-import { useLoadsRealtime } from "@/lib/useLoadsRealtime";
-import { usePushRegistration } from "@/lib/usePushRegistration";
+import { useQuery } from "@tanstack/react-query";
 import {
-  RelayChip, NonRevChip, StatusPill, DiagonalStripes,
-  fmtTimeRangeShort, loadNumLabel,
-} from "@/lib/loadCard";
-import { useOrgTz, todayKeyInTz } from "@/lib/orgTz";
-import type { Load } from "@/lib/types";
+  Clock, Truck, ChevronRight, ChevronLeft, Calendar, List as ListIcon, Split, AlertTriangle, Inbox,
+} from "lucide-react-native";
+import { fetchLoadsForDriver } from "@/lib/api/loads";
+import { useDriverSession } from "@/lib/useDriverSession";
+import { useLoadsRealtime } from "@/lib/useLoadsRealtime";
+import { useOrgTz, todayKeyInTz, nowInTz } from "@/lib/orgTz";
+import { fmtTimeShort } from "@/lib/loadCard";
+import type { Load, Stop } from "@/lib/types";
+import { Glass } from "@/components/Glass";
+import { EmptyState } from "@/components/EmptyState";
+import { C, f, SP, RADIUS, SHADOW, ACCENT, ACCENT_INK } from "@/lib/theme";
 
-const txt = (weight: 500 | 600 | 700 | 800) => ({
-  fontFamily:
-    weight === 500 ? "PlusJakartaSans_500Medium"  :
-    weight === 600 ? "PlusJakartaSans_600SemiBold" :
-    weight === 700 ? "PlusJakartaSans_700Bold"     :
-                     "PlusJakartaSans_800ExtraBold",
-});
+const { width: SCREEN_W } = Dimensions.get("window");
+const DOW  = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const DOW1 = ["S", "M", "T", "W", "T", "F", "S"];
+const MON  = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const HOUR_H = 58;
+const GUTTER = 48;   // hour-label gutter
+const EV_LEFT = 54;  // where event blocks start
 
-function dateKeyOf(iso: string): string { return iso.slice(0, 10); }
-
-/** Shift a "YYYY-MM-DD" key by N days. Noon anchor avoids DST edge cases. */
-function shiftDateKey(key: string, days: number): string {
-  const d = new Date(`${key}T12:00:00`);
-  d.setDate(d.getDate() + days);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+/* ---- date helpers (operate on naive dispatch-zone YYYY-MM-DDTHH:mm) ---- */
+function dayKey(iso?: string): string { return iso ? iso.slice(0, 10) : ""; }
+function parseDay(key: string): Date { const [y, m, d] = key.split("-").map(Number); return new Date(y, m - 1, d); }
+function keyOf(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
-
-/** Section header for a day. `todayKey` must be in the org's tz — pass
- *  in from the caller (uses todayKeyInTz(orgTz)) so "Today" / "Tomorrow"
- *  / "Yesterday" reflect the org's calendar day, not the device's. */
-function fmtDateHeader(dateStr: string, todayKey: string): string {
-  const d = new Date(`${dateStr}T12:00:00`);
-  const todayD = new Date(`${todayKey}T12:00:00`);
-  const dateLabel = d.toLocaleDateString("en-US", {
-    weekday: "short", month: "short", day: "numeric",
-    year: todayD.getFullYear() !== d.getFullYear() ? "numeric" : undefined,
-  });
-  if (dateStr === todayKey)                   return `Today · ${dateLabel}`;
-  if (dateStr === shiftDateKey(todayKey,  1)) return `Tomorrow · ${dateLabel}`;
-  if (dateStr === shiftDateKey(todayKey, -1)) return `Yesterday · ${dateLabel}`;
-  return dateLabel;
+function shiftKey(key: string, n: number): string { const d = parseDay(key); d.setDate(d.getDate() + n); return keyOf(d); }
+function minutesOf(iso: string): number { const [h, m] = iso.slice(11, 16).split(":").map(Number); return (h || 0) * 60 + (m || 0); }
+function spanDays(startIso: string, endIso: string): string[] {
+  const a = parseDay(dayKey(startIso)), b = parseDay(dayKey(endIso || startIso));
+  const out: string[] = []; const d = new Date(a);
+  while (d <= b) { out.push(keyOf(d)); d.setDate(d.getDate() + 1); }
+  return out.length ? out : [dayKey(startIso)];
 }
+function fmtHour(h: number): string { const ap = h < 12 ? "a" : "p"; return `${h % 12 || 12}${ap}`; }
 
-// First / last stop of the driver's leg — handles relays (where the
-// type lookup misses the relay handoff). Mirrors the LoadCard helper.
-function originStop(load: Load) { return load.stops[0]; }
-function destinationStop(load: Load) { return load.stops[load.stops.length - 1]; }
-
-function locLabel(s: Load["stops"][number] | undefined): string {
+type Kind = "full" | "pickup" | "delivery";
+function kindOf(l: Load): Kind {
+  return l.relayRole === "pickup" ? "pickup" : l.relayRole === "delivery" ? "delivery" : "full";
+}
+function cityOf(s?: Stop): string {
   if (!s) return "—";
   if (s.city && s.state) return `${s.city}, ${s.state}`;
-  return s.city ?? s.facilityName ?? s.address ?? "—";
+  return s.city ?? s.facilityName ?? "—";
 }
+const KIND_CHIP: Record<Kind, { label: string | null; bg: string; fg: string }> = {
+  full:     { label: null,           bg: C.blueBg,  fg: C.blueInk },
+  pickup:   { label: "PICKUP LEG",   bg: C.greenBg, fg: C.greenInk },
+  delivery: { label: "DELIVERY LEG", bg: C.redBg,   fg: C.redInk },
+};
+const KIND_BAR: Record<Kind, string> = { full: ACCENT, pickup: C.green, delivery: C.red };
+// route dots: [origin, destination] colors per leg kind
+const KIND_DOTS: Record<Kind, [string, string]> = {
+  full:     [C.green,  C.red],
+  pickup:   [C.green,  C.purple],
+  delivery: [C.purple, C.red],
+};
 
-interface DayEntry {
-  load:      Load;
-  dayIndex:  number;   // 1-based
-  totalDays: number;
-}
-
-function ScheduleCard({ entry }: { entry: DayEntry }) {
-  const router = useRouter();
-  const { load, dayIndex, totalDays } = entry;
-  const pickup   = originStop(load);
-  const delivery = destinationStop(load);
-  const isMulti  = totalDays > 1;
-  const needsAction = needsConfirmation(load);
-  const isNonRev   = load.eventKind === "non_revenue";
-
-  return (
-    <TouchableOpacity
-      onPress={() => router.push({ pathname: "/load/[id]", params: { id: load.id } })}
-      activeOpacity={0.85}
-      style={{
-        flexDirection: "row",
-        backgroundColor: "#ffffff",
-        borderRadius: 12,
-        marginBottom: 8,
-        marginHorizontal: 16,
-        overflow: "hidden",
-        borderWidth: 1, borderColor: "#e8eaed",
-      }}
-    >
-      <View style={{ width: 4, backgroundColor: needsAction ? "#dc2626" : "#1a73e8" }} />
-
-      <View style={{ flex: 1, padding: 12 }}>
-        {isNonRev ? <DiagonalStripes /> : null}
-
-        {/* Title row — title + relay/non-rev chips */}
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-          <Text style={[txt(800), { fontSize: 15, color: "#202124", flex: 1 }]} numberOfLines={1}>
-            {load.title}
-          </Text>
-          {isNonRev ? <NonRevChip size="small" /> : null}
-          {load.relayRole ? <RelayChip role={load.relayRole} size="small" /> : null}
-        </View>
-
-        {/* Equipment row */}
-        {(load.assetName || load.trailerType) ? (
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginTop: 4 }}>
-            {load.assetName ? (
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-                <Truck size={11} color="#5f6368" strokeWidth={2.2} />
-                <Text style={[txt(700), { fontSize: 12, color: "#3c4043" }]} numberOfLines={1}>
-                  {load.assetName}
-                </Text>
-              </View>
-            ) : null}
-            {load.trailerType ? (
-              <Text style={[txt(700), { fontSize: 12, color: "#3c4043" }]} numberOfLines={1}>
-                · {load.trailerType}
-              </Text>
-            ) : null}
-          </View>
-        ) : null}
-
-        {/* Route */}
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 6 }}>
-          <MapPin size={11} color="#5f6368" strokeWidth={2.2} />
-          <Text style={[txt(600), { fontSize: 12, color: "#5f6368", flex: 1 }]} numberOfLines={1}>
-            {locLabel(pickup)}
-            {"  →  "}
-            {locLabel(delivery)}
-          </Text>
-        </View>
-
-        {/* Meta row — load # · time range · [status] · multi-day chip */}
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 8 }}>
-          <Text style={[txt(700), { fontSize: 11, color: "#1a73e8" }]} numberOfLines={1}>
-            {loadNumLabel(load)}
-          </Text>
-          <Text style={[txt(600), { fontSize: 11, color: "#9aa0a6" }]}>·</Text>
-          <Text style={[txt(600), { fontSize: 11, color: "#5f6368", flex: 1 }]} numberOfLines={1}>
-            {fmtTimeRangeShort(load)}
-          </Text>
-          <StatusPill status={load.status} size="small" />
-          {isMulti ? (
-            <View style={{ paddingHorizontal: 7, paddingVertical: 1, borderRadius: 999, backgroundColor: "#e8f0fe" }}>
-              <Text style={[txt(800), { fontSize: 9, color: "#1558d6", letterSpacing: 0.3 }]}>
-                DAY {dayIndex}/{totalDays}
-              </Text>
-            </View>
-          ) : null}
-        </View>
-      </View>
-    </TouchableOpacity>
-  );
-}
+type Item = { load: Load; dayKeySel: string };
 
 export default function ScheduleScreen() {
+  const insets = useSafeAreaInsets();
+  const router = useRouter();
   const session = useDriverSession();
-  const queryClient = useQueryClient();
-  // Default to the day/calendar view — drivers think in "today's runs"
-  // more than a list of upcoming. List remains one tap away via toggle.
-  const [mode, setMode] = React.useState<"schedule" | "day">("day");
-  const dayViewRef = React.useRef<DayViewHandle>(null);
   const driver = session.status === "matched" ? session.driver : null;
   useLoadsRealtime(driver?.driverId, driver?.orgId);
-  usePushRegistration(driver?.driverId, driver?.orgId);
+  const orgTz = useOrgTz(driver?.driverId, driver?.orgId);
+  const todayKey = todayKeyInTz(orgTz);
 
-  const { data: loads, isLoading, isRefetching, refetch, isError } = useQuery({
+  const { data: loads, isLoading, isError, isRefetching, refetch } = useQuery({
     queryKey: ["loads", driver?.driverId],
     queryFn:  () => fetchLoadsForDriver(driver!.driverId, driver!.orgId),
     enabled:  !!driver,
   });
 
-  // Daily inspection prompt now lives on the Active loads tab (the
-  // primary screen drivers land on), not here. The card was originally
-  // placed here but the user moved it because Active is what gets
-  // opened every shift, whereas Schedule is a planning view.
-
-  // Pre-fetch full details for every load whose time window touches the
-  // ±24h band. The list endpoint already returns enough to render cards,
-  // but the load-detail screen issues a separate fetchLoad on tap — and
-  // that one won't hit the network if the driver is offline. Prefetching
-  // here seeds ['load', id] in the persisted cache so airplane-mode tap
-  // lands on the full detail view, not a spinner.
-  useEffect(() => {
-    if (!loads || !driver) return;
-    const now = Date.now();
-    const DAY = 24 * 60 * 60 * 1000;
-    const active = loads.filter((l) => {
-      const start = new Date(l.start).getTime();
-      const end   = new Date(l.end).getTime();
-      // Window touches [now - 24h, now + 24h]
-      return end >= now - DAY && start <= now + DAY;
-    });
-    for (const l of active) {
-      void queryClient.prefetchQuery({
-        queryKey: ["load", l.id],
-        queryFn:  () => fetchLoad(l.id, driver.driverId, driver.orgId),
-      });
-    }
-  }, [loads, driver, queryClient]);
-
-  // "Today" must be in the org's tz — otherwise the count and the
-  // Today/Tomorrow/Yesterday section labels are based on the device's
-  // calendar day, which is wrong when the driver is in a different
-  // zone than the org. orgTz comes from the server (/v1/driver/org-settings).
-  const orgTz = useOrgTz(driver?.driverId, driver?.orgId);
-  const todayKey = todayKeyInTz(orgTz);
-
-  const upcomingCount = useMemo(() => {
-    if (!loads) return 0;
-    // A load counts if its end date is today or later (i.e. not fully in the past)
-    return loads.filter((l) => l.end.slice(0, 10) >= todayKey).length;
-  }, [loads, todayKey]);
-
-  const sections = useMemo(() => {
-    if (!loads) return [];
-    const groups = new Map<string, DayEntry[]>();
-
-    for (const load of loads) {
-      const startKey = dateKeyOf(load.start);
-      const endKey   = dateKeyOf(load.end);
-      // Build the inclusive list of date keys this load spans
-      const dayKeys: string[] = [];
-      const cur = new Date(`${startKey}T00:00:00`);
-      const end = new Date(`${endKey}T00:00:00`);
-      while (cur.getTime() <= end.getTime()) {
-        const yyyy = cur.getFullYear();
-        const mm   = String(cur.getMonth() + 1).padStart(2, "0");
-        const dd   = String(cur.getDate()).padStart(2, "0");
-        dayKeys.push(`${yyyy}-${mm}-${dd}`);
-        cur.setDate(cur.getDate() + 1);
+  // Group loads by every calendar day they span (multi-day loads appear on each).
+  const itemsByDay = useMemo(() => {
+    const map: Record<string, Item[]> = {};
+    for (const load of loads ?? []) {
+      for (const dk of spanDays(load.start, load.end)) {
+        (map[dk] = map[dk] || []).push({ load, dayKeySel: dk });
       }
-      const totalDays = dayKeys.length;
-      dayKeys.forEach((dateStr, i) => {
-        const arr = groups.get(dateStr) ?? [];
-        arr.push({ load, dayIndex: i + 1, totalDays });
-        groups.set(dateStr, arr);
-      });
     }
+    for (const arr of Object.values(map)) {
+      arr.sort((a, b) => a.load.start.slice(11).localeCompare(b.load.start.slice(11)));
+    }
+    return map;
+  }, [loads]);
 
-    const sortedKeys = [...groups.keys()].sort();
-    return sortedKeys.map((dateStr) => ({
-      title: fmtDateHeader(dateStr, todayKey),
-      data:  (groups.get(dateStr) ?? []).sort((a, b) => a.load.start.localeCompare(b.load.start)),
-    }));
-  }, [loads, todayKey]);
+  const [selected, setSelected] = useState(todayKey);
+  const [view, setView] = useState<"list" | "day">("list");
 
-  const listRef        = React.useRef<SectionList<DayEntry>>(null);
-  const listContainer  = React.useRef<View>(null);
-  const todayHeaderRef = React.useRef<View>(null);
-  const scrollY        = React.useRef(0);
+  // Snap to "today" once the org tz resolves (initial render may be "").
+  useEffect(() => { setSelected((s) => (s ? s : todayKey)); }, [todayKey]);
 
-  function scrollToToday() {
-    const header    = todayHeaderRef.current;
-    const container = listContainer.current;
-    if (!header || !container) return;
+  // Week window: Saturday → Friday containing `selected`.
+  const days = useMemo(() => {
+    const sel = parseDay(selected || todayKey);
+    const back = (sel.getDay() + 1) % 7; // Sat→0 … Fri→6
+    const start = new Date(sel); start.setDate(sel.getDate() - back);
+    return Array.from({ length: 7 }, (_, i) => { const d = new Date(start); d.setDate(start.getDate() + i); return keyOf(d); });
+  }, [selected, todayKey]);
 
-    // measure() gives each view's current position in window coordinates.
-    // headerPageY = where today's header is on screen right now.
-    // containerPageY = where the top of the list is on screen.
-    // contentY = how far into the scroll content today's header sits.
-    header.measure((_fx, _fy, _w, _h, _px, headerPageY) => {
-      container.measure((_fx2, _fy2, _w2, _h2, _px2, containerPageY) => {
-        const contentY = scrollY.current + (headerPageY - containerPageY);
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (listRef.current?.getScrollResponder() as any)?.scrollTo({
-          y: Math.max(0, contentY),
-          animated: false,
-        });
-      });
-    });
+  const items = itemsByDay[selected] ?? [];
+  const loadCount = useMemo(() => new Set(items.map((i) => i.load.id)).size, [items]);
+  const selDate = parseDay(selected || todayKey);
+  const isToday = selected === todayKey;
+
+  const wStart = parseDay(days[0]), wEnd = parseDay(days[6]);
+  const rangeLabel = wStart.getMonth() === wEnd.getMonth()
+    ? `${MON[wStart.getMonth()]} ${wStart.getDate()} – ${wEnd.getDate()}`
+    : `${MON[wStart.getMonth()]} ${wStart.getDate()} – ${MON[wEnd.getMonth()]} ${wEnd.getDate()}`;
+
+  function openLoad(id: string) {
+    router.push({ pathname: "/load/[id]", params: { id } });
   }
 
-  // Auto-scroll on first load
-  const initialScrollDone = React.useRef(false);
-  React.useEffect(() => {
-    if (initialScrollDone.current || sections.length === 0) return;
-    const id = setTimeout(() => {
-      scrollToToday();
-      initialScrollDone.current = true;
-    }, 300);
-    return () => clearTimeout(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sections]);
-
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: "#1a73e8" }} edges={["top"]}>
-      <View style={{ backgroundColor: "#1a73e8", paddingHorizontal: 22, paddingTop: 8, paddingBottom: 20 }}>
-        <View style={{ flexDirection: "row", alignItems: "center" }}>
-          <Text style={[txt(800), { flex: 1, fontSize: 22, color: "#ffffff", letterSpacing: -0.3 }]}>
-            Schedule
-          </Text>
-          <View style={{ flexDirection: "row", gap: 6 }}>
+    <View style={{ flex: 1, backgroundColor: C.bg }}>
+      <StatusBar style="dark" />
+
+      {/* Glass header */}
+      <Glass
+        deep
+        radii={{ borderBottomLeftRadius: RADIUS.headerList, borderBottomRightRadius: RADIUS.headerList }}
+        style={{ paddingTop: insets.top + 8, paddingHorizontal: SP.screenPx, paddingBottom: 12, zIndex: 10 }}
+      >
+        <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 12 }}>
+          <View style={{ flex: 1 }}>
+            <Text style={[f(600), { fontSize: 13, color: C.t3, letterSpacing: 0.1 }]}>
+              {MON[selDate.getMonth()]} {selDate.getFullYear()}
+            </Text>
+            <Text style={[f(800), { fontSize: 27, color: C.t1, marginTop: 1, letterSpacing: -0.6 }]}>Schedule</Text>
+          </View>
+          {!isToday ? (
             <TouchableOpacity
-              onPress={() => setMode((m) => (m === "schedule" ? "day" : "schedule"))}
-              activeOpacity={0.7}
-              style={{
-                width: 36, height: 36, borderRadius: 18,
-                backgroundColor: "rgba(255,255,255,0.12)",
-                borderWidth: 1, borderColor: "rgba(255,255,255,0.18)",
-                alignItems: "center", justifyContent: "center",
-              }}
+              onPress={() => setSelected(todayKey)}
+              activeOpacity={0.8}
+              style={{ flexDirection: "row", alignItems: "center", gap: 6, height: 34, paddingHorizontal: 13, borderRadius: 12, backgroundColor: C.surface, ...SHADOW.card }}
             >
-              {mode === "schedule"
-                ? <CalendarDays size={15} color="#ffffff" strokeWidth={2.2} />
-                : <List         size={15} color="#ffffff" strokeWidth={2.2} />}
+              <Calendar size={14} color={ACCENT_INK} strokeWidth={2.2} />
+              <Text style={[f(700), { fontSize: 12.5, color: ACCENT_INK }]}>Today</Text>
             </TouchableOpacity>
-            <TouchableOpacity
-              onPress={() => {
-                if (mode === "day") dayViewRef.current?.goToToday();
-                else                scrollToToday();
-              }}
-              activeOpacity={0.7}
-              style={{
-                flexDirection: "row", alignItems: "center", gap: 6,
-                paddingHorizontal: 12, paddingVertical: 8,
-                borderRadius: 999,
-                backgroundColor: "rgba(255,255,255,0.12)",
-                borderWidth: 1, borderColor: "rgba(255,255,255,0.18)",
-              }}
-            >
-              <CalendarCheck size={13} color="#ffffff" strokeWidth={2.4} />
-              <Text style={[txt(800), { fontSize: 12, color: "#ffffff", letterSpacing: 0.3 }]}>
-                Today
-              </Text>
-            </TouchableOpacity>
+          ) : null}
+        </View>
+
+        {/* Week nav + strip */}
+        <View style={{ marginTop: 14 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+            <Text style={[f(800), { fontSize: 13, color: C.t2, letterSpacing: -0.2 }]}>{rangeLabel}</Text>
+            <View style={{ flexDirection: "row", gap: 4 }}>
+              <TouchableOpacity onPress={() => setSelected(shiftKey(selected, -7))} activeOpacity={0.8}
+                style={{ width: 30, height: 30, borderRadius: 9, backgroundColor: C.surfaceSunk, alignItems: "center", justifyContent: "center" }}>
+                <ChevronLeft size={18} color={C.t2} strokeWidth={2.4} />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setSelected(shiftKey(selected, 7))} activeOpacity={0.8}
+                style={{ width: 30, height: 30, borderRadius: 9, backgroundColor: C.surfaceSunk, alignItems: "center", justifyContent: "center" }}>
+                <ChevronRight size={18} color={C.t2} strokeWidth={2.4} />
+              </TouchableOpacity>
+            </View>
+          </View>
+          <View style={{ flexDirection: "row", gap: 4 }}>
+            {days.map((key) => {
+              const d = parseDay(key);
+              const isSel = key === selected, dayIsToday = key === todayKey, has = (itemsByDay[key]?.length ?? 0) > 0;
+              return (
+                <TouchableOpacity
+                  key={key}
+                  onPress={() => setSelected(key)}
+                  activeOpacity={0.85}
+                  style={[
+                    { flex: 1, alignItems: "center", gap: 4, paddingVertical: 7, borderRadius: 14 },
+                    isSel && { backgroundColor: C.surface, ...SHADOW.card },
+                  ]}
+                >
+                  <Text style={[f(800), { fontSize: 11, letterSpacing: 0.2, color: dayIsToday && !isSel ? ACCENT_INK : isSel ? C.t1 : C.t3 }]}>
+                    {DOW1[d.getDay()]}
+                  </Text>
+                  <View style={{ width: 30, height: 30, borderRadius: 999, alignItems: "center", justifyContent: "center", backgroundColor: isSel ? ACCENT : "transparent" }}>
+                    <Text style={[f(800), { fontSize: 16, letterSpacing: -0.4, color: isSel ? "#fff" : dayIsToday ? ACCENT_INK : C.t1 }]}>
+                      {d.getDate()}
+                    </Text>
+                  </View>
+                  <View style={{ width: 5, height: 5, borderRadius: 999, backgroundColor: ACCENT, opacity: has ? 1 : 0 }} />
+                </TouchableOpacity>
+              );
+            })}
           </View>
         </View>
+      </Glass>
 
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 10 }}>
-          <Calendar size={14} color="rgba(255,255,255,0.7)" strokeWidth={2.2} />
-          <Text style={[txt(700), { fontSize: 12, color: "rgba(255,255,255,0.7)", letterSpacing: 0.3 }]}>
-            {upcomingCount} load{upcomingCount === 1 ? "" : "s"} scheduled
+      {/* Sub-header: day label + summary + view toggle */}
+      <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 10, paddingHorizontal: SP.screenPx, paddingTop: 13, paddingBottom: 4 }}>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <View style={{ flexDirection: "row", alignItems: "baseline", gap: 8 }}>
+            <Text style={[f(800), { fontSize: 21, color: C.t1, letterSpacing: -0.5 }]}>
+              {isToday ? "Today" : DOW[selDate.getDay()]}
+            </Text>
+            <Text style={[f(700), { fontSize: 14, color: C.t3 }]}>{MON[selDate.getMonth()]} {selDate.getDate()}</Text>
+          </View>
+          <Text style={[f(700), { fontSize: 12, color: C.t3, marginTop: 2 }]}>
+            {items.length ? `${items.length} ${items.length === 1 ? "event" : "events"} · ${loadCount} ${loadCount === 1 ? "load" : "loads"}` : "No events"}
           </Text>
         </View>
+        <View style={{ flexDirection: "row", gap: 2, padding: 3, borderRadius: 11, backgroundColor: C.surfaceSunk }}>
+          {([["list", ListIcon], ["day", Calendar]] as const).map(([v, Ico]) => {
+            const on = view === v;
+            return (
+              <TouchableOpacity key={v} onPress={() => setView(v)} activeOpacity={0.8}
+                style={[{ width: 36, height: 32, borderRadius: 9, alignItems: "center", justifyContent: "center" }, on && { backgroundColor: C.surface, ...SHADOW.card }]}>
+                <Ico size={16} color={on ? ACCENT_INK : C.t3} strokeWidth={2.3} />
+              </TouchableOpacity>
+            );
+          })}
+        </View>
       </View>
 
-      <View style={{ flex: 1, backgroundColor: "#f8f9fa" }}>
+      {/* Body */}
       {isLoading ? (
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-          <ActivityIndicator size="large" color="#1a73e8" />
+          <ActivityIndicator size="large" color={ACCENT} />
         </View>
       ) : isError ? (
-        // Wrap in a ScrollView so RefreshControl works — without this the
-        // EmptyState is a static View and the user can't actually pull
-        // down to retry, despite the subtitle saying they should.
+        <EmptyState title="Could not load schedule" subtitle="Pull down to retry" Icon={AlertTriangle} />
+      ) : items.length === 0 ? (
         <ScrollView
+          style={{ flex: 1 }}
           contentContainerStyle={{ flexGrow: 1 }}
-          refreshControl={<RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor="#1a73e8" />}
+          refreshControl={<RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor={ACCENT} />}
         >
-          <EmptyState title="Could not load schedule" subtitle="Pull down to retry" />
+          <View style={{ paddingTop: 50 }}>
+            <EmptyState title="No events scheduled" subtitle="Pick another day with a dot, or change weeks with the arrows." Icon={Inbox} />
+          </View>
         </ScrollView>
-      ) : mode === "day" ? (
-        <DayView ref={dayViewRef} loads={loads ?? []} />
-      ) : sections.length === 0 ? (
+      ) : view === "list" ? (
         <ScrollView
-          contentContainerStyle={{ flexGrow: 1 }}
-          refreshControl={<RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor="#1a73e8" />}
+          style={{ flex: 1 }}
+          contentContainerStyle={{ paddingHorizontal: SP.screenPx, paddingTop: 8, paddingBottom: 130, gap: 12 }}
+          showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor={ACCENT} />}
         >
-          <EmptyState title="No loads scheduled" subtitle="Check back when dispatch adds a load" Icon={Calendar} />
+          {items.map((it) => <EventCard key={it.load.id + it.dayKeySel} item={it} onOpen={openLoad} />)}
         </ScrollView>
       ) : (
-        <View ref={listContainer} style={{ flex: 1 }}>
-          <SectionList
-            ref={listRef}
-            sections={sections}
-            keyExtractor={(item) => `${item.load.id}-${item.dayIndex}`}
-            stickySectionHeadersEnabled
-            initialNumToRender={500}
-            windowSize={999}
-            contentContainerStyle={{ paddingTop: 6, paddingBottom: 40 }}
-            refreshControl={<RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor="#1a73e8" />}
-            onScroll={(e) => { scrollY.current = e.nativeEvent.contentOffset.y; }}
-            scrollEventThrottle={16}
-            renderSectionHeader={({ section }) => {
-              const isToday = section.title.startsWith("Today");
-              return (
-                <View
-                  ref={isToday ? todayHeaderRef : undefined}
-                  style={{
-                    backgroundColor: "#f8f9fa",
-                    paddingHorizontal: 16,
-                    paddingTop: 14,
-                    paddingBottom: 8,
-                    flexDirection: "row",
-                    alignItems: "center",
-                    gap: 8,
-                  }}
-                >
-                  {isToday ? <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: "#1a73e8" }} /> : null}
-                  <Text style={[txt(800), { fontSize: 12, color: isToday ? "#1a73e8" : "#5f6368", letterSpacing: 0.6, textTransform: "uppercase" }]}>
-                    {section.title}
+        <DayGrid items={items} onOpen={openLoad} showNow={isToday} nowMin={isToday ? nowInTz(orgTz).getHours() * 60 + nowInTz(orgTz).getMinutes() : 0} selectedKey={selected} />
+      )}
+    </View>
+  );
+}
+
+/* ---------------- Agenda card ---------------- */
+function EventCard({ item, onOpen }: { item: Item; onOpen: (id: string) => void }) {
+  const { load, dayKeySel } = item;
+  const kind = kindOf(load);
+  const chip = KIND_CHIP[kind];
+  const [dotFrom, dotTo] = KIND_DOTS[kind];
+  const days = spanDays(load.start, load.end);
+  const multi = days.length > 1;
+  const idx = days.indexOf(dayKeySel);
+
+  let timeText: string;
+  if (!multi) timeText = `${fmtTimeShort(load.start)}–${fmtTimeShort(load.end)}`;
+  else if (idx === 0) timeText = `${fmtTimeShort(load.start)} →`;
+  else if (idx === days.length - 1) timeText = `→ ${fmtTimeShort(load.end)}`;
+  else timeText = "All day";
+
+  const from = load.stops[0];
+  const to = load.stops[load.stops.length - 1];
+  const miles = load.loadedMiles ?? load.miles;
+  const isRelay = kind !== "full";
+
+  return (
+    <TouchableOpacity
+      activeOpacity={0.9}
+      onPress={() => onOpen(load.id)}
+      style={{ backgroundColor: C.surface, borderRadius: RADIUS.tile, borderWidth: 1, borderColor: C.border, ...SHADOW.card, padding: 14 }}
+    >
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+          <Clock size={12} color={C.t4} strokeWidth={2.3} />
+          <Text style={[f(700), { fontSize: 12, color: C.t3 }]}>{timeText}</Text>
+        </View>
+        <View style={{ marginLeft: "auto", flexDirection: "row", alignItems: "center", gap: 7 }}>
+          {chip.label ? (
+            <View style={{ height: 20, paddingHorizontal: 8, borderRadius: 7, backgroundColor: chip.bg, justifyContent: "center" }}>
+              <Text style={[f(800), { fontSize: 10, letterSpacing: 0.4, color: chip.fg }]}>{chip.label}</Text>
+            </View>
+          ) : null}
+          {multi ? (
+            <View style={{ paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6, backgroundColor: C.surfaceSunk }}>
+              <Text style={[f(800), { fontSize: 10, letterSpacing: 0.3, color: C.t3 }]}>Day {idx + 1} of {days.length}</Text>
+            </View>
+          ) : null}
+        </View>
+      </View>
+
+      <Text style={[f(800), { fontSize: 16, color: C.t1, marginTop: 9, letterSpacing: -0.3, lineHeight: 20 }]} numberOfLines={2}>
+        {load.title}
+      </Text>
+
+      {load.assetName || load.trailerType ? (
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 6 }}>
+          <Truck size={13} color={ACCENT} strokeWidth={2.2} />
+          <Text style={[f(700), { fontSize: 12.5, color: C.t2 }]} numberOfLines={1}>
+            {load.assetName ?? ""}{load.assetName && load.trailerType ? "  ·  " : ""}{load.trailerType ?? ""}
+          </Text>
+        </View>
+      ) : null}
+
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+          <View style={{ width: 8, height: 8, borderRadius: 999, backgroundColor: dotFrom }} />
+          <Text style={[f(700), { fontSize: 13, color: C.t2 }]}>{cityOf(from)}</Text>
+        </View>
+        <ChevronRight size={14} color={C.t4} strokeWidth={2.6} />
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+          <View style={{ width: 8, height: 8, borderRadius: 999, backgroundColor: dotTo }} />
+          <Text style={[f(700), { fontSize: 13, color: C.t2 }]}>{cityOf(to)}</Text>
+        </View>
+      </View>
+
+      {isRelay && load.partnerDriverName ? (
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 7, marginTop: 9, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 10, backgroundColor: C.purpleBg }}>
+          <Split size={13} color={C.purpleInk} strokeWidth={2.2} />
+          <Text style={[f(700), { fontSize: 12, color: C.purpleInk, flex: 1 }]}>
+            {kind === "pickup" ? "Hand off to " : "Take over from "}
+            <Text style={f(800)}>{load.partnerDriverName}</Text>
+            {to ? ` at ${cityOf(to)}` : ""}
+          </Text>
+        </View>
+      ) : null}
+
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 11, paddingTop: 10, borderTopWidth: 1, borderTopColor: C.borderSoft }}>
+        {load.loadNum ? (
+          <Text style={[f(700), { fontSize: 12, color: C.t2 }]} numberOfLines={1}>#{load.loadNum}</Text>
+        ) : <View />}
+        {miles != null ? <Text style={[f(800), { fontSize: 12, color: C.t3, marginLeft: "auto" }]}>{miles} mi</Text> : null}
+        <ChevronRight size={15} color={C.t4} strokeWidth={2.4} style={{ marginLeft: miles != null ? 0 : "auto" }} />
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+/* ---------------- Day grid (24h) ---------------- */
+type Block = Item & { startMin: number; endMin: number; contPrev: boolean; contNext: boolean; col: number; cols: number };
+
+function layoutColumns(blocks: Block[]) {
+  let cluster: Block[] = [], colEnds: number[] = [], clusterEnd = -1;
+  const flush = () => {
+    const n = Math.max(...cluster.map((b) => b.col)) + 1;
+    cluster.forEach((b) => (b.cols = n));
+    cluster = []; colEnds = [];
+  };
+  for (const b of blocks) {
+    if (cluster.length && b.startMin >= clusterEnd) flush();
+    let placed = false;
+    for (let i = 0; i < colEnds.length; i++) {
+      if (colEnds[i] <= b.startMin) { b.col = i; colEnds[i] = b.endMin; placed = true; break; }
+    }
+    if (!placed) { b.col = colEnds.length; colEnds.push(b.endMin); }
+    cluster.push(b);
+    clusterEnd = cluster.length === 1 ? b.endMin : Math.max(clusterEnd, b.endMin);
+  }
+  if (cluster.length) flush();
+}
+
+function DayGrid({ items, onOpen, showNow, nowMin, selectedKey }: {
+  items: Item[]; onOpen: (id: string) => void; showNow: boolean; nowMin: number; selectedKey: string;
+}) {
+  const scrollRef = useRef<ScrollView>(null);
+  const evWidth = SCREEN_W - EV_LEFT - SP.screenPx;
+
+  const blocks = useMemo(() => {
+    const bs: Block[] = items.map((it) => {
+      const days = spanDays(it.load.start, it.load.end);
+      const idx = days.indexOf(it.dayKeySel);
+      const startMin = idx === 0 ? minutesOf(it.load.start) : 0;
+      const endRaw = idx === days.length - 1 ? minutesOf(it.load.end) : 24 * 60;
+      return { ...it, startMin, endMin: Math.max(endRaw, startMin + 45), contPrev: idx > 0, contNext: idx < days.length - 1, col: 0, cols: 1 };
+    }).sort((a, b) => a.startMin - b.startMin || a.endMin - b.endMin);
+    layoutColumns(bs);
+    return bs;
+  }, [items]);
+
+  useEffect(() => {
+    const first = blocks.length ? blocks[0].startMin : 8 * 60;
+    scrollRef.current?.scrollTo({ y: Math.max(0, (first / 60) * HOUR_H - 46), animated: false });
+  }, [blocks, selectedKey]);
+
+  return (
+    <ScrollView ref={scrollRef} style={{ flex: 1 }} contentContainerStyle={{ paddingLeft: SP.screenPx, paddingRight: 0, paddingTop: 6, paddingBottom: 130 }} showsVerticalScrollIndicator={false}>
+      <View style={{ height: 24 * HOUR_H, position: "relative" }}>
+        {Array.from({ length: 24 }, (_, h) => (
+          <View key={h} style={{ position: "absolute", top: h * HOUR_H, left: GUTTER, right: 0, borderTopWidth: 1, borderTopColor: C.borderStrong }}>
+            <Text style={[f(700), { position: "absolute", left: -44, top: -7, width: 38, textAlign: "right", fontSize: 10.5, color: C.t3 }]}>
+              {h === 0 ? "" : fmtHour(h)}
+            </Text>
+          </View>
+        ))}
+
+        {showNow ? (
+          <View style={{ position: "absolute", top: (nowMin / 60) * HOUR_H, left: GUTTER, right: 0, borderTopWidth: 2, borderTopColor: C.red, zIndex: 6 }}>
+            <View style={{ position: "absolute", left: -5, top: -5, width: 9, height: 9, borderRadius: 999, backgroundColor: C.red }} />
+          </View>
+        ) : null}
+
+        {blocks.map((b) => {
+          const kind = kindOf(b.load);
+          const top = (b.startMin / 60) * HOUR_H;
+          const height = ((b.endMin - b.startMin) / 60) * HOUR_H;
+          const compact = height < 78;
+          const colW = evWidth / b.cols;
+          const left = EV_LEFT + b.col * colW;
+          const chip = KIND_CHIP[kind];
+          const miles = b.load.loadedMiles ?? b.load.miles;
+          return (
+            <TouchableOpacity
+              key={b.load.id + b.dayKeySel}
+              activeOpacity={0.92}
+              onPress={() => onOpen(b.load.id)}
+              style={{
+                position: "absolute", top: top + 2, height: height - 4, left: left + 2, width: colW - 6,
+                borderRadius: 12, overflow: "hidden", flexDirection: "row",
+                backgroundColor: C.surface, borderWidth: 1, borderColor: C.border, ...SHADOW.card,
+              }}
+            >
+              <View style={{ width: 4, backgroundColor: KIND_BAR[kind] }} />
+              <View style={{ flex: 1, minWidth: 0, paddingHorizontal: 9, paddingVertical: compact ? 5 : 7 }}>
+                <Text style={[f(800), { fontSize: 13.5, color: C.t1, letterSpacing: -0.2, lineHeight: 17 }]} numberOfLines={compact ? 1 : 2}>
+                  {b.load.title}
+                </Text>
+                {b.load.assetName ? (
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: compact ? 2 : 4 }}>
+                    <Truck size={12} color={ACCENT} strokeWidth={2.2} />
+                    <Text style={[f(800), { fontSize: 11, color: C.t1 }]} numberOfLines={1}>{b.load.assetName}</Text>
+                  </View>
+                ) : null}
+                {!compact && height > 150 ? (
+                  <Text style={[f(700), { fontSize: 11, color: C.t4, marginTop: 5 }]} numberOfLines={1}>
+                    {b.load.loadNum ? `#${b.load.loadNum}` : ""}{b.load.loadNum && miles != null ? " · " : ""}{miles != null ? `${miles} mi` : ""}
+                  </Text>
+                ) : null}
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap", marginTop: 5 }}>
+                  {chip.label ? (
+                    <View style={{ paddingHorizontal: 5, paddingVertical: 1, borderRadius: 5, backgroundColor: chip.bg }}>
+                      <Text style={[f(800), { fontSize: 9, letterSpacing: 0.3, color: chip.fg }]}>{chip.label}</Text>
+                    </View>
+                  ) : null}
+                  <Text style={[f(800), { fontSize: 10.5, color: C.t3 }]}>
+                    {b.contPrev ? "12a" : fmtTimeShort(b.load.start)}–{b.contNext ? "12a" : fmtTimeShort(b.load.end)}
                   </Text>
                 </View>
-              );
-            }}
-            renderItem={({ item }) => <ScheduleCard entry={item} />}
-            onScrollToIndexFailed={() => {}}
-          />
-        </View>
-      )}
+              </View>
+            </TouchableOpacity>
+          );
+        })}
       </View>
-    </SafeAreaView>
+    </ScrollView>
   );
 }

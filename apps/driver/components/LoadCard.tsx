@@ -103,10 +103,7 @@ export function LoadCard({ load }: Props) {
   const showPay = !!orgSettings?.showDriverPay && load.driverPay != null;
 
   const miles = load.loadedMiles ?? load.miles;
-  const metaLeft =
-    miles != null || load.commodity
-      ? `${miles != null ? `${miles} mi` : ""}${miles != null && load.commodity ? " · " : ""}${load.commodity ?? ""}`
-      : fmtTimeRangeShort(load);
+  const metaLeft = miles != null ? `${miles} mi` : fmtTimeRangeShort(load);
 
   // Eyebrow trailing text (date + appt window) per leg.
   const originExtra = isRelayDelivery
