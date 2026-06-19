@@ -15,6 +15,7 @@ import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability } from "../middleware/require.js";
 import { syncBackfill, syncIncremental, getOrgMotiveKey, snapshotOdometers } from "../lib/motiveIngest.js";
+import { loadExcludedDrivers } from "../lib/reportExclusions.js";
 
 const movements = new Hono<{ Variables: AuthVariables }>();
 
@@ -531,9 +532,38 @@ movements.get("/odometer-summary", async (c) => {
     console.error("[GET /v1/movements/odometer-summary] assets fetch:", assetErr);
     return c.json({ error: "fetch_failed", detail: assetErr.message }, 500);
   }
-  const eldAssets = (assetRows ?? []) as Array<{ id: number; motive_vehicle_id: number | null }>;
+  let eldAssets = (assetRows ?? []) as Array<{ id: number; motive_vehicle_id: number | null }>;
+
+  // Drop owner-op assets. The carrier's "fleet miles" KPI is supposed
+  // to reflect the carrier's OWN trucks — owner-operators we just bill
+  // for shouldn't roll into the total. We derive owner-op at the asset
+  // level from driver_asset_prefs: an asset is excluded when its
+  // default driver is flagged exclude_from_reports. This mirrors how
+  // /v1/reports/loads excludes their loads from the dashboard's
+  // revenue + loaded-miles KPIs.
+  const excluded = await loadExcludedDrivers(orgId);
+  if (excluded.ids.length > 0) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: prefRows, error: prefErr } = await (supabase as any)
+      .from("driver_asset_prefs")
+      .select("asset_id, driver_id")
+      .eq("org_id", orgId)
+      .in("driver_id", excluded.ids);
+    if (prefErr) {
+      console.error("[GET /v1/movements/odometer-summary] driver_asset_prefs fetch (non-fatal):", prefErr);
+    }
+    const excludedAssetIds = new Set<number>(
+      ((prefRows ?? []) as Array<{ asset_id: number | null }>)
+        .map(r => r.asset_id)
+        .filter((v): v is number => v != null),
+    );
+    if (excludedAssetIds.size > 0) {
+      eldAssets = eldAssets.filter(a => !excludedAssetIds.has(a.id));
+    }
+  }
+
   if (eldAssets.length === 0) {
-    return c.json({ totalMiles: 0, eldAssetCount: 0, perAsset: {} });
+    return c.json({ totalMiles: 0, eldAssetCount: 0, perAsset: {}, perAssetSource: {} });
   }
   const eldAssetIds   = eldAssets.map(a => a.id);
   const eldVehicleIds = eldAssets.map(a => a.motive_vehicle_id).filter((v): v is number => v != null);

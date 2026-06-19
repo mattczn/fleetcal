@@ -26,6 +26,7 @@ import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability } from "../middleware/require.js";
 import { getOrgTier, applyActiveCapFilter } from "../lib/orgTier.js";
+import { loadExcludedDrivers } from "../lib/reportExclusions.js";
 
 const assets = new Hono<{ Variables: AuthVariables }>();
 
@@ -96,7 +97,38 @@ assets.get("/", async (c) => {
     console.error("[GET /v1/assets] failed:", error);
     return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
   }
-  const res: ListAssetsResponse = { assets: ((data ?? []) as unknown as DbAssetRow[]).map(rowToAsset) };
+  const assetsList = ((data ?? []) as unknown as DbAssetRow[]).map(rowToAsset);
+
+  // Derive the owner-op flag per asset. An asset is excluded when its
+  // default driver (per driver_asset_prefs) is flagged
+  // exclude_from_reports. Computed here once so every client
+  // (dashboard, performance, timeline) gets the same answer instead of
+  // re-deriving from a separate fetch. Two queries instead of a join
+  // because driver_asset_prefs.driver_id has no PostgREST FK alias
+  // tying it to drivers.id in the current schema dump.
+  const excluded = await loadExcludedDrivers(orgId);
+  if (excluded.ids.length > 0) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: prefRows, error: prefErr } = await (supabase as any)
+      .from("driver_asset_prefs")
+      .select("asset_id, driver_id")
+      .eq("org_id", orgId)
+      .in("driver_id", excluded.ids);
+    if (prefErr) {
+      console.error("[GET /v1/assets] driver_asset_prefs fetch (non-fatal):", prefErr);
+    } else {
+      const excludedAssetIds = new Set<number>(
+        ((prefRows ?? []) as Array<{ asset_id: number | null }>)
+          .map(r => r.asset_id)
+          .filter((v): v is number => v != null),
+      );
+      for (const a of assetsList) {
+        if (excludedAssetIds.has(a.id)) a.excludeFromReports = true;
+      }
+    }
+  }
+
+  const res: ListAssetsResponse = { assets: assetsList };
   return c.json(res);
 });
 

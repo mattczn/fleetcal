@@ -1013,6 +1013,10 @@ export default function DashboardView() {
         asset.id !== unassignedAssetId &&
         asset.type !== 'Unassigned' &&
         asset.name !== 'Unassigned' &&
+        // Owner-op assets are dispatched normally but their numbers
+        // aren't the carrier's — drop them from every per-truck rollup
+        // (revenue, miles, payroll) just like the loads report does.
+        !asset.excludeFromReports &&
         isActiveInRange(asset, periodStartKey, periodEndKey),
       )
       .map(asset => {

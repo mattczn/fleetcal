@@ -301,6 +301,13 @@ export interface Asset {
    *  out of today's view. */
   activeFrom?: string;
   activeTo?: string | null;
+  /** Derived owner-operator flag. True when this asset's default driver
+   *  (per driver_asset_prefs) is flagged Driver.excludeFromReports.
+   *  Owner-op trucks are dispatched normally but their numbers don't
+   *  roll into fleet KPIs (revenue, miles, payroll). Computed
+   *  server-side in GET /v1/assets so the dashboard can filter
+   *  consistently without re-deriving from a separate fetch. */
+  excludeFromReports?: boolean;
 }
 
 // ── Trailer ─────────────────────────────────────────────────────────────
