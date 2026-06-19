@@ -1,7 +1,8 @@
 import React from "react";
 import { View, Text } from "react-native";
 import { useOnline } from "@/lib/useOnline";
-import { C, f } from "@/lib/theme";
+import { f } from "@/lib/theme";
+import { useTheme } from "@/lib/ThemeProvider";
 
 /**
  * Online/offline pill driven by NetInfo. Treats the null (probing /
@@ -11,6 +12,7 @@ import { C, f } from "@/lib/theme";
  */
 export function SyncStatusPill() {
   const online = useOnline();
+  const { C } = useTheme();
   const offline = online === false;
   const p = offline
     ? { bg: C.redBg, fg: C.redInk, dot: C.red }

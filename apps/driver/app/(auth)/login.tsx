@@ -15,7 +15,8 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import { ArrowLeft } from "lucide-react-native";
 import { supabase } from "@/lib/supabase";
-import { C, f, RADIUS, SHADOW, ACCENT } from "@/lib/theme";
+import { f, RADIUS } from "@/lib/theme";
+import { useTheme } from "@/lib/ThemeProvider";
 
 // Canonical legal URLs hosted on the marketing site. Linked from the
 // SMS opt-in disclosure — required for Twilio A2P 10DLC sign-off and
@@ -37,6 +38,7 @@ function formatUSPhone(input: string): string {
 }
 
 export default function LoginScreen() {
+  const { C, ACCENT, SHADOW, isDark } = useTheme();
   const [step, setStep] = useState<Step>("phone");
   const [phone, setPhone] = useState("");
   const [otp, setOtp] = useState("");
@@ -99,7 +101,7 @@ export default function LoginScreen() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }} edges={["top", "bottom"]}>
-      <StatusBar style="dark" />
+      <StatusBar style={isDark ? "light" : "dark"} />
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === "ios" ? "padding" : undefined}

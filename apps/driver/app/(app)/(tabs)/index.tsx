@@ -13,7 +13,7 @@ import {
 import { SafeAreaView, SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Inbox, AlertTriangle } from "lucide-react-native";
+import { Inbox, AlertTriangle, Moon, Sun } from "lucide-react-native";
 import { SyncStatusPill } from "@/components/SyncStatusPill";
 import { NotificationsBell } from "@/components/NotificationsBell";
 import InspectionCard from "@/components/InspectionCard";
@@ -28,7 +28,8 @@ import { useReportDevicePermissions } from "@/lib/useReportDevicePermissions";
 import { railway } from "@/lib/railway";
 import type { Load } from "@/lib/types";
 import { Glass } from "@/components/Glass";
-import { C, f, SP, RADIUS, SHADOW, ACCENT } from "@/lib/theme";
+import { f, SP, RADIUS } from "@/lib/theme";
+import { useTheme } from "@/lib/ThemeProvider";
 
 const { width: SCREEN_W } = Dimensions.get("window");
 
@@ -46,6 +47,7 @@ type TabIdx = 0 | 1 | 2;
 
 export default function LoadsScreen() {
   const insets = useSafeAreaInsets();
+  const { C, SHADOW, ACCENT, isDark, toggle } = useTheme();
   const session = useDriverSession();
   const driver  = session.status === "matched" ? session.driver : null;
   useLoadsRealtime(driver?.driverId, driver?.orgId);
@@ -154,7 +156,7 @@ export default function LoadsScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
-      <StatusBar style="dark" />
+      <StatusBar style={isDark ? "light" : "dark"} />
 
       {/* Glass header */}
       <Glass
@@ -169,8 +171,16 @@ export default function LoadsScreen() {
               {driver?.name ?? "Driver"}
             </Text>
           </View>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
             <SyncStatusPill />
+            <TouchableOpacity
+              onPress={toggle}
+              activeOpacity={0.8}
+              accessibilityLabel="Toggle dark mode"
+              style={{ width: 36, height: 36, borderRadius: RADIUS.iconBtn, alignItems: "center", justifyContent: "center" }}
+            >
+              {isDark ? <Sun size={19} color={C.t2} strokeWidth={2.2} /> : <Moon size={19} color={C.t2} strokeWidth={2.2} />}
+            </TouchableOpacity>
             <NotificationsBell tint="dark" />
           </View>
         </View>

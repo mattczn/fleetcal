@@ -1,21 +1,17 @@
 /**
  * Frosted surface — the design's "liquid glass" header / tab bar / status dock.
  *
- * We render it as a near-opaque translucent white panel (with a hairline top
- * highlight + shadow) rather than a real `backdrop-filter` blur. In this
- * layout the glass panels sit over the solid light background (the header is
- * in-flow, the tab bar reserves its tray, the dock floats over a light list),
- * so an actual blur adds almost nothing visible — and avoiding the native
- * `expo-blur` module keeps the whole redesign shippable over-the-air (OTA),
- * not gated behind a native rebuild.
+ * Rendered as a near-opaque translucent panel (with a hairline top highlight +
+ * shadow) rather than a real backdrop blur, so it stays OTA-safe (no native
+ * `expo-blur`). The fill/shadow flip with the active theme.
  *
  * Outer view carries radius + shadow; an absolutely-filled inner view carries
- * the translucent fill (clipped to the radii). Shadows can't render through
- * `overflow: hidden`, which is why they're separate layers.
+ * the translucent fill (clipped to the radii) — shadows can't render through
+ * `overflow: hidden`, so they're separate layers.
  */
 import React from "react";
 import { View, StyleSheet, type ViewStyle } from "react-native";
-import { SHADOW } from "@/lib/theme";
+import { useTheme } from "@/lib/ThemeProvider";
 
 type Props = {
   children?: React.ReactNode;
@@ -30,23 +26,22 @@ type Props = {
 };
 
 export function Glass({ children, style, radii, deep = false, withShadow = true }: Props) {
+  const { SHADOW, glassFill, glassFillDeep, glassHair } = useTheme();
   return (
     <View style={[withShadow && SHADOW.glass, radii, style]}>
-      {/* translucent frosted fill, clipped to the radii */}
       <View
         style={[
           StyleSheet.absoluteFill,
           radii,
-          { backgroundColor: deep ? "rgba(255,255,255,0.94)" : "rgba(255,255,255,0.85)", overflow: "hidden" },
+          { backgroundColor: deep ? glassFillDeep : glassFill, overflow: "hidden" },
         ]}
       />
-      {/* inner hairline highlight */}
       <View
         pointerEvents="none"
         style={[
           StyleSheet.absoluteFill,
           radii,
-          { borderTopWidth: StyleSheet.hairlineWidth, borderColor: "rgba(255,255,255,0.9)" },
+          { borderTopWidth: StyleSheet.hairlineWidth, borderColor: glassHair },
         ]}
       />
       {children}

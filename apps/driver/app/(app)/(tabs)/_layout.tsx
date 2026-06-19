@@ -6,7 +6,8 @@ import type { BottomTabBarProps } from "@react-navigation/bottom-tabs";
 import { Truck, User, Calendar, ClipboardCheck, type LucideIcon } from "lucide-react-native";
 import { useNotificationDeepLink } from "@/lib/useNotificationDeepLink";
 import { Glass } from "@/components/Glass";
-import { C, f, ACCENT } from "@/lib/theme";
+import { f } from "@/lib/theme";
+import { useTheme } from "@/lib/ThemeProvider";
 
 const TAB_META: Record<string, { label: string; Icon: LucideIcon; big?: boolean }> = {
   index:    { label: "Loads",    Icon: Truck, big: true },
@@ -23,6 +24,7 @@ const TAB_META: Record<string, { label: string; Icon: LucideIcon; big?: boolean 
  */
 function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
+  const { C, ACCENT } = useTheme();
   return (
     <View style={{ backgroundColor: C.bg, paddingTop: 8, paddingBottom: Math.max(insets.bottom, 10), paddingHorizontal: 14 }}>
       <Glass

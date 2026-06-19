@@ -11,7 +11,8 @@ import {
   fmtTimeRangeShort, fmtStopAppt, fmtShortDate, fmtScheduleType,
   fmtRelayHandoffTime, relayHandoffAction,
 } from "@/lib/loadCard";
-import { C, f, SP, RADIUS, SHADOW, SCHED_TINT } from "@/lib/theme";
+import { f, SP, RADIUS } from "@/lib/theme";
+import { useTheme } from "@/lib/ThemeProvider";
 
 type Props = { load: Load };
 
@@ -50,6 +51,7 @@ function facilitySub(s: Stop | undefined): string | null {
 
 /** Route-rail node — a tinted map-pin circle, colored by leg endpoint. */
 function RouteNode({ kind }: { kind: "origin" | "dest" | "relay" }) {
+  const { C } = useTheme();
   const tint =
     kind === "origin" ? { bg: C.greenBg, fg: C.green } :
     kind === "relay"  ? { bg: C.purpleBg, fg: C.purple } :
@@ -63,6 +65,7 @@ function RouteNode({ kind }: { kind: "origin" | "dest" | "relay" }) {
 
 /** APPT / WINDOW / FCFS mini-chip. */
 function MiniSched({ stop }: { stop?: Stop }) {
+  const { SCHED_TINT } = useTheme();
   const label = fmtScheduleType(stop);
   if (!label) return null;
   const tint = SCHED_TINT[label as "APPT" | "WINDOW" | "FCFS"] ?? SCHED_TINT.FCFS;
@@ -74,6 +77,7 @@ function MiniSched({ stop }: { stop?: Stop }) {
 }
 
 export function LoadCard({ load }: Props) {
+  const { C, SHADOW } = useTheme();
   const router = useRouter();
   const session = useDriverSession();
   const driver = session.status === "matched" ? session.driver : null;

@@ -18,6 +18,7 @@ import {
 import { useDriverSession, type DriverSessionState } from "@/lib/useDriverSession";
 import { queryClient, asyncStoragePersister, PERSIST_MAX_AGE } from "@/lib/queryClient";
 import { drainQueue } from "@/lib/uploadQueue";
+import { ThemeProvider } from "@/lib/ThemeProvider";
 
 // Drive React Query's online state from NetInfo so paused mutations
 // auto-resume the moment the radio comes back. Default behavior in
@@ -114,7 +115,9 @@ export default function RootLayout() {
         });
       }}
     >
-      <RootLayoutInner />
+      <ThemeProvider>
+        <RootLayoutInner />
+      </ThemeProvider>
     </PersistQueryClientProvider>
   );
 }

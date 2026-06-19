@@ -17,7 +17,8 @@ import { fmtTimeShort } from "@/lib/loadCard";
 import type { Load, Stop } from "@/lib/types";
 import { Glass } from "@/components/Glass";
 import { EmptyState } from "@/components/EmptyState";
-import { C, f, SP, RADIUS, SHADOW, ACCENT, ACCENT_INK } from "@/lib/theme";
+import { f, SP, RADIUS, type Colors } from "@/lib/theme";
+import { useTheme } from "@/lib/ThemeProvider";
 
 const { width: SCREEN_W } = Dimensions.get("window");
 const DOW  = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -53,23 +54,30 @@ function cityOf(s?: Stop): string {
   if (s.city && s.state) return `${s.city}, ${s.state}`;
   return s.city ?? s.facilityName ?? "—";
 }
-const KIND_CHIP: Record<Kind, { label: string | null; bg: string; fg: string }> = {
-  full:     { label: null,           bg: C.blueBg,  fg: C.blueInk },
-  pickup:   { label: "PICKUP LEG",   bg: C.greenBg, fg: C.greenInk },
-  delivery: { label: "DELIVERY LEG", bg: C.redBg,   fg: C.redInk },
-};
-const KIND_BAR: Record<Kind, string> = { full: ACCENT, pickup: C.green, delivery: C.red };
+function kindChips(C: Colors): Record<Kind, { label: string | null; bg: string; fg: string }> {
+  return {
+    full:     { label: null,           bg: C.blueBg,  fg: C.blueInk },
+    pickup:   { label: "PICKUP LEG",   bg: C.greenBg, fg: C.greenInk },
+    delivery: { label: "DELIVERY LEG", bg: C.redBg,   fg: C.redInk },
+  };
+}
+function kindBars(C: Colors, accent: string): Record<Kind, string> {
+  return { full: accent, pickup: C.green, delivery: C.red };
+}
 // route dots: [origin, destination] colors per leg kind
-const KIND_DOTS: Record<Kind, [string, string]> = {
-  full:     [C.green,  C.red],
-  pickup:   [C.green,  C.purple],
-  delivery: [C.purple, C.red],
-};
+function kindDots(C: Colors): Record<Kind, [string, string]> {
+  return {
+    full:     [C.green,  C.red],
+    pickup:   [C.green,  C.purple],
+    delivery: [C.purple, C.red],
+  };
+}
 
 type Item = { load: Load; dayKeySel: string };
 
 export default function ScheduleScreen() {
   const insets = useSafeAreaInsets();
+  const { C, SHADOW, ACCENT, ACCENT_INK, isDark } = useTheme();
   const router = useRouter();
   const session = useDriverSession();
   const driver = session.status === "matched" ? session.driver : null;
@@ -127,7 +135,7 @@ export default function ScheduleScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
-      <StatusBar style="dark" />
+      <StatusBar style={isDark ? "light" : "dark"} />
 
       {/* Glass header */}
       <Glass
@@ -260,10 +268,11 @@ export default function ScheduleScreen() {
 
 /* ---------------- Agenda card ---------------- */
 function EventCard({ item, onOpen }: { item: Item; onOpen: (id: string) => void }) {
+  const { C, SHADOW, ACCENT } = useTheme();
   const { load, dayKeySel } = item;
   const kind = kindOf(load);
-  const chip = KIND_CHIP[kind];
-  const [dotFrom, dotTo] = KIND_DOTS[kind];
+  const chip = kindChips(C)[kind];
+  const [dotFrom, dotTo] = kindDots(C)[kind];
   const days = spanDays(load.start, load.end);
   const multi = days.length > 1;
   const idx = days.indexOf(dayKeySel);
@@ -378,6 +387,9 @@ function DayGrid({ items, onOpen, showNow, nowMin, selectedKey }: {
   items: Item[]; onOpen: (id: string) => void; showNow: boolean; nowMin: number; selectedKey: string;
 }) {
   const scrollRef = useRef<ScrollView>(null);
+  const { C, SHADOW, ACCENT } = useTheme();
+  const chips = kindChips(C);
+  const bars = kindBars(C, ACCENT);
   const evWidth = SCREEN_W - EV_LEFT - SP.screenPx;
 
   const blocks = useMemo(() => {
@@ -421,7 +433,7 @@ function DayGrid({ items, onOpen, showNow, nowMin, selectedKey }: {
           const compact = height < 78;
           const colW = evWidth / b.cols;
           const left = EV_LEFT + b.col * colW;
-          const chip = KIND_CHIP[kind];
+          const chip = chips[kind];
           const miles = b.load.loadedMiles ?? b.load.miles;
           return (
             <TouchableOpacity
@@ -434,7 +446,7 @@ function DayGrid({ items, onOpen, showNow, nowMin, selectedKey }: {
                 backgroundColor: C.surface, borderWidth: 1, borderColor: C.border, ...SHADOW.card,
               }}
             >
-              <View style={{ width: 4, backgroundColor: KIND_BAR[kind] }} />
+              <View style={{ width: 4, backgroundColor: bars[kind] }} />
               <View style={{ flex: 1, minWidth: 0, paddingHorizontal: 9, paddingVertical: compact ? 5 : 7 }}>
                 <Text style={[f(800), { fontSize: 13.5, color: C.t1, letterSpacing: -0.2, lineHeight: 17 }]} numberOfLines={compact ? 1 : 2}>
                   {b.load.title}
