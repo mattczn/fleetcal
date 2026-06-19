@@ -295,7 +295,7 @@ export default function LoadsScreen() {
         onRequestClose={() => setInspectionFormOpen(false)}
       >
         <SafeAreaProvider>
-          <SafeAreaView style={{ flex: 1, backgroundColor: "white" }} edges={["top"]}>
+          <SafeAreaView style={{ flex: 1, backgroundColor: C.surface }} edges={["top"]}>
             <InspectionFormScreen
               driverName={driver?.name ?? "Driver"}
               onClose={() => setInspectionFormOpen(false)}
