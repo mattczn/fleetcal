@@ -3,6 +3,7 @@
  * reads (currently just showDriverPay) from the Railway API.
  */
 import { railway } from "@/lib/railway";
+import type { OrgModuleFlags } from "@fleetcal/types";
 
 export interface OrgSettings {
   showDriverPay: boolean;
@@ -17,6 +18,10 @@ export interface OrgSettings {
    *  rate_con + invoice are excluded by hard policy regardless of the
    *  org's config. */
   driverUploadKinds: string[];
+  /** Org module flags (merged with MVP defaults server-side). null only
+   *  before the first fetch — `isModuleEnabled` treats null as all-on, so
+   *  nothing flashes hidden while loading. */
+  modules: OrgModuleFlags | null;
 }
 
 const DEFAULTS: OrgSettings = {
@@ -24,6 +29,7 @@ const DEFAULTS: OrgSettings = {
   timezone:          null,
   // Default mirrors the server when settings haven't been fetched yet.
   driverUploadKinds: ["pod", "bol", "scale", "lumper", "receipt", "driver_sheet", "relay_handoff", "other"],
+  modules:           null,
 };
 
 export async function fetchOrgSettings(_orgId: string): Promise<OrgSettings> {

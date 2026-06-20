@@ -4,7 +4,7 @@
  * MaintenanceFormScreen) live in components/ and do their own data
  * fetching + state; this tab owns the segment state + the header chrome.
  */
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { View, Text, TouchableOpacity } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
@@ -15,13 +15,23 @@ import MaintenanceFormScreen from "@/components/MaintenanceFormScreen";
 import { Glass } from "@/components/Glass";
 import { f, SP, RADIUS } from "@/lib/theme";
 import { useTheme } from "@/lib/ThemeProvider";
+import { useModules } from "@/lib/useModules";
 
 type Segment = "fuel" | "maintenance";
 
 export default function ReportScreen() {
   const insets = useSafeAreaInsets();
   const { C, isDark } = useTheme();
+  const { fuel, maintenance } = useModules();
   const [segment, setSegment] = useState<Segment>("fuel");
+
+  // If the active segment's module isn't enabled for this org, fall to the
+  // other one. (The tab itself is hidden when neither is enabled.)
+  useEffect(() => {
+    if (segment === "fuel" && !fuel && maintenance) setSegment("maintenance");
+    else if (segment === "maintenance" && !maintenance && fuel) setSegment("fuel");
+  }, [fuel, maintenance, segment]);
+  const showToggle = fuel && maintenance;
 
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
@@ -33,21 +43,27 @@ export default function ReportScreen() {
         style={{ paddingTop: insets.top + 8, paddingHorizontal: SP.screenPx, paddingBottom: 12, zIndex: 10 }}
       >
         <Text style={[f(800), { fontSize: 27, color: C.t1, letterSpacing: -0.6 }]}>Reports</Text>
-        <View style={{ flexDirection: "row", gap: 3, marginTop: 14, padding: 4, borderRadius: 14, backgroundColor: C.surfaceSunk }}>
-          <Seg label="Fuel" Icon={Fuel} active={segment === "fuel"} onPress={() => setSegment("fuel")} />
-          <Seg label="Maintenance" Icon={Wrench} active={segment === "maintenance"} onPress={() => setSegment("maintenance")} />
-        </View>
+        {showToggle ? (
+          <View style={{ flexDirection: "row", gap: 3, marginTop: 14, padding: 4, borderRadius: 14, backgroundColor: C.surfaceSunk }}>
+            <Seg label="Fuel" Icon={Fuel} active={segment === "fuel"} onPress={() => setSegment("fuel")} />
+            <Seg label="Maintenance" Icon={Wrench} active={segment === "maintenance"} onPress={() => setSegment("maintenance")} />
+          </View>
+        ) : null}
       </Glass>
 
       {/* Render BOTH screens at all times so in-progress input (description,
           photos, picker selections) survives flipping segments. */}
       <View style={{ flex: 1, backgroundColor: C.bg }}>
-        <View style={{ flex: 1, display: segment === "fuel" ? "flex" : "none" }}>
-          <FuelFormScreen />
-        </View>
-        <View style={{ flex: 1, display: segment === "maintenance" ? "flex" : "none" }}>
-          <MaintenanceFormScreen />
-        </View>
+        {fuel ? (
+          <View style={{ flex: 1, display: !showToggle || segment === "fuel" ? "flex" : "none" }}>
+            <FuelFormScreen />
+          </View>
+        ) : null}
+        {maintenance ? (
+          <View style={{ flex: 1, display: !showToggle || segment === "maintenance" ? "flex" : "none" }}>
+            <MaintenanceFormScreen />
+          </View>
+        ) : null}
       </View>
     </View>
   );

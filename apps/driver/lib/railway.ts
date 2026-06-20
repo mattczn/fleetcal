@@ -245,6 +245,9 @@ export const railway = {
          *  server-side from org_settings.document_types (enabled AND
          *  driver_visible) with a legacy fallback. */
         driverUploadKinds: string[];
+        /** Org module flags (MVP defaults merged server-side). Gates the
+         *  Report tab / inspections / compliance per org. */
+        modules:           import("@fleetcal/types").OrgModuleFlags | null;
       };
     }>("GET", "/v1/driver/org-settings");
   },

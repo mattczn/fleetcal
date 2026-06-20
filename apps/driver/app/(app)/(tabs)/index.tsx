@@ -30,6 +30,7 @@ import type { Load } from "@/lib/types";
 import { Glass } from "@/components/Glass";
 import { f, SP, RADIUS } from "@/lib/theme";
 import { useTheme } from "@/lib/ThemeProvider";
+import { useModules } from "@/lib/useModules";
 
 const { width: SCREEN_W } = Dimensions.get("window");
 
@@ -48,6 +49,7 @@ type TabIdx = 0 | 1 | 2;
 export default function LoadsScreen() {
   const insets = useSafeAreaInsets();
   const { C, SHADOW, ACCENT, isDark, toggle } = useTheme();
+  const { reporting } = useModules();
   const session = useDriverSession();
   const driver  = session.status === "matched" ? session.driver : null;
   useLoadsRealtime(driver?.driverId, driver?.orgId);
@@ -96,7 +98,7 @@ export default function LoadsScreen() {
   } = useQuery({
     queryKey: ["inspections", "today", driver?.driverId],
     queryFn:  () => railway.todaysInspections(),
-    enabled:  !!driver,
+    enabled:  !!driver && reporting,
     staleTime: 60_000,
   });
   const todaysInspections = inspectionData?.inspections ?? [];
@@ -259,7 +261,7 @@ export default function LoadsScreen() {
                 <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={ACCENT} />
               }
               // Inspection card pinned to the top of the Active tab only.
-              ListHeaderComponent={tabIdx === 0 ? (
+              ListHeaderComponent={tabIdx === 0 && reporting ? (
                 <InspectionCard
                   loading={inspectionLoading}
                   inspections={todaysInspections}

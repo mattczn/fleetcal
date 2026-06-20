@@ -33,6 +33,7 @@ import {
 } from "@fleetcal/types";
 import { useOrgTz, describeTz } from "@/lib/orgTz";
 import { useTheme } from "@/lib/ThemeProvider";
+import { useModules } from "@/lib/useModules";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
   fontFamily:
@@ -116,6 +117,9 @@ function isoToDisplay(iso?: string): string {
 // ── Screen ──────────────────────────────────────────────────────────────
 
 export default function ProfileScreen() {
+  // MVP orgs (no reporting modules) see Account + Appearance + Sign-out
+  // only; the compliance sections below are gated on the full-tier gate.
+  const { reporting } = useModules();
   const { C, SHADOW, ACCENT, mode, setMode } = useTheme();
   const [me,         setMe]         = useState<DriverMeResponse | null>(null);
   const [docs,       setDocs]       = useState<DriverDocument[]>([]);
@@ -491,6 +495,8 @@ export default function ProfileScreen() {
                 </FormGrid>
               </Card>
 
+              {reporting ? (
+              <>
               {/* License */}
               <SectionHeader label="License" />
               <Card>
@@ -595,6 +601,8 @@ export default function ProfileScreen() {
                   ))
                 )}
               </Card>
+              </>
+              ) : null}
 
               {/* Organization */}
               <SectionHeader label="Organization" />
@@ -617,11 +625,15 @@ export default function ProfileScreen() {
                 </View>
               </Card>
 
+              {reporting ? (
+              <>
               {/* Notifications */}
               <SectionHeader label="Notifications" />
               <Card>
                 <NotificationsPrefs />
               </Card>
+              </>
+              ) : null}
 
               {/* Sign out */}
               <TouchableOpacity onPress={handleSignOut}

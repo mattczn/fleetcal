@@ -15,6 +15,10 @@ import {
   DEFAULT_DRIVER_VISIBLE_DOC_KINDS,
   NOTIFICATION_RULE_KEYS,
   driverVisibleDocumentKinds,
+  type OrgModule,
+  type OrgModuleFlags,
+  MVP_LAUNCH_DEFAULTS,
+  isModuleEnabled,
 } from "@fleetcal/types";
 
 import { supabase } from "../lib/supabase.js";
@@ -686,6 +690,30 @@ driver.get("/loads/:id", async (c) => {
   return c.json({ load });
 });
 
+/** Resolve an org's effective module flags — the SAME MVP-defaults merge
+ *  the web's /v1/org-settings uses, so the driver app gates on identical
+ *  values. No stored map (new orgs) → pure MVP defaults; stored map →
+ *  defaults overlaid by the org's explicit choices (Curzon keeps fuel /
+ *  maintenance ON). */
+async function getOrgModules(orgId: string): Promise<OrgModuleFlags> {
+  const { data } = await supabase
+    .from("org_settings")
+    .select("modules")
+    .eq("org_id", orgId)
+    .maybeSingle();
+  const stored = (data as { modules: OrgModuleFlags | null } | null)?.modules ?? null;
+  const has = stored !== null && Object.keys(stored).length > 0;
+  return has ? { ...MVP_LAUNCH_DEFAULTS, ...stored } : { ...MVP_LAUNCH_DEFAULTS };
+}
+
+/** Server-enforce a driver-app module gate: true if ANY of the given
+ *  modules is enabled for the org. A hidden tab can't be reached via the
+ *  API once the submit handler calls this. */
+async function orgHasAnyModule(orgId: string, ...modules: OrgModule[]): Promise<boolean> {
+  const flags = await getOrgModules(orgId);
+  return modules.some((m) => isModuleEnabled(m, flags));
+}
+
 // GET /v1/driver/org-settings — the subset of org_settings the driver app
 // actually reads. Returns:
 //   - showDriverPay: gates the Pay row on the driver-app load card
@@ -696,7 +724,7 @@ driver.get("/org-settings", async (c) => {
   const orgId = c.get("orgId");
   const { data, error } = await supabase
     .from("org_settings")
-    .select("show_driver_pay,rate_con_settings,document_types,driver_visible_doc_kinds")
+    .select("show_driver_pay,rate_con_settings,document_types,driver_visible_doc_kinds,modules")
     .eq("org_id", orgId)
     .maybeSingle();
   if (error) {
@@ -711,6 +739,7 @@ driver.get("/org-settings", async (c) => {
     rate_con_settings: { promptVariables?: { timezone?: string } } | null;
     document_types:    Array<{ kind: string; enabled: boolean; driverVisible: boolean }> | null;
     driver_visible_doc_kinds: string[] | null;
+    modules:           OrgModuleFlags | null;
   } | null;
   const showDriverPay = row?.show_driver_pay ?? false;
   const rawTz = row?.rate_con_settings?.promptVariables?.timezone ?? null;
@@ -754,7 +783,12 @@ driver.get("/org-settings", async (c) => {
     driverUploadKinds = [...DEFAULT_DRIVER_VISIBLE_DOC_KINDS];
   }
   driverUploadKinds = ensureMandatoryDriverKinds(driverUploadKinds, orgId, "org-settings");
-  return c.json({ settings: { showDriverPay, timezone, driverUploadKinds } });
+  // Module flags (same MVP-defaults merge as the web) so the driver app
+  // can gate the Report tab / inspections / compliance per org.
+  const storedModules = row?.modules ?? null;
+  const hasModules = storedModules !== null && Object.keys(storedModules).length > 0;
+  const modules: OrgModuleFlags = hasModules ? { ...MVP_LAUNCH_DEFAULTS, ...storedModules } : { ...MVP_LAUNCH_DEFAULTS };
+  return c.json({ settings: { showDriverPay, timezone, driverUploadKinds, modules } });
 });
 
 // POD + BOL are operationally required for trucking workflows — proof
@@ -2073,6 +2107,9 @@ function rowToFuelReportDriver(r: FuelReportRowDriver) {
 driver.post("/fuel-reports", async (c) => {
   const driverId = c.get("driverId");
   const orgId    = c.get("orgId");
+  if (!(await orgHasAnyModule(orgId, "fuel"))) {
+    return c.json({ error: "module_disabled", detail: "Fuel reporting is not enabled for this org." }, 403);
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let body: any;
@@ -2256,6 +2293,9 @@ async function fetchMaintReportPhotosMap(
 driver.post("/maintenance-reports", async (c) => {
   const driverId = c.get("driverId");
   const orgId    = c.get("orgId");
+  if (!(await orgHasAnyModule(orgId, "maintenance"))) {
+    return c.json({ error: "module_disabled", detail: "Maintenance reporting is not enabled for this org." }, 403);
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let body: any;
@@ -2748,6 +2788,9 @@ interface InspectionBody {
 driver.post("/inspections", async (c) => {
   const driverId = c.get("driverId");
   const orgId    = c.get("orgId");
+  if (!(await orgHasAnyModule(orgId, "fuel", "maintenance"))) {
+    return c.json({ error: "module_disabled", detail: "Inspections are not enabled for this org." }, 403);
+  }
   let body: InspectionBody;
   try {
     body = await c.req.json() as InspectionBody;

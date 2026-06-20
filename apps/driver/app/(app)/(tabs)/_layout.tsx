@@ -8,6 +8,7 @@ import { useNotificationDeepLink } from "@/lib/useNotificationDeepLink";
 import { Glass } from "@/components/Glass";
 import { f } from "@/lib/theme";
 import { useTheme } from "@/lib/ThemeProvider";
+import { useModules } from "@/lib/useModules";
 
 const TAB_META: Record<string, { label: string; Icon: LucideIcon; big?: boolean }> = {
   index:    { label: "Loads",    Icon: Truck, big: true },
@@ -25,6 +26,7 @@ const TAB_META: Record<string, { label: string; Icon: LucideIcon; big?: boolean 
 function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
   const { C, ACCENT } = useTheme();
+  const { reporting } = useModules();
   return (
     <View style={{ backgroundColor: C.bg, paddingTop: 8, paddingBottom: Math.max(insets.bottom, 10), paddingHorizontal: 14 }}>
       <Glass
@@ -32,10 +34,12 @@ function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
         radii={{ borderRadius: 24 }}
         style={{ height: 62, flexDirection: "row", alignItems: "center", justifyContent: "space-around", paddingHorizontal: 8 }}
       >
-        {state.routes.map((route, i) => {
+        {state.routes
+          .filter((route) => route.name !== "report" || reporting)
+          .map((route) => {
           const meta = TAB_META[route.name];
           if (!meta) return null;
-          const focused = state.index === i;
+          const focused = state.routes[state.index]?.key === route.key;
           const color = focused ? ACCENT : C.t3;
           const { Icon } = meta;
           const onPress = () => {
