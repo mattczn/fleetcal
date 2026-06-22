@@ -167,7 +167,14 @@ export const MVP_LAUNCH_DEFAULTS: Required<Pick<OrgModuleFlags,
   // remain off via motive_integration.
   trailers:           true,
   performance:        false,
-  driver_app:         false,
+  // Driver app: ON for MVP as of 2026-06-22. The mobile companion app
+  // is multi-tenant now (any org's drivers can sign in), so the Notify
+  // Driver popover (confirm load / mark picked up / mark delivered /
+  // upload POD / report trailer) and the Settings → Driver App tab
+  // both have a real receiver on the other end for every new org. No
+  // reason to hide them anymore — the value showed up the moment the
+  // app stopped being Curzon-only.
+  driver_app:         true,
   dispatch_board:     false,
   custom_documents:   false,
   team_roles:         false,

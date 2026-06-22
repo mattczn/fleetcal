@@ -1781,10 +1781,12 @@ export default function EventModal() {
   // is hidden, not the type chip.
   const { enabled: moduleEnabled } = useModules();
   const maintenanceEnabled = moduleEnabled('maintenance');
-  // Driver-app module gates the Notify-driver popover below — without
-  // the driver app there's nobody on the other end of those nudges
-  // (confirm load / mark picked up / mark delivered / upload POD /
-  // report trailer) so the button has no useful behavior on MVP orgs.
+  // Driver-app module gates the Notify-driver popover below. Default
+  // is ON for new orgs since 2026-06-22 (the mobile app went
+  // multi-tenant); only orgs that explicitly turned the module off
+  // hide the button now. Carriers running without the driver app
+  // still see this as disabled — nothing to nudge if no one's on the
+  // other end of the push.
   const driverAppEnabled   = moduleEnabled('driver_app');
   const canViewDriverPay = canDo('loads.view_driver_pay');
   // Hide the load price / rate field for roles without loads.view_price
