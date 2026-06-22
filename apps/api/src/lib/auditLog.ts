@@ -36,15 +36,30 @@ import { supabase } from "./supabase.js";
  *  swallowing legitimate "changed it back" sequences minutes later. */
 const DEDUP_WINDOW_MS = 60_000;
 
+/** Deterministic JSON: recursive key-sort before serialization. Required
+ *  because Postgres jsonb does NOT preserve key insertion order — entries
+ *  read back from `events.audit_log` / `loads.audit_log` come in jsonb's
+ *  canonical order, while the candidate `entry` we build in JS has keys
+ *  in the AuditEntry interface order. Plain `JSON.stringify` produces
+ *  different strings for the same data, and the dedup miss compounds:
+ *  every retry/echo got appended, audit logs ballooned with duplicates,
+ *  and every prior "fix" (wider window, more entries scanned) was
+ *  tweaking a comparison that was structurally broken. */
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return '[' + value.map(stableStringify).join(',') + ']';
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return '{' + keys.map(k => JSON.stringify(k) + ':' + stableStringify(obj[k])).join(',') + '}';
+}
+
 /** Compare two audit entries by their semantic content, ignoring changedAt.
- *  Stringify is the cheapest path to a deep compare here — entries are small
- *  flat objects with a handful of strings + small nested shapes. */
+ *  Uses stableStringify so jsonb's key reordering doesn't break the check. */
 function semanticallyEqual(a: LoadAuditEntry, b: LoadAuditEntry): boolean {
   const stripTime = (e: LoadAuditEntry) => {
-    // Pull `changedAt` out; everything else must match exactly.
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { changedAt, ...rest } = e as LoadAuditEntry & { changedAt?: string };
-    return JSON.stringify(rest);
+    return stableStringify(rest);
   };
   return stripTime(a) === stripTime(b);
 }

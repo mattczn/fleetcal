@@ -982,6 +982,21 @@ interface AuditEntry {
  *  scheduled → picked_up" entries at identical timestamps. */
 const DRIVER_AUDIT_DEDUP_WINDOW_MS = 60_000;
 
+/** Deterministic JSON used for dedup-key equality — recursive key sort.
+ *  Postgres jsonb does NOT preserve key insertion order, so entries read
+ *  back from `events.audit_log` come in jsonb's canonical order while
+ *  the candidate we build in JS uses the AuditEntry interface order.
+ *  Plain `JSON.stringify` produces different strings for the same data;
+ *  see the long writeup in lib/auditLog.ts for why every prior fix
+ *  attempt missed this. */
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return '[' + value.map(stableStringify).join(',') + ']';
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return '{' + keys.map(k => JSON.stringify(k) + ':' + stableStringify(obj[k])).join(',') + '}';
+}
+
 async function appendAudit(
   eventId: string,
   orgId:   string,
@@ -997,18 +1012,22 @@ async function appendAudit(
   const existing = ((data as { audit_log: AuditEntry[] | null } | null)?.audit_log) ?? [];
 
   // Dedup: scan last 10 entries; skip when one within the window has the
-  // same semantic content (everything except changedAt).
+  // same semantic content (everything except changedAt). Uses
+  // stableStringify so jsonb's key reordering doesn't break the check.
   const candidateMs = Date.parse(entry.changedAt ?? "");
   if (Number.isFinite(candidateMs)) {
     const tail = existing.slice(-10);
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const candidateContent = JSON.stringify({ ...entry, changedAt: undefined });
+    const { changedAt: _candidateChangedAt, ...candidateRest } = entry;
+    void _candidateChangedAt;
+    const candidateContent = stableStringify(candidateRest);
     for (let i = tail.length - 1; i >= 0; i--) {
       const prev = tail[i];
       const prevMs = Date.parse(prev.changedAt ?? "");
       if (!Number.isFinite(prevMs)) continue;
       if (Math.abs(candidateMs - prevMs) > DRIVER_AUDIT_DEDUP_WINDOW_MS) continue;
-      const prevContent = JSON.stringify({ ...prev, changedAt: undefined });
+      const { changedAt: _prevChangedAt, ...prevRest } = prev;
+      void _prevChangedAt;
+      const prevContent = stableStringify(prevRest);
       if (prevContent === candidateContent) return;
     }
   }
