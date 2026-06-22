@@ -18,6 +18,7 @@ import {
 import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability } from "../middleware/require.js";
+import { convertIfHeicAtUpload, HEIC_DECODE_FAILED } from "../lib/heicToJpeg.js";
 
 const trailers = new Hono<{ Variables: AuthVariables }>();
 
@@ -386,15 +387,26 @@ trailers.post("/:id/documents", requireCapability("trailers.edit"), async (c) =>
     .from("trailers").select("id").eq("id", id).eq("org_id", orgId).maybeSingle();
   if (!trailerRow) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
 
-  const ext  = (file.name.split(".").pop() ?? "bin").toLowerCase();
+  // Convert HEIC → JPEG at the boundary so iPhone-shot trailer photos
+  // (registration, license, etc.) become broker-renderable instead of
+  // landing as raw HEIC that everything downstream chokes on.
+  let bytes      = new Uint8Array(await file.arrayBuffer());
+  let uploadMime = file.type || "application/octet-stream";
+  let uploadName = file.name;
+  const conv = await convertIfHeicAtUpload(file, bytes, "[POST /v1/trailers/:id/documents]");
+  if ('failed' in conv) return c.json(HEIC_DECODE_FAILED, 415);
+  bytes      = conv.bytes;
+  uploadMime = conv.mime || uploadMime;
+  uploadName = conv.name;
+
+  const ext  = (uploadName.split(".").pop() ?? "bin").toLowerCase();
   const rand = Math.random().toString(36).slice(2, 10);
   const storagePath = `${orgId}/${id}/${kind}_${Date.now()}_${rand}.${ext}`;
-  const bytes = new Uint8Array(await file.arrayBuffer());
 
   const { error: upErr } = await supabase.storage
     .from(TRAILER_DOC_BUCKET)
     .upload(storagePath, bytes, {
-      contentType: file.type || "application/octet-stream",
+      contentType: uploadMime,
       upsert: false,
     });
   if (upErr) {
@@ -410,8 +422,8 @@ trailers.post("/:id/documents", requireCapability("trailers.edit"), async (c) =>
       trailer_id:   id,
       kind,
       storage_path: storagePath,
-      file_name:    file.name,
-      mime_type:    file.type || null,
+      file_name:    uploadName,
+      mime_type:    uploadMime || null,
       size_bytes:   bytes.length,
       expires_on:   body.expiresOn?.trim() || null,
       notes:        body.notes?.trim() || null,

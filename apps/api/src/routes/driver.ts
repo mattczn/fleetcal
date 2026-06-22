@@ -23,51 +23,7 @@ import {
 
 import { supabase } from "../lib/supabase.js";
 import { driverAuth, type DriverAuthVariables } from "../middleware/driverAuth.js";
-import { isHeic } from "../lib/heicDetect.js";
-import { heicToJpeg, rewriteHeicExtension } from "../lib/heicToJpeg.js";
-
-/**
- * Convert HEIC → JPEG inline at every driver-app upload boundary so an
- * iPhone POD shot in HEIC mode becomes a renderable JPEG before it
- * lands in load_documents. pdf-lib has no HEIC support — leaving raw
- * HEIC in the table means the invoice packet builder silently drops
- * it later, costing the broker a real document and us a re-send.
- *
- * Returns the (possibly converted) bytes + mime + filename, or null if
- * the file isn't HEIC (caller proceeds as-is) or the decode threw
- * (caller should 415 — see callsites).
- */
-async function convertIfHeic(file: File, bytes: Uint8Array<ArrayBuffer>): Promise<
-  | { converted: true;  bytes: Uint8Array<ArrayBuffer>; mime: string; name: string }
-  | { converted: false; bytes: Uint8Array<ArrayBuffer>; mime: string; name: string }
-  | { converted: false; failed: true }
-> {
-  if (!isHeic(bytes, file.type)) {
-    return { converted: false, bytes, mime: file.type, name: file.name };
-  }
-  try {
-    const t0 = Date.now();
-    const result = await heicToJpeg(bytes);
-    console.log(
-      "[driver upload] HEIC → JPEG converted:",
-      file.name, `${result.originalBytes}B → ${result.jpegBytes.length}B in ${Date.now() - t0}ms`,
-    );
-    return {
-      converted: true,
-      bytes:     result.jpegBytes,
-      mime:      "image/jpeg",
-      name:      rewriteHeicExtension(file.name),
-    };
-  } catch (err) {
-    console.error("[driver upload] HEIC decode failed:", file.name, err);
-    return { converted: false, failed: true };
-  }
-}
-
-const HEIC_DECODE_FAILED = {
-  error:  "heic_decode_failed",
-  detail: "Couldn't decode this HEIC photo. Re-take the shot with iPhone Settings → Camera → Formats → Most Compatible enabled, or re-export the existing photo as JPG.",
-} as const;
+import { convertIfHeicAtUpload as convertIfHeic, HEIC_DECODE_FAILED } from "../lib/heicToJpeg.js";
 
 const driver = new Hono<{ Variables: DriverAuthVariables }>();
 

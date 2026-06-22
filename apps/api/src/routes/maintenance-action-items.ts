@@ -29,6 +29,7 @@ import { supabase } from "../lib/supabase.js";
 import { getUserDisplayName } from "../lib/clerk.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability, requireModule } from "../middleware/require.js";
+import { convertIfHeicAtUpload, HEIC_DECODE_FAILED } from "../lib/heicToJpeg.js";
 import {
   rowToActionItem,
   ACTION_ITEM_COLS,
@@ -729,18 +730,31 @@ actionItems.post("/:id/photos", requireCapability("maintenance.edit"), async (c)
     return c.json({ error: "validation_failed", errors: ["file required"] } satisfies ApiErrorResponse, 400);
   }
 
+  // Convert HEIC → JPEG at the boundary. Maintenance defect photos
+  // shot on iPhone come in as HEIC; storing raw means the lightbox,
+  // PDF-embed (if we ever bundle a maintenance report), and broker
+  // share paths all silently fall over. Same handler as every other
+  // upload route.
+  let bytes      = new Uint8Array(await file.arrayBuffer());
+  let uploadMime = file.type || "application/octet-stream";
+  let uploadName = file.name;
+  const conv = await convertIfHeicAtUpload(file, bytes, "[POST /v1/maintenance-action-items/:id/photos]");
+  if ('failed' in conv) return c.json(HEIC_DECODE_FAILED, 415);
+  bytes      = conv.bytes;
+  uploadMime = conv.mime || uploadMime;
+  uploadName = conv.name;
+
   // Build a collision-resistant path. Timestamp + random hex inside
   // the per-item folder so even a rapid burst of uploads can't
   // overwrite each other.
-  const ext  = (file.name.split(".").pop() ?? "bin").toLowerCase();
+  const ext  = (uploadName.split(".").pop() ?? "bin").toLowerCase();
   const rand = Math.random().toString(36).slice(2, 10);
   const storagePath = `${orgId}/action_items/${id}/${Date.now()}_${rand}.${ext}`;
-  const bytes = new Uint8Array(await file.arrayBuffer());
 
   const { error: uploadErr } = await supabase.storage
     .from(PHOTO_BUCKET)
     .upload(storagePath, bytes, {
-      contentType: file.type || "application/octet-stream",
+      contentType: uploadMime,
       upsert: false,
     });
   if (uploadErr) {
@@ -755,8 +769,8 @@ actionItems.post("/:id/photos", requireCapability("maintenance.edit"), async (c)
       action_item_id: id,
       org_id:         orgId,
       storage_path:   storagePath,
-      file_name:      file.name,
-      mime_type:      file.type || null,
+      file_name:      uploadName,
+      mime_type:      uploadMime || null,
       size_bytes:     bytes.length,
       uploaded_by:    userId,
     } as any)

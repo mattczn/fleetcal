@@ -97,3 +97,68 @@ export function rewriteHeicExtension(name: string): string {
   if (/\.jpe?g$/i.test(name)) return name; // already legitimate
   return `${name}.jpg`;
 }
+
+import { isHeic } from "./heicDetect.js";
+
+/**
+ * Shared 415 response payload for HEIC decode failures at the upload
+ * boundary. Same message in every endpoint so the driver app + web
+ * UI can match on `error: "heic_decode_failed"` and surface the
+ * actionable hint (iPhone → Most Compatible) without per-endpoint
+ * special-casing. */
+export const HEIC_DECODE_FAILED = {
+  error:  "heic_decode_failed",
+  detail: "Couldn't decode this HEIC photo. Re-take the shot with iPhone Settings → Camera → Formats → Most Compatible enabled, or re-export the existing photo as JPG.",
+} as const;
+
+export type ConvertIfHeicResult =
+  | { converted: true;  bytes: Uint8Array<ArrayBuffer>; mime: string; name: string }
+  | { converted: false; bytes: Uint8Array<ArrayBuffer>; mime: string; name: string }
+  | { converted: false; failed: true };
+
+/**
+ * Inline upload-boundary HEIC handler. Use at EVERY File-accepting
+ * endpoint so an iPhone-shot HEIC becomes a JPEG before it lands in
+ * storage:
+ *
+ *   const conv = await convertIfHeicAtUpload(file, bytes, "[POST /v1/foo]");
+ *   if ('failed' in conv) return c.json(HEIC_DECODE_FAILED, 415);
+ *   bytes      = conv.bytes;
+ *   uploadMime = conv.mime;
+ *   uploadName = conv.name;
+ *
+ * Centralized so we can't ship a new upload endpoint that forgets the
+ * conversion — the 2026-06-17 invoice-packet incident (76 invoices
+ * shipped to brokers with missing PODs) traced back to exactly that
+ * oversight in three different upload paths. See lib/auditLog.ts +
+ * project memory `invoice-packet-flow` for the full writeup.
+ */
+export async function convertIfHeicAtUpload(
+  file:    File,
+  bytes:   Uint8Array<ArrayBuffer>,
+  /** Log prefix so Railway logs let you trace which endpoint converted
+   *  what. Optional; defaults to `[upload]` for callers that don't care
+   *  about per-endpoint trace granularity. */
+  logTag:  string = "[upload]",
+): Promise<ConvertIfHeicResult> {
+  if (!isHeic(bytes, file.type)) {
+    return { converted: false, bytes, mime: file.type, name: file.name };
+  }
+  try {
+    const t0 = Date.now();
+    const result = await heicToJpeg(bytes);
+    console.log(
+      `${logTag} HEIC → JPEG converted:`,
+      file.name, `${result.originalBytes}B → ${result.jpegBytes.length}B in ${Date.now() - t0}ms`,
+    );
+    return {
+      converted: true,
+      bytes:     result.jpegBytes,
+      mime:      "image/jpeg",
+      name:      rewriteHeicExtension(file.name),
+    };
+  } catch (err) {
+    console.error(`${logTag} HEIC decode failed:`, file.name, err);
+    return { converted: false, failed: true };
+  }
+}
