@@ -19,13 +19,26 @@ type Props = { load: Load };
 /**
  * The "from" / "to" of this driver's leg — handles relays correctly.
  *   - Single load:  first stop is pickup, last is delivery.
- *   - Pickup leg:   first stop is pickup, last is the relay handoff.
- *   - Delivery leg: first stop is the relay handoff, last is delivery.
+ *   - Pickup leg:   first stop is pickup, destination is the relay handoff.
+ *   - Delivery leg: origin is the relay handoff, last stop is delivery.
+ *
+ * `load.stops` contains the WHOLE load (origin → handoff → final
+ * delivery) for both legs of a relay, so we have to swap in the
+ * relay stop for the leg's destination (pickup leg) or origin
+ * (delivery leg). Matches the leg-aware Schedule logic on 2026-06-22.
  */
 function originStop(load: Load): Stop | undefined {
+  if (load.relayRole === "delivery") {
+    const relay = load.stops.find((s) => s.type === "relay");
+    if (relay) return relay;
+  }
   return load.stops[0];
 }
 function destinationStop(load: Load): Stop | undefined {
+  if (load.relayRole === "pickup") {
+    const relay = load.stops.find((s) => s.type === "relay");
+    if (relay) return relay;
+  }
   return load.stops[load.stops.length - 1];
 }
 function originLabel(s: Stop | undefined, isRelayDelivery: boolean): string {
