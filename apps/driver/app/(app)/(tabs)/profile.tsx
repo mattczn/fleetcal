@@ -145,63 +145,94 @@ export default function ProfileScreen() {
   const [pickerOpen,      setPickerOpen]      = useState<'licenseExp' | 'medicalCardExp' | 'dob' | null>(null);
   const [statePickerOpen, setStatePickerOpen] = useState<'addr' | 'license' | null>(null);
 
-  // ── Edit mode ─────────────────────────────────────────────────────
-  // Profile is read-only by default with an Edit button in the
-  // sticky action bar at the top. Tapping Edit unlocks the inputs
-  // and swaps Edit for Save / Discard. The previous on-blur
-  // auto-save pattern was discarded — it surprised drivers who tabbed
-  // through fields they hadn't meant to change and got silent writes.
-  const [editing, setEditing] = useState(false);
-  const [saving,  setSaving]  = useState(false);
+  // ── Per-section edit mode ─────────────────────────────────────────
+  // Each section (Account / Address / License / Compliance) has its
+  // own independent editing state. Tapping Edit on a section unlocks
+  // ONLY that section's fields — Save patches only those fields,
+  // Discard rolls back only those fields. Multiple sections can be
+  // in edit mode at once if the driver wants to update several
+  // sections in parallel; Save commits each on its own.
+  type Section = "account" | "address" | "license" | "compliance";
+  const [accountEdit,    setAccountEdit]    = useState(false);
+  const [addressEdit,    setAddressEdit]    = useState(false);
+  const [licenseEdit,    setLicenseEdit]    = useState(false);
+  const [complianceEdit, setComplianceEdit] = useState(false);
+  // Tracks which section's save is currently in flight (null = none).
+  // Mutually exclusive — saves are serialized so the spinner / disable
+  // states don't race.
+  const [savingSection, setSavingSection] = useState<Section | null>(null);
 
-  // Reset all editable form state from a fresh `me` snapshot. Used
-  // when Discard is tapped, when /me reloads after save, and on
-  // initial hydration.
-  function resetFromMe(src: DriverMeResponse) {
-    setFirstName(src.firstName ?? "");
-    setLastName(src.lastName ?? "");
-    setPhone(src.phone ?? "");
-    setEmail(src.email ?? "");
-    setAddr(parseAddress(src.address));
-    setLicenseNumber(src.licenseNumber ?? "");
-    setLicenseState(src.licenseState ?? "");
-    setLicenseExp(src.licenseExp);
-    setMedCardExp(src.medicalCardExp);
-    setDob(src.dob);
+  function exitEdit(s: Section) {
+    if (s === "account")    setAccountEdit(false);
+    if (s === "address")    setAddressEdit(false);
+    if (s === "license")    setLicenseEdit(false);
+    if (s === "compliance") setComplianceEdit(false);
   }
 
-  function discardEdits() {
-    if (me) resetFromMe(me);
-    setPickerOpen(null);
-    setStatePickerOpen(null);
-    setEditing(false);
+  /** Reset a single section's local form state from the last server
+   *  snapshot. Used by Discard and after a successful Save reload. */
+  function resetSection(s: Section, src: DriverMeResponse) {
+    if (s === "account") {
+      setFirstName(src.firstName ?? "");
+      setLastName(src.lastName ?? "");
+      setPhone(src.phone ?? "");
+      setEmail(src.email ?? "");
+    } else if (s === "address") {
+      setAddr(parseAddress(src.address));
+    } else if (s === "license") {
+      setLicenseNumber(src.licenseNumber ?? "");
+      setLicenseState(src.licenseState ?? "");
+      setLicenseExp(src.licenseExp);
+    } else {
+      setMedCardExp(src.medicalCardExp);
+      setDob(src.dob);
+    }
   }
 
-  async function saveAllEdits() {
-    if (saving) return;
-    setSaving(true);
+  function discardSection(s: Section) {
+    if (me) resetSection(s, me);
+    // Only close the popup pickers that belong to this section so
+    // edits in flight on a different section aren't disturbed.
+    if (s === "address") {
+      if (statePickerOpen === "addr") setStatePickerOpen(null);
+    } else if (s === "license") {
+      if (statePickerOpen === "license") setStatePickerOpen(null);
+      if (pickerOpen === "licenseExp")   setPickerOpen(null);
+    } else if (s === "compliance") {
+      if (pickerOpen === "medicalCardExp" || pickerOpen === "dob") setPickerOpen(null);
+    }
+    exitEdit(s);
+  }
+
+  async function saveSection(s: Section) {
+    if (savingSection) return;
+    setSavingSection(s);
     try {
-      // One PATCH with every editable field. Server-side keeps untouched
-      // values unchanged when the same value comes back in the payload,
-      // so we don't need to compute a diff here.
-      await railway.updateMe({
-        firstName:      firstName.trim() || null,
-        lastName:       lastName.trim()  || null,
-        phone:          phone.trim()     || null,
-        email:          email.trim()     || null,
-        address:        joinAddress(addr),
-        licenseNumber:  licenseNumber.trim() || null,
-        licenseState:   licenseState || null,
-        licenseExp:     licenseExp ?? null,
-        medicalCardExp: medCardExp ?? null,
-        dob:            dob ?? null,
-      });
+      const patch =
+        s === "account" ? {
+          firstName: firstName.trim() || null,
+          lastName:  lastName.trim()  || null,
+          phone:     phone.trim()     || null,
+          email:     email.trim()     || null,
+        } :
+        s === "address" ? {
+          address: joinAddress(addr),
+        } :
+        s === "license" ? {
+          licenseNumber: licenseNumber.trim() || null,
+          licenseState:  licenseState || null,
+          licenseExp:    licenseExp ?? null,
+        } : {
+          medicalCardExp: medCardExp ?? null,
+          dob:            dob ?? null,
+        };
+      await railway.updateMe(patch);
       await loadAll();
-      setEditing(false);
+      exitEdit(s);
     } catch (err) {
       Alert.alert("Save failed", (err as Error).message ?? "Something went wrong.");
     } finally {
-      setSaving(false);
+      setSavingSection(null);
     }
   }
 
@@ -437,42 +468,48 @@ export default function ProfileScreen() {
 
               {/* Account */}
               <SectionHeader label="Account"
-                editing={editing} saving={saving}
-                onEdit={() => setEditing(true)} onSave={saveAllEdits} onDiscard={discardEdits} />
+                editing={accountEdit}
+                saving={savingSection === "account"}
+                onEdit={() => setAccountEdit(true)}
+                onSave={() => saveSection("account")}
+                onDiscard={() => discardSection("account")} />
               <Card>
                 <FormGrid>
                   <FormCol>
                     <FieldLabel label="First Name" />
                     <TextField value={firstName} onChangeText={setFirstName}
-                      autoCapitalize="words" editable={editing} />
+                      autoCapitalize="words" editable={accountEdit} />
                   </FormCol>
                   <FormCol>
                     <FieldLabel label="Last Name" />
                     <TextField value={lastName} onChangeText={setLastName}
-                      autoCapitalize="words" editable={editing} />
+                      autoCapitalize="words" editable={accountEdit} />
                   </FormCol>
                 </FormGrid>
                 <FieldLabel label="Phone" />
                 <TextField value={phone} onChangeText={setPhone}
-                  keyboardType="phone-pad" editable={editing} />
+                  keyboardType="phone-pad" editable={accountEdit} />
                 <FieldLabel label="Email" />
                 <TextField value={email} onChangeText={setEmail}
-                  keyboardType="email-address" autoCapitalize="none" editable={editing} />
+                  keyboardType="email-address" autoCapitalize="none" editable={accountEdit} />
               </Card>
 
               {/* Address */}
               <SectionHeader label="Address"
-                editing={editing} saving={saving}
-                onEdit={() => setEditing(true)} onSave={saveAllEdits} onDiscard={discardEdits} />
+                editing={addressEdit}
+                saving={savingSection === "address"}
+                onEdit={() => setAddressEdit(true)}
+                onSave={() => saveSection("address")}
+                onDiscard={() => discardSection("address")} />
               <Card>
                 <FieldLabel label="Street" />
                 <TextField value={addr.street}
                   onChangeText={(v) => setAddr({ ...addr, street: v })}
-                  editable={editing} />
+                  editable={addressEdit} />
                 <FieldLabel label="City" />
                 <TextField value={addr.city}
                   onChangeText={(v) => setAddr({ ...addr, city: v })}
-                  editable={editing} />
+                  editable={addressEdit} />
                 <FormGrid>
                   <FormCol>
                     <FieldLabel label="State" />
@@ -480,28 +517,31 @@ export default function ProfileScreen() {
                       open={statePickerOpen === 'addr'}
                       setOpen={(v) => setStatePickerOpen(v ? 'addr' : null)}
                       onChange={(s) => setAddr({ ...addr, state: s })}
-                      editable={editing}
+                      editable={addressEdit}
                     />
                   </FormCol>
                   <FormCol>
                     <FieldLabel label="Zip" />
                     <TextField value={addr.zip}
                       onChangeText={(v) => setAddr({ ...addr, zip: v.replace(/[^\d-]/g, "").slice(0, 10) })}
-                      keyboardType="number-pad" editable={editing} />
+                      keyboardType="number-pad" editable={addressEdit} />
                   </FormCol>
                 </FormGrid>
               </Card>
 
               {/* License + Compliance + Documents all in MVP. */}
               <SectionHeader label="License"
-                editing={editing} saving={saving}
-                onEdit={() => setEditing(true)} onSave={saveAllEdits} onDiscard={discardEdits} />
+                editing={licenseEdit}
+                saving={savingSection === "license"}
+                onEdit={() => setLicenseEdit(true)}
+                onSave={() => saveSection("license")}
+                onDiscard={() => discardSection("license")} />
               <Card>
                 <FormGrid>
                   <FormCol style={{ flex: 2 }}>
                     <FieldLabel label="License #" />
                     <TextField value={licenseNumber} onChangeText={setLicenseNumber}
-                      autoCapitalize="characters" editable={editing} />
+                      autoCapitalize="characters" editable={licenseEdit} />
                   </FormCol>
                   <FormCol>
                     <FieldLabel label="State" />
@@ -509,7 +549,7 @@ export default function ProfileScreen() {
                       open={statePickerOpen === 'license'}
                       setOpen={(v) => setStatePickerOpen(v ? 'license' : null)}
                       onChange={(s) => setLicenseState(s)}
-                      editable={editing}
+                      editable={licenseEdit}
                     />
                   </FormCol>
                 </FormGrid>
@@ -519,14 +559,17 @@ export default function ProfileScreen() {
                   onChange={(iso) => setLicenseExp(iso)}
                   open={pickerOpen === 'licenseExp'}
                   setOpen={(v) => setPickerOpen(v ? 'licenseExp' : null)}
-                  editable={editing}
+                  editable={licenseEdit}
                 />
               </Card>
 
               {/* Compliance */}
               <SectionHeader label="Compliance"
-                editing={editing} saving={saving}
-                onEdit={() => setEditing(true)} onSave={saveAllEdits} onDiscard={discardEdits} />
+                editing={complianceEdit}
+                saving={savingSection === "compliance"}
+                onEdit={() => setComplianceEdit(true)}
+                onSave={() => saveSection("compliance")}
+                onDiscard={() => discardSection("compliance")} />
               <Card>
                 <FieldLabel label="Medical Card Expiration" />
                 <DateField
@@ -534,7 +577,7 @@ export default function ProfileScreen() {
                   onChange={(iso) => setMedCardExp(iso)}
                   open={pickerOpen === 'medicalCardExp'}
                   setOpen={(v) => setPickerOpen(v ? 'medicalCardExp' : null)}
-                  editable={editing}
+                  editable={complianceEdit}
                 />
                 <FieldLabel label="Date of Birth" />
                 <DateField
@@ -544,7 +587,7 @@ export default function ProfileScreen() {
                   setOpen={(v) => setPickerOpen(v ? 'dob' : null)}
                   /* DOB is bounded — no future dates. */
                   maximumDate={new Date()}
-                  editable={editing}
+                  editable={complianceEdit}
                 />
               </Card>
 
