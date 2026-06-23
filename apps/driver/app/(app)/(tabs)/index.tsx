@@ -15,7 +15,6 @@ import { StatusBar } from "expo-status-bar";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Inbox, AlertTriangle, Moon, Sun } from "lucide-react-native";
 import { SyncStatusPill } from "@/components/SyncStatusPill";
-import { NotificationsBell } from "@/components/NotificationsBell";
 import InspectionCard from "@/components/InspectionCard";
 import InspectionFormScreen from "@/components/InspectionFormScreen";
 import { fetchLoadsForDriver, fetchLoad } from "@/lib/api/loads";
@@ -180,7 +179,7 @@ export default function LoadsScreen() {
           <View style={{ flex: 1 }}>
             <Text style={[f(600), { fontSize: 13, color: C.t3, letterSpacing: 0.1 }]}>{greeting},</Text>
             <Text style={[f(800), { fontSize: 27, color: C.t1, marginTop: 1, letterSpacing: -0.6 }]} numberOfLines={1}>
-              {driver?.name ?? "Driver"}
+              {driver?.name?.split(/\s+/)[0] ?? "Driver"}
             </Text>
           </View>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
@@ -193,7 +192,6 @@ export default function LoadsScreen() {
             >
               {isDark ? <Sun size={19} color={C.t2} strokeWidth={2.2} /> : <Moon size={19} color={C.t2} strokeWidth={2.2} />}
             </TouchableOpacity>
-            <NotificationsBell tint="dark" />
           </View>
         </View>
 

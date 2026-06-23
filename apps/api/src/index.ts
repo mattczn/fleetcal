@@ -57,6 +57,7 @@ import fleetRoute from "./routes/fleet.js";
 import costAnalysisRoute from "./routes/cost-analysis.js";
 import capacityRoute from "./routes/capacity.js";
 import contactSalesRoute from "./routes/contact-sales.js";
+import supportRoute from "./routes/support.js";
 import { syncIncrementalAllOrgs, snapshotOdometersAllOrgs } from "./lib/motiveIngest.js";
 import { sweepAutoDeliver } from "./lib/autoDeliverSweep.js";
 import { runConfirmReminders } from "./jobs/confirmReminders.js";
@@ -182,6 +183,11 @@ app.route("/v1/capacity", capacityRoute);
 // the route emails CONTACT_SALES_TO (defaults to hello@fleetcal.app)
 // via Resend. Honeypot + time-gate stops drive-by spam.
 app.route("/v1/contact-sales", contactSalesRoute);
+
+// Public support intake — fleetcal.app/support contact form POSTs here
+// (this is the apps' App Store / Play Store Support URL). Emails
+// SUPPORT_TO (defaults to hello@fleetcal.app). Same honeypot + time-gate.
+app.route("/v1/support", supportRoute);
 
 // ── Authenticated routes ────────────────────────────────────────────────
 

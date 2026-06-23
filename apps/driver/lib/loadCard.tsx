@@ -7,7 +7,6 @@
 import React from "react";
 import { View, Text } from "react-native";
 import Svg, { Defs, Pattern, Rect } from "react-native-svg";
-import { Split } from "lucide-react-native";
 import type { Load, LoadStatus, Stop } from "./types";
 
 // Driver app uses inline txt() helpers across files — duplicate the
@@ -287,25 +286,23 @@ export function NonRevChip({ size = "default" }: { size?: "default" | "small" })
  * "delivery" means the delivery leg (driver receives).
  */
 export function RelayChip({
-  role, size = "default",
+  role,
+  // `size` is kept for backwards-compatibility with existing callers
+  // but no longer changes the rendering — the chip now matches the
+  // Schedule screen's PICKUP LEG / DELIVERY LEG pill 1:1 so the same
+  // load reads consistently across Loads + Schedule.
 }: {
   role: "pickup" | "delivery";
   size?: "default" | "small";
 }) {
-  const iconSize = size === "small" ? 9  : 10;
-  const fontSize = size === "small" ? 9  : 10;
-  const padH     = size === "small" ? 5  : 6;
-  const padV     = size === "small" ? 0  : 1;
   return (
     <View style={{
-      flexDirection: "row", alignItems: "center", gap: 3,
-      paddingHorizontal: padH, paddingVertical: padV,
-      borderRadius: 999,
+      height: 20, paddingHorizontal: 8, borderRadius: 7,
       backgroundColor: "#ede9fe",
+      justifyContent: "center",
     }}>
-      <Split size={iconSize} color="#5b21b6" strokeWidth={2.4} />
-      <Text style={[txt(800), { fontSize, color: "#5b21b6", letterSpacing: 0.3 }]}>
-        RELAY · {role === "pickup" ? "PICKUP" : "DELIVERY"}
+      <Text style={[txt(800), { fontSize: 10, letterSpacing: 0.4, color: "#5b21b6" }]}>
+        {role === "pickup" ? "PICKUP LEG" : "DELIVERY LEG"}
       </Text>
     </View>
   );

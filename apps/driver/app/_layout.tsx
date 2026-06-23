@@ -32,9 +32,9 @@ import { ThemeProvider } from "@/lib/ThemeProvider";
 // systems because FormData payloads don't serialize through the React
 // Query persister — see lib/uploadQueue.ts for why.
 // Drive React Query's focus state from AppState so any query with a
-// `refetchInterval` (driver NotificationsBell, truck-location on the
-// load screen, etc.) automatically pauses when the app backgrounds
-// and resumes — with one immediate refetch — when the driver returns.
+// `refetchInterval` (truck-location on the load screen, etc.)
+// automatically pauses when the app backgrounds and resumes — with
+// one immediate refetch — when the driver returns.
 // Without this wiring, polling continues at full cadence even while
 // the phone is locked, burning Motive quota for no UX benefit.
 AppState.addEventListener("change", (state: AppStateStatus) => {

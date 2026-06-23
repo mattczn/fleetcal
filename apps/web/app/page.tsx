@@ -1475,6 +1475,7 @@ function Footer() {
     ['Company', [
       ['Why FleetCal',  '#story'],
       ['Contact sales', '/contact-sales'],
+      ['Support',       '/support'],
     ]],
     ['Account', [
       ['Sign in', '/sign-in'],

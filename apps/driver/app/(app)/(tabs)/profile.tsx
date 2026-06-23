@@ -396,7 +396,7 @@ export default function ProfileScreen() {
             <User size={36} color="#fff" strokeWidth={2.2} />
           )}
         </View>
-        <Text style={[txt(800), { fontSize: 22, color: C.t1, letterSpacing: -0.3 }]}>{me?.firstName ?? me?.name ?? "—"}</Text>
+        <Text style={[txt(800), { fontSize: 22, color: C.t1, letterSpacing: -0.3 }]}>{me?.name ?? "—"}</Text>
         <Text style={[txt(500), { fontSize: 13, color: C.t3, marginTop: 2 }]}>
           {me?.phone ?? "—"}
         </Text>
