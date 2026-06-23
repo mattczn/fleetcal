@@ -64,6 +64,22 @@ export async function sendPushToDriver(
     priority: "high",
   }));
 
+  // Expo's enhanced push security (2024+) requires Authorization:
+  // Bearer when the project has "Send-only access token" enforcement
+  // enabled. Without it Expo returns 200 OK but every ticket is an
+  // error and nothing delivers. This bit both Curzon's grandfathered
+  // installs AND the new FleetCal builds at the same time on 2026-06-22
+  // (same project id → same enforcement → both pipelines died at once).
+  //
+  // Set EXPO_ACCESS_TOKEN in Railway env vars. Token comes from the
+  // Expo dashboard at expo.dev → account settings → Access Tokens.
+  // Send-only scope is fine. Falls through unauth'd if unset so dev
+  // still works for non-enforced projects, but warns loudly.
+  const expoAccessToken = process.env.EXPO_ACCESS_TOKEN;
+  if (!expoAccessToken) {
+    console.warn("[sendPushToDriver] EXPO_ACCESS_TOKEN not set — push will silently fail if Expo project has enhanced security enabled.");
+  }
+
   let res: Response;
   try {
     res = await fetch("https://exp.host/--/api/v2/push/send", {
@@ -72,6 +88,7 @@ export async function sendPushToDriver(
         "Accept":           "application/json",
         "Accept-encoding":  "gzip, deflate",
         "Content-Type":     "application/json",
+        ...(expoAccessToken ? { "Authorization": `Bearer ${expoAccessToken}` } : {}),
       },
       body: JSON.stringify(messages),
     });
@@ -88,12 +105,18 @@ export async function sendPushToDriver(
   const body = await res.json().catch(() => null) as { data?: ExpoTicket[] } | null;
   const tickets = body?.data ?? [];
 
-  // Clean up dead tokens — Expo returns DeviceNotRegistered for uninstalled apps.
+  // Surface EVERY ticket error so quota / auth / project-mismatch
+  // failures stop being invisible. Grep `[sendPushToDriver] expo
+  // error` in Railway logs after a manual nudge to see what Expo
+  // actually said.
   const dead: string[] = [];
   tickets.forEach((t, i) => {
-    if (t.status === "error" && t.details?.error === "DeviceNotRegistered") {
-      dead.push(tokens[i]);
-    }
+    if (t.status !== "error") return;
+    const errKind = t.details?.error ?? "unknown";
+    console.error(
+      `[sendPushToDriver] expo error ticket: kind=${errKind} message=${t.message ?? ""} token=${tokens[i]?.slice(0, 20)}...`,
+    );
+    if (errKind === "DeviceNotRegistered") dead.push(tokens[i]);
   });
   if (dead.length > 0) {
     await supabase.from("driver_push_tokens").delete().in("token", dead);

@@ -60,6 +60,26 @@ export async function sendPushToDriver(
     priority: 'high',
   }));
 
+  // Expo's enhanced push security (rolled out 2024+) requires a
+  // Bearer access token when the target Expo project has "Send-only
+  // access token" enforcement enabled. Without it, Expo returns 200
+  // OK at the HTTP layer but every ticket comes back with status
+  // 'error' and the actual push never delivers. This is the
+  // exact silent failure that killed both Curzon's old installs AND
+  // the new FleetCal builds on 2026-06-22 — same project id, same
+  // enforcement, both pipelines died at once.
+  //
+  // Set EXPO_ACCESS_TOKEN in Vercel env (project Settings → Environment
+  // Variables). The token is generated in the Expo dashboard at
+  // https://expo.dev/accounts/<account>/settings/access-tokens — use a
+  // send-only scope. If unset we fall through without auth so dev/local
+  // still works for projects that haven't enabled enforcement yet,
+  // but we log a warning so the gap is visible in logs.
+  const expoAccessToken = process.env.EXPO_ACCESS_TOKEN;
+  if (!expoAccessToken) {
+    console.warn('[sendPushToDriver] EXPO_ACCESS_TOKEN not set — push will silently fail if Expo project has enhanced security enabled.');
+  }
+
   let res: Response;
   try {
     res = await fetch('https://exp.host/--/api/v2/push/send', {
@@ -68,6 +88,7 @@ export async function sendPushToDriver(
         'Accept':           'application/json',
         'Accept-encoding':  'gzip, deflate',
         'Content-Type':     'application/json',
+        ...(expoAccessToken ? { 'Authorization': `Bearer ${expoAccessToken}` } : {}),
       },
       body: JSON.stringify(messages),
     });
@@ -84,12 +105,20 @@ export async function sendPushToDriver(
   const body = await res.json().catch(() => null) as { data?: ExpoTicket[] } | null;
   const tickets = body?.data ?? [];
 
-  // Clean up dead tokens — Expo returns DeviceNotRegistered for uninstalled apps
+  // Surface EVERY ticket error — not just DeviceNotRegistered. Without
+  // this, an auth failure / project mismatch / quota issue returns
+  // status=error tickets that we previously dropped on the floor.
+  // The new log line is the diagnostic surface for "I clicked notify
+  // and nothing happened" — grep `[sendPushToDriver] expo error` in
+  // Vercel function logs.
   const dead: string[] = [];
   tickets.forEach((t, i) => {
-    if (t.status === 'error' && t.details?.error === 'DeviceNotRegistered') {
-      dead.push(tokens[i]);
-    }
+    if (t.status !== 'error') return;
+    const errKind = t.details?.error ?? 'unknown';
+    console.error(
+      `[sendPushToDriver] expo error ticket: kind=${errKind} message=${t.message ?? ''} token=${tokens[i]?.slice(0, 20)}...`,
+    );
+    if (errKind === 'DeviceNotRegistered') dead.push(tokens[i]);
   });
   if (dead.length > 0) {
     await db.from('driver_push_tokens').delete().in('token', dead);
