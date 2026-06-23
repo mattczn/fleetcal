@@ -404,20 +404,6 @@ export default function ProfileScreen() {
             </View>
           ) : (
             <>
-              {/* Edit / Save / Discard action bar — top-of-screen
-                  action so the driver doesn't have to hunt for it.
-                  Generous breathing room around it (mt 4, mb 12) so it
-                  reads as a screen-level action, not a Section item. */}
-              <View style={{ marginTop: 4, marginBottom: 12 }}>
-                <EditActionBar
-                  editing={editing}
-                  saving={saving}
-                  onEdit={() => setEditing(true)}
-                  onSave={saveAllEdits}
-                  onDiscard={discardEdits}
-                />
-              </View>
-
               {/* Appearance — in-app light/dark toggle */}
               <SectionHeader label="Appearance" />
               <Card>
@@ -450,7 +436,9 @@ export default function ProfileScreen() {
               </Card>
 
               {/* Account */}
-              <SectionHeader label="Account" />
+              <SectionHeader label="Account"
+                editing={editing} saving={saving}
+                onEdit={() => setEditing(true)} onSave={saveAllEdits} onDiscard={discardEdits} />
               <Card>
                 <FormGrid>
                   <FormCol>
@@ -473,7 +461,9 @@ export default function ProfileScreen() {
               </Card>
 
               {/* Address */}
-              <SectionHeader label="Address" />
+              <SectionHeader label="Address"
+                editing={editing} saving={saving}
+                onEdit={() => setEditing(true)} onSave={saveAllEdits} onDiscard={discardEdits} />
               <Card>
                 <FieldLabel label="Street" />
                 <TextField value={addr.street}
@@ -503,7 +493,9 @@ export default function ProfileScreen() {
               </Card>
 
               {/* License + Compliance + Documents all in MVP. */}
-              <SectionHeader label="License" />
+              <SectionHeader label="License"
+                editing={editing} saving={saving}
+                onEdit={() => setEditing(true)} onSave={saveAllEdits} onDiscard={discardEdits} />
               <Card>
                 <FormGrid>
                   <FormCol style={{ flex: 2 }}>
@@ -532,7 +524,9 @@ export default function ProfileScreen() {
               </Card>
 
               {/* Compliance */}
-              <SectionHeader label="Compliance" />
+              <SectionHeader label="Compliance"
+                editing={editing} saving={saving}
+                onEdit={() => setEditing(true)} onSave={saveAllEdits} onDiscard={discardEdits} />
               <Card>
                 <FieldLabel label="Medical Card Expiration" />
                 <DateField
@@ -740,94 +734,92 @@ function DriverDocumentViewer({ doc, onClose }: { doc: DriverDocument | null; on
 
 // ── Subcomponents ───────────────────────────────────────────────────────
 
-/**
- * Edit / Save / Discard action bar. Sits above the form sections,
- * controls the read-only ↔ edit toggle, and surfaces the all-at-once
- * save flow. Profile is read-only by default; the driver taps Edit
- * to unlock the fields and gets explicit commit (Save) or bail
- * (Discard) buttons in return.
- */
-function EditActionBar({
-  editing, saving, onEdit, onSave, onDiscard,
+/** Section label with an optional inline Edit / Save / Discard action
+ *  group on the right. When `editing` / `onEdit` / etc. are omitted the
+ *  header renders as a plain label (used for Appearance, Organization,
+ *  Documents). When passed, the right side shows either a pencil Edit
+ *  pill (read-only) or a Save + Discard pair (editing). All editable
+ *  sections share the SAME edit state — tapping Edit on any section
+ *  unlocks every editable field at once. */
+function SectionHeader({
+  label, editing, saving, onEdit, onSave, onDiscard,
 }: {
-  editing:    boolean;
-  saving:     boolean;
-  onEdit:     () => void;
-  onSave:     () => void;
-  onDiscard:  () => void;
+  label:    string;
+  editing?: boolean;
+  saving?:  boolean;
+  onEdit?:    () => void;
+  onSave?:    () => void;
+  onDiscard?: () => void;
 }) {
   const { C, ACCENT } = useTheme();
-  if (!editing) {
-    return (
-      <View style={{ flexDirection: "row", justifyContent: "flex-end", marginBottom: 4 }}>
-        <TouchableOpacity
-          onPress={onEdit}
-          activeOpacity={0.7}
-          style={{
-            flexDirection: "row", alignItems: "center", gap: 6,
-            paddingHorizontal: 14, paddingVertical: 8,
-            borderRadius: 999,
-            backgroundColor: C.blueBg,
-          }}
-        >
-          <Pencil size={13} color={ACCENT} strokeWidth={2.4} />
-          <Text style={[txt(700), { fontSize: 13, color: ACCENT }]}>Edit Profile</Text>
-        </TouchableOpacity>
-      </View>
-    );
-  }
+  const hasActions = !!onEdit && !!onSave && !!onDiscard;
   return (
-    <View style={{ flexDirection: "row", gap: 8, marginBottom: 4 }}>
-      <TouchableOpacity
-        onPress={onDiscard}
-        disabled={saving}
-        activeOpacity={0.7}
-        style={{
-          flex: 1,
-          flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
-          paddingVertical: 10,
-          borderRadius: 999,
-          backgroundColor: C.surfaceSunk,
-          borderWidth: 1, borderColor: C.border,
-          opacity: saving ? 0.5 : 1,
-        }}
-      >
-        <X size={14} color={C.t2} strokeWidth={2.4} />
-        <Text style={[txt(700), { fontSize: 13, color: C.t2 }]}>Discard</Text>
-      </TouchableOpacity>
-      <TouchableOpacity
-        onPress={onSave}
-        disabled={saving}
-        activeOpacity={0.7}
-        style={{
-          flex: 1,
-          flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
-          paddingVertical: 10,
-          borderRadius: 999,
-          backgroundColor: ACCENT,
-          opacity: saving ? 0.6 : 1,
-        }}
-      >
-        {saving
-          ? <ActivityIndicator color="#fff" />
-          : <Check size={14} color="#fff" strokeWidth={2.4} />}
-        <Text style={[txt(800), { fontSize: 13, color: "#fff", letterSpacing: 0.2 }]}>
-          {saving ? "Saving…" : "Save"}
-        </Text>
-      </TouchableOpacity>
+    <View style={{
+      flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+      marginBottom: 8, marginTop: 16, minHeight: 26,
+    }}>
+      <Text style={[txt(800), {
+        fontSize: 11, letterSpacing: 1.1, color: C.t3,
+        textTransform: "uppercase",
+      }]}>
+        {label}
+      </Text>
+      {hasActions ? (
+        editing ? (
+          <View style={{ flexDirection: "row", gap: 6 }}>
+            <TouchableOpacity
+              onPress={onDiscard}
+              disabled={saving}
+              activeOpacity={0.7}
+              style={{
+                flexDirection: "row", alignItems: "center", gap: 4,
+                paddingHorizontal: 10, paddingVertical: 5,
+                borderRadius: 999,
+                backgroundColor: C.surfaceSunk,
+                borderWidth: 1, borderColor: C.border,
+                opacity: saving ? 0.5 : 1,
+              }}
+            >
+              <X size={11} color={C.t2} strokeWidth={2.4} />
+              <Text style={[txt(700), { fontSize: 11, color: C.t2 }]}>Discard</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={onSave}
+              disabled={saving}
+              activeOpacity={0.7}
+              style={{
+                flexDirection: "row", alignItems: "center", gap: 4,
+                paddingHorizontal: 10, paddingVertical: 5,
+                borderRadius: 999,
+                backgroundColor: ACCENT,
+                opacity: saving ? 0.6 : 1,
+              }}
+            >
+              {saving
+                ? <ActivityIndicator color="#fff" size="small" />
+                : <Check size={11} color="#fff" strokeWidth={2.4} />}
+              <Text style={[txt(800), { fontSize: 11, color: "#fff", letterSpacing: 0.2 }]}>
+                {saving ? "Saving" : "Save"}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <TouchableOpacity
+            onPress={onEdit}
+            activeOpacity={0.7}
+            style={{
+              flexDirection: "row", alignItems: "center", gap: 4,
+              paddingHorizontal: 10, paddingVertical: 5,
+              borderRadius: 999,
+              backgroundColor: C.blueBg,
+            }}
+          >
+            <Pencil size={11} color={ACCENT} strokeWidth={2.4} />
+            <Text style={[txt(700), { fontSize: 11, color: ACCENT }]}>Edit</Text>
+          </TouchableOpacity>
+        )
+      ) : null}
     </View>
-  );
-}
-
-function SectionHeader({ label }: { label: string }) {
-  const { C } = useTheme();
-  return (
-    <Text style={[txt(800), {
-      fontSize: 11, letterSpacing: 1.1, color: C.t3,
-      marginBottom: 8, marginTop: 16, textTransform: "uppercase",
-    }]}>
-      {label}
-    </Text>
   );
 }
 

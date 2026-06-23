@@ -55,10 +55,14 @@ function cityOf(s?: Stop): string {
   return s.city ?? s.facilityName ?? "—";
 }
 function kindChips(C: Colors): Record<Kind, { label: string | null; bg: string; fg: string }> {
+  // Relay legs (pickup + delivery) always wear the relay purple so the
+  // driver immediately recognizes "this is a handoff load" regardless
+  // of which leg they're seeing. The leg text (PICKUP LEG vs DELIVERY
+  // LEG) already distinguishes which side they're on.
   return {
-    full:     { label: null,           bg: C.blueBg,  fg: C.blueInk },
-    pickup:   { label: "PICKUP LEG",   bg: C.greenBg, fg: C.greenInk },
-    delivery: { label: "DELIVERY LEG", bg: C.redBg,   fg: C.redInk },
+    full:     { label: null,           bg: C.blueBg,   fg: C.blueInk },
+    pickup:   { label: "PICKUP LEG",   bg: C.purpleBg, fg: C.purpleInk },
+    delivery: { label: "DELIVERY LEG", bg: C.purpleBg, fg: C.purpleInk },
   };
 }
 function kindBars(C: Colors, accent: string): Record<Kind, string> {
@@ -308,8 +312,18 @@ function EventCard({ item, onOpen }: { item: Item; onOpen: (id: string) => void 
   else if (idx === days.length - 1) timeText = `→ ${fmtTimeShort(load.end)}`;
   else timeText = "All day";
 
-  const from = load.stops[0];
-  const to = load.stops[load.stops.length - 1];
+  // Relay-leg-aware endpoints. The load.stops array includes the
+  // WHOLE load (origin → handoff → final delivery) for both legs of
+  // a relay. Showing first/last for a relay leg would mislabel the
+  // bottom city stripe — e.g. a pickup-leg driver would see the final
+  // delivery city as their destination when they actually drop the
+  // trailer at the handoff. Swap in the relay stop for the leg's
+  // destination (pickup leg) or origin (delivery leg).
+  const relayStop = load.stops.find((s) => s.type === "relay");
+  const from =
+    kind === "delivery" && relayStop ? relayStop : load.stops[0];
+  const to =
+    kind === "pickup"   && relayStop ? relayStop : load.stops[load.stops.length - 1];
   const miles = load.loadedMiles ?? load.miles;
   const isRelay = kind !== "full";
 
