@@ -4425,16 +4425,24 @@ function FuelTabContent({
       // Scope both fetches to the selected period. pEnd from
       // getPeriodRange is midnight-local on the last day, so we
       // bump to end-of-day before serializing — otherwise we'd
-      // miss any fuel-up that happened later that same day.
+      // miss any fuel-up reported later that same day (fuel_reports
+      // filters on a real `reported_at` timestamp).
       const fromIso = pStart.toISOString();
       const endOfDay = new Date(pEnd);
       endOfDay.setHours(23, 59, 59, 999);
       const toIso = endOfDay.toISOString();
-      // Both calls in parallel. listFuelTransactions takes a date
-      // string for transaction_date filtering; listFuelReports takes
-      // ISO timestamps for reported_at filtering.
-      const fromDate = fromIso.slice(0, 10);
-      const toDate   = toIso.slice(0, 10);
+      // listFuelReports takes ISO timestamps (reported_at) — fromIso/toIso
+      // above are correct for that.
+      //
+      // listFuelTransactions filters on `transaction_date`, a DATE-ONLY
+      // column, so it needs the LOCAL calendar date — NOT the UTC slice
+      // of an end-of-day timestamp. `toIso.slice(0,10)` was the bug:
+      // end-of-day Jun 19 in Central time is Jun 20 05:59Z, so the slice
+      // returned "2026-06-20" and the server's `lte transaction_date`
+      // swept in the whole next day. dateKeyOf is local-tz, matching the
+      // dashboard's date-only bounds exactly.
+      const fromDate = dateKeyOf(pStart);
+      const toDate   = dateKeyOf(pEnd);
       const [tx, fr] = await Promise.all([
         fetchWithRetry(() => railway.listFuelTransactions({ from: fromDate, to: toDate, limit: 500 }), {
           onAttemptFailed: (err, n, willRetry) => {
