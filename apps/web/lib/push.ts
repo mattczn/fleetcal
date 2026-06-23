@@ -1,10 +1,33 @@
-import { getSupabase } from './supabase';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import {
   DEFAULT_NOTIFICATION_RULES,
   NOTIFICATION_RULE_FIELD_FROM_KEY,
   type NotificationRules,
   type NotificationRuleKey,
 } from '@fleetcal/types';
+
+/**
+ * Server-side admin Supabase client (service-role). This module only
+ * runs server-side (Next.js API routes, server actions) — never in
+ * the browser. The previous getSupabase() flow returned an anon-key
+ * client whose Clerk-token bridge is browser-only, so on the server
+ * every Supabase call went anon-only and 401'd as soon as RLS was
+ * enabled on drivers / driver_push_tokens / org_settings. Service-role
+ * bypasses RLS and is the correct pattern for trusted server code.
+ */
+let _adminClient: SupabaseClient | null = null;
+function adminDb(): SupabaseClient {
+  if (_adminClient) return _adminClient;
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !serviceRoleKey) {
+    throw new Error('Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY env var');
+  }
+  _adminClient = createClient(url, serviceRoleKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  return _adminClient;
+}
 
 export interface PushPayload {
   title: string;
@@ -40,7 +63,7 @@ export async function sendPushToDriver(
   driverId: number,
   payload: PushPayload,
 ): Promise<void> {
-  const db = getSupabase();
+  const db = adminDb();
   const { data, error } = await db
     .from('driver_push_tokens')
     .select('token')
@@ -127,7 +150,7 @@ export async function sendPushToDriver(
 
 /** Resolve the per-org notification rules (with defaults filled in). */
 async function loadOrgNotificationRules(orgId: string): Promise<NotificationRules> {
-  const db = getSupabase();
+  const db = adminDb();
   const { data, error } = await db
     .from('org_settings')
     .select('notification_rules')
@@ -178,7 +201,7 @@ export async function sendAutoPushToDriver(
     eventStart?: string | null;
   },
 ): Promise<boolean> {
-  const db = getSupabase();
+  const db = adminDb();
   const rules = opts?.rules ?? await loadOrgNotificationRules(orgId);
   const rule  = rules[NOTIFICATION_RULE_FIELD_FROM_KEY[ruleKey]];
   if (!rule.enabled) return false;

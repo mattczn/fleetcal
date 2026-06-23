@@ -1,8 +1,34 @@
 import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
-import { getSupabase } from '@/lib/supabase';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { sendPushToDriver, sendAutoPushToDriver } from '@/lib/push';
 import { NOTIFICATION_RULE_KEYS, type NotificationRuleKey } from '@fleetcal/types';
+
+/**
+ * Server-side admin Supabase client (service-role). Bypasses RLS so
+ * this route can verify driver ownership + queue pushes without
+ * carrying a per-user JWT — which `getSupabase()` can't do because
+ * the Clerk-token bridge in lib/supabase.ts is browser-only (returns
+ * null in server contexts → request goes anon-only → 401 once RLS
+ * is enabled on drivers, which is what was killing this route in
+ * production on 2026-06-22).
+ *
+ * Lazy-init so a missing env var on a preview deploy doesn't
+ * crash module evaluation — the route throws a clear 500 instead.
+ */
+let _adminClient: SupabaseClient | null = null;
+function adminSupabase(): SupabaseClient {
+  if (_adminClient) return _adminClient;
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !serviceRoleKey) {
+    throw new Error('Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY env var');
+  }
+  _adminClient = createClient(url, serviceRoleKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  return _adminClient;
+}
 
 const RAILWAY_URL =
   process.env.NEXT_PUBLIC_RAILWAY_URL ?? 'https://fleetcalapi-production.up.railway.app';
@@ -31,8 +57,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Invalid body' }, { status: 400 });
   }
 
-  // Verify the driver belongs to the requesting org
-  const db = getSupabase();
+  // Verify the driver belongs to the requesting org. Use the admin
+  // (service-role) client so RLS doesn't block us — this route runs
+  // server-side without a per-user JWT, so the anon-key path 401s.
+  const db = adminSupabase();
   const { data: driver, error } = await db
     .from('drivers')
     .select('id')
