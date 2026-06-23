@@ -118,8 +118,11 @@ function isoToDisplay(iso?: string): string {
 // ── Screen ──────────────────────────────────────────────────────────────
 
 export default function ProfileScreen() {
-  // MVP orgs (no reporting modules) see Account + Appearance + Sign-out
-  // only; the compliance sections below are gated on the full-tier gate.
+  // `reporting` (= Fuel OR Maintenance modules enabled) only gates the
+  // Notifications section now. License, Compliance, and Documents all
+  // ship in MVP — small carriers still want their drivers carrying a
+  // photo of the CDL + med card from day one, even before the reporting
+  // bundle is unlocked.
   const { reporting } = useModules();
   const { C, SHADOW, ACCENT, mode, setMode } = useTheme();
   const [me,         setMe]         = useState<DriverMeResponse | null>(null);
@@ -374,7 +377,7 @@ export default function ProfileScreen() {
             <User size={36} color="#fff" strokeWidth={2.2} />
           )}
         </View>
-        <Text style={[txt(800), { fontSize: 22, color: C.t1, letterSpacing: -0.3 }]}>{me?.name ?? "—"}</Text>
+        <Text style={[txt(800), { fontSize: 22, color: C.t1, letterSpacing: -0.3 }]}>{me?.firstName ?? me?.name ?? "—"}</Text>
         <Text style={[txt(500), { fontSize: 13, color: C.t3, marginTop: 2 }]}>
           {me?.phone ?? "—"}
         </Text>
@@ -509,9 +512,10 @@ export default function ProfileScreen() {
                 </FormGrid>
               </Card>
 
-              {reporting ? (
-              <>
-              {/* License */}
+              {/* License — ships in MVP. Compliance fields below also
+                  in MVP. Notifications stay gated on the reporting
+                  module (Fuel / Maintenance) since those toggles only
+                  matter when those modules generate auto-pushes. */}
               <SectionHeader label="License" />
               <Card>
                 <FormGrid>
@@ -591,8 +595,6 @@ export default function ProfileScreen() {
                   ))
                 )}
               </Card>
-              </>
-              ) : null}
 
               {/* Organization */}
               <SectionHeader label="Organization" />

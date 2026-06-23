@@ -31,9 +31,15 @@ export function useModules() {
   const enabled = useCallback((m: OrgModule) => isModuleEnabled(m, flags), [flags]);
 
   // "Reporting" is the full-tier driver bundle: Fuel + Maintenance reports,
-  // daily inspections (DVIR), and the compliance profile sections. Gated on
-  // either underlying module so a partial org config still surfaces what it
-  // has. (A dedicated `driver_compliance` flag can split this later.)
+  // daily inspections (DVIR), and the Notifications preferences (those
+  // toggles only matter for auto-generated reporting nudges). Gated on
+  // either underlying module so a partial org config still surfaces what
+  // it has.
+  //
+  // License + Compliance + Documents on the Profile screen used to live
+  // under this gate too but were promoted to MVP on 2026-06-22 — small
+  // carriers want CDL + medical card visibility from day one even before
+  // the full reporting bundle unlocks.
   const reporting = enabled("fuel") || enabled("maintenance");
 
   return {
