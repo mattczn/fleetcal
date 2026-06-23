@@ -977,6 +977,11 @@ export interface UpdateOrgSettingsRequest {
   /** Motive integration config — sync toggles + cadences. Merged
    *  shallowly with the existing row so a single-field PATCH works. */
   motiveSettings?:   import("./domain").MotiveSettings | null;
+  /** Replace the list of document kinds auto-included in invoice packets
+   *  (e.g. ["pod","bol"]). Full replace — send the whole array. [] =
+   *  auto-include nothing; null = reset to the POD default. Server
+   *  validates every entry is a packet doc kind. */
+  invoiceAutoIncludeKinds?: string[] | null;
 }
 export interface UpdateOrgSettingsResponse { settings: OrgSettings; }
 

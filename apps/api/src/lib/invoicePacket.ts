@@ -22,6 +22,7 @@
 import { PDFDocument, degrees } from "pdf-lib";
 import { isHeicMagic } from "./heicDetect.js";
 import type { Invoice, DocumentKind } from "@fleetcal/types";
+import { PACKET_DOC_KINDS, isDocIncludedInPacket, resolveAutoIncludeKinds } from "@fleetcal/types";
 import { renderInvoicePdf } from "./invoicePdf.js";
 import { supabase } from "./supabase.js";
 
@@ -412,154 +413,74 @@ export async function buildInvoicePacket(args: PacketArgs): Promise<PacketResult
   };
 }
 
-/**
- * Resolve the default supporting-doc set for a load. Order matches
- * the order brokers typically expect: POD first (proof of delivery),
- * then BOL, lumper receipts, scale tickets. Most recent per kind
- * wins so we don't include stale duplicates.
- *
- * If the load has an explicit invoiceDocIds array set, it overrides
- * this default — the caller passes those paths directly instead.
- */
-const PACKET_DOC_KINDS_ORDER: DocumentKind[] = ["pod", "bol", "lumper", "scale", "receipt", "driver_sheet"];
-
-export async function resolveDefaultPacketDocs(loadId: string, orgId: string): Promise<string[]> {
-  const { data, error } = await supabase
-    .from("load_documents")
-    .select("storage_path,kind,uploaded_at")
-    .eq("load_id", loadId)
-    .eq("org_id", orgId)
-    .in("kind", PACKET_DOC_KINDS_ORDER)
-    .order("uploaded_at", { ascending: false });
-  if (error) {
-    console.warn("[invoicePacket] resolveDefault failed:", error);
-    return [];
-  }
-  const rows = (data ?? []) as Array<{ storage_path: string; kind: string; uploaded_at: string }>;
-
-  // PODs: if a doc is on the load tagged kind='pod', it belongs in the
-  // packet. Brokers want as much proof of delivery as we can hand them;
-  // there's no upside to filtering by a time window. Previous versions
-  // gated PODs to "uploaded within 24h of delivery" to match a defensive
-  // UI heuristic — but the heuristic dropped real PODs uploaded at pickup
-  // time or in batches days before delivery, and the dispatcher had no
-  // good way to override the default.
-  //
-  // Every other kind (BOL, lumper, scale, receipt, driver_sheet) is
-  // a singleton in practice — newest-per-kind keeps the packet small
-  // and never picks two competing copies of the same kind.
-  const pickedPodPaths: string[] = [];
-  const newestByOtherKind = new Map<string, string>();
-  for (const r of rows) {
-    if (r.kind === "pod") {
-      pickedPodPaths.push(r.storage_path);
-    } else {
-      if (!newestByOtherKind.has(r.kind)) {
-        newestByOtherKind.set(r.kind, r.storage_path);
-      }
-    }
-  }
-
-  // Emit in canonical kind order so the merged packet shape stays
-  // predictable across loads. PODs come first per PACKET_DOC_KINDS_ORDER.
-  const out: string[] = [];
-  for (const kind of PACKET_DOC_KINDS_ORDER) {
-    if (kind === "pod") {
-      // PODs ordered by upload time DESC (matches the query order),
-      // so the newest POD lands first within the POD block. Brokers
-      // typically read top-down; freshest photo lands at the top.
-      out.push(...pickedPodPaths);
-    } else {
-      const p = newestByOtherKind.get(kind);
-      if (p) out.push(p);
-    }
-  }
-  return out;
-}
+/** Canonical kind order for the merged packet (PODs first, then BOL,
+ *  lumper, scale, receipt, driver sheet). Sourced from PACKET_DOC_KINDS
+ *  in @fleetcal/types so the server and the closeout UI iterate the same
+ *  list. The bare invoice page and the rate-con are attached separately. */
+const PACKET_DOC_KINDS_ORDER: readonly DocumentKind[] = PACKET_DOC_KINDS;
 
 /**
- * Resolve the dispatcher-selected docs for a load's invoice packet.
+ * Resolve the docs to bundle into a load's invoice packet.
  *
- * Selection rule (per-doc, kind-aware):
+ * Runs every load_documents row through the ONE shared selection rule
+ * (isDocIncludedInPacket, @fleetcal/types) so the result is byte-for-byte
+ * what the closeout UI shows the dispatcher as selected — the UI imports
+ * the same function. The rule per doc:
  *
- *   PODs:
- *     - included_in_invoice = true   → INCLUDE
- *     - included_in_invoice = false  → EXCLUDE
- *     - included_in_invoice = null   → INCLUDE  (default: every POD belongs)
+ *   included_in_invoice = true   → INCLUDE   (explicit pick — always wins)
+ *   included_in_invoice = false  → EXCLUDE   (explicit unpick — always wins)
+ *   included_in_invoice = null   → INCLUDE  iff this kind is in the org's
+ *                                  invoice_auto_include_kinds list
  *
- *   Other kinds (BOL, lumper, scale, receipt, driver_sheet):
- *     - included_in_invoice = true   → INCLUDE  (explicit pick wins)
- *     - included_in_invoice = false  → EXCLUDE
- *     - included_in_invoice = null   → INCLUDE only if newest of its kind
- *                                       (singleton fallback — multiple
- *                                       drafts of the same BOL would
- *                                       otherwise both attach)
+ * ALL docs of an auto-included kind attach (no "newest of its kind"
+ * trimming) — dispatchers asked for "pick a type → all of that type
+ * ships"; per-doc unticking handles the rare duplicate. The auto-include
+ * list defaults to ["pod"] (resolveAutoIncludeKinds) so an org that has
+ * never touched the setting still attaches every POD and nothing else,
+ * exactly as the closeout screen renders it.
  *
- * Why per-kind: PODs are commonly multiple-per-load (one photo per
- * pallet, one per damage angle), and brokers want them all. Other
- * kinds are singletons in practice; we don't want to attach an old
- * BOL alongside a corrected one just because both rows exist.
- *
- * The previous version had an `anyTouched` global flag that flipped
- * the WHOLE load into "explicit picks only" mode the moment ANY doc
- * got ticked. That meant clicking two POD pills excluded the other
- * four PODs on the load — the silent breakage that lost half of
- * Curzon's 13092 PODs on 2026-06-17.
- *
- * Replaced the legacy loads.invoice_doc_ids array reader on
- * 2026-06-07 (see migration 20260607_load_documents_included_in_invoice
- * and ReviewQueue / accounting page Save flows).
+ * History: this replaced an `anyTouched` global flag that silently lost
+ * half of Curzon's 13092 PODs on 2026-06-17, and a per-kind "newest
+ * untouched" default that let an untouched fuel receipt ride along to a
+ * broker even though the dispatcher's screen showed it excluded.
  */
 export async function resolvePacketDocsForLoad(loadId: string, orgId: string): Promise<string[]> {
-  const { data: docRows } = await supabase
-    .from("load_documents")
-    .select("id,storage_path,kind,uploaded_at,included_in_invoice")
-    .eq("load_id", loadId)
-    .eq("org_id", orgId)
-    .in("kind", PACKET_DOC_KINDS_ORDER)
-    .order("uploaded_at", { ascending: false });
-  // The generated supabase types don't carry the new column yet (it
-  // lands once the user reruns the type-pull post-migration). Cast
-  // through unknown so the build stays clean; runtime returns the col.
-  const allDocs = ((docRows ?? []) as unknown as Array<{
+  const [docsRes, settingsRes] = await Promise.all([
+    supabase
+      .from("load_documents")
+      .select("id,storage_path,kind,uploaded_at,included_in_invoice")
+      .eq("load_id", loadId)
+      .eq("org_id", orgId)
+      .in("kind", [...PACKET_DOC_KINDS_ORDER])
+      .order("uploaded_at", { ascending: false }),
+    supabase
+      .from("org_settings")
+      .select("invoice_auto_include_kinds")
+      .eq("org_id", orgId)
+      .maybeSingle(),
+  ]);
+  // The generated supabase types don't carry the new columns yet (they
+  // land once the user reruns the type-pull post-migration). Cast through
+  // unknown so the build stays clean; runtime returns the columns.
+  const allDocs = ((docsRes.data ?? []) as unknown as Array<{
     id: string; storage_path: string; kind: string; uploaded_at: string;
     included_in_invoice: boolean | null;
   }>);
+  const autoIncludeKinds = resolveAutoIncludeKinds(
+    (settingsRes.data as unknown as { invoice_auto_include_kinds: string[] | null } | null)
+      ?.invoice_auto_include_kinds,
+  );
 
-  // PODs: include unless explicit FALSE. Preserves uploaded_at-DESC
-  // ordering from the query so the broker sees the newest photo on top.
-  const podPaths = allDocs
-    .filter(d => d.kind === "pod" && d.included_in_invoice !== false)
-    .map(d => d.storage_path);
-
-  // Non-PODs: per-kind picker.
-  //   - First doc of the kind with TRUE wins (most recent explicit pick).
-  //   - Otherwise the newest doc of the kind that isn't explicitly FALSE
-  //     becomes the singleton default.
-  const nonPodPathsByKind = new Map<string, string>();
-  for (const kind of PACKET_DOC_KINDS_ORDER) {
-    if (kind === "pod") continue;
-    const ofKind = allDocs.filter(d => d.kind === kind);
-    const explicitTrue = ofKind.find(d => d.included_in_invoice === true);
-    if (explicitTrue) {
-      nonPodPathsByKind.set(kind, explicitTrue.storage_path);
-      continue;
-    }
-    const newestUntouched = ofKind.find(d => d.included_in_invoice !== false);
-    if (newestUntouched) {
-      nonPodPathsByKind.set(kind, newestUntouched.storage_path);
-    }
-  }
-
-  // Emit in canonical kind order so the merged packet shape stays
-  // predictable across loads. PODs come first per PACKET_DOC_KINDS_ORDER.
+  // Emit in canonical kind order (PODs first), newest-first within a kind
+  // — matches the query's uploaded_at DESC, so the broker reads the
+  // freshest doc at the top of each block.
   const out: string[] = [];
   for (const kind of PACKET_DOC_KINDS_ORDER) {
-    if (kind === "pod") {
-      out.push(...podPaths);
-    } else {
-      const p = nonPodPathsByKind.get(kind);
-      if (p) out.push(p);
+    for (const d of allDocs) {
+      if (d.kind !== kind) continue;
+      if (isDocIncludedInPacket({ kind: d.kind, includedInInvoice: d.included_in_invoice }, autoIncludeKinds)) {
+        out.push(d.storage_path);
+      }
     }
   }
   return out;

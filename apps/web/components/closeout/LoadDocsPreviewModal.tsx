@@ -19,10 +19,7 @@ import { Loader2, AlertCircle, Eye, X, Check } from 'lucide-react';
 import Tooltip from '@/components/ui/Tooltip';
 import { railway } from '@/lib/railway';
 import { useCalendarStore } from '@/store/useCalendarStore';
-
-/** Doc kinds that the server's resolveDefaultPacketDocs considers when
- *  no explicit included_in_invoice is set on a load_documents row. */
-const PACKET_KINDS: readonly string[] = ['pod', 'bol', 'lumper', 'scale', 'receipt', 'driver_sheet'];
+import { isDocIncludedInPacket, resolveAutoIncludeKinds } from '@fleetcal/types';
 
 const KIND_LABEL: Record<string, string> = {
   rate_con: 'Rate Con', pod: 'POD', bol: 'BOL', lumper: 'Lumper',
@@ -93,40 +90,34 @@ export function LoadDocsPreviewModal({ load, onClose, onSaved }: {
     return () => { cancelled = true; };
   }, [load.loadId]);
 
-  // Derived effective include state.
-  //   1. Pending toggle wins (the user just clicked it).
-  //   2. Else d.includedInInvoice when not null (server-stored choice).
-  //   3. Else newest-per-kind heuristic among PACKET_KINDS — same
-  //      rule the server's resolveDefaultPacketDocs runs.
-  const heuristicIncluded: Set<string> = useMemo(() => {
-    if (!docs) return new Set();
-    const byKind = new Map<string, LoadDoc>();
-    const sorted = [...docs].sort((a, b) =>
-      (b.uploadedAt ?? '').localeCompare(a.uploadedAt ?? ''),
-    );
-    for (const d of sorted) {
-      if (PACKET_KINDS.includes(d.kind) && !byKind.has(d.kind)) {
-        byKind.set(d.kind, d);
-      }
-    }
-    return new Set(Array.from(byKind.values()).map(d => d.id));
-  }, [docs]);
+  // Org's invoice auto-include doc kinds (Settings → Invoicing). null →
+  // resolveAutoIncludeKinds falls back to ['pod'].
+  const invoiceAutoIncludeRaw = useCalendarStore(s => s.invoiceAutoIncludeKinds);
+  const autoIncludeKinds = useMemo(
+    () => resolveAutoIncludeKinds(invoiceAutoIncludeRaw),
+    [invoiceAutoIncludeRaw],
+  );
+  // Derived effective include state, via the ONE shared rule
+  // (@fleetcal/types isDocIncludedInPacket) — identical to the server
+  // packet builder so this modal, the closeout queue, and the emailed
+  // packet never disagree. Pending toggle wins; else the explicit stored
+  // choice; else the untouched-default from the org's auto-include list.
   const effectiveInclude = (d: LoadDoc): boolean => {
     if (Object.prototype.hasOwnProperty.call(pendingChanges, d.id)) {
       return pendingChanges[d.id];
     }
-    if (d.includedInInvoice === true)  return true;
-    if (d.includedInInvoice === false) return false;
-    return heuristicIncluded.has(d.id);
+    return isDocIncludedInPacket(
+      { kind: d.kind, includedInInvoice: d.includedInInvoice },
+      autoIncludeKinds,
+    );
   };
   const included: Set<string> = useMemo(() => {
     const s = new Set<string>();
     for (const d of (docs ?? [])) if (effectiveInclude(d)) s.add(d.id);
     return s;
-    // effectiveInclude reads pendingChanges + heuristicIncluded via
-    // closure; both are listed inputs to the derivation.
+    // effectiveInclude reads pendingChanges + autoIncludeKinds via closure.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [docs, pendingChanges, heuristicIncluded]);
+  }, [docs, pendingChanges, autoIncludeKinds]);
 
   // Default the viewer to the rate con (or the first uploaded doc).
   useEffect(() => {
@@ -197,9 +188,10 @@ export function LoadDocsPreviewModal({ load, onClose, onSaved }: {
     if (!docs) return;
     const doc = docs.find(d => d.id === id);
     if (!doc) return;
-    const persisted: boolean = doc.includedInInvoice === true  ? true
-                              : doc.includedInInvoice === false ? false
-                              : heuristicIncluded.has(id);
+    const persisted: boolean = isDocIncludedInPacket(
+      { kind: doc.kind, includedInInvoice: doc.includedInInvoice },
+      autoIncludeKinds,
+    );
     const nextVal = !included.has(id);
     setPendingChanges(prev => {
       const copy = { ...prev };

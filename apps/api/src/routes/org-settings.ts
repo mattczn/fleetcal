@@ -26,6 +26,8 @@ import {
   DOCUMENT_KINDS,
   DRIVER_HIDDEN_DOC_KINDS,
   MVP_LAUNCH_DEFAULTS,
+  resolveAutoIncludeKinds,
+  isPacketDocKind,
 } from "@fleetcal/types";
 
 import { supabase } from "../lib/supabase.js";
@@ -38,7 +40,7 @@ orgSettings.get("/", async (c) => {
   const orgId = c.get("orgId");
   const { data, error } = await supabase
     .from("org_settings")
-    .select("show_driver_pay,rate_con_settings,invoice_settings,role_overrides,modules,driver_visible_doc_kinds,document_types,notification_rules,motive_settings")
+    .select("show_driver_pay,rate_con_settings,invoice_settings,role_overrides,modules,driver_visible_doc_kinds,document_types,notification_rules,motive_settings,invoice_auto_include_kinds")
     .eq("org_id", orgId)
     .maybeSingle();
   if (error) {
@@ -55,6 +57,7 @@ orgSettings.get("/", async (c) => {
     document_types:            DocumentTypeConfig[]   | null;
     notification_rules:        NotificationRules      | null;
     motive_settings:           import("@fleetcal/types").MotiveSettings | null;
+    invoice_auto_include_kinds: string[]              | null;
   } | null;
   // orgModules: layer MVP_LAUNCH_DEFAULTS as the base, then merge the
   // stored map on top. Three regimes fall out:
@@ -89,6 +92,10 @@ orgSettings.get("/", async (c) => {
       documentTypes:         row?.document_types          ?? null,
       notificationRules:     row?.notification_rules      ?? null,
       motiveSettings:        row?.motive_settings         ?? null,
+      // Resolve null (never configured) → the POD default so the closeout
+      // UI and the server packet builder see the same list. An explicitly
+      // cleared [] is returned verbatim.
+      invoiceAutoIncludeKinds: resolveAutoIncludeKinds(row?.invoice_auto_include_kinds),
     },
   };
   return c.json(res);
@@ -107,9 +114,23 @@ orgSettings.patch("/", requireCapability("org.settings.edit"), async (c) => {
     body.driverVisibleDocKinds === undefined &&
     body.documentTypes         === undefined &&
     body.notificationRules     === undefined &&
-    body.motiveSettings        === undefined
+    body.motiveSettings        === undefined &&
+    body.invoiceAutoIncludeKinds === undefined
   ) {
     return c.json({ error: "validation_failed", errors: ["at least one settable field required"] } satisfies ApiErrorResponse, 400);
+  }
+
+  // Validate invoiceAutoIncludeKinds: array (or null) of packet doc kinds.
+  // Rejecting unknown kinds keeps the stored list clean for the shared
+  // selection rule.
+  if (body.invoiceAutoIncludeKinds !== undefined && body.invoiceAutoIncludeKinds !== null) {
+    if (!Array.isArray(body.invoiceAutoIncludeKinds)) {
+      return c.json({ error: "validation_failed", errors: ["invoiceAutoIncludeKinds must be an array or null"] } satisfies ApiErrorResponse, 400);
+    }
+    const bad = body.invoiceAutoIncludeKinds.filter(k => typeof k !== "string" || !isPacketDocKind(k));
+    if (bad.length) {
+      return c.json({ error: "validation_failed", errors: [`invoiceAutoIncludeKinds: unknown kind(s) ${bad.join(", ")}`] } satisfies ApiErrorResponse, 400);
+    }
   }
 
   // Validate documentTypes before touching the DB. Server-enforced rules
@@ -146,7 +167,7 @@ orgSettings.patch("/", requireCapability("org.settings.edit"), async (c) => {
   // clobbering keys the caller didn't include.
   const { data: existing } = await supabase
     .from("org_settings")
-    .select("show_driver_pay,rate_con_settings,invoice_settings,role_overrides,modules,driver_visible_doc_kinds,document_types,notification_rules,motive_settings")
+    .select("show_driver_pay,rate_con_settings,invoice_settings,role_overrides,modules,driver_visible_doc_kinds,document_types,notification_rules,motive_settings,invoice_auto_include_kinds")
     .eq("org_id", orgId)
     .maybeSingle();
   const existingRow = existing as {
@@ -159,6 +180,7 @@ orgSettings.patch("/", requireCapability("org.settings.edit"), async (c) => {
     document_types:            DocumentTypeConfig[]   | null;
     notification_rules:        NotificationRules      | null;
     motive_settings:           import("@fleetcal/types").MotiveSettings | null;
+    invoice_auto_include_kinds: string[]              | null;
   } | null;
 
   const nextShowDriverPay = body.showDriverPay ?? existingRow?.show_driver_pay ?? false;
@@ -244,6 +266,13 @@ orgSettings.patch("/", requireCapability("org.settings.edit"), async (c) => {
       : body.motiveSettings === null
         ? null
         : { ...(existingRow?.motive_settings ?? {}), ...body.motiveSettings };
+  // invoiceAutoIncludeKinds is a full REPLACE (the settings checklist
+  // ships the whole array). null clears back to the POD default at read
+  // time via resolveAutoIncludeKinds; [] persists "auto-include nothing".
+  const nextInvoiceAutoIncludeKinds: string[] | null =
+    body.invoiceAutoIncludeKinds === undefined
+      ? (existingRow?.invoice_auto_include_kinds ?? null)
+      : (body.invoiceAutoIncludeKinds ?? null);
 
   const { error } = await supabase
     .from("org_settings")
@@ -259,6 +288,7 @@ orgSettings.patch("/", requireCapability("org.settings.edit"), async (c) => {
         document_types:            nextDocumentTypes as never,
         notification_rules:        nextNotificationRules as never,
         motive_settings:           mergedMotive as never,
+        invoice_auto_include_kinds: nextInvoiceAutoIncludeKinds as never,
       } as never,
       { onConflict: "org_id" },
     );
@@ -285,6 +315,7 @@ orgSettings.patch("/", requireCapability("org.settings.edit"), async (c) => {
       documentTypes:         nextDocumentTypes,
       notificationRules:     nextNotificationRules,
       motiveSettings:        mergedMotive,
+      invoiceAutoIncludeKinds: resolveAutoIncludeKinds(nextInvoiceAutoIncludeKinds),
     },
   };
   return c.json(res);

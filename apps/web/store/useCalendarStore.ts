@@ -360,6 +360,15 @@ interface CalendarStore extends ModalState {
   documentTypes: import('@fleetcal/types').DocumentTypeConfig[] | null;
   hydrateDocumentTypes: (types: import('@fleetcal/types').DocumentTypeConfig[] | null | undefined) => void;
 
+  /** Document kinds auto-included in invoice packets when a doc hasn't
+   *  been explicitly toggled (e.g. ['pod','bol']). Drives the closeout /
+   *  accounting invoice-include defaults via the shared isDocIncludedInPacket
+   *  rule, matching the server packet builder. null = not yet hydrated;
+   *  readers pass it through resolveAutoIncludeKinds (→ ['pod'] fallback).
+   *  Hydrated from /v1/org-settings on app boot. */
+  invoiceAutoIncludeKinds: string[] | null;
+  hydrateInvoiceAutoIncludeKinds: (kinds: string[] | null | undefined) => void;
+
   theme: 'light' | 'dark' | 'system';
   setTheme: (t: 'light' | 'dark' | 'system') => void;
 
@@ -724,6 +733,10 @@ export const useCalendarStore = create<CalendarStore>()(
   documentTypes: null,
   hydrateDocumentTypes: (types) =>
     set({ documentTypes: types ?? null }),
+
+  invoiceAutoIncludeKinds: null,
+  hydrateInvoiceAutoIncludeKinds: (kinds) =>
+    set({ invoiceAutoIncludeKinds: kinds ?? null }),
 
   cardFontScale: 1.0,
   setCardFontScale: (n) => set({ cardFontScale: n }),

@@ -35,6 +35,9 @@ import {
   type NotificationRules,
   type TrailerCategory,
   TRAILER_CATEGORIES,
+  PACKET_DOC_KINDS,
+  PACKET_DOC_KIND_LABEL,
+  resolveAutoIncludeKinds,
 } from '@fleetcal/types';
 import { railway } from '@/lib/railway';
 import {
@@ -2291,6 +2294,13 @@ function InvoicingPanel() {
   const [savedSnapshot, setSavedSnapshot] = useState<Form>(emptyForm);
   const isDirty = JSON.stringify(form) !== JSON.stringify(savedSnapshot);
 
+  // Invoice-packet auto-include doc kinds. A separate self-saving control
+  // (not part of the identity form blob) — toggling a kind persists right
+  // away via updateOrgSettings({ invoiceAutoIncludeKinds }). Defaults to
+  // ['pod'] until hydrated.
+  const hydrateStoreAutoInclude = useCalendarStore(s => s.hydrateInvoiceAutoIncludeKinds);
+  const [autoIncludeKinds, setAutoIncludeKinds] = useState<string[]>(() => resolveAutoIncludeKinds(null));
+
   useEffect(() => {
     if (!isDirty) return;
     const handler = (e: BeforeUnloadEvent) => {
@@ -2314,6 +2324,32 @@ function InvoicingPanel() {
         next.delete(key as string);
         return next;
       });
+    }
+  };
+
+  // Toggle a doc kind in the auto-include list and persist immediately.
+  // Optimistic — revert local + store state on failure.
+  const toggleAutoIncludeKind = async (kind: string) => {
+    const prev = autoIncludeKinds;
+    const next = prev.includes(kind) ? prev.filter(k => k !== kind) : [...prev, kind];
+    setAutoIncludeKinds(next);
+    setSaving(true);
+    setErr(null);
+    try {
+      const { railway } = await import('@/lib/railway');
+      const { settings } = await railway.updateOrgSettings({ invoiceAutoIncludeKinds: next });
+      const resolved = resolveAutoIncludeKinds(settings.invoiceAutoIncludeKinds);
+      setAutoIncludeKinds(resolved);
+      // Push into the store so the closeout / accounting include-defaults
+      // update live in this session, no reload needed.
+      hydrateStoreAutoInclude(settings.invoiceAutoIncludeKinds ?? null);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setAutoIncludeKinds(prev);
+      setErr((e as Error).message ?? 'Save failed');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -2369,6 +2405,7 @@ function InvoicingPanel() {
         // changed since load.
         setSavedSnapshot(next);
         setAutofilledFromClerk(filled);
+        setAutoIncludeKinds(resolveAutoIncludeKinds(settings.invoiceAutoIncludeKinds));
         setLoading(false);
       })
       .catch(e => {
@@ -2516,6 +2553,39 @@ function InvoicingPanel() {
             onChange={v => updateField('defaultPaymentTermsDays', v.replace(/[^\d]/g, ''))}
             placeholder="30" />
         </FieldRow>
+      </Card>
+
+      {/* Invoice documents — which proof-doc kinds auto-attach to the
+          packet. Saves immediately (separate from the identity-form Save
+          button). The same rule drives the closeout/accounting include
+          checkboxes, so what a dispatcher sees selected is what ships. */}
+      <Card title="Invoice documents"
+        subtitle="Which document types are automatically included in the invoice packet sent to customers. Dispatchers can still add or remove individual documents per load in closeout.">
+        <div className="flex flex-col gap-1.5">
+          {PACKET_DOC_KINDS.map(kind => {
+            const checked = autoIncludeKinds.includes(kind);
+            return (
+              <label key={kind}
+                className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg cursor-pointer transition-colors"
+                style={{
+                  border: '1px solid var(--gc-border-light)',
+                  background: checked ? 'var(--gc-blue-light)' : 'var(--gc-surface)',
+                }}>
+                <input type="checkbox" checked={checked} disabled={saving}
+                  onChange={() => void toggleAutoIncludeKind(kind)}
+                  style={{ width: 15, height: 15, accentColor: 'var(--gc-blue)', cursor: 'pointer' }} />
+                <span className="text-[13.5px] font-medium" style={{ color: 'var(--gc-text-1)' }}>
+                  {PACKET_DOC_KIND_LABEL[kind]}
+                </span>
+              </label>
+            );
+          })}
+        </div>
+        <p className="text-[12px] mt-3 leading-relaxed" style={{ color: 'var(--gc-text-3)' }}>
+          Proof of delivery is on by default — most customers require it. Receipts, BOLs, scale
+          tickets, and driver sheets stay off unless you add them here, so internal paperwork
+          doesn&rsquo;t reach a customer by accident.
+        </p>
       </Card>
 
       {/* Advanced — module-gated AND collapsed by default. MVP orgs

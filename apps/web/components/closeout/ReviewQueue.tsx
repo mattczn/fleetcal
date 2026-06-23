@@ -36,6 +36,7 @@ import Tooltip from '@/components/ui/Tooltip';
 import { fetchLoadDocuments, getLoadDocumentSignedUrl } from '@/lib/db';
 import { railway, RailwayError } from '@/lib/railway';
 import { useCalendarStore } from '@/store/useCalendarStore';
+import { isDocIncludedInPacket, resolveAutoIncludeKinds } from '@fleetcal/types';
 import { displayBrokerName } from '@/lib/customerMatch';
 import PdfCanvas from '@/components/pdf/PdfCanvas';
 import DocViewer from './DocViewer';
@@ -243,6 +244,14 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   const loadId = current?.loadId ?? current?.id;
   const orgId  = useCalendarStore(s => s.orgId);
   const tz     = useCalendarStore(s => s.calendarTimezone);
+  // Org's invoice auto-include doc kinds (Settings → Invoicing). null →
+  // resolveAutoIncludeKinds falls back to ['pod']. Drives the untouched-doc
+  // default below via the SAME rule the server packet builder runs.
+  const invoiceAutoIncludeRaw = useCalendarStore(s => s.invoiceAutoIncludeKinds);
+  const autoIncludeKinds = useMemo(
+    () => resolveAutoIncludeKinds(invoiceAutoIncludeRaw),
+    [invoiceAutoIncludeRaw],
+  );
 
   // Per-load assets cache — docs list + signed URL for every doc +
   // rate-con URL. Populated up-front for current/next/prev so prev/next
@@ -469,21 +478,23 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
     if (Object.prototype.hasOwnProperty.call(pendingIncludeChanges, d.id)) {
       return pendingIncludeChanges[d.id];
     }
-    if (d.includedInInvoice === true)  return true;
-    if (d.includedInInvoice === false) return false;
-    // null → default: every POD on the load belongs in the invoice
-    // packet. Matches the server-side resolveDefaultPacketDocs rule
-    // exactly. If a dispatcher wants to exclude a particular POD they
-    // toggle the pill off, which writes included_in_invoice=false.
-    return d.kind === 'pod';
+    // The ONE shared rule (@fleetcal/types) — identical to what the server
+    // packet builder runs. explicit true/false wins; an untouched (null)
+    // doc is included iff its kind is in the org's auto-include list
+    // (defaults to PODs). Guarantees "what you see selected here is exactly
+    // what gets bundled."
+    return isDocIncludedInPacket(
+      { kind: d.kind, includedInInvoice: d.includedInInvoice },
+      autoIncludeKinds,
+    );
   };
   const includedDocIds = useMemo<Set<string>>(() => {
     const s = new Set<string>();
     for (const d of docs) if (effectiveInclude(d)) s.add(d.id);
     return s;
-    // effectiveInclude reads pendingIncludeChanges from closure.
+    // effectiveInclude reads pendingIncludeChanges + autoIncludeKinds from closure.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [docs, pendingIncludeChanges]);
+  }, [docs, pendingIncludeChanges, autoIncludeKinds]);
   const dirtyIncludeCount = Object.keys(pendingIncludeChanges).length;
 
   // ── Actions ───────────────────────────────────────────────────────

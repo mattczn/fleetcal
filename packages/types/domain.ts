@@ -551,6 +551,15 @@ export interface OrgSettings {
    *  leak through GET /v1/org-settings; the toggles + cadences here
    *  control HOW we use the key. */
   motiveSettings?: MotiveSettings | null;
+  /** Document kinds auto-included in invoice packets when a doc hasn't
+   *  been explicitly toggled (e.g. ["pod","bol"]). Configured in
+   *  Settings → Invoicing; stored in org_settings.invoice_auto_include_kinds.
+   *  null = never configured → server falls back to
+   *  DEFAULT_INVOICE_AUTO_INCLUDE_KINDS (["pod"]); [] = auto-include nothing.
+   *  The SINGLE rule that consumes this (isDocIncludedInPacket, see
+   *  invoicePacket.ts) is shared by the closeout UI and the server packet
+   *  builder so "selected" always equals "included". */
+  invoiceAutoIncludeKinds?: string[] | null;
 }
 
 /**
