@@ -19,9 +19,14 @@
  *   Cookie-presence-only middleware was tried as an escape, but every
  *   Next.js API route uses `auth()` from `@clerk/nextjs/server` which
  *   requires clerkMiddleware to have run — removing it broke API
- *   routes worse than the partial page crashes. Restored. Real fix
- *   needs a Clerk SDK bump (we're on 7.3.0; 7.5.2 is current but
- *   npm install was not picking it up cleanly in the workspace).
+ *   routes worse than the partial page crashes. Restored.
+ *
+ * 2026-06-22 update:
+ *   Bumped @clerk/nextjs 7.3.0 → 7.5.7 (latest stable). Outer wrap
+ *   below now returns a JSON 503 for /api/* paths if Clerk still
+ *   crashes, rather than redirecting to /sign-in — the dispatcher
+ *   web's fetch() to /api/driver-push was getting Status 0 / no body
+ *   because the redirect made no sense for an API consumer.
  *
  * Notes:
  *   - No tier check (was the source of the crash).
@@ -85,8 +90,21 @@ export default async function middleware(request: NextRequest, event: NextFetchE
   try {
     return await protectedMiddleware(request, event)
   } catch (err) {
-    console.error('[middleware] Clerk middleware crashed, redirecting to /sign-in:', err)
+    console.error('[middleware] Clerk middleware crashed:', err)
     if (isPublicRoute(request)) return
+
+    // API routes can't follow a 307 redirect to /sign-in — the
+    // dispatcher web's fetch() POSTs would get Status 0 / empty body
+    // (and that's exactly what was happening on /api/driver-push when
+    // Clerk middleware hit its TypeError: immutable bug). Return a
+    // JSON 503 so the client sees a clear error to surface or retry.
+    if (request.nextUrl.pathname.startsWith('/api/')) {
+      return new Response(
+        JSON.stringify({ error: 'auth_unavailable', detail: 'Clerk middleware temporarily unavailable; retry shortly.' }),
+        { status: 503, headers: { 'Content-Type': 'application/json' } },
+      )
+    }
+
     const url = new URL('/sign-in', request.url)
     url.searchParams.set('redirect_url', request.nextUrl.pathname + request.nextUrl.search)
     return Response.redirect(url)
