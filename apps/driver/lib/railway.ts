@@ -137,6 +137,13 @@ export const railway = {
     return req<{ ok: true }>("POST", "/v1/driver/permissions", body);
   },
 
+  // Register/refresh this device's Expo push token. Goes through Railway
+  // (service-role) instead of a direct Supabase upsert, which the
+  // 2026-06-11 RLS lockdown broke for the driver's OTP-auth'd client.
+  registerPushToken(body: { token: string; platform: "ios" | "android" }) {
+    return req<{ ok: true }>("POST", "/v1/driver/push-token", body);
+  },
+
   // Notifications inbox — every push the driver has been sent in the
   // last 48h (default). Includes acknowledgement state so the UI can
   // distinguish "still pending action" from "done."

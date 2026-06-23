@@ -389,6 +389,48 @@ driver.post("/permissions", async (c) => {
   return c.json({ ok: true });
 });
 
+// POST /v1/driver/push-token — register/refresh this device's Expo push
+// token. Moved off the direct client→Supabase upsert (which broke for
+// every driver after the 2026-06-11 RLS lockdown: driver_push_tokens
+// got an org-scoped RLS policy keyed on `auth.jwt() ->> 'org_id'`, but
+// the driver app authenticates via Supabase phone-OTP whose JWT carries
+// no org_id claim → every upsert silently denied, no tokens registered
+// fleet-wide for ~10 days). This endpoint runs the upsert with the
+// service-role client (bypasses RLS) and resolves driver+org from the
+// driverAuth-verified JWT so the client can't spoof another driver.
+driver.post("/push-token", async (c) => {
+  const driverId = c.get("driverId");
+  const orgId    = c.get("orgId");
+  let body: { token?: string; platform?: string };
+  try { body = await c.req.json(); }
+  catch { return c.json({ error: "invalid_json" }, 400); }
+
+  const token = (body.token ?? "").trim();
+  if (!token) {
+    return c.json({ error: "validation_failed", errors: ["token required"] }, 400);
+  }
+  const platform = body.platform === "android" ? "android" : "ios";
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { error } = await (supabase as any)
+    .from("driver_push_tokens")
+    .upsert(
+      {
+        driver_id:    driverId,
+        org_id:       orgId,
+        token,
+        platform,
+        last_seen_at: new Date().toISOString(),
+      },
+      { onConflict: "token" },
+    );
+  if (error) {
+    console.error("[POST /v1/driver/push-token] upsert failed:", error);
+    return c.json({ error: "upsert_failed", detail: error.message }, 500);
+  }
+  return c.json({ ok: true });
+});
+
 driver.get("/notification-prefs", async (c) => {
   const driverId = c.get("driverId");
   const { data, error } = await sbAny

@@ -3,7 +3,7 @@ import { Platform } from "react-native";
 import * as Notifications from "expo-notifications";
 import * as Device from "expo-device";
 import Constants from "expo-constants";
-import { supabase } from "@/lib/supabase";
+import { railway } from "@/lib/railway";
 
 /** Public status surfaced to the UI so the driver can see when push
  *  registration is broken (e.g. permission denied or upstream upsert
@@ -70,36 +70,31 @@ export function usePushRegistration(
         );
         if (cancelled) return;
         const token = tokenRes.data;
-        const platform = Platform.OS === "ios" ? "ios" : "android";
+        const platform: "ios" | "android" = Platform.OS === "ios" ? "ios" : "android";
 
-        // Retry the upsert — server hiccups + flaky cell shouldn't
-        // leave the driver permanently unregistered. Exponential
-        // backoff. Only the last error is surfaced if all retries fail.
+        // Register the token via Railway (service-role) instead of a
+        // direct Supabase upsert. The 2026-06-11 RLS lockdown put an
+        // org-scoped policy on driver_push_tokens keyed on the
+        // `org_id` JWT claim — which the driver's Supabase phone-OTP
+        // token doesn't carry — so the old direct upsert silently 403'd
+        // and NO driver registered a token fleet-wide for ~10 days.
+        // Railway resolves driver+org from the verified JWT and writes
+        // with service-role, bypassing RLS. Retry on flaky cell.
         let lastErr: unknown = null;
         for (let attempt = 0; attempt < UPSERT_RETRIES; attempt++) {
           if (cancelled) return;
-          const { error } = await supabase
-            .from("driver_push_tokens")
-            .upsert(
-              {
-                driver_id:    driverId,
-                org_id:       orgId,
-                token,
-                platform,
-                last_seen_at: new Date().toISOString(),
-              },
-              { onConflict: "token" },
-            );
-          if (!error) {
+          try {
+            await railway.registerPushToken({ token, platform });
             if (!cancelled) setStatus("registered");
             return;
-          }
-          lastErr = error;
-          if (attempt < UPSERT_RETRIES - 1) {
-            await new Promise(r => setTimeout(r, UPSERT_BACKOFF_MS * (attempt + 1)));
+          } catch (err) {
+            lastErr = err;
+            if (attempt < UPSERT_RETRIES - 1) {
+              await new Promise(r => setTimeout(r, UPSERT_BACKOFF_MS * (attempt + 1)));
+            }
           }
         }
-        console.error("usePushRegistration upsert (all retries failed):", lastErr);
+        console.error("usePushRegistration register (all retries failed):", lastErr);
         if (!cancelled) setStatus("failed");
       } catch (err) {
         // Push not configured (e.g. free Apple ID without aps-environment entitlement)
