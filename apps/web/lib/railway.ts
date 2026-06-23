@@ -36,7 +36,7 @@ import type {
   ListDriversResponse, CreateDriverRequest, CreateDriverResponse,
   UpdateDriverRequest, UpdateDriverResponse,
   ListCustomersResponse, CreateCustomerRequest, CreateCustomerResponse,
-  UpdateCustomerRequest, UpdateCustomerResponse,
+  UpdateCustomerRequest, UpdateCustomerResponse, MergeCustomerResponse,
   RefreshCustomerInvoicingResponse,
   HarvestRateConFromPdfRequest,
   HarvestRateConFromPdfResponse,
@@ -802,6 +802,11 @@ class RailwayClient {
     return this.req<UpdateCustomerResponse>('PATCH', `/v1/customers/${id}`, body);
   }
   deleteCustomer(id: string)                 { return this.req<void>('DELETE', `/v1/customers/${id}`); }
+  /** Fold customer `id` (source) into `targetId` (kept): reassigns every
+   *  load + invoice, then deletes the source. */
+  mergeCustomer(id: string, targetId: string) {
+    return this.req<MergeCustomerResponse>('POST', `/v1/customers/${id}/merge`, { targetId });
+  }
   /** Re-runs the rate-con broker-harvest prompt against the customer's
    *  most recent rate confirmation and returns the four invoicing
    *  fields for the UI to pre-fill. Does NOT auto-write — caller is

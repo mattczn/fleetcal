@@ -1,11 +1,11 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef, forwardRef, useImperativeHandle } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, forwardRef, useImperativeHandle } from 'react';
 import {
   X, Building2, Phone, Mail, User, FileText, Hash,
   TrendingUp, Package, Clock, CheckCircle2, Search,
   ChevronUp, ChevronDown, ChevronsUpDown, ArrowLeft,
-  Truck, Calendar, DollarSign, ExternalLink, Plus, Trash2,
+  Truck, Calendar, DollarSign, ExternalLink, Plus, Trash2, GitMerge, AlertTriangle,
   Sparkles, Loader2, AlertCircle, MapPin,
 } from 'lucide-react';
 import { railway } from '@/lib/railway';
@@ -362,6 +362,13 @@ function BrokerProfileModal({
                 selectedLoadId={selectedLoadId}
                 onSelectLoad={setSelectedLoadId}
                 onDirtyChange={setPanelDirty}
+                onRemoved={(removedId) => {
+                  // Jump to another customer (or clear selection) once
+                  // the open one is deleted/merged away.
+                  const remaining = customers.filter(x => x.id !== removedId);
+                  setSelectedLoadId(null);
+                  setSelectedId(remaining[0]?.id ?? '');
+                }}
               />
             ) : (
               <div className="flex items-center justify-center h-full text-sm" style={{ color: 'var(--gc-text-3)' }}>
@@ -484,8 +491,11 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
   selectedLoadId: string | null;
   onSelectLoad: (id: string) => void;
   onDirtyChange?: (dirty: boolean) => void;
-}>(function BrokerDetailPanel({ broker, loads, loading, selectedLoadId, onSelectLoad, onDirtyChange }, ref) {
-  const { updateCustomer } = useCalendarStore();
+  /** Called after this customer is deleted or merged away so the parent
+   *  can deselect / pick another customer. */
+  onRemoved?: (removedId: string) => void;
+}>(function BrokerDetailPanel({ broker, loads, loading, selectedLoadId, onSelectLoad, onDirtyChange, onRemoved }, ref) {
+  const { updateCustomer, customers, removeCustomer, mergeCustomer } = useCalendarStore();
   const tz = useCalendarStore(s => s.calendarTimezone);
 
   // Details / History split. Details = customer profile fields.
@@ -1059,6 +1069,16 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
         </div>
       </div>
 
+      {/* Danger zone — merge into another customer, or delete (keeps the
+          name on historical loads, only severs the link). */}
+      <CustomerDangerZone
+        broker={broker}
+        allCustomers={customers}
+        loadCount={loads.length}
+        onMerge={async (targetId) => { await mergeCustomer(broker.id, targetId); onRemoved?.(broker.id); }}
+        onDelete={async ()         => { await removeCustomer(broker.id);          onRemoved?.(broker.id); }}
+      />
+
       </>)}
 
       {view === 'history' && (<>
@@ -1534,6 +1554,299 @@ function PField({ label, icon, hint, children }: { label: string; icon?: React.R
           {hint}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Name similarity (Dice coefficient on bigrams) ────────────────────────────
+// Used to rank merge candidates "most similar first". Normalizes case +
+// punctuation + common carrier suffixes (LLC, Inc, Logistics…) so
+// "ABC Logistics LLC" and "abc logistics, inc" score as near-identical.
+// Returns 0..1. Cheap enough to run over the whole customer list on every
+// keystroke in the merge picker.
+const NAME_NOISE = /\b(llc|l\.l\.c|inc|incorporated|co|corp|corporation|ltd|limited|logistics|transport|transportation|trucking|freight|carriers?|services?|group|usa|the)\b/g;
+function normalizeForSim(s: string): string {
+  return s.toLowerCase().replace(NAME_NOISE, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
+}
+function bigrams(s: string): Map<string, number> {
+  const m = new Map<string, number>();
+  const clean = s.replace(/\s+/g, '');
+  for (let i = 0; i < clean.length - 1; i++) {
+    const bg = clean.slice(i, i + 2);
+    m.set(bg, (m.get(bg) ?? 0) + 1);
+  }
+  return m;
+}
+function nameSimilarity(a: string, b: string): number {
+  const na = normalizeForSim(a);
+  const nb = normalizeForSim(b);
+  if (!na || !nb) return 0;
+  if (na === nb) return 1;
+  // Substring containment is a strong signal names alone miss
+  // ("ABC" vs "ABC West") — floor the score so these rank high.
+  const contains = na.includes(nb) || nb.includes(na) ? 0.6 : 0;
+  const ba = bigrams(na);
+  const bb = bigrams(nb);
+  if (ba.size === 0 || bb.size === 0) return contains;
+  let overlap = 0;
+  for (const [bg, count] of ba) {
+    const other = bb.get(bg);
+    if (other) overlap += Math.min(count, other);
+  }
+  const total = [...ba.values()].reduce((s, n) => s + n, 0) + [...bb.values()].reduce((s, n) => s + n, 0);
+  const dice = (2 * overlap) / total;
+  return Math.max(dice, contains);
+}
+
+// ─── Customer danger zone: merge + delete ─────────────────────────────────────
+function CustomerDangerZone({ broker, allCustomers, loadCount, onMerge, onDelete }: {
+  broker: Customer;
+  allCustomers: Customer[];
+  loadCount: number;
+  onMerge: (targetId: string) => Promise<void>;
+  onDelete: () => Promise<void>;
+}) {
+  const [mergeOpen, setMergeOpen] = useState(false);
+  const [armed, setArmed]         = useState(false);
+  const [typed, setTyped]         = useState('');
+  const [busy, setBusy]           = useState(false);
+  const [error, setError]         = useState<string | null>(null);
+
+  // Reset the delete arming + any open merge picker whenever the
+  // selected customer changes underneath us.
+  useEffect(() => { setArmed(false); setTyped(''); setMergeOpen(false); setError(null); }, [broker.id]);
+
+  const ready = armed && typed.trim() === broker.name.trim();
+
+  const handleDelete = async () => {
+    if (!ready || busy) return;
+    setBusy(true); setError(null);
+    try { await onDelete(); }
+    catch (err) { setError((err as Error)?.message ?? 'Delete failed'); setBusy(false); }
+  };
+
+  return (
+    <div className="px-7 pb-8">
+      <div className="mt-2 pt-6" style={{ borderTop: '1px dashed var(--gc-border-light)' }}>
+        <div className="text-[11px] font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--gc-text-3)' }}>
+          Danger zone
+        </div>
+
+        {/* Merge */}
+        <div className="flex items-center gap-3 mb-4">
+          <button
+            onClick={() => { setMergeOpen(true); setError(null); }}
+            disabled={busy}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-40"
+            style={{ color: 'var(--gc-text-1)', border: '1px solid var(--gc-border)' }}
+            onMouseEnter={e => { if (!busy) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+            <GitMerge size={14} />
+            Merge into another customer
+          </button>
+          <span className="text-xs" style={{ color: 'var(--gc-text-3)' }}>
+            Moves this customer&apos;s loads + invoices onto another record, then deletes this one.
+          </span>
+        </div>
+
+        {/* Delete */}
+        {!armed ? (
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => { setArmed(true); setError(null); }}
+              disabled={busy}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-40"
+              style={{ color: '#7a1d18', border: '1px solid rgba(217,48,37,0.4)' }}
+              onMouseEnter={e => { if (!busy) e.currentTarget.style.background = 'rgba(217,48,37,0.08)'; }}
+              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+              <Trash2 size={14} />
+              Delete customer
+            </button>
+            <span className="text-xs" style={{ color: 'var(--gc-text-3)' }}>
+              {loadCount > 0
+                ? `${loadCount} load${loadCount === 1 ? '' : 's'} will keep the name "${broker.name}" but lose the link.`
+                : 'Removes this customer record.'}
+            </span>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-3">
+            <p className="text-sm" style={{ color: 'var(--gc-text-2)' }}>
+              Delete <strong>{broker.name}</strong>. Loads and invoices are kept — they just lose the link to this
+              record and keep the customer <em>name</em>. Type{' '}
+              <code style={{ background: 'var(--gc-hover)', padding: '1px 4px', borderRadius: 3 }}>{broker.name}</code>{' '}
+              to confirm.
+            </p>
+            <div className="flex items-center gap-2">
+              <input
+                autoFocus
+                value={typed}
+                onChange={e => setTyped(e.target.value)}
+                placeholder={broker.name}
+                className="flex-1 text-sm rounded-lg px-3 py-1.5 outline-none"
+                style={{ border: '1px solid var(--gc-border)', background: 'var(--gc-bg)', color: 'var(--gc-text-1)' }}
+              />
+              <button
+                onClick={() => void handleDelete()}
+                disabled={!ready || busy}
+                className="px-4 py-1.5 rounded-lg text-sm font-medium text-white disabled:opacity-40"
+                style={{ background: '#d93025' }}>
+                {busy ? 'Deleting…' : 'Delete'}
+              </button>
+              <button
+                onClick={() => { setArmed(false); setTyped(''); }}
+                disabled={busy}
+                className="px-4 py-1.5 rounded-lg text-sm font-medium transition-colors disabled:opacity-40"
+                style={{ color: 'var(--gc-text-2)' }}
+                onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        {error && (
+          <div className="flex items-center gap-1.5 text-xs mt-3" style={{ color: '#d93025' }}>
+            <AlertTriangle size={12} /> {error}
+          </div>
+        )}
+      </div>
+
+      {mergeOpen && (
+        <MergeCustomerPicker
+          source={broker}
+          allCustomers={allCustomers}
+          onCancel={() => setMergeOpen(false)}
+          onConfirm={async (targetId) => {
+            setBusy(true); setError(null);
+            try { await onMerge(targetId); }
+            catch (err) { setError((err as Error)?.message ?? 'Merge failed'); setBusy(false); setMergeOpen(false); }
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── Merge picker: choose a target, sorted by name similarity ─────────────────
+function MergeCustomerPicker({ source, allCustomers, onCancel, onConfirm }: {
+  source: Customer;
+  allCustomers: Customer[];
+  onCancel: () => void;
+  onConfirm: (targetId: string) => Promise<void>;
+}) {
+  const [search, setSearch] = useState('');
+  const [targetId, setTargetId] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
+
+  // Every other customer, ranked most-similar-first to the source name.
+  const ranked = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return allCustomers
+      .filter(c => c.id !== source.id)
+      .filter(c => !q || c.name.toLowerCase().includes(q) || (c.aliases ?? []).some(a => a.toLowerCase().includes(q)))
+      .map(c => ({ c, score: nameSimilarity(source.name, c.name) }))
+      .sort((a, b) => b.score - a.score || a.c.name.localeCompare(b.c.name));
+  }, [allCustomers, source.id, source.name, search]);
+
+  const target = ranked.find(r => r.c.id === targetId)?.c ?? null;
+
+  return (
+    <div className="fixed inset-0 z-[240] flex items-center justify-center p-4"
+      style={{ background: 'rgba(0,0,0,0.32)' }}
+      onMouseDown={e => { if (e.target === e.currentTarget && !confirming) onCancel(); }}>
+      <div className="flex flex-col rounded-2xl shadow-xl overflow-hidden"
+        style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border-light)', width: 460, maxHeight: '80vh' }}>
+        <div className="px-5 py-4 shrink-0" style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
+          <div className="flex items-center gap-2 mb-0.5">
+            <GitMerge size={15} style={{ color: ACCENT }} />
+            <span className="text-sm font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+              Merge &ldquo;{source.name}&rdquo; into…
+            </span>
+          </div>
+          <p className="text-xs" style={{ color: 'var(--gc-text-3)' }}>
+            Pick the customer to keep. Sorted by name similarity.
+          </p>
+        </div>
+
+        <div className="px-5 pt-3 pb-2 shrink-0">
+          <div className="flex items-center gap-2 rounded-lg px-2.5 py-1.5"
+            style={{ border: '1px solid var(--gc-border)', background: 'var(--gc-bg)' }}>
+            <Search size={13} style={{ color: 'var(--gc-text-3)' }} />
+            <input
+              autoFocus
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search customers…"
+              className="flex-1 text-sm outline-none bg-transparent"
+              style={{ color: 'var(--gc-text-1)' }}
+            />
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-3 pb-2 min-h-0">
+          {ranked.length === 0 ? (
+            <p className="text-xs px-2 py-4 text-center" style={{ color: 'var(--gc-text-3)' }}>
+              No other customers to merge into.
+            </p>
+          ) : ranked.map(({ c, score }) => {
+            const sel = c.id === targetId;
+            return (
+              <button key={c.id}
+                onClick={() => setTargetId(c.id)}
+                className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left transition-colors"
+                style={{ background: sel ? 'var(--gc-blue-light)' : 'transparent' }}
+                onMouseEnter={e => { if (!sel) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+                onMouseLeave={e => { if (!sel) e.currentTarget.style.background = 'transparent'; }}>
+                <div className="w-7 h-7 rounded-full shrink-0 flex items-center justify-center text-[10px] font-bold text-white"
+                  style={{ background: sel ? ACCENT : '#9aa0a6' }}>
+                  {brokerInitials(c.name)}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium truncate" style={{ color: 'var(--gc-text-1)' }}>{c.name}</div>
+                  {c.mcNum && <div className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>MC {c.mcNum}</div>}
+                </div>
+                {score >= 0.55 && (
+                  <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full shrink-0"
+                    style={{ color: ACCENT, background: 'var(--gc-blue-light)' }}>
+                    similar
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="px-5 py-3 shrink-0 flex items-center justify-between gap-2"
+          style={{ borderTop: '1px solid var(--gc-border-light)' }}>
+          <span className="text-xs" style={{ color: 'var(--gc-text-3)' }}>
+            {target
+              ? <>Deletes <strong style={{ color: 'var(--gc-text-2)' }}>{source.name}</strong></>
+              : 'Select a target'}
+          </span>
+          <div className="flex items-center gap-2">
+            <button onClick={onCancel} disabled={confirming}
+              className="px-3.5 py-1.5 rounded-lg text-sm font-medium transition-colors disabled:opacity-40"
+              style={{ color: 'var(--gc-text-2)' }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+              Cancel
+            </button>
+            <button
+              onClick={async () => {
+                if (!target || confirming) return;
+                if (!window.confirm(`Merge "${source.name}" into "${target.name}"?\n\nAll of ${source.name}'s loads and invoices move to ${target.name}, and ${source.name} is deleted. This can't be undone.`)) return;
+                setConfirming(true);
+                await onConfirm(target.id);
+              }}
+              disabled={!target || confirming}
+              className="px-4 py-1.5 rounded-lg text-sm font-semibold text-white transition-opacity disabled:opacity-40"
+              style={{ background: ACCENT }}>
+              {confirming ? 'Merging…' : 'Merge'}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

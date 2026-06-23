@@ -698,8 +698,45 @@ export interface CreateCustomerRequest {
   invoicePortal?:       string | null;
   invoiceInstructions?: string | null;
   billingAddress?:      string | null;
+  /** When a customer with the same (case-insensitive) name already
+   *  exists in the org, POST /v1/customers rejects with 409
+   *  `duplicate_name` UNLESS this is true — i.e. the dispatcher saw the
+   *  "already exists" prompt and chose to create a separate record
+   *  anyway. */
+  force?:               boolean;
 }
 export interface CreateCustomerResponse { customer: Customer; }
+
+/** 409 body from POST /v1/customers when a same-name customer already
+ *  exists and `force` was not set. Lists the colliding record(s) so the
+ *  client can name them in the confirm prompt. */
+export interface DuplicateCustomerResponse {
+  error:    'duplicate_name';
+  existing: Customer[];
+}
+
+/** Body from DELETE /v1/customers/:id. The customer row is removed and
+ *  every load/invoice FK is nulled (ON DELETE SET NULL); loads keep the
+ *  readable broker name. `keptNameOnLoads` counts loads that had the
+ *  name backfilled because their denormalized `broker` field was empty. */
+export interface DeleteCustomerResponse {
+  deleted:         true;
+  id:              string;
+  keptNameOnLoads: number;
+}
+
+/** POST /v1/customers/:id/merge — fold the customer in the URL (source)
+ *  into `targetId` (kept), reassigning every load + invoice, then delete
+ *  the source. The source's name/aliases are added to the target's
+ *  alias list so rate-con matching still recognizes the old name. */
+export interface MergeCustomerRequest  { targetId: string; }
+export interface MergeCustomerResponse {
+  merged:        true;
+  sourceId:      string;
+  targetId:      string;
+  movedLoads:    number;
+  movedInvoices: number;
+}
 export interface UpdateCustomerRequest {
   name?:                string;
   shortName?:           string | null;

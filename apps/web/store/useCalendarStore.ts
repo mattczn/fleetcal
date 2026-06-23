@@ -10,7 +10,7 @@ import { DEFAULT_PROMPT_VARIABLES, PromptVariables } from '@/lib/prompt';
 import { getSupabase } from '@/lib/supabase';
 import { normalizePhone } from '@/lib/phone';
 import type { OrgData, DispatcherCreateInput, DispatcherUpdateInput } from '@/lib/db';
-import { fetchEventsInRange, fetchSavedLocations, createSavedLocation, updateSavedLocation, deleteSavedLocation, fetchDispatchers, createDispatcher, updateDispatcher, deleteDispatcher, fetchCustomers, createCustomer, updateCustomer, deleteCustomer, fetchTrailers, createTrailer, updateTrailer, deleteTrailer } from '@/lib/db';
+import { fetchEventsInRange, fetchSavedLocations, createSavedLocation, updateSavedLocation, deleteSavedLocation, fetchDispatchers, createDispatcher, updateDispatcher, deleteDispatcher, fetchCustomers, createCustomer, updateCustomer, deleteCustomer, mergeCustomer, DuplicateCustomerError, fetchTrailers, createTrailer, updateTrailer, deleteTrailer } from '@/lib/db';
 import { railway } from '@/lib/railway';
 import { buildCreateLoadBody, splitForUpdate, buildEventByIdUpdate } from '@/lib/loadFieldSplit';
 import { DUMMY_ASSETS, DUMMY_DRIVERS, DUMMY_EVENTS, DEMO_BASE_DATE } from '@/lib/dummy-data';
@@ -456,9 +456,13 @@ interface CalendarStore extends ModalState {
 
   customers: Customer[];
   fetchCustomers: () => Promise<void>;
-  addCustomer: (c: Omit<Customer, 'id'>) => Promise<Customer | null>;
+  addCustomer: (c: Omit<Customer, 'id'>, force?: boolean) => Promise<Customer | null>;
   updateCustomer: (id: string, updates: Partial<Omit<Customer, 'id'>>) => Promise<void>;
   removeCustomer: (id: string) => Promise<void>;
+  /** Fold `sourceId` into `targetId` — server reassigns every load +
+   *  invoice, then deletes the source. Drops the source from the store
+   *  on success. Throws on failure so the caller can surface it. */
+  mergeCustomer: (sourceId: string, targetId: string) => Promise<void>;
   addCustomerAlias: (id: string, alias: string) => Promise<void>;
   /** Append a contact to customer.contacts[] if no existing entry has
    *  the same email OR phone (case/whitespace-insensitive). No-op when
@@ -1020,13 +1024,34 @@ export const useCalendarStore = create<CalendarStore>()(
     const list = await fetchCustomers(orgId);
     set({ customers: list });
   },
-  addCustomer: async (c) => {
+  addCustomer: async (c, force = false) => {
     const { orgId } = get();
     if (!orgId) return null;
-    const created = await createCustomer(orgId, c);
+    let created: Customer | null;
+    try {
+      created = await createCustomer(orgId, c, force);
+    } catch (err) {
+      // Server rejected the insert because a same-name customer already
+      // exists. Confirm the dispatcher really wants a SEPARATE record,
+      // then retry forcing past the guard. This fires on EVERY create
+      // path (directory, load detail, EventModal, settings) because
+      // they all funnel through here. Decline → no-op.
+      if (err instanceof DuplicateCustomerError) {
+        const names = err.existing.map(e => e.name).filter(Boolean);
+        const list  = names.length ? ` (${[...new Set(names)].join(', ')})` : '';
+        const ok = typeof window !== 'undefined' && window.confirm(
+          `A customer named "${c.name}"${list} already exists.\n\nCreate a separate new customer with this name anyway?`,
+        );
+        if (!ok) return null;
+        created = await createCustomer(orgId, c, true);
+      } else {
+        throw err;
+      }
+    }
     if (!created) return null;
-    set((s) => ({ customers: [...s.customers, created].sort((a, b) => a.name.localeCompare(b.name)) }));
-    return created;
+    const made = created;
+    set((s) => ({ customers: [...s.customers, made].sort((a, b) => a.name.localeCompare(b.name)) }));
+    return made;
   },
   updateCustomer: async (id, updates) => {
     await updateCustomer(id, updates);
@@ -1039,6 +1064,15 @@ export const useCalendarStore = create<CalendarStore>()(
     } catch (err) {
       notifyDeleteError('Customer', err);
     }
+  },
+  mergeCustomer: async (sourceId, targetId) => {
+    // Server reassigns loads + invoices then deletes the source. Let
+    // failures throw so the merge UI can show them — a half-finished
+    // merge is worth flagging (unlike a delete). On success the source
+    // is gone; drop it from the store. Loads in the calendar reflect
+    // the new customer_id on their next fetch.
+    await mergeCustomer(sourceId, targetId);
+    set((s) => ({ customers: s.customers.filter(c => c.id !== sourceId) }));
   },
   addCustomerAlias: async (id, alias) => {
     const customer = get().customers.find(c => c.id === id);

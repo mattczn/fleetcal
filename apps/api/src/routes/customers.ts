@@ -16,6 +16,10 @@ import {
   type RefreshCustomerInvoicingResponse,
   type HarvestRateConFromPdfRequest,
   type HarvestRateConFromPdfResponse,
+  type DuplicateCustomerResponse,
+  type DeleteCustomerResponse,
+  type MergeCustomerRequest,
+  type MergeCustomerResponse,
   type ApiErrorResponse,
 } from "@fleetcal/types";
 
@@ -110,6 +114,32 @@ customers.post("/", requireCapability("customers.create"), async (c) => {
   if (!body.name) {
     return c.json({ error: "validation_failed", errors: ["name required"] } satisfies ApiErrorResponse, 400);
   }
+
+  // Duplicate-name guard. A carrier legitimately can have two distinct
+  // brokers with the same name (different MC, different region), so this
+  // is a confirm-prompt rather than a hard unique constraint: if a
+  // same-name customer already exists and the caller didn't pass
+  // `force`, return 409 with the colliding record(s) so the client can
+  // ask "create a separate one anyway?". Case-insensitive exact match
+  // on name; `%`/`_` escaped so a literal name with those chars doesn't
+  // become a wildcard.
+  if (body.force !== true) {
+    const esc = body.name.trim().replace(/[\\%_]/g, (m) => `\\${m}`);
+    const { data: dupes, error: dupErr } = await supabase
+      .from("customers")
+      .select(COLS)
+      .eq("org_id", orgId)
+      .ilike("name", esc);
+    if (dupErr) {
+      console.error("[POST /v1/customers] duplicate check failed:", dupErr);
+      return c.json({ error: "create_failed", detail: dupErr.message } satisfies ApiErrorResponse, 500);
+    }
+    const existing = ((dupes ?? []) as unknown as DbCustomerRow[]).map(rowToCustomer);
+    if (existing.length > 0) {
+      return c.json({ error: "duplicate_name", existing } satisfies DuplicateCustomerResponse, 409);
+    }
+  }
+
   const insert = {
     org_id:        orgId,
     name:          body.name,
@@ -188,6 +218,44 @@ customers.patch("/:id", requireCapability("customers.edit"), async (c) => {
 customers.delete("/:id", requireCapability("customers.delete"), async (c) => {
   const orgId = c.get("orgId");
   const id = c.req.param("id");
+
+  // Deleting a customer must NEVER blank the name off historical loads —
+  // it only severs the FK link. loads.customer_id is ON DELETE SET NULL,
+  // and loads.broker carries the denormalized name, which is normally
+  // populated whenever the load was linked to a customer. As a safety
+  // net, backfill broker from the customer name on any linked load whose
+  // broker is null before we delete, so nothing loses its readable name.
+  const { data: cust, error: lookErr } = await supabase
+    .from("customers")
+    .select("name")
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (lookErr) {
+    console.error("[DELETE /v1/customers/:id] lookup failed:", lookErr);
+    return c.json({ error: "delete_failed", detail: lookErr.message } satisfies ApiErrorResponse, 500);
+  }
+  const name = (cust as { name?: string } | null)?.name?.trim();
+
+  let keptNameOnLoads = 0;
+  if (name) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: patched, error: bfErr } = await (supabase as any)
+      .from("loads")
+      .update({ broker: name })
+      .eq("org_id", orgId)
+      .eq("customer_id", id)
+      .is("broker", null)
+      .select("id");
+    if (bfErr) {
+      console.error("[DELETE /v1/customers/:id] broker backfill failed:", bfErr);
+      // Non-fatal: the FK will still null and most loads already carry a
+      // broker string. Proceed with the delete.
+    } else {
+      keptNameOnLoads = (patched ?? []).length;
+    }
+  }
+
   const { error } = await supabase
     .from("customers")
     .delete()
@@ -197,7 +265,122 @@ customers.delete("/:id", requireCapability("customers.delete"), async (c) => {
     console.error("[DELETE /v1/customers/:id] failed:", error);
     return c.json({ error: "delete_failed", detail: error.message } satisfies ApiErrorResponse, 500);
   }
-  return c.body(null, 204);
+  // FK ON DELETE SET NULL handles loads.customer_id + invoices.customer_id.
+  return c.json({ deleted: true, id, keptNameOnLoads } satisfies DeleteCustomerResponse);
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// POST /v1/customers/:id/merge — fold this customer (source) into a
+// target, reassigning every load + invoice, then delete the source.
+// ─────────────────────────────────────────────────────────────────────────
+customers.post("/:id/merge", requireCapability("customers.edit"), async (c) => {
+  const orgId = c.get("orgId");
+  const sourceId = c.req.param("id");
+  let body: MergeCustomerRequest;
+  try {
+    body = await c.req.json<MergeCustomerRequest>();
+  } catch {
+    return c.json({ error: "validation_failed", errors: ["invalid json"] } satisfies ApiErrorResponse, 400);
+  }
+  const targetId = body.targetId;
+  if (!targetId) {
+    return c.json({ error: "validation_failed", errors: ["targetId required"] } satisfies ApiErrorResponse, 400);
+  }
+  if (targetId === sourceId) {
+    return c.json({ error: "validation_failed", errors: ["cannot merge a customer into itself"] } satisfies ApiErrorResponse, 400);
+  }
+
+  // Both must exist in this org.
+  const { data: rows, error: lookErr } = await supabase
+    .from("customers")
+    .select(COLS)
+    .eq("org_id", orgId)
+    .in("id", [sourceId, targetId]);
+  if (lookErr) {
+    console.error("[POST /v1/customers/:id/merge] lookup failed:", lookErr);
+    return c.json({ error: "merge_failed", detail: lookErr.message } satisfies ApiErrorResponse, 500);
+  }
+  const found  = (rows ?? []) as unknown as DbCustomerRow[];
+  const source = found.find((r) => r.id === sourceId);
+  const target = found.find((r) => r.id === targetId);
+  if (!source || !target) {
+    return c.json({ error: "not_found", detail: "source or target customer not found in this org" } satisfies ApiErrorResponse, 404);
+  }
+
+  // Reassign every FK from source → target. There is no DB-level
+  // transaction across these PostgREST calls, but the operation is safe
+  // to re-run: if a later step fails, the rows already moved stay moved
+  // and the source survives, so a retry simply finishes the job. No
+  // orphans, no data loss.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sb = supabase as any;
+  const { data: movedL, error: lErr } = await sb
+    .from("loads")
+    .update({ customer_id: targetId })
+    .eq("org_id", orgId)
+    .eq("customer_id", sourceId)
+    .select("id");
+  if (lErr) {
+    console.error("[merge] reassign loads failed:", lErr);
+    return c.json({ error: "merge_failed", detail: lErr.message } satisfies ApiErrorResponse, 500);
+  }
+  const { data: movedI, error: iErr } = await sb
+    .from("invoices")
+    .update({ customer_id: targetId })
+    .eq("org_id", orgId)
+    .eq("customer_id", sourceId)
+    .select("id");
+  if (iErr) {
+    console.error("[merge] reassign invoices failed:", iErr);
+    return c.json({ error: "merge_failed", detail: iErr.message } satisfies ApiErrorResponse, 500);
+  }
+
+  // Fold the source's name + short name + aliases into the target's
+  // alias list so future rate-con parsing still recognizes the old
+  // broker name. Dedup case-insensitively against the target's own name
+  // and existing aliases.
+  const have = new Set<string>([
+    target.name.trim().toLowerCase(),
+    ...(target.aliases ?? []).map((a) => a.trim().toLowerCase()),
+  ]);
+  const additions: string[] = [];
+  for (const cand of [source.name, source.short_name, ...(source.aliases ?? [])]) {
+    const v = (cand ?? "").trim();
+    if (!v) continue;
+    const lc = v.toLowerCase();
+    if (have.has(lc)) continue;
+    have.add(lc);
+    additions.push(v);
+  }
+  if (additions.length > 0) {
+    const merged = [...(target.aliases ?? []), ...additions];
+    const { error: aErr } = await sb
+      .from("customers")
+      .update({ aliases: merged })
+      .eq("id", targetId)
+      .eq("org_id", orgId);
+    if (aErr) console.error("[merge] alias fold failed (non-fatal):", aErr);
+  }
+
+  // Source is no longer referenced anywhere — delete it.
+  const { error: dErr } = await supabase
+    .from("customers")
+    .delete()
+    .eq("id", sourceId)
+    .eq("org_id", orgId);
+  if (dErr) {
+    console.error("[merge] delete source failed:", dErr);
+    return c.json({ error: "merge_failed", detail: dErr.message } satisfies ApiErrorResponse, 500);
+  }
+
+  const res: MergeCustomerResponse = {
+    merged:        true,
+    sourceId,
+    targetId,
+    movedLoads:    (movedL ?? []).length,
+    movedInvoices: (movedI ?? []).length,
+  };
+  return c.json(res);
 });
 
 // ─────────────────────────────────────────────────────────────────────────

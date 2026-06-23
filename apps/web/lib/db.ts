@@ -1,6 +1,18 @@
 'use client';
 
-import { railway } from './railway';
+import { railway, RailwayError } from './railway';
+import type { Customer as CustomerType, MergeCustomerResponse, DuplicateCustomerResponse } from '@fleetcal/types';
+
+/** Thrown by createCustomer when the API rejects the insert because a
+ *  same-name customer already exists (409 `duplicate_name`) and `force`
+ *  was not set. Carries the colliding records so the caller can name
+ *  them in a confirm prompt, then retry with force=true. */
+export class DuplicateCustomerError extends Error {
+  constructor(public existing: CustomerType[]) {
+    super('duplicate_name');
+    this.name = 'DuplicateCustomerError';
+  }
+}
 import type { DeletedEvent } from '@/store/useCalendarStore';
 import type { Asset, Driver, CalendarEvent, SavedLocation, Dispatcher, Customer, Trailer } from './types';
 
@@ -190,7 +202,7 @@ export async function fetchCustomers(_orgId: string): Promise<Customer[]> {
   catch (err) { console.error('fetchCustomers:', err); return []; }
 }
 
-export async function createCustomer(_orgId: string, c: Omit<Customer, 'id'>): Promise<Customer | null> {
+export async function createCustomer(_orgId: string, c: Omit<Customer, 'id'>, force = false): Promise<Customer | null> {
   try {
     const { customer } = await railway.createCustomer({
       name:                c.name,
@@ -208,9 +220,31 @@ export async function createCustomer(_orgId: string, c: Omit<Customer, 'id'>): P
       invoicePortal:       c.invoicePortal       ?? null,
       invoiceInstructions: c.invoiceInstructions ?? null,
       billingAddress:      c.billingAddress      ?? null,
+      ...(force ? { force: true } : {}),
     });
     return customer;
-  } catch (err) { console.error('createCustomer:', err); return null; }
+  } catch (err) {
+    // 409 duplicate_name → surface as a typed error so the caller can
+    // prompt "create a separate one anyway?" and retry with force=true.
+    // Every other failure keeps the historical swallow-and-return-null
+    // behavior so existing call sites don't suddenly start throwing.
+    if (err instanceof RailwayError && err.status === 409) {
+      const detail = err.detail as DuplicateCustomerResponse | null;
+      if (detail?.error === 'duplicate_name') {
+        throw new DuplicateCustomerError(detail.existing ?? []);
+      }
+    }
+    console.error('createCustomer:', err);
+    return null;
+  }
+}
+
+/** Merge `sourceId` into `targetId`: every load + invoice is reassigned
+ *  to the target and the source customer is deleted. Throws on failure
+ *  so the UI can surface it (unlike delete, a half-finished merge is
+ *  worth flagging). */
+export async function mergeCustomer(sourceId: string, targetId: string): Promise<MergeCustomerResponse> {
+  return railway.mergeCustomer(sourceId, targetId);
 }
 
 export async function updateCustomer(id: string, updates: Partial<Omit<Customer, 'id'>>): Promise<void> {
