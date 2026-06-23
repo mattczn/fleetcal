@@ -7,7 +7,7 @@ import type { Load, Stop } from "@/lib/types";
 import { fetchOrgSettings } from "@/lib/api/orgSettings";
 import { useDriverSession } from "@/lib/useDriverSession";
 import {
-  RelayChip, NonRevChip, StatusPill,
+  RelayChip, NonRevChip,
   fmtTimeRangeShort, fmtStopAppt, fmtShortDate, fmtScheduleType,
   fmtRelayHandoffTime, relayHandoffAction,
 } from "@/lib/loadCard";
@@ -149,7 +149,12 @@ export function LoadCard({ load }: Props) {
           ) : null}
         </View>
         <View style={{ alignItems: "flex-end", gap: 6 }}>
-          <StatusPill status={load.status} size="small" />
+          {/* Status pill (Assigned / En Route / Picked Up / Delivered)
+              was here. Dropped 2026-06-22 — too noisy on the card; the
+              driver already knows the status from context (active vs
+              upcoming vs recent tabs filter on it). Pending-nudge bell
+              counter + relay / non-rev chips stay since those convey
+              info the tab filter doesn't carry. */}
           {pendingCount > 0 ? (
             <View style={{ flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, height: 21, borderRadius: 7, backgroundColor: C.red }}>
               <Bell size={11} color="#ffffff" strokeWidth={2.6} />

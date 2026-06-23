@@ -27,14 +27,8 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import { supabase } from "@/lib/supabase";
 import { railway, type DriverMeResponse } from "@/lib/railway";
 import type { DriverDocument, DriverDocumentKind } from "@fleetcal/types";
-import {
-  NOTIFICATION_RULE_KEYS,
-  NOTIFICATION_RULE_LABEL,
-  type NotificationRuleKey,
-} from "@fleetcal/types";
 import { useOrgTz, describeTz } from "@/lib/orgTz";
 import { useTheme } from "@/lib/ThemeProvider";
-import { useModules } from "@/lib/useModules";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
   fontFamily:
@@ -118,12 +112,6 @@ function isoToDisplay(iso?: string): string {
 // ── Screen ──────────────────────────────────────────────────────────────
 
 export default function ProfileScreen() {
-  // `reporting` (= Fuel OR Maintenance modules enabled) only gates the
-  // Notifications section now. License, Compliance, and Documents all
-  // ship in MVP — small carriers still want their drivers carrying a
-  // photo of the CDL + med card from day one, even before the reporting
-  // bundle is unlocked.
-  const { reporting } = useModules();
   const { C, SHADOW, ACCENT, mode, setMode } = useTheme();
   const [me,         setMe]         = useState<DriverMeResponse | null>(null);
   const [docs,       setDocs]       = useState<DriverDocument[]>([]);
@@ -416,6 +404,20 @@ export default function ProfileScreen() {
             </View>
           ) : (
             <>
+              {/* Edit / Save / Discard action bar — top-of-screen
+                  action so the driver doesn't have to hunt for it.
+                  Generous breathing room around it (mt 4, mb 12) so it
+                  reads as a screen-level action, not a Section item. */}
+              <View style={{ marginTop: 4, marginBottom: 12 }}>
+                <EditActionBar
+                  editing={editing}
+                  saving={saving}
+                  onEdit={() => setEditing(true)}
+                  onSave={saveAllEdits}
+                  onDiscard={discardEdits}
+                />
+              </View>
+
               {/* Appearance — in-app light/dark toggle */}
               <SectionHeader label="Appearance" />
               <Card>
@@ -446,18 +448,6 @@ export default function ProfileScreen() {
                   </TouchableOpacity>
                 </View>
               </Card>
-
-              {/* Edit / Save / Discard action bar — anchors the whole
-                  form into either view or edit mode. Sticky at the top
-                  of the scrollable content so the driver can save / bail
-                  without scrolling back. */}
-              <EditActionBar
-                editing={editing}
-                saving={saving}
-                onEdit={() => setEditing(true)}
-                onSave={saveAllEdits}
-                onDiscard={discardEdits}
-              />
 
               {/* Account */}
               <SectionHeader label="Account" />
@@ -512,10 +502,7 @@ export default function ProfileScreen() {
                 </FormGrid>
               </Card>
 
-              {/* License — ships in MVP. Compliance fields below also
-                  in MVP. Notifications stay gated on the reporting
-                  module (Fuel / Maintenance) since those toggles only
-                  matter when those modules generate auto-pushes. */}
+              {/* License + Compliance + Documents all in MVP. */}
               <SectionHeader label="License" />
               <Card>
                 <FormGrid>
@@ -617,15 +604,11 @@ export default function ProfileScreen() {
                 </View>
               </Card>
 
-              {reporting ? (
-              <>
-              {/* Notifications */}
-              <SectionHeader label="Notifications" />
-              <Card>
-                <NotificationsPrefs />
-              </Card>
-              </>
-              ) : null}
+              {/* Notifications section removed 2026-06-22 — per-rule
+                  driver overrides weren't actually wired up end-to-end
+                  for the auto-pushes that landed on the phone; the
+                  toggles were UI-only. Until the rules get connected
+                  to the cron, drivers don't see them. */}
 
               {/* Sign out */}
               <TouchableOpacity onPress={handleSignOut}
@@ -1128,121 +1111,3 @@ function DocRow({
   );
 }
 
-/**
- * Per-rule opt-out toggles for driver-facing auto notifications. A
- * toggle's state reflects the driver's explicit override; missing
- * override means the rule follows the org default (rendered as ON
- * — drivers see "on by default, tap to silence"). Manual dispatcher
- * nudges bypass these and always send.
- */
-function NotificationsPrefs() {
-  const { C, ACCENT } = useTheme();
-  const [prefs, setPrefs] = useState<Record<string, boolean> | null>(null);
-  const [busyKey, setBusyKey] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    railway.getNotificationPrefs()
-      .then(({ prefs: p }) => { if (!cancelled) setPrefs(p); })
-      .catch(() => { if (!cancelled) setPrefs({}); });
-    return () => { cancelled = true; };
-  }, []);
-
-  // For UI purposes: "on" = either no override OR override=true.
-  // Tapping flips between explicit-off and clear-override (which is
-  // back to on by default).
-  function isOn(ruleKey: string): boolean {
-    if (prefs == null) return true;
-    const explicit = prefs[ruleKey];
-    if (explicit === false) return false;
-    return true;
-  }
-
-  async function toggle(ruleKey: NotificationRuleKey) {
-    if (prefs == null || busyKey) return;
-    const currentlyOn = isOn(ruleKey);
-    setBusyKey(ruleKey);
-    try {
-      // currentlyOn → switch to explicit off.
-      // currently off → clear the override so it follows org default again.
-      const { prefs: next } = await railway.setNotificationPref(
-        ruleKey,
-        currentlyOn ? false : null,
-      );
-      setPrefs(next);
-    } catch (err) {
-      console.error("[NotificationsPrefs] save failed:", err);
-      Alert.alert("Couldn't save", "Try again in a moment.");
-    } finally {
-      setBusyKey(null);
-    }
-  }
-
-  if (prefs == null) {
-    return (
-      <View style={{ paddingVertical: 18, alignItems: "center" }}>
-        <ActivityIndicator color={ACCENT} />
-      </View>
-    );
-  }
-
-  return (
-    <View style={{ paddingVertical: 6 }}>
-      <Text style={[txt(500), { fontSize: 12, color: C.t3, marginBottom: 12 }]}>
-        Choose which automatic alerts you'll get. Your dispatcher can still
-        send you direct messages — those always come through.
-      </Text>
-      {NOTIFICATION_RULE_KEYS.map((ruleKey, i) => (
-        <View
-          key={ruleKey}
-          style={{
-            flexDirection: "row",
-            alignItems: "flex-start",
-            paddingVertical: 12,
-            borderTopWidth: i === 0 ? 0 : 1,
-            borderTopColor: C.borderSoft,
-            gap: 12,
-          }}
-        >
-          <View style={{ flex: 1, justifyContent: "center" }}>
-            <Text style={[txt(700), { fontSize: 14, color: C.t1 }]}>
-              {NOTIFICATION_RULE_LABEL[ruleKey]}
-            </Text>
-          </View>
-          <PrefSwitch
-            value={isOn(ruleKey)}
-            disabled={busyKey != null}
-            onChange={() => void toggle(ruleKey)}
-          />
-        </View>
-      ))}
-    </View>
-  );
-}
-
-/** Minimal on/off pill. Tapping toggles; disabled dims. */
-function PrefSwitch({
-  value, disabled, onChange,
-}: { value: boolean; disabled: boolean; onChange: () => void }) {
-  const { C, ACCENT } = useTheme();
-  return (
-    <TouchableOpacity
-      onPress={onChange}
-      disabled={disabled}
-      style={{
-        width: 50, height: 28, borderRadius: 14,
-        backgroundColor: value ? ACCENT : C.borderStrong,
-        opacity: disabled ? 0.5 : 1,
-        padding: 2,
-        justifyContent: "center",
-      }}
-      activeOpacity={0.7}
-    >
-      <View style={{
-        width: 24, height: 24, borderRadius: 12,
-        backgroundColor: "#ffffff",
-        alignSelf: value ? "flex-end" : "flex-start",
-      }} />
-    </TouchableOpacity>
-  );
-}
