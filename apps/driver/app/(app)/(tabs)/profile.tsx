@@ -19,12 +19,13 @@ import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
 import {
   LogOut, User, FileText, Trash2, X, Share2, Eye, Plus, Calendar as CalendarIcon, ChevronDown,
+  Pencil, Check,
 } from "lucide-react-native";
 import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { supabase } from "@/lib/supabase";
-import { railway, type DriverProfileUpdate, type DriverMeResponse } from "@/lib/railway";
+import { railway, type DriverMeResponse } from "@/lib/railway";
 import type { DriverDocument, DriverDocumentKind } from "@fleetcal/types";
 import {
   NOTIFICATION_RULE_KEYS,
@@ -153,6 +154,66 @@ export default function ProfileScreen() {
   const [pickerOpen,      setPickerOpen]      = useState<'licenseExp' | 'medicalCardExp' | 'dob' | null>(null);
   const [statePickerOpen, setStatePickerOpen] = useState<'addr' | 'license' | null>(null);
 
+  // ── Edit mode ─────────────────────────────────────────────────────
+  // Profile is read-only by default with an Edit button in the
+  // sticky action bar at the top. Tapping Edit unlocks the inputs
+  // and swaps Edit for Save / Discard. The previous on-blur
+  // auto-save pattern was discarded — it surprised drivers who tabbed
+  // through fields they hadn't meant to change and got silent writes.
+  const [editing, setEditing] = useState(false);
+  const [saving,  setSaving]  = useState(false);
+
+  // Reset all editable form state from a fresh `me` snapshot. Used
+  // when Discard is tapped, when /me reloads after save, and on
+  // initial hydration.
+  function resetFromMe(src: DriverMeResponse) {
+    setFirstName(src.firstName ?? "");
+    setLastName(src.lastName ?? "");
+    setPhone(src.phone ?? "");
+    setEmail(src.email ?? "");
+    setAddr(parseAddress(src.address));
+    setLicenseNumber(src.licenseNumber ?? "");
+    setLicenseState(src.licenseState ?? "");
+    setLicenseExp(src.licenseExp);
+    setMedCardExp(src.medicalCardExp);
+    setDob(src.dob);
+  }
+
+  function discardEdits() {
+    if (me) resetFromMe(me);
+    setPickerOpen(null);
+    setStatePickerOpen(null);
+    setEditing(false);
+  }
+
+  async function saveAllEdits() {
+    if (saving) return;
+    setSaving(true);
+    try {
+      // One PATCH with every editable field. Server-side keeps untouched
+      // values unchanged when the same value comes back in the payload,
+      // so we don't need to compute a diff here.
+      await railway.updateMe({
+        firstName:      firstName.trim() || null,
+        lastName:       lastName.trim()  || null,
+        phone:          phone.trim()     || null,
+        email:          email.trim()     || null,
+        address:        joinAddress(addr),
+        licenseNumber:  licenseNumber.trim() || null,
+        licenseState:   licenseState || null,
+        licenseExp:     licenseExp ?? null,
+        medicalCardExp: medCardExp ?? null,
+        dob:            dob ?? null,
+      });
+      await loadAll();
+      setEditing(false);
+    } catch (err) {
+      Alert.alert("Save failed", (err as Error).message ?? "Something went wrong.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   const loadAll = useCallback(async () => {
     try {
       const [meRes, docsRes] = await Promise.all([
@@ -183,38 +244,6 @@ export default function ProfileScreen() {
   }, []);
 
   useEffect(() => { void loadAll(); }, [loadAll]);
-
-  /**
-   * Save a partial patch to /me. On failure, rolls local form state
-   * back from the last known-good `me` so the field doesn't keep
-   * showing the rejected value (which made drivers walk away thinking
-   * they'd saved when they hadn't).
-   *
-   * Caller passes `revert` describing how to reset the relevant local
-   * state from `me` — keeps this function generic across the ~10
-   * field-level blur handlers that call it.
-   */
-  async function saveFields(
-    patch: DriverProfileUpdate,
-    opts: { refresh?: boolean; revert?: (last: DriverMeResponse) => void } = {},
-  ) {
-    try {
-      await railway.updateMe(patch);
-      // Refresh after name changes so the header reflects the
-      // computed full name (server combines first + last).
-      if (opts.refresh) await loadAll();
-    } catch (err) {
-      const msg = (err as Error).message ?? "Save failed";
-      Alert.alert(
-        "Save failed",
-        `${msg}\n\nThe field has been reverted.`,
-        [{ text: "OK" }],
-      );
-      // Roll the form back to the last-known server value so the
-      // driver isn't staring at a value the server already rejected.
-      if (opts.revert && me) opts.revert(me);
-    }
-  }
 
   // Document upload — single flat flow: pick category, then source.
   async function startUpload() {
@@ -415,6 +444,18 @@ export default function ProfileScreen() {
                 </View>
               </Card>
 
+              {/* Edit / Save / Discard action bar — anchors the whole
+                  form into either view or edit mode. Sticky at the top
+                  of the scrollable content so the driver can save / bail
+                  without scrolling back. */}
+              <EditActionBar
+                editing={editing}
+                saving={saving}
+                onEdit={() => setEditing(true)}
+                onSave={saveAllEdits}
+                onDiscard={discardEdits}
+              />
+
               {/* Account */}
               <SectionHeader label="Account" />
               <Card>
@@ -422,75 +463,48 @@ export default function ProfileScreen() {
                   <FormCol>
                     <FieldLabel label="First Name" />
                     <TextField value={firstName} onChangeText={setFirstName}
-                      autoCapitalize="words"
-                      onBlur={() => saveFields(
-                        { firstName: firstName.trim() || null },
-                        { refresh: true, revert: (last) => setFirstName(last.firstName ?? "") },
-                      )} />
+                      autoCapitalize="words" editable={editing} />
                   </FormCol>
                   <FormCol>
                     <FieldLabel label="Last Name" />
                     <TextField value={lastName} onChangeText={setLastName}
-                      autoCapitalize="words"
-                      onBlur={() => saveFields(
-                        { lastName: lastName.trim() || null },
-                        { refresh: true, revert: (last) => setLastName(last.lastName ?? "") },
-                      )} />
+                      autoCapitalize="words" editable={editing} />
                   </FormCol>
                 </FormGrid>
                 <FieldLabel label="Phone" />
-                <TextField value={phone} onChangeText={setPhone} keyboardType="phone-pad"
-                  onBlur={() => saveFields(
-                    { phone: phone.trim() || null },
-                    { revert: (last) => setPhone(last.phone ?? "") },
-                  )} />
+                <TextField value={phone} onChangeText={setPhone}
+                  keyboardType="phone-pad" editable={editing} />
                 <FieldLabel label="Email" />
-                <TextField value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none"
-                  onBlur={() => saveFields(
-                    { email: email.trim() || null },
-                    { revert: (last) => setEmail(last.email ?? "") },
-                  )} />
+                <TextField value={email} onChangeText={setEmail}
+                  keyboardType="email-address" autoCapitalize="none" editable={editing} />
               </Card>
 
               {/* Address */}
               <SectionHeader label="Address" />
               <Card>
                 <FieldLabel label="Street" />
-                <TextField value={addr.street} onChangeText={(v) => setAddr({ ...addr, street: v })}
-                  onBlur={() => saveFields(
-                    { address: joinAddress(addr) },
-                    { revert: (last) => setAddr(parseAddress(last.address)) },
-                  )} />
+                <TextField value={addr.street}
+                  onChangeText={(v) => setAddr({ ...addr, street: v })}
+                  editable={editing} />
                 <FieldLabel label="City" />
-                <TextField value={addr.city} onChangeText={(v) => setAddr({ ...addr, city: v })}
-                  onBlur={() => saveFields(
-                    { address: joinAddress(addr) },
-                    { revert: (last) => setAddr(parseAddress(last.address)) },
-                  )} />
+                <TextField value={addr.city}
+                  onChangeText={(v) => setAddr({ ...addr, city: v })}
+                  editable={editing} />
                 <FormGrid>
                   <FormCol>
                     <FieldLabel label="State" />
                     <StateField value={addr.state}
                       open={statePickerOpen === 'addr'}
                       setOpen={(v) => setStatePickerOpen(v ? 'addr' : null)}
-                      onChange={(s) => {
-                        const next = { ...addr, state: s };
-                        setAddr(next);
-                        void saveFields(
-                          { address: joinAddress(next) },
-                          { revert: (last) => setAddr(parseAddress(last.address)) },
-                        );
-                      }}
+                      onChange={(s) => setAddr({ ...addr, state: s })}
+                      editable={editing}
                     />
                   </FormCol>
                   <FormCol>
                     <FieldLabel label="Zip" />
-                    <TextField value={addr.zip} onChangeText={(v) => setAddr({ ...addr, zip: v.replace(/[^\d-]/g, "").slice(0, 10) })}
-                      keyboardType="number-pad"
-                      onBlur={() => saveFields(
-                        { address: joinAddress(addr) },
-                        { revert: (last) => setAddr(parseAddress(last.address)) },
-                      )} />
+                    <TextField value={addr.zip}
+                      onChangeText={(v) => setAddr({ ...addr, zip: v.replace(/[^\d-]/g, "").slice(0, 10) })}
+                      keyboardType="number-pad" editable={editing} />
                   </FormCol>
                 </FormGrid>
               </Card>
@@ -504,39 +518,25 @@ export default function ProfileScreen() {
                   <FormCol style={{ flex: 2 }}>
                     <FieldLabel label="License #" />
                     <TextField value={licenseNumber} onChangeText={setLicenseNumber}
-                      autoCapitalize="characters"
-                      onBlur={() => saveFields(
-                        { licenseNumber: licenseNumber.trim() || null },
-                        { revert: (last) => setLicenseNumber(last.licenseNumber ?? "") },
-                      )} />
+                      autoCapitalize="characters" editable={editing} />
                   </FormCol>
                   <FormCol>
                     <FieldLabel label="State" />
                     <StateField value={licenseState}
                       open={statePickerOpen === 'license'}
                       setOpen={(v) => setStatePickerOpen(v ? 'license' : null)}
-                      onChange={(s) => {
-                        setLicenseState(s);
-                        void saveFields(
-                          { licenseState: s || null },
-                          { revert: (last) => setLicenseState(last.licenseState ?? "") },
-                        );
-                      }}
+                      onChange={(s) => setLicenseState(s)}
+                      editable={editing}
                     />
                   </FormCol>
                 </FormGrid>
                 <FieldLabel label="Expiration" />
                 <DateField
                   value={licenseExp}
-                  onChange={(iso) => {
-                    setLicenseExp(iso);
-                    void saveFields(
-                      { licenseExp: iso ?? null },
-                      { revert: (last) => setLicenseExp(last.licenseExp) },
-                    );
-                  }}
+                  onChange={(iso) => setLicenseExp(iso)}
                   open={pickerOpen === 'licenseExp'}
                   setOpen={(v) => setPickerOpen(v ? 'licenseExp' : null)}
+                  editable={editing}
                 />
               </Card>
 
@@ -546,30 +546,20 @@ export default function ProfileScreen() {
                 <FieldLabel label="Medical Card Expiration" />
                 <DateField
                   value={medCardExp}
-                  onChange={(iso) => {
-                    setMedCardExp(iso);
-                    void saveFields(
-                      { medicalCardExp: iso ?? null },
-                      { revert: (last) => setMedCardExp(last.medicalCardExp) },
-                    );
-                  }}
+                  onChange={(iso) => setMedCardExp(iso)}
                   open={pickerOpen === 'medicalCardExp'}
                   setOpen={(v) => setPickerOpen(v ? 'medicalCardExp' : null)}
+                  editable={editing}
                 />
                 <FieldLabel label="Date of Birth" />
                 <DateField
                   value={dob}
-                  onChange={(iso) => {
-                    setDob(iso);
-                    void saveFields(
-                      { dob: iso ?? null },
-                      { revert: (last) => setDob(last.dob) },
-                    );
-                  }}
+                  onChange={(iso) => setDob(iso)}
                   open={pickerOpen === 'dob'}
                   setOpen={(v) => setPickerOpen(v ? 'dob' : null)}
                   /* DOB is bounded — no future dates. */
                   maximumDate={new Date()}
+                  editable={editing}
                 />
               </Card>
 
@@ -765,6 +755,85 @@ function DriverDocumentViewer({ doc, onClose }: { doc: DriverDocument | null; on
 
 // ── Subcomponents ───────────────────────────────────────────────────────
 
+/**
+ * Edit / Save / Discard action bar. Sits above the form sections,
+ * controls the read-only ↔ edit toggle, and surfaces the all-at-once
+ * save flow. Profile is read-only by default; the driver taps Edit
+ * to unlock the fields and gets explicit commit (Save) or bail
+ * (Discard) buttons in return.
+ */
+function EditActionBar({
+  editing, saving, onEdit, onSave, onDiscard,
+}: {
+  editing:    boolean;
+  saving:     boolean;
+  onEdit:     () => void;
+  onSave:     () => void;
+  onDiscard:  () => void;
+}) {
+  const { C, ACCENT } = useTheme();
+  if (!editing) {
+    return (
+      <View style={{ flexDirection: "row", justifyContent: "flex-end", marginBottom: 4 }}>
+        <TouchableOpacity
+          onPress={onEdit}
+          activeOpacity={0.7}
+          style={{
+            flexDirection: "row", alignItems: "center", gap: 6,
+            paddingHorizontal: 14, paddingVertical: 8,
+            borderRadius: 999,
+            backgroundColor: C.blueBg,
+          }}
+        >
+          <Pencil size={13} color={ACCENT} strokeWidth={2.4} />
+          <Text style={[txt(700), { fontSize: 13, color: ACCENT }]}>Edit Profile</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+  return (
+    <View style={{ flexDirection: "row", gap: 8, marginBottom: 4 }}>
+      <TouchableOpacity
+        onPress={onDiscard}
+        disabled={saving}
+        activeOpacity={0.7}
+        style={{
+          flex: 1,
+          flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
+          paddingVertical: 10,
+          borderRadius: 999,
+          backgroundColor: C.surfaceSunk,
+          borderWidth: 1, borderColor: C.border,
+          opacity: saving ? 0.5 : 1,
+        }}
+      >
+        <X size={14} color={C.t2} strokeWidth={2.4} />
+        <Text style={[txt(700), { fontSize: 13, color: C.t2 }]}>Discard</Text>
+      </TouchableOpacity>
+      <TouchableOpacity
+        onPress={onSave}
+        disabled={saving}
+        activeOpacity={0.7}
+        style={{
+          flex: 1,
+          flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
+          paddingVertical: 10,
+          borderRadius: 999,
+          backgroundColor: ACCENT,
+          opacity: saving ? 0.6 : 1,
+        }}
+      >
+        {saving
+          ? <ActivityIndicator color="#fff" />
+          : <Check size={14} color="#fff" strokeWidth={2.4} />}
+        <Text style={[txt(800), { fontSize: 13, color: "#fff", letterSpacing: 0.2 }]}>
+          {saving ? "Saving…" : "Save"}
+        </Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
 function SectionHeader({ label }: { label: string }) {
   const { C } = useTheme();
   return (
@@ -808,33 +877,38 @@ function FieldLabel({ label }: { label: string }) {
 interface TextFieldProps {
   value: string;
   onChangeText: (v: string) => void;
-  onBlur?: () => void;
   placeholder?: string;
   keyboardType?: "default" | "email-address" | "number-pad" | "phone-pad" | "decimal-pad";
   autoCapitalize?: "none" | "sentences" | "words" | "characters";
   maxLength?: number;
+  /** When false, the input is read-only — tap does nothing, keyboard
+   *  doesn't appear, and the border softens so the screen reads as
+   *  view-mode. Defaults to true so older callers keep behaving. */
+  editable?: boolean;
 }
 
 function TextField({
-  value, onChangeText, onBlur, placeholder, keyboardType, autoCapitalize, maxLength,
+  value, onChangeText, placeholder, keyboardType, autoCapitalize, maxLength,
+  editable = true,
 }: TextFieldProps) {
   const { C } = useTheme();
   return (
     <TextInput
       value={value}
       onChangeText={onChangeText}
-      onBlur={onBlur}
       placeholder={placeholder}
       placeholderTextColor={C.t4}
       keyboardType={keyboardType ?? "default"}
       autoCapitalize={autoCapitalize ?? "sentences"}
       maxLength={maxLength}
+      editable={editable}
       style={[
         txt(600),
         {
-          backgroundColor: C.surface,
+          backgroundColor: editable ? C.surface : C.surfaceSunk,
           borderRadius: 10,
-          borderWidth: 1, borderColor: C.border,
+          borderWidth: 1,
+          borderColor: editable ? C.border : C.borderSoft,
           paddingHorizontal: 12, paddingVertical: 10,
           fontSize: 15, color: C.t1,
           marginBottom: 4,
@@ -846,13 +920,14 @@ function TextField({
 
 // Native date picker. iOS shows in a sheet, Android in a dialog.
 function DateField({
-  value, onChange, open, setOpen, maximumDate,
+  value, onChange, open, setOpen, maximumDate, editable = true,
 }: {
   value:        string | undefined;     // ISO YYYY-MM-DD
   onChange:     (iso: string | undefined) => void;
   open:         boolean;
   setOpen:      (v: boolean) => void;
   maximumDate?: Date;
+  editable?:    boolean;
 }) {
   const { C, ACCENT } = useTheme();
   const display = isoToDisplay(value);
@@ -866,20 +941,22 @@ function DateField({
 
   return (
     <>
-      <TouchableOpacity onPress={() => setOpen(!open)}
-        activeOpacity={0.7}
+      <TouchableOpacity
+        onPress={() => { if (editable) setOpen(!open); }}
+        activeOpacity={editable ? 0.7 : 1}
         style={{
           flexDirection: "row", alignItems: "center", justifyContent: "space-between",
-          backgroundColor: C.surface,
+          backgroundColor: editable ? C.surface : C.surfaceSunk,
           borderRadius: 10,
-          borderWidth: 1, borderColor: C.border,
+          borderWidth: 1,
+          borderColor: editable ? C.border : C.borderSoft,
           paddingHorizontal: 12, paddingVertical: 12,
           marginBottom: 4,
         }}>
         <Text style={[txt(display ? 700 : 500), { fontSize: 15, color: display ? C.t1 : C.t4 }]}>
-          {display || "Select date"}
+          {display || (editable ? "Select date" : "—")}
         </Text>
-        <CalendarIcon size={16} color={C.t3} />
+        {editable && <CalendarIcon size={16} color={C.t3} />}
       </TouchableOpacity>
       {open && Platform.OS === 'ios' && (
         <Modal transparent animationType="slide" visible onRequestClose={() => setOpen(false)}>
@@ -924,30 +1001,33 @@ function DateField({
 // visual chrome as DateField (picker row → modal sheet) so the form
 // reads consistently.
 function StateField({
-  value, onChange, open, setOpen,
+  value, onChange, open, setOpen, editable = true,
 }: {
   value: string;
   onChange: (next: string) => void;
   open: boolean;
   setOpen: (v: boolean) => void;
+  editable?: boolean;
 }) {
   const { C, ACCENT } = useTheme();
   return (
     <>
-      <TouchableOpacity onPress={() => setOpen(!open)}
-        activeOpacity={0.7}
+      <TouchableOpacity
+        onPress={() => { if (editable) setOpen(!open); }}
+        activeOpacity={editable ? 0.7 : 1}
         style={{
           flexDirection: "row", alignItems: "center", justifyContent: "space-between",
-          backgroundColor: C.surface,
+          backgroundColor: editable ? C.surface : C.surfaceSunk,
           borderRadius: 10,
-          borderWidth: 1, borderColor: C.border,
+          borderWidth: 1,
+          borderColor: editable ? C.border : C.borderSoft,
           paddingHorizontal: 12, paddingVertical: 12,
           marginBottom: 4,
         }}>
         <Text style={[txt(value ? 700 : 500), { fontSize: 15, color: value ? C.t1 : C.t4 }]}>
-          {value || "Select"}
+          {value || (editable ? "Select" : "—")}
         </Text>
-        <ChevronDown size={16} color={C.t3} />
+        {editable && <ChevronDown size={16} color={C.t3} />}
       </TouchableOpacity>
       {open && (
         <Modal transparent animationType="slide" visible onRequestClose={() => setOpen(false)}>

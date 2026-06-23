@@ -106,8 +106,13 @@ export function LoadCard({ load }: Props) {
   });
   const showPay = !!orgSettings?.showDriverPay && load.driverPay != null;
 
-  const miles = load.loadedMiles ?? load.miles;
-  const metaLeft = miles != null ? `${miles} mi` : fmtTimeRangeShort(load);
+  // Bottom-stripe shows the leg's appt window (pickup start → delivery
+  // end). Miles were previously shown when present and the time was
+  // only a fallback — that made the same UI slot read inconsistently
+  // across cards depending on whether loadedMiles had been entered
+  // upstream. The time range is always known + always relevant, so use
+  // it unconditionally.
+  const metaLeft = fmtTimeRangeShort(load);
 
   // Eyebrow trailing text (date + appt window) per leg.
   const originExtra = isRelayDelivery
