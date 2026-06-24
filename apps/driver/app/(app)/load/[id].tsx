@@ -71,13 +71,19 @@ const txt = (weight: 500 | 600 | 700 | 800) => ({
                      "PlusJakartaSans_800ExtraBold",
 });
 
-// "Accept Load" is gone — confirming the load IS accepting it. Both
-// scheduled and dispatched now jump directly to en_route on Start Trip.
-// The server stamps confirmed_at automatically when status advances
-// past 'scheduled' so the skip-confirm-and-go-straight-to-Start-Trip
-// path still records the acknowledgment.
+// "Accept Load" is gone — confirming the load IS accepting it. The
+// three pre-trip states (scheduled, assigned, dispatched) all jump
+// directly to en_route on Start Trip. `assigned` is in fact the MOST
+// common state a driver opens a load in — a driver only ever sees
+// loads assigned to them, so dispatch's assignment moves it from
+// scheduled → assigned before the driver ever taps in. Omitting it
+// here is what made the Start Trip dock vanish on freshly-assigned
+// loads. The server stamps confirmed_at automatically when status
+// advances past 'scheduled' so the skip-confirm-and-go-straight-to-
+// Start-Trip path still records the acknowledgment.
 const STATUS_TRANSITIONS: Partial<Record<LoadStatus, LoadStatus>> = {
   scheduled:  "en_route",
+  assigned:   "en_route",
   dispatched: "en_route",
   en_route:   "picked_up",
   picked_up:  "delivered",
@@ -85,6 +91,7 @@ const STATUS_TRANSITIONS: Partial<Record<LoadStatus, LoadStatus>> = {
 
 const STATUS_CTA: Partial<Record<LoadStatus, string>> = {
   scheduled:  "Start Trip",
+  assigned:   "Start Trip",
   dispatched: "Start Trip",
   en_route:   "Mark Picked Up",
   picked_up:  "Mark Delivered",
@@ -1178,7 +1185,7 @@ export default function LoadDetailScreen() {
             Lets the driver acknowledge an upcoming load without yet
             advancing the status (e.g., the 7 PM evening sweep prompts
             them to confirm tomorrow's runs). */}
-        {load.status === "scheduled" && !load.confirmedAt && load.eventKind !== "non_revenue" ? (
+        {(load.status === "scheduled" || load.status === "assigned") && !load.confirmedAt && load.eventKind !== "non_revenue" ? (
           <TouchableOpacity
             onPress={() => confirmLoadMut()}
             activeOpacity={0.85}
@@ -1231,13 +1238,13 @@ export default function LoadDetailScreen() {
         ) : null}
 
         {/* Assigned truck card — shown only while the load is still
-            pre-pickup (status = scheduled). Once status moves to
+            pre-pickup (status = scheduled or assigned). Once status moves to
             dispatched/en_route/etc, the driver is already in the truck
             and doesn't need to be reminded which one or how to find it.
             Surfaces the truck name, last-known location, View on Map +
             Navigate quick actions, and the standard "double-check with
             dispatch" disclaimer. */}
-        {load.status === "scheduled" && load.assetName && load.eventKind !== "non_revenue" && (
+        {(load.status === "scheduled" || load.status === "assigned") && load.assetName && load.eventKind !== "non_revenue" && (
           <AssignedTruckCard
             assetName={load.assetName}
             assetColor={truckLoc?.color}
