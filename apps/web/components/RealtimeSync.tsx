@@ -25,6 +25,32 @@ export default function RealtimeSync() {
   const updateFromRemote = useCalendarStore(s => s.updateEventFromRemote);
   const removeFromRemote = useCalendarStore(s => s.removeEventFromRemote);
 
+  // Keep the realtime socket authenticated. With Clerk third-party auth
+  // there is no Supabase Auth session, so supabase-js never pushes the JWT
+  // to the realtime socket on its own — under the RLS lockdown (landed
+  // 2026-06-09) the socket then authorizes as `anon` and every row change
+  // is filtered out, so confirmed / POD / status updates never reach the
+  // calendar until a manual refresh (which goes through the service-role
+  // API). Push a fresh Clerk 'supabase' token now and refresh it before
+  // the ~60s token TTL so the socket stays `authenticated` with the
+  // org_id claim the RLS policies check.
+  useEffect(() => {
+    if (!orgId) return;
+    const supabase = getSupabase();
+    let active = true;
+    const pump = async () => {
+      try {
+        const token = await window.Clerk?.session?.getToken({ template: 'supabase' });
+        if (active && token) await supabase.realtime.setAuth(token);
+      } catch (err) {
+        console.warn('[realtime] auth token pump failed:', err);
+      }
+    };
+    void pump();
+    const interval = setInterval(() => { void pump(); }, 50_000);
+    return () => { active = false; clearInterval(interval); };
+  }, [orgId]);
+
   useEffect(() => {
     if (!orgId) return;
     const supabase = getSupabase();
