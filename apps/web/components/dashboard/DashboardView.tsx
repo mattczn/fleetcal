@@ -589,8 +589,12 @@ export default function DashboardView() {
       try {
         // Date-only filter for the API; use the org-anchored dates so
         // a 1am Sat CT load doesn't bleed into Friday's period.
+        // Paginate — the server clamps `limit` to 500, so a 90-day / YTD
+        // range with >500 fuel-ups would silently undercount the KPI if
+        // we asked for them in one shot. listAllFuelTransactions pages
+        // until the full count is collected.
         const { fuelTransactions } = await fetchWithRetry(
-          () => railway.listFuelTransactions({ from: periodIso.fromDate, to: periodIso.toDate, limit: 5000 }),
+          () => railway.listAllFuelTransactions({ from: periodIso.fromDate, to: periodIso.toDate }),
         );
         if (cancelled) return;
         const sum = fuelTransactions.reduce((s, t) => s + (t.totalCharged ?? 0), 0);

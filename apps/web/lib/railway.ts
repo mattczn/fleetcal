@@ -1313,6 +1313,33 @@ class RailwayClient {
     const s = qs.toString();
     return this.req<ListFuelTransactionsResponse>('GET', `/v1/fuel-transactions${s ? `?${s}` : ''}`);
   }
+  /**
+   * Fetch EVERY fuel transaction matching the filter, paging past the
+   * server's hard 500-row cap (see fuel-transactions.ts — limit is
+   * clamped to <=500). Any caller that sums or aggregates over a range
+   * (dashboard fuel KPI, equipment Fuel tab KPIs / per-truck chart) MUST
+   * use this, not listFuelTransactions with a big `limit` — that limit
+   * is silently ignored above 500, so a 90-day / YTD range would
+   * undercount. Pages by offset until we've collected `total` rows, with
+   * a safety cap so a runaway count can't loop forever.
+   */
+  async listAllFuelTransactions(query: Omit<ListFuelTransactionsRequest, 'limit' | 'offset'> = {}): Promise<ListFuelTransactionsResponse> {
+    const PAGE = 500;          // matches the server's max
+    const MAX_PAGES = 40;      // 20k rows — far beyond any real range
+    const all: ListFuelTransactionsResponse['fuelTransactions'] = [];
+    let offset = 0;
+    let total = 0;
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const res = await this.listFuelTransactions({ ...query, limit: PAGE, offset });
+      all.push(...res.fuelTransactions);
+      total = res.total;
+      offset += res.fuelTransactions.length;
+      // Stop when we've collected everything, or the server returned a
+      // short page (defensive — means there's nothing left).
+      if (res.fuelTransactions.length < PAGE || all.length >= total) break;
+    }
+    return { fuelTransactions: all, total, limit: all.length, offset: 0 };
+  }
   matchFuelTransaction(id: string, body: MatchFuelTransactionRequest, opts?: { force?: boolean }) {
     const qs = opts?.force ? '?force=true' : '';
     return this.req<MatchFuelTransactionResponse>('PATCH', `/v1/fuel-transactions/${id}/match${qs}`, body);

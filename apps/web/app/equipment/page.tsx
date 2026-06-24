@@ -4444,7 +4444,11 @@ function FuelTabContent({
       const fromDate = dateKeyOf(pStart);
       const toDate   = dateKeyOf(pEnd);
       const [tx, fr] = await Promise.all([
-        fetchWithRetry(() => railway.listFuelTransactions({ from: fromDate, to: toDate, limit: 500 }), {
+        // Paginate past the server's 500-row cap so the KPIs + per-truck
+        // chart are correct on long ranges (90 Days / YTD routinely
+        // exceed 500 fuel-ups). listFuelTransactions(limit:500) silently
+        // truncated, undercounting Total fuel spend.
+        fetchWithRetry(() => railway.listAllFuelTransactions({ from: fromDate, to: toDate }), {
           onAttemptFailed: (err, n, willRetry) => {
             if (willRetry) console.warn(`[equipment fuel] tx attempt ${n} failed, retrying:`, err);
           },
