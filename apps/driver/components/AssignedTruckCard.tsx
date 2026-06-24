@@ -60,9 +60,13 @@ interface Props {
    *  the refresh button while it's pending. Omit to hide the
    *  refresh affordance entirely. */
   onRefresh?: () => Promise<void>;
+  /** When false (org's Motive ELD module is off) the card shows just the
+   *  assigned truck name — no live-location line, no View on Map /
+   *  Navigate actions, since there's no ELD feeding a position. */
+  eldEnabled?: boolean;
 }
 
-export function AssignedTruckCard({ assetName, assetColor, truck, onViewOnMap, onRefresh }: Props) {
+export function AssignedTruckCard({ assetName, assetColor, truck, onViewOnMap, onRefresh, eldEnabled = true }: Props) {
   const { C, SHADOW, ACCENT } = useTheme();
   const color = assetColor ?? ACCENT;
   const hasLocation = truck != null;
@@ -146,6 +150,11 @@ export function AssignedTruckCard({ assetName, assetColor, truck, onViewOnMap, o
         </View>
       </View>
 
+      {/* Live-location line + locate actions — only when the org's Motive
+          ELD module is on. With no ELD there's no position to show, so
+          the card collapses to just the assigned-truck name above. */}
+      {eldEnabled && (
+        <>
       {/* Last-seen line + refresh button. Truck location ages with the
           truck (engine off → ping doesn't update), so the driver may
           need to force-fetch from Motive when the timestamp looks too
@@ -221,6 +230,8 @@ export function AssignedTruckCard({ assetName, assetColor, truck, onViewOnMap, o
           </Text>
         </TouchableOpacity>
       </View>
+        </>
+      )}
 
       {/* Disclaimer */}
       <View style={{
@@ -234,7 +245,9 @@ export function AssignedTruckCard({ assetName, assetColor, truck, onViewOnMap, o
       }}>
         <AlertTriangle size={12} color={C.amberInk} strokeWidth={2.2} style={{ marginTop: 1 }} />
         <Text style={[txt(500), { flex: 1, fontSize: 11, color: C.amberInk, lineHeight: 16 }]}>
-          Truck and location may have changed. Double-check with dispatch before leaving for the truck.
+          {eldEnabled
+            ? "Truck and location may have changed. Double-check with dispatch before leaving for the truck."
+            : "Truck assignment may have changed. Double-check with dispatch."}
         </Text>
       </View>
     </View>

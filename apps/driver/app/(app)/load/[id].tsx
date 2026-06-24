@@ -58,7 +58,9 @@ import { DocumentsView } from "@/components/DocumentsView";
 import { ExpandableInstructions } from "@/components/ExpandableInstructions";
 import { useDriverSession } from "@/lib/useDriverSession";
 import { ScheduleTypeChip } from "@/lib/loadCard";
+import { needsRunConfirmation } from "@/lib/loadStatus";
 import type { LoadStatus, Stop } from "@/lib/types";
+import { isModuleEnabled } from "@fleetcal/types";
 import { Glass } from "@/components/Glass";
 import { SP, RADIUS } from "@/lib/theme";
 import { useTheme } from "@/lib/ThemeProvider";
@@ -882,6 +884,11 @@ export default function LoadDetailScreen() {
     staleTime: 5 * 60 * 1000,
   });
 
+  // Motive ELD module gate. New MVP orgs have motive_integration OFF, so
+  // there's no live truck location to show — hide the locate actions and
+  // skip polling Motive entirely. Curzon (absent flag) stays enabled.
+  const eldEnabled = isModuleEnabled("motive_integration", orgSettings?.modules);
+
   // Live truck location for the asset bound to this load. 404s silently
   // when the asset has no Motive vehicle id or the org has no Motive
   // API key — RouteMap renders without the truck pin in that case.
@@ -895,7 +902,7 @@ export default function LoadDetailScreen() {
         throw err;
       }
     },
-    enabled:  !!id && !!driver,
+    enabled:  !!id && !!driver && eldEnabled,
     // Poll once every 2 min while the screen is open and the app is
     // foregrounded. focusManager (wired at the root) automatically
     // pauses this when the driver backgrounds the app, so the Motive
@@ -1185,7 +1192,7 @@ export default function LoadDetailScreen() {
             Lets the driver acknowledge an upcoming load without yet
             advancing the status (e.g., the 7 PM evening sweep prompts
             them to confirm tomorrow's runs). */}
-        {(load.status === "scheduled" || load.status === "assigned") && !load.confirmedAt && load.eventKind !== "non_revenue" ? (
+        {needsRunConfirmation(load) ? (
           <TouchableOpacity
             onPress={() => confirmLoadMut()}
             activeOpacity={0.85}
@@ -1243,10 +1250,13 @@ export default function LoadDetailScreen() {
             and doesn't need to be reminded which one or how to find it.
             Surfaces the truck name, last-known location, View on Map +
             Navigate quick actions, and the standard "double-check with
-            dispatch" disclaimer. */}
+            dispatch" disclaimer. When the org's Motive ELD module is
+            off there's no live position, so it shows the truck name
+            only (eldEnabled gates the location line + actions). */}
         {(load.status === "scheduled" || load.status === "assigned") && load.assetName && load.eventKind !== "non_revenue" && (
           <AssignedTruckCard
             assetName={load.assetName}
+            eldEnabled={eldEnabled}
             assetColor={truckLoc?.color}
             truck={truckLoc ? {
               lat:          truckLoc.lat,

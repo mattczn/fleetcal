@@ -6,6 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { Load, Stop } from "@/lib/types";
 import { fetchOrgSettings } from "@/lib/api/orgSettings";
 import { useDriverSession } from "@/lib/useDriverSession";
+import { needsRunConfirmation } from "@/lib/loadStatus";
 import {
   RelayChip, NonRevChip,
   fmtTimeRangeShort, fmtStopAppt, fmtShortDate, fmtScheduleType,
@@ -100,6 +101,10 @@ export function LoadCard({ load }: Props) {
   const isRelayPickup = load.relayRole === "pickup";
   const isRelayDelivery = load.relayRole === "delivery";
   const isNonRev = load.eventKind === "non_revenue";
+  // Caution chip when this load still needs the driver's run-confirmation —
+  // mirrors the green Confirm banner inside the load detail so the driver
+  // spots it in the list before opening.
+  const needsConfirm = needsRunConfirmation(load);
   const destKind: "dest" | "relay" = delivery?.type === "relay" ? "relay" : "dest";
 
   // Pending dispatcher nudges (load_notifications WHERE acknowledged_at IS NULL).
@@ -168,6 +173,12 @@ export function LoadCard({ load }: Props) {
               upcoming vs recent tabs filter on it). Pending-nudge bell
               counter + relay / non-rev chips stay since those convey
               info the tab filter doesn't carry. */}
+          {needsConfirm ? (
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, height: 21, borderRadius: 7, backgroundColor: C.amberBg }}>
+              <AlertTriangle size={11} color={C.amberInk} strokeWidth={2.6} />
+              <Text style={[f(800), { fontSize: 11, color: C.amberInk }]}>CONFIRM</Text>
+            </View>
+          ) : null}
           {pendingCount > 0 ? (
             <View style={{ flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, height: 21, borderRadius: 7, backgroundColor: C.red }}>
               <Bell size={11} color="#ffffff" strokeWidth={2.6} />
