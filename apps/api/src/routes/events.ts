@@ -398,6 +398,24 @@ events.patch("/:id", async (c) => {
     if (becameUnassigned) update.status = "scheduled";
   }
 
+  // Guard: never let a dispatcher save silently REGRESS a driver-owned
+  // status. A stale `status` re-sent by the EventModal after the driver
+  // advanced the load in the app (e.g. confirmed → dispatched) would
+  // otherwise revert it (dispatched → assigned). Drop a backwards move
+  // out of a driver-owned state; forward moves + exception states
+  // (cancelled/tonu/problem) still apply.
+  if (typeof update.status === "string") {
+    const STATUS_RANK: Record<string, number> = {
+      scheduled: 0, assigned: 1, dispatched: 2, en_route: 3, picked_up: 4, delivered: 5,
+    };
+    const EXCEPTION_STATUSES = new Set(["cancelled", "tonu", "problem"]);
+    const curRank  = STATUS_RANK[kr.status as string] ?? 0;
+    const nextRank = STATUS_RANK[update.status] ?? 0;
+    if (!EXCEPTION_STATUSES.has(update.status) && curRank >= STATUS_RANK.dispatched && nextRank < curRank) {
+      delete update.status;
+    }
+  }
+
   if (Object.keys(update).length === 0) {
     return badRequest(c, ["no allowed fields supplied; nothing to update"]);
   }

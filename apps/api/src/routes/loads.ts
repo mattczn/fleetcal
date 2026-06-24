@@ -1551,6 +1551,27 @@ loads.patch("/:id/events/:eventId", requireCapability("loads.edit"), async (c) =
     }
   }
 
+  // Guard: a dispatcher save must never silently REGRESS a driver-owned
+  // status. The EventModal re-sends the whole event — including a
+  // possibly-stale `status` — on every save, so an edit made after the
+  // driver advanced the load in the app (e.g. confirmed → dispatched)
+  // would otherwise revert it (dispatched → assigned). Drop a backwards
+  // move out of a driver-owned state; forward moves and the exception
+  // states (cancelled/tonu/problem) still apply.
+  let statusRegressionBlocked = false;
+  if (typeof update.status === "string" && prevStatus) {
+    const STATUS_RANK: Record<string, number> = {
+      scheduled: 0, assigned: 1, dispatched: 2, en_route: 3, picked_up: 4, delivered: 5,
+    };
+    const EXCEPTION_STATUSES = new Set(["cancelled", "tonu", "problem"]);
+    const curRank  = STATUS_RANK[prevStatus] ?? 0;
+    const nextRank = STATUS_RANK[update.status] ?? 0;
+    if (!EXCEPTION_STATUSES.has(update.status) && curRank >= STATUS_RANK.dispatched && nextRank < curRank) {
+      delete update.status;
+      statusRegressionBlocked = true;
+    }
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { error } = await supabase
     .from("events")
@@ -1571,8 +1592,10 @@ loads.patch("/:id/events/:eventId", requireCapability("loads.edit"), async (c) =
   // the auto-promotion above (scheduled → assigned when a driver is
   // set, etc.) — `effectiveNewStatus` reads the value we actually
   // wrote, not what was in body.
-  const effectiveNewStatus = (update.status as string | undefined)
-    ?? (("status" in body) ? body.status : undefined);
+  const effectiveNewStatus = statusRegressionBlocked
+    ? undefined
+    : (update.status as string | undefined)
+      ?? (("status" in body) ? body.status : undefined);
   if (
     prevStatus !== null &&
     effectiveNewStatus !== undefined &&
