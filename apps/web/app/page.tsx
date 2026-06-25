@@ -1070,7 +1070,6 @@ function Features() {
         // section reads as its own block instead of flowing visually
         // out of the hero.
         background:    '#fff',
-        borderTop:     '1px solid #e8eaed',
         borderBottom:  '1px solid #e8eaed',
       }}>
       <div className={WRAP}>
