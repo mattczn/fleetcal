@@ -24,7 +24,6 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { useEffect, useState } from 'react';
 import { Menu, X } from 'lucide-react';
-import SmoothScrollLink from './SmoothScrollLink';
 
 interface Cta { href: string; label: string }
 
@@ -49,12 +48,13 @@ export default function MarketingNav({ cta, showSignIn }: { cta: Cta; showSignIn
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  // Section links — DRY between desktop bar + mobile panel.
-  const NAV: ReadonlyArray<{ to: string; label: string }> = [
-    { to: 'features', label: 'Features'     },
-    { to: 'how',      label: 'How it works'  },
-    { to: 'pricing',  label: 'Pricing'       },
-    { to: 'story',    label: 'Why FleetCal'  },
+  // Top-level page links — DRY between desktop bar + mobile panel. Section
+  // navigation now lives in the per-page HeroFeatureNav pill, so the top bar
+  // carries page links instead.
+  const NAV: ReadonlyArray<{ href: string; label: string }> = [
+    { href: '/',              label: 'Home'    },
+    { href: '/contact-sales', label: 'Contact' },
+    { href: '/support',       label: 'Support' },
   ];
 
   return (
@@ -70,27 +70,29 @@ export default function MarketingNav({ cta, showSignIn }: { cta: Cta; showSignIn
       }}
     >
       <div className="mx-auto flex items-center justify-between w-full max-w-[1600px] px-5 sm:px-6 md:px-8 lg:px-12" style={{ height: 68 }}>
-        <Link href="/" aria-label="FleetCal home" className="flex items-center">
-          <Image
-            src="/logo-horizontal.png"
-            alt="FleetCal"
-            width={140}
-            height={32}
-            priority
-            style={{ height: 32, width: 'auto', objectFit: 'contain', display: 'block' }}
-          />
-        </Link>
+        <div className="flex items-center gap-7 lg:gap-9">
+          <Link href="/" aria-label="FleetCal home" className="flex items-center">
+            <Image
+              src="/logo-horizontal.png"
+              alt="FleetCal"
+              width={140}
+              height={32}
+              priority
+              style={{ height: 32, width: 'auto', objectFit: 'contain', display: 'block' }}
+            />
+          </Link>
 
-        <div className="hidden md:flex items-center gap-8 font-display">
-          {NAV.map(n => (
-            <SmoothScrollLink
-              key={n.to}
-              to={n.to}
-              className="text-[15px] font-medium text-sys-text-2 hover:text-sys-blue-text transition-colors"
-            >
-              {n.label}
-            </SmoothScrollLink>
-          ))}
+          <div className="hidden md:flex items-center gap-7 font-display">
+            {NAV.map(n => (
+              <Link
+                key={n.href}
+                href={n.href}
+                className="text-[15px] font-medium text-sys-text-2 hover:text-sys-blue-text transition-colors"
+              >
+                {n.label}
+              </Link>
+            ))}
+          </div>
         </div>
 
         <div className="flex items-center gap-3 sm:gap-4 font-display">
@@ -141,14 +143,14 @@ export default function MarketingNav({ cta, showSignIn }: { cta: Cta; showSignIn
         >
           <div className="flex flex-col font-display">
             {NAV.map(n => (
-              <SmoothScrollLink
-                key={n.to}
-                to={n.to}
+              <Link
+                key={n.href}
+                href={n.href}
                 onClick={() => setOpen(false)}
                 className="block text-[16px] font-medium text-sys-text-2 hover:text-sys-blue-text py-3 border-b border-[#f1f3f4] last:border-b-0"
               >
                 {n.label}
-              </SmoothScrollLink>
+              </Link>
             ))}
             {showSignIn && (
               <Link

@@ -144,7 +144,7 @@ function Pipeline() {
 
 // ── Section B · Features (three alternating rows) ───────────────────────
 
-function FeatureRow({ id, Icon, iconBg, iconColor, kicker, title, body, chips, card, flip }: {
+function FeatureRow({ id, Icon, iconBg, iconColor, kicker, title, body, card, flip }: {
   id: string;
   Icon: React.ComponentType<{ size?: number; style?: React.CSSProperties; strokeWidth?: number }>;
   iconBg: string; iconColor: string; kicker: string; title: string; body: React.ReactNode;
@@ -160,9 +160,6 @@ function FeatureRow({ id, Icon, iconBg, iconColor, kicker, title, body, chips, c
           </div>
           <h3 className="font-display" style={{ fontWeight: 800, fontSize: 'clamp(26px, 2.6vw, 33px)', lineHeight: 1.12, letterSpacing: '-0.022em', margin: '22px 0 0', color: '#202124', maxWidth: 440 }}>{title}</h3>
           <p style={{ fontSize: 17.5, lineHeight: 1.65, color: '#5f6368', margin: '14px 0 0', maxWidth: 470 }}>{body}</p>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 9, marginTop: 22 }}>
-            {chips.map((c) => <span key={c} style={{ fontSize: 13, fontWeight: 500, color: '#3c4043', background: '#fff', border: '1px solid #e8eaed', padding: '7px 14px', borderRadius: 999 }}>{c}</span>)}
-          </div>
         </div>
         <div className={flip ? 'order-2 lg:order-1' : 'order-2'}>{card}</div>
       </div>

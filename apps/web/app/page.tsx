@@ -275,7 +275,7 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
                   boxShadow:    '0 0 0 3px rgba(30,142,62,0.18)',
                 }}
               />
-              Built by a carrier, for carriers
+              Built for carriers, dispatchers, and owner-operators
             </span>
           </Reveal>
           <Reveal delay={60}>
@@ -572,7 +572,7 @@ const FEATURE_GROUPS: ReadonlyArray<FeatureGroup> = [
     Icon:   Receipt,
     color:  '#f97316',
     light:  '#fef0e6',
-    title:  'Stay ahead of the paperwork. And cash flow.',
+    title:  'Stay ahead of paperwork and cashflow.',
     body:   "Verify paperwork effortlessly with the POD on one side and the rate con on the other. Then batch the whole week's invoices in a single pass. AI reads each customer's invoicing instructions so you get paid clean.",
     chips:  ['Side-by-side review', 'Release for invoicing', 'One-click or bulk', 'Customer billing rules'],
     links:  [['Paperwork verification', '/product/paperwork'], ['Billing', '/product/billing']],
@@ -896,24 +896,6 @@ function GroupCopy({ group }: { group: FeatureGroup }) {
       <p style={{ fontSize: 17.5, lineHeight: 1.65, color: '#5f6368', margin: '14px 0 0', maxWidth: 480 }}>
         {group.body}
       </p>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 9, marginTop: 22 }}>
-        {group.chips.map(c => (
-          <span
-            key={c}
-            style={{
-              whiteSpace: 'nowrap',
-              fontSize: 13,
-              fontWeight: 500,
-              color: '#3c4043',
-              background: '#f8f9fa',
-              border: '1px solid #e8eaed',
-              padding: '7px 14px',
-              borderRadius: 999,
-            }}>
-            {c}
-          </span>
-        ))}
-      </div>
       <LearnLinks group={group} />
     </div>
   );
@@ -1075,10 +1057,10 @@ function Features() {
       <div className={WRAP}>
         <Reveal style={{ maxWidth: 760 }}>
           <SectionTitle>
-            Built by a carrier, <span style={{ color: 'var(--gc-blue)' }}>for carriers.</span>
+            Carrier first tools that<br /><span style={{ color: 'var(--gc-blue)' }}>keep trucks moving.</span>
           </SectionTitle>
           <SectionSub>
-            The whole back office of a small carrier, without the bloat or the enterprise price tag.
+            Focus on optimizing your fleet without the bloat or the enterprise price tag.
           </SectionSub>
         </Reveal>
 

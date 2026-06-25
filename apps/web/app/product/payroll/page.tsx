@@ -60,16 +60,8 @@ const HERO_TABS: ReadonlyArray<{ id: string; label: string }> = [
 
 // ── Shared primitives ───────────────────────────────────────────────────
 
-function Chip({ children }: { children: React.ReactNode }) {
-  return (
-    <span style={{ whiteSpace: 'nowrap', fontSize: 13, fontWeight: 500, color: '#3c4043', background: '#f8f9fa', border: '1px solid #e8eaed', padding: '7px 14px', borderRadius: 999 }}>
-      {children}
-    </span>
-  );
-}
-
 function FeatureCopy({
-  Icon, iconBg, accent, kicker, title, body, chips,
+  Icon, iconBg, accent, kicker, title, body,
 }: {
   Icon: React.ComponentType<{ size?: number; style?: React.CSSProperties; strokeWidth?: number }>;
   iconBg: string;
@@ -89,9 +81,6 @@ function FeatureCopy({
       </div>
       <h3 className="font-display" style={{ fontWeight: 800, fontSize: 'clamp(26px, 2.6vw, 33px)', lineHeight: 1.12, letterSpacing: '-0.022em', margin: '22px 0 0', color: '#202124', maxWidth: 440 }}>{title}</h3>
       <p style={{ fontSize: 17.5, lineHeight: 1.65, color: '#5f6368', margin: '14px 0 0', maxWidth: 470 }}>{body}</p>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 9, marginTop: 22 }}>
-        {chips.map(c => <Chip key={c}>{c}</Chip>)}
-      </div>
     </div>
   );
 }
