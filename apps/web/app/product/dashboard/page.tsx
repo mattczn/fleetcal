@@ -3,6 +3,7 @@ import Image from 'next/image';
 import { auth } from '@clerk/nextjs/server';
 import { ArrowLeft } from 'lucide-react';
 import MarketingNav from '@/components/marketing/MarketingNav';
+import HeroFeatureNav from '@/components/marketing/HeroFeatureNav';
 import Reveal from '@/components/marketing/Reveal';
 import DashboardHeroCard from '@/components/marketing/dashboard/DashboardHeroCard';
 import ReportBuilderCard from '@/components/marketing/dashboard/ReportBuilderCard';
@@ -41,11 +42,16 @@ function ctaFor(state: AuthCta): { href: string; label: string } {
 
 const WRAP = 'mx-auto w-full max-w-[1600px] px-5 sm:px-6 md:px-8 lg:px-12';
 
+const HERO_TABS: ReadonlyArray<{ id: string; label: string }> = [
+  { id: 'revenue', label: 'Revenue' },
+  { id: 'reports', label: 'Reports & trends' },
+];
+
 // ── Hero (full-bleed panel, like /product/payroll) ──────────────────────
 
 function Hero({ cta }: { cta: { href: string; label: string } }) {
   return (
-    <section className="flex flex-col justify-center" style={{ background: 'radial-gradient(120% 90% at 92% -8%, rgba(168,206,250,0.7) 0%, rgba(255,255,255,0) 56%), linear-gradient(180deg, #eef4fe 0%, #f6f9fe 42%, #ffffff 92%)', paddingTop: 56, paddingBottom: 90, minHeight: 'calc(100vh - 68px)' }}>
+    <section className="relative flex flex-col justify-center" style={{ background: 'radial-gradient(120% 90% at 92% -8%, rgba(168,206,250,0.7) 0%, rgba(255,255,255,0) 56%), linear-gradient(180deg, #eef4fe 0%, #f6f9fe 42%, #ffffff 92%)', paddingTop: 56, paddingBottom: 150, minHeight: 'calc(100vh - 68px)' }}>
       <div className={`${WRAP} grid items-center gap-12 lg:gap-14 grid-cols-1 lg:grid-cols-[1fr_1.24fr]`}>
         <div>
           <Reveal>
@@ -83,6 +89,9 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
           <DashboardHeroCard />
         </Reveal>
       </div>
+      <div className="absolute inset-x-0 bottom-16 sm:bottom-20 z-10">
+        <HeroFeatureNav items={HERO_TABS} />
+      </div>
     </section>
   );
 }
@@ -116,7 +125,7 @@ const DONUT = 'conic-gradient(#1a73e8 0 20.3%, #1e8e3e 0 39.7%, #ea4335 0 51.1%,
 
 function RevenueSources() {
   return (
-    <section style={{ background: '#f8f9fa', borderTop: '1px solid #e8eaed', borderBottom: '1px solid #e8eaed', padding: '88px 0' }}>
+    <section id="revenue" style={{ background: '#f8f9fa', borderTop: '1px solid #e8eaed', borderBottom: '1px solid #e8eaed', padding: '88px 0', scrollMarginTop: 80 }}>
       <div className={WRAP}>
         <Reveal style={{ maxWidth: 640 }}>
           <span className="font-mono" style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.14em', textTransform: 'uppercase', color: '#1e8e3e' }}>Where the money comes from</span>
@@ -189,7 +198,7 @@ const GRID = ['$20.0K', '$15.0K', '$10.0K', '$5.0K', '$0'];
 
 function ReportsAndTrends() {
   return (
-    <section id="reports" style={{ padding: '92px 0' }}>
+    <section id="reports" style={{ padding: '92px 0', scrollMarginTop: 80 }}>
       {/* Overlap: chart (76%) left, report builder (62%) pulled up over its
           bottom-right corner. Collapses to a stack below 880px. */}
       <style>{`.db-overlap > :first-child { width: 100%; } .db-overlap > :last-child { width: 100%; margin-top: 18px; } @media (min-width: 880px) { .db-overlap > :first-child { width: 76%; max-width: 920px; } .db-overlap > :last-child { width: 62%; margin-left: auto; margin-top: -68px; position: relative; z-index: 2; } }`}</style>
@@ -277,6 +286,7 @@ function Footer() {
       ['Payroll',   '/product/payroll'],
       ['Dashboard', '/product/dashboard'],
       ['Paperwork', '/product/paperwork'],
+      ['Billing',   '/product/billing'],
       ['Pricing',   '/#pricing'],
     ]],
     ['Company', [

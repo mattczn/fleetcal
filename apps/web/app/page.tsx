@@ -8,6 +8,7 @@ import MarketingNav from '@/components/marketing/MarketingNav';
 import FaqAccordion from '@/components/marketing/FaqAccordion';
 import Reveal from '@/components/marketing/Reveal';
 import HeroVideo from '@/components/marketing/HeroVideo';
+import HeroFeatureNav from '@/components/marketing/HeroFeatureNav';
 
 /**
  * Marketing landing page at `/`.
@@ -81,6 +82,16 @@ function ctaFor(state: AuthCta): { href: string; label: string } {
 // boxed-in feel on big screens. px-8 → px-12 gutter at lg keeps a
 // comfortable rhythm without the page hugging the viewport edge.
 const WRAP = 'mx-auto w-full max-w-[1600px] px-5 sm:px-6 md:px-8 lg:px-12';
+
+const HERO_TABS: ReadonlyArray<{ id: string; label: string }> = [
+  { id: 'dispatch', label: 'Dispatch Calendar' },
+  { id: 'paperwork', label: 'Paperwork & Billing' },
+  { id: 'payroll', label: 'Payroll & Insights' },
+  { id: 'how', label: 'How it works' },
+  { id: 'pricing', label: 'Pricing' },
+  { id: 'story', label: 'Why FleetCal' },
+  { id: 'faq', label: 'FAQ' },
+];
 
 /** Mac-style browser frame around a product placeholder. Real
  *  screenshots drop into the `<children>` slot once shipped. */
@@ -220,6 +231,7 @@ function SectionSub({ children }: { children: React.ReactNode }) {
 
 function Hero({ cta }: { cta: { href: string; label: string } }) {
   return (
+    <>
     <section
       id="top"
       // Fills the viewport below the 68px nav on standard laptop /
@@ -234,8 +246,8 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
       style={{
         background:    'radial-gradient(120% 90% at 92% -8%, rgba(168,206,250,0.7) 0%, rgba(255,255,255,0) 56%), linear-gradient(180deg, #eef4fe 0%, #f6f9fe 42%, #ffffff 92%)',
         paddingTop:    72,
-        paddingBottom: 84,
-        minHeight:     'calc(100vh - 68px)',
+        paddingBottom: 48,
+        minHeight:     'calc(100vh - 168px)',
       }}
     >
       <div
@@ -457,6 +469,8 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
         </Reveal>
       </div>
     </section>
+    <HeroFeatureNav items={HERO_TABS} sticky />
+    </>
   );
 }
 
@@ -468,7 +482,7 @@ function TrustBand() {
     ['All-in-1',  'dispatch, payroll, billing'],
   ];
   return (
-    <section style={{ borderTop: '1px solid #e8eaed', borderBottom: '1px solid #e8eaed', background: '#f8f9fa' }}>
+    <section>
       <div
         className={`${WRAP} grid gap-6 grid-cols-2 md:grid-cols-4 py-7 sm:py-9`}
       >
@@ -561,7 +575,7 @@ const FEATURE_GROUPS: ReadonlyArray<FeatureGroup> = [
     title:  'Stay ahead of the paperwork. And cash flow.',
     body:   "Verify paperwork effortlessly with the POD on one side and the rate con on the other. Then batch the whole week's invoices in a single pass. AI reads each customer's invoicing instructions so you get paid clean.",
     chips:  ['Side-by-side review', 'Release for invoicing', 'One-click or bulk', 'Customer billing rules'],
-    links:  [['Paperwork verification', '/product/paperwork'], ['Billing', '#']],
+    links:  [['Paperwork verification', '/product/paperwork'], ['Billing', '/product/billing']],
     primary:   { kind: 'image', src: '/paperwork-verification.png', alt: 'Side-by-side POD and rate-con review for closeout' },
     topBadge:  { kind: 'chip', title: 'Ready to release', sub: '42 loads · $28,496' },
     secondary: { kind: 'invoicebar' },
@@ -1049,7 +1063,7 @@ function Features() {
       id="features"
       style={{
         padding:         '110px 0 100px',
-        scrollMarginTop: 68,
+        scrollMarginTop: 150,
         // Pale-brand-blue canvas + matching borders. Establishes a
         // distinct third tone alongside the white hero and the gray
         // TrustBand / HowItWorks / Story, so the "Built by a carrier"
@@ -1080,12 +1094,14 @@ function Features() {
             return (
               <Reveal key={group.key}>
                 <div
+                  id={group.key}
                   className="feat-row"
                   style={{
                     display:             'grid',
                     gridTemplateColumns: flip ? '1.45fr 0.9fr' : '0.9fr 1.45fr',
                     gap:                 56,
                     alignItems:          'center',
+                    scrollMarginTop:     150,
                   }}>
                   <div style={{ order: flip ? 2 : 1 }}>
                     <GroupCopy group={group} />
@@ -1132,7 +1148,7 @@ function HowItWorks() {
         background:    '#f8f9fa',
         borderTop:     '1px solid #e8eaed',
         borderBottom:  '1px solid #e8eaed',
-        scrollMarginTop: 68,
+        scrollMarginTop: 150,
       }}
     >
       <div className={WRAP}>
@@ -1201,7 +1217,7 @@ function HowItWorks() {
 
 function Pricing() {
   return (
-    <section id="pricing" style={{ padding: '110px 0 100px', scrollMarginTop: 68 }}>
+    <section id="pricing" style={{ padding: '110px 0 100px', scrollMarginTop: 150 }}>
       <div className={WRAP}>
         <Reveal style={{ textAlign: 'center', maxWidth: 680, margin: '0 auto' }}>
           <SectionLabel>Pricing</SectionLabel>
@@ -1232,7 +1248,7 @@ function Story() {
         background:    '#f8f9fa',
         borderTop:     '1px solid #e8eaed',
         borderBottom:  '1px solid #e8eaed',
-        scrollMarginTop: 68,
+        scrollMarginTop: 150,
       }}
     >
       {/* Editorial two-column. Founder card sits in the narrower
@@ -1340,7 +1356,7 @@ const FAQS = [
 
 function Faq() {
   return (
-    <section style={{ padding: '110px 0' }}>
+    <section id="faq" style={{ padding: '110px 0', scrollMarginTop: 150 }}>
       <div
         className={`${WRAP} grid items-start gap-10 lg:gap-16 grid-cols-1 lg:grid-cols-[0.8fr_1.4fr]`}
       >
@@ -1472,6 +1488,7 @@ function Footer() {
       ['Payroll',      '/product/payroll'],
       ['Dashboard',    '/product/dashboard'],
       ['Paperwork',    '/product/paperwork'],
+      ['Billing',      '/product/billing'],
       ['How it works', '#how'],
       ['Pricing',      '#pricing'],
     ]],

@@ -5,6 +5,7 @@ import { ArrowLeft, Play, Check, ChevronDown, DollarSign, CreditCard, Flag, File
 import MarketingNav from '@/components/marketing/MarketingNav';
 import Reveal from '@/components/marketing/Reveal';
 import HeroVideo from '@/components/marketing/HeroVideo';
+import HeroFeatureNav from '@/components/marketing/HeroFeatureNav';
 import ReviewQueueCard from '@/components/marketing/paperwork/ReviewQueueCard';
 import FlagModal from '@/components/marketing/paperwork/FlagModal';
 
@@ -41,6 +42,11 @@ function ctaFor(state: AuthCta): { href: string; label: string } {
 
 const WRAP = 'mx-auto w-full max-w-[1600px] px-5 sm:px-6 md:px-8 lg:px-12';
 
+const HERO_TABS: ReadonlyArray<{ id: string; label: string }> = [
+  { id: 'features', label: 'Verify & release' },
+  { id: 'review-queue', label: 'Review queue' },
+];
+
 function BillingLink({ children }: { children: React.ReactNode }) {
   return <Link href="/product/billing" style={{ color: '#1967d2', fontWeight: 600, textDecoration: 'none', borderBottom: '1.5px solid rgba(26,115,232,.32)' }}>{children}</Link>;
 }
@@ -49,7 +55,7 @@ function BillingLink({ children }: { children: React.ReactNode }) {
 
 function Hero({ cta }: { cta: { href: string; label: string } }) {
   return (
-    <section className="flex flex-col justify-center" style={{ background: 'radial-gradient(120% 90% at 92% -8%, rgba(176,230,196,0.75) 0%, rgba(255,255,255,0) 56%), linear-gradient(180deg, #ecfaf1 0%, #f5fbf7 42%, #ffffff 92%)', paddingTop: 56, paddingBottom: 88, minHeight: 'calc(100vh - 68px)' }}>
+    <section className="relative flex flex-col justify-center" style={{ background: 'radial-gradient(120% 90% at 92% -8%, rgba(176,230,196,0.75) 0%, rgba(255,255,255,0) 56%), linear-gradient(180deg, #ecfaf1 0%, #f5fbf7 42%, #ffffff 92%)', paddingTop: 56, paddingBottom: 150, minHeight: 'calc(100vh - 68px)' }}>
       <div className={`${WRAP} grid items-center gap-10 lg:gap-16 grid-cols-1 lg:grid-cols-[1fr_1.4fr]`}>
         <div>
           <Reveal>
@@ -95,6 +101,9 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
           </div>
         </Reveal>
       </div>
+      <div className="absolute inset-x-0 bottom-16 sm:bottom-20 z-10">
+        <HeroFeatureNav items={HERO_TABS} />
+      </div>
     </section>
   );
 }
@@ -120,7 +129,7 @@ function AccCard({ Icon, iconBg, iconColor, title, desc }: {
 
 function VerifyAndRelease() {
   return (
-    <section id="features" style={{ padding: '90px 0 86px' }}>
+    <section id="features" style={{ padding: '90px 0 86px', scrollMarginTop: 80 }}>
       {/* The accessorial cards overlap the screenshot's lower whitespace on
           desktop; below 880px they stack below it and the decorative
           overlays (badge / filter chip / popover) hide. */}
@@ -200,7 +209,7 @@ function Caption({ Icon, iconBg, iconColor, title, sub }: {
 
 function ReviewQueue() {
   return (
-    <section style={{ background: '#f8f9fa', borderTop: '1px solid #e8eaed', padding: '90px 0' }}>
+    <section id="review-queue" style={{ background: '#f8f9fa', borderTop: '1px solid #e8eaed', padding: '90px 0', scrollMarginTop: 80 }}>
       <div className={WRAP}>
         <Reveal style={{ maxWidth: 700 }}>
           <span className="font-mono" style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.14em', textTransform: 'uppercase', color: '#1e8e3e' }}>The review queue</span>

@@ -1,0 +1,128 @@
+'use client';
+
+/**
+ * HeroFeatureNav — a pill of tabs that smooth-scrolls to each feature
+ * section on the page (Google-style section switcher). The active tab
+ * tracks whichever section is in view (IntersectionObserver). Jump targets
+ * need `scroll-margin-top` to clear the sticky bar(s) above them.
+ *
+ *  - default (non-sticky): meant to be absolutely pinned inside a hero
+ *    (the /product/* pages position it at the hero bottom).
+ *  - sticky: renders a `position: sticky` row that sits at the hero bottom
+ *    and pins under the 68px MarketingNav as you scroll, frosting a
+ *    full-width backdrop once stuck (the home page).
+ */
+import { useEffect, useRef, useState } from 'react';
+
+export interface FeatureTab { id: string; label: string }
+
+export default function HeroFeatureNav({ items, sticky = false }: { items: ReadonlyArray<FeatureTab>; sticky?: boolean }) {
+  const [active, setActive] = useState<string>(items[0]?.id ?? '');
+  const [stuck, setStuck] = useState(false);
+  const barRef = useRef<HTMLDivElement>(null);
+
+  // Active-tab scrollspy.
+  useEffect(() => {
+    const obs = new IntersectionObserver(
+      (entries) => {
+        const vis = entries
+          .filter((e) => e.isIntersecting)
+          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+        if (vis[0]) setActive((vis[0].target as HTMLElement).id);
+      },
+      { rootMargin: '-42% 0px -52% 0px', threshold: 0 },
+    );
+    items.forEach((it) => {
+      const el = document.getElementById(it.id);
+      if (el) obs.observe(el);
+    });
+    return () => obs.disconnect();
+  }, [items]);
+
+  // Stuck detection (sticky mode): the row reports < 1 visibility the moment
+  // it pins under the 68px nav, which toggles the frosted backdrop.
+  useEffect(() => {
+    if (!sticky) return;
+    const el = barRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(
+      ([e]) => setStuck(e.intersectionRatio < 1),
+      { rootMargin: '-69px 0px 0px 0px', threshold: [1] },
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [sticky]);
+
+  const jump = (id: string) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    setActive(id);
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  const pill = (
+    <nav className="mx-auto w-full max-w-[1600px] px-5 sm:px-6 md:px-8 lg:px-12 flex justify-center">
+      <style>{`.hfn-rail::-webkit-scrollbar{display:none}`}</style>
+      <div
+        className="hfn-rail flex items-center gap-1"
+        style={{
+          background: '#fff',
+          border: '1px solid #e8eaed',
+          borderRadius: 999,
+          boxShadow: 'var(--shadow-3)',
+          padding: 6,
+          maxWidth: '100%',
+          overflowX: 'auto',
+          scrollbarWidth: 'none',
+        }}
+      >
+        {items.map((it) => {
+          const on = active === it.id;
+          return (
+            <button
+              key={it.id}
+              type="button"
+              onClick={() => jump(it.id)}
+              aria-current={on ? 'true' : undefined}
+              className="font-display whitespace-nowrap transition-all"
+              style={{
+                fontWeight: on ? 700 : 500,
+                fontSize: 14.5,
+                lineHeight: 1,
+                color: on ? '#202124' : '#5f6368',
+                background: 'transparent',
+                border: 'none',
+                borderRadius: 999,
+                padding: '10px 18px',
+                cursor: 'pointer',
+                flex: 'none',
+              }}
+            >
+              {it.label}
+            </button>
+          );
+        })}
+      </div>
+    </nav>
+  );
+
+  if (!sticky) return pill;
+
+  return (
+    <div
+      ref={barRef}
+      className="sticky z-40"
+      style={{
+        top: 68,
+        paddingTop: 12,
+        paddingBottom: 12,
+        background: stuck ? 'rgba(255,255,255,0.82)' : 'transparent',
+        WebkitBackdropFilter: stuck ? 'saturate(180%) blur(12px)' : 'none',
+        backdropFilter: stuck ? 'saturate(180%) blur(12px)' : 'none',
+        transition: 'background .25s',
+      }}
+    >
+      {pill}
+    </div>
+  );
+}
