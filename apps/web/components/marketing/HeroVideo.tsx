@@ -27,10 +27,15 @@ interface HeroVideoProps {
   width:     number;
   height:    number;
   ariaLabel: string;
+  /** Show native playback controls (used by the paperwork demo, which is a
+   *  scrubbable "Live demo" rather than a silent background loop). */
+  controls?: boolean;
+  /** Poster frame shown before the video paints. */
+  poster?:   string;
   style?:    CSSProperties;
 }
 
-export default function HeroVideo({ src, width, height, ariaLabel, style: _style }: HeroVideoProps) {
+export default function HeroVideo({ src, width, height, ariaLabel, controls = false, poster, style: _style }: HeroVideoProps) {
   // Note: style on the wrapping div, NOT the video — the video gets
   // its sizing from inline `style=` in the raw HTML below.
   // Attribute order is deliberate: muted FIRST so the autoplay policy
@@ -41,6 +46,8 @@ export default function HeroVideo({ src, width, height, ariaLabel, style: _style
       `playsinline ` +
       `autoplay ` +
       `loop ` +
+      (controls ? `controls ` : ``) +
+      (poster ? `poster="${escapeAttr(poster)}" ` : ``) +
       `preload="auto" ` +
       `aria-label="${escapeAttr(ariaLabel)}" ` +
       `style="width:100%;height:auto;aspect-ratio:${width}/${height};display:block;background:#f8f9fa;"` +

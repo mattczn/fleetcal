@@ -39,7 +39,7 @@ function ctaFor(state: AuthCta): { href: string; label: string } {
   return                              { href: '/sign-up',  label: 'Start free trial' };
 }
 
-const WRAP = 'mx-auto w-full max-w-[1280px] px-7';
+const WRAP = 'mx-auto w-full max-w-[1600px] px-5 sm:px-6 md:px-8 lg:px-12';
 
 // ── Hero (full-bleed panel, like /product/payroll) ──────────────────────
 
@@ -276,6 +276,7 @@ function Footer() {
       ['Features',  '/#features'],
       ['Payroll',   '/product/payroll'],
       ['Dashboard', '/product/dashboard'],
+      ['Paperwork', '/product/paperwork'],
       ['Pricing',   '/#pricing'],
     ]],
     ['Company', [

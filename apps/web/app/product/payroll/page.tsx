@@ -48,7 +48,7 @@ function ctaFor(state: AuthCta): { href: string; label: string } {
 
 // 1280px content cap + 28px gutter — matches the design handoff (narrower
 // than the landing page's 1600px so the editorial feature rows read tight).
-const WRAP = 'mx-auto w-full max-w-[1280px] px-7';
+const WRAP = 'mx-auto w-full max-w-[1600px] px-5 sm:px-6 md:px-8 lg:px-12';
 
 // ── Shared primitives ───────────────────────────────────────────────────
 
@@ -331,6 +331,7 @@ function Footer() {
       ['Features',  '/#features'],
       ['Payroll',   '/product/payroll'],
       ['Dashboard', '/product/dashboard'],
+      ['Paperwork', '/product/paperwork'],
       ['Pricing',   '/#pricing'],
     ]],
     ['Company', [
