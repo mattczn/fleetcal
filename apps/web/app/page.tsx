@@ -232,7 +232,7 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
       // content needs.
       className="flex flex-col justify-center"
       style={{
-        background:    'radial-gradient(ellipse 70% 90% at 88% 0%, #e8f0fe 0%, #fff 60%)',
+        background:    'radial-gradient(120% 90% at 92% -8%, rgba(168,206,250,0.7) 0%, rgba(255,255,255,0) 56%), linear-gradient(180deg, #eef4fe 0%, #f6f9fe 42%, #ffffff 92%)',
         paddingTop:    72,
         paddingBottom: 84,
         minHeight:     'calc(100vh - 68px)',
@@ -576,7 +576,7 @@ const FEATURE_GROUPS: ReadonlyArray<FeatureGroup> = [
     title:  'Close the Week. Track Performance.',
     body:   'Driver events roll straight into the weekly payroll page — adjust and finalize in minutes. Then see performance by truck, driver, and lane, so you know exactly what is making money.',
     chips:  ['Auto-filled payroll', 'Bonus & adjustment', 'Revenue by truck', 'Revenue by lane'],
-    links:  [['Payroll', '#'], ['Dashboard & reports', '#']],
+    links:  [['Payroll', '/product/payroll'], ['Dashboard & reports', '/product/dashboard']],
     primary:   { kind: 'image', src: '/weekly-dashboard.png', alt: 'Revenue by truck, customer, and over time' },
     secondary: {
       kind:         'image',
@@ -1055,9 +1055,9 @@ function Features() {
         // TrustBand / HowItWorks / Story, so the "Built by a carrier"
         // section reads as its own block instead of flowing visually
         // out of the hero.
-        background:    '#e8f0fe',
-        borderTop:     '1px solid #d2e3fc',
-        borderBottom:  '1px solid #d2e3fc',
+        background:    '#fff',
+        borderTop:     '1px solid #e8eaed',
+        borderBottom:  '1px solid #e8eaed',
       }}>
       <div className={WRAP}>
         <Reveal style={{ maxWidth: 760 }}>
@@ -1469,6 +1469,8 @@ function Footer() {
   const cols: ReadonlyArray<[string, ReadonlyArray<[string, string]>]> = [
     ['Product', [
       ['Features',     '#features'],
+      ['Payroll',      '/product/payroll'],
+      ['Dashboard',    '/product/dashboard'],
       ['How it works', '#how'],
       ['Pricing',      '#pricing'],
     ]],
