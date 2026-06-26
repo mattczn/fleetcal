@@ -136,7 +136,7 @@ function RevenueSources() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-[22px]" style={{ marginTop: 38 }}>
           {/* Revenue by Truck */}
           <Reveal>
-            <div style={{ background: '#fff', border: '1px solid #e8eaed', borderRadius: 16, boxShadow: 'var(--shadow-card)', padding: '22px 24px', height: '100%' }}>
+            <div className="feat-frame-shadow feat-wide" style={{ background: '#fff', border: '1px solid #e8eaed', borderRadius: 16, padding: '22px 24px', height: '100%' }}>
               <div className="font-display" style={{ fontWeight: 700, fontSize: 15, color: '#202124', marginBottom: 18 }}>Revenue by Truck</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 13 }}>
                 {TRUCKS.map((t, i) => (
@@ -155,7 +155,7 @@ function RevenueSources() {
 
           {/* Revenue by Customer */}
           <Reveal delay={80}>
-            <div style={{ background: '#fff', border: '1px solid #e8eaed', borderRadius: 16, boxShadow: 'var(--shadow-card)', padding: '22px 24px', height: '100%' }}>
+            <div className="feat-frame-shadow feat-wide" style={{ background: '#fff', border: '1px solid #e8eaed', borderRadius: 16, padding: '22px 24px', height: '100%' }}>
               <span className="font-display" style={{ fontWeight: 700, fontSize: 15, color: '#202124' }}>Revenue by Customer</span>
               <div className="grid grid-cols-1 sm:grid-cols-[170px_1fr] gap-5 items-center" style={{ marginTop: 16 }}>
                 <div style={{ display: 'grid', placeItems: 'center' }}>
@@ -212,7 +212,7 @@ function ReportsAndTrends() {
         <Reveal>
           <div className="db-overlap" style={{ marginTop: 42 }}>
             <div style={{ position: 'relative' }}>
-              <div style={{ background: '#fff', border: '1px solid #e8eaed', borderRadius: 16, boxShadow: 'var(--shadow-soft)', padding: '22px 24px' }}>
+              <div className="feat-frame-shadow feat-wide" style={{ background: '#fff', border: '1px solid #e8eaed', borderRadius: 16, padding: '22px 24px' }}>
                 <div className="font-display" style={{ fontWeight: 700, fontSize: 15, color: '#202124', marginBottom: 18 }}>Revenue Over Time</div>
                 <div style={{ position: 'relative', height: 230, paddingLeft: 46 }}>
                   {/* gridlines + y-axis */}

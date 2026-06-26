@@ -141,8 +141,8 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
 function Screenshot({ src, alt, origin }: { src: string; alt: string; origin: 'left' | 'right' }) {
   return (
     <div
-      className={`overflow-hidden transition-transform duration-[450ms] ease-[cubic-bezier(.2,.7,.3,1)] hover:scale-[1.06] ${origin === 'right' ? 'origin-right' : 'origin-left'}`}
-      style={{ border: '1px solid #e8eaed', borderRadius: 16, boxShadow: 'var(--shadow-soft)' }}
+      className={`feat-frame-shadow ${origin === 'right' ? 'feat-right' : 'feat-left'} overflow-hidden`}
+      style={{ border: '1px solid #e8eaed', borderRadius: 16 }}
     >
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src={src} alt={alt} style={{ display: 'block', width: '100%', height: 'auto', background: '#f8f9fa' }} />
@@ -211,7 +211,7 @@ function Features() {
               chips={['Detention & lumper', 'Bonus & deduction', 'Auto-matched by name']}
             />
             <div style={{ position: 'relative' }}>
-              <div style={{ position: 'relative', zIndex: 1, border: '1px solid #e8eaed', borderRadius: 14, overflow: 'hidden', boxShadow: 'var(--shadow-card)' }}>
+              <div className="feat-frame-shadow feat-right" style={{ position: 'relative', border: '1px solid #e8eaed', borderRadius: 14, overflow: 'hidden' }}>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src="/payroll-load-financials.png" alt="Financial section inside the load modal, accessorial marked pay-to-driver" style={{ display: 'block', width: '100%', height: 'auto', background: '#f8f9fa' }} />
               </div>

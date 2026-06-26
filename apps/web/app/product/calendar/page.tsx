@@ -91,7 +91,7 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
 
         <Reveal delay={140}>
           <div style={{ position: 'relative' }}>
-            <div style={{ border: '1px solid #e8eaed', borderRadius: 16, overflow: 'hidden', boxShadow: 'var(--shadow-soft)', background: '#fff' }}>
+            <div className="feat-frame-shadow feat-right" style={{ border: '1px solid #e8eaed', borderRadius: 16, overflow: 'hidden', background: '#fff' }}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src="/calendar-view.png" alt="FleetCal dispatch calendar, one color-coded column per truck" style={{ display: 'block', width: '100%', height: 'auto' }} />
             </div>
@@ -136,7 +136,7 @@ function BuildLoads() {
       <div className={`${WRAP} grid items-center gap-12 lg:gap-[60px] grid-cols-1 lg:grid-cols-[1.18fr_1fr]`}>
         <Reveal className="order-1 lg:order-1">
           <div style={{ position: 'relative' }}>
-            <div style={{ position: 'relative', border: '1px solid #e8eaed', borderRadius: 16, overflow: 'hidden', boxShadow: 'var(--shadow-soft)', background: '#f8f9fa' }}>
+            <div className="feat-frame-shadow feat-wide" style={{ position: 'relative', border: '1px solid #e8eaed', borderRadius: 16, overflow: 'hidden', background: '#f8f9fa' }}>
               <HeroVideo src="/rateconai.mp4" width={1896} height={1080} ariaLabel="AI extracting load details from a dropped rate confirmation" />
             </div>
 
@@ -204,7 +204,7 @@ function TruckView() {
         <Reveal>
           <div className="grid grid-cols-1 lg:grid-cols-[1.25fr_1fr] gap-6" style={{ marginTop: 30 }}>
             {/* drag & drop demo */}
-            <div style={{ background: '#fff', border: '1px solid #e8eaed', borderRadius: 16, overflow: 'hidden', position: 'relative', boxShadow: '0 10px 30px -16px rgba(26,35,50,.2)' }}>
+            <div className="feat-frame-shadow feat-wide" style={{ background: '#fff', border: '1px solid #e8eaed', borderRadius: 16, overflow: 'hidden', position: 'relative' }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '13px 18px', borderBottom: '1px solid #e8eaed' }}>
                 <span className="font-display" style={{ fontWeight: 700, fontSize: 14, color: '#202124' }}>Drag &amp; drop to assign</span>
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12, color: '#5f6368' }}><span style={{ width: 7, height: 7, borderRadius: 999, background: '#d93025' }} />Live demo</span>

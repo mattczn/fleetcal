@@ -94,7 +94,7 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
 
         <Reveal delay={140}>
           <div style={{ position: 'relative' }}>
-            <div className="overflow-hidden transition-transform duration-[450ms] ease-[cubic-bezier(.2,.7,.3,1)] origin-right hover:scale-[1.12]" style={{ border: '1px solid #e8eaed', borderRadius: 18, background: '#0b1220', boxShadow: 'var(--shadow-soft)' }}>
+            <div className="feat-frame-shadow feat-right overflow-hidden" style={{ border: '1px solid #e8eaed', borderRadius: 18, background: '#0b1220' }}>
               <HeroVideo src="/billing-demo.mp4" poster="/billing-demo-poster.png" width={1908} height={1080} ariaLabel="Batch invoicing: select released loads, generate and send invoices" />
             </div>
             <div className="hidden sm:flex" style={{ position: 'absolute', top: -15, right: -12, zIndex: 3, background: '#fff', border: '1px solid #e8eaed', borderRadius: 999, boxShadow: 'var(--shadow-3)', padding: '8px 14px', alignItems: 'center', gap: 8 }}>
@@ -125,7 +125,7 @@ function Pipeline() {
         </Reveal>
 
         <Reveal>
-          <div style={{ position: 'relative', marginTop: 34, border: '1px solid #e8eaed', borderRadius: 16, boxShadow: 'var(--shadow-soft)' }}>
+          <div className="feat-frame-shadow feat-wide" style={{ position: 'relative', marginTop: 34, border: '1px solid #e8eaed', borderRadius: 16 }}>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src="/billing-board.png" alt="Billing board with released loads ready to invoice" style={{ display: 'block', width: '100%', height: 'auto', borderRadius: 16 }} />
 

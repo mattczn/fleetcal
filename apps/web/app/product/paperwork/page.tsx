@@ -92,7 +92,7 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
 
         <Reveal delay={140}>
           <div style={{ position: 'relative' }}>
-            <div className="overflow-hidden transition-transform duration-[450ms] ease-[cubic-bezier(.2,.7,.3,1)] origin-right hover:scale-[1.12]" style={{ border: '1px solid #e8eaed', borderRadius: 18, background: '#0b1220', boxShadow: 'var(--shadow-soft)' }}>
+            <div className="feat-frame-shadow feat-right overflow-hidden" style={{ border: '1px solid #e8eaed', borderRadius: 18, background: '#0b1220' }}>
               <HeroVideo src="/paperwork-demo.mp4" poster="/paperwork-demo-poster.png" width={1677} height={928} ariaLabel="Load closeout review: rate con and POD side by side, ready to release" />
             </div>
             <div className="hidden sm:flex" style={{ position: 'absolute', top: -15, right: -12, zIndex: 3, background: '#fff', border: '1px solid #e8eaed', borderRadius: 999, boxShadow: 'var(--shadow-3)', padding: '8px 14px', alignItems: 'center', gap: 8 }}>
@@ -143,7 +143,7 @@ function VerifyAndRelease() {
 
         <Reveal>
           <div style={{ position: 'relative', marginTop: 34 }}>
-            <div style={{ border: '1px solid #e8eaed', borderRadius: 16, boxShadow: 'var(--shadow-soft)', overflow: 'hidden' }}>
+            <div className="feat-frame-shadow feat-wide" style={{ border: '1px solid #e8eaed', borderRadius: 16, overflow: 'hidden' }}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src="/paperwork-board.png" alt="Paperwork board filtered to loads with accessorials" style={{ display: 'block', width: '100%', height: 'auto' }} />
             </div>
@@ -218,7 +218,7 @@ function ReviewQueue() {
         </Reveal>
 
         <Reveal>
-          <div style={{ position: 'relative', marginTop: 34, border: '1px solid #e8eaed', borderRadius: 16, overflow: 'hidden', boxShadow: 'var(--shadow-soft)' }}>
+          <div className="feat-frame-shadow feat-wide" style={{ position: 'relative', marginTop: 34, border: '1px solid #e8eaed', borderRadius: 16, overflow: 'hidden' }}>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src="/paperwork-sidebyside.png" alt="Load closeout: rate con and POD side by side with the ready-to-release verdict" style={{ display: 'block', width: '100%', height: 'auto' }} />
             <div style={{ position: 'absolute', bottom: 18, left: 20, display: 'inline-flex', alignItems: 'center', gap: 9, background: '#fff', color: '#202124', fontWeight: 600, fontSize: 13.5, padding: '9px 14px', borderRadius: 999, boxShadow: '0 6px 16px -4px rgba(60,64,67,.3)' }} className="font-display">
