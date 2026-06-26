@@ -19,6 +19,7 @@ export interface FeatureTab { id: string; label: string }
 export default function HeroFeatureNav({ items, sticky = false }: { items: ReadonlyArray<FeatureTab>; sticky?: boolean }) {
   const [active, setActive] = useState<string>(items[0]?.id ?? '');
   const [stuck, setStuck] = useState(false);
+  const [barH, setBarH] = useState(73);
   const barRef = useRef<HTMLDivElement>(null);
 
   // Active-tab scrollspy.
@@ -45,6 +46,7 @@ export default function HeroFeatureNav({ items, sticky = false }: { items: Reado
     if (!sticky) return;
     const el = barRef.current;
     if (!el) return;
+    setBarH(el.offsetHeight);
     const obs = new IntersectionObserver(
       ([e]) => setStuck(e.intersectionRatio < 1),
       { rootMargin: '-69px 0px 0px 0px', threshold: [1] },
@@ -109,20 +111,36 @@ export default function HeroFeatureNav({ items, sticky = false }: { items: Reado
   if (!sticky) return pill;
 
   return (
-    <div
-      ref={barRef}
-      className="sticky z-40"
-      style={{
-        top: 68,
-        paddingTop: 12,
-        paddingBottom: 12,
-        background: stuck ? 'rgba(255,255,255,0.82)' : 'transparent',
-        WebkitBackdropFilter: stuck ? 'saturate(180%) blur(12px)' : 'none',
-        backdropFilter: stuck ? 'saturate(180%) blur(12px)' : 'none',
-        transition: 'background .25s',
-      }}
-    >
-      {pill}
-    </div>
+    <>
+      {/* ONE frosted layer behind BOTH the 68px MarketingNav and this pill
+          row. Owning the frost in a single element avoids the seam that two
+          stacked backdrop-filters produce where they meet. It grows to cover
+          the pill row once stuck; the MarketingNav renders `frostless` on
+          these pages so the top 68px isn't double-frosted. */}
+      <div
+        aria-hidden
+        className="fixed inset-x-0 top-0 z-[39]"
+        style={{
+          height: stuck ? 68 + barH : 68,
+          background: 'rgba(255,255,255,0.82)',
+          WebkitBackdropFilter: 'saturate(180%) blur(12px)',
+          backdropFilter: 'saturate(180%) blur(12px)',
+          transition: 'height .25s',
+          pointerEvents: 'none',
+        }}
+      />
+      <div
+        ref={barRef}
+        className="sticky z-40"
+        style={{
+          top: 68,
+          paddingTop: 12,
+          paddingBottom: 12,
+          background: 'transparent',
+        }}
+      >
+        {pill}
+      </div>
+    </>
   );
 }

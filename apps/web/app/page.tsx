@@ -53,7 +53,7 @@ export default async function HomePage() {
       className="h-full overflow-y-auto font-sys bg-sys-bg text-sys-primary"
       style={{ scrollBehavior: 'smooth' }}
     >
-      <MarketingNav cta={cta} showSignIn={state === 'out'} />
+      <MarketingNav cta={cta} showSignIn={state === 'out'} frostless />
       <Hero cta={cta} />
       <Features />
       <HowItWorks />
@@ -554,7 +554,7 @@ const FEATURE_GROUPS: ReadonlyArray<FeatureGroup> = [
     title:  'Find the gaps. Fill the trucks.',
     body:   "See every truck's schedule in its own column on a live calendar. Empty space means it's time to start booking loads. Drop a rate-con PDF and AI fills in the load details and maps the stops. Drag and drop to assign loads to drivers and trucks.",
     chips:  ['Color per truck', 'Unassigned load queue', 'AI rate-con parser', 'Drag-to-assign'],
-    links:  [['Dispatch calendar', '#']],
+    links:  [['Dispatch calendar', '/product/calendar']],
     // Static calendar screenshot is the hero; the rate-con drag-drop
     // video plays underneath as a smaller overlapping frame (~45%
     // width). The AI extraction badge floats over the TOP of the
@@ -821,7 +821,7 @@ function LearnLinks({ group }: { group: FeatureGroup }) {
       {group.links.map(([label, href], i) => {
         const primary = i === 0;
         return (
-          <a
+          <Link
             key={label}
             href={href}
             className="learn-link font-display"
@@ -844,7 +844,7 @@ function LearnLinks({ group }: { group: FeatureGroup }) {
             <span className="learn-arrow">
               <ArrowRight size={15} style={{ color: primary ? '#fff' : group.color }} strokeWidth={2.4} />
             </span>
-          </a>
+          </Link>
         );
       })}
     </div>
@@ -1466,6 +1466,7 @@ function Footer() {
   const cols: ReadonlyArray<[string, ReadonlyArray<[string, string]>]> = [
     ['Product', [
       ['Features',     '#features'],
+      ['Calendar',     '/product/calendar'],
       ['Payroll',      '/product/payroll'],
       ['Dashboard',    '/product/dashboard'],
       ['Paperwork',    '/product/paperwork'],

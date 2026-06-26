@@ -23,7 +23,7 @@ export default async function PaperworkMarketingPage() {
 
   return (
     <div data-marketing-scroll className="h-full overflow-y-auto font-sys bg-sys-bg text-sys-primary" style={{ scrollBehavior: 'smooth' }}>
-      <MarketingNav cta={cta} showSignIn={state === 'out'} />
+      <MarketingNav cta={cta} showSignIn={state === 'out'} frostless />
       <Hero cta={cta} />
       <VerifyAndRelease />
       <ReviewQueue />
@@ -55,7 +55,8 @@ function BillingLink({ children }: { children: React.ReactNode }) {
 
 function Hero({ cta }: { cta: { href: string; label: string } }) {
   return (
-    <section className="relative flex flex-col justify-center" style={{ background: 'radial-gradient(120% 90% at 92% -8%, rgba(176,230,196,0.75) 0%, rgba(255,255,255,0) 56%), linear-gradient(180deg, #ecfaf1 0%, #f5fbf7 42%, #ffffff 92%)', paddingTop: 56, paddingBottom: 150, minHeight: 'calc(100vh - 68px)' }}>
+    <>
+    <section className="flex flex-col justify-center" style={{ background: 'radial-gradient(120% 90% at 92% -8%, rgba(176,230,196,0.75) 0%, rgba(255,255,255,0) 56%), linear-gradient(180deg, #ecfaf1 0%, #f5fbf7 42%, #ffffff 92%)', paddingTop: 56, paddingBottom: 48, minHeight: 'calc(100vh - 168px)' }}>
       <div className={`${WRAP} grid items-center gap-10 lg:gap-16 grid-cols-1 lg:grid-cols-[1fr_1.4fr]`}>
         <div>
           <Reveal>
@@ -101,10 +102,9 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
           </div>
         </Reveal>
       </div>
-      <div className="absolute inset-x-0 bottom-16 sm:bottom-20 z-10">
-        <HeroFeatureNav items={HERO_TABS} />
-      </div>
     </section>
+    <HeroFeatureNav items={HERO_TABS} sticky />
+    </>
   );
 }
 
@@ -129,7 +129,7 @@ function AccCard({ Icon, iconBg, iconColor, title, desc }: {
 
 function VerifyAndRelease() {
   return (
-    <section id="features" style={{ padding: '90px 0 86px', scrollMarginTop: 80 }}>
+    <section id="features" style={{ padding: '90px 0 86px', scrollMarginTop: 150 }}>
       {/* The accessorial cards overlap the screenshot's lower whitespace on
           desktop; below 880px they stack below it and the decorative
           overlays (badge / filter chip / popover) hide. */}
@@ -209,7 +209,7 @@ function Caption({ Icon, iconBg, iconColor, title, sub }: {
 
 function ReviewQueue() {
   return (
-    <section id="review-queue" style={{ background: '#f8f9fa', borderTop: '1px solid #e8eaed', padding: '90px 0', scrollMarginTop: 80 }}>
+    <section id="review-queue" style={{ background: '#f8f9fa', borderTop: '1px solid #e8eaed', padding: '90px 0', scrollMarginTop: 150 }}>
       <div className={WRAP}>
         <Reveal style={{ maxWidth: 700 }}>
           <span className="font-mono" style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.14em', textTransform: 'uppercase', color: '#1e8e3e' }}>The review queue</span>
@@ -292,6 +292,7 @@ function FinalCta({ cta }: { cta: { href: string; label: string } }) {
 function Footer() {
   const cols: ReadonlyArray<[string, ReadonlyArray<[string, string]>]> = [
     ['Product', [
+      ['Calendar',  '/product/calendar'],
       ['Payroll',   '/product/payroll'],
       ['Dashboard', '/product/dashboard'],
       ['Paperwork', '/product/paperwork'],

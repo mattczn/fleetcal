@@ -27,7 +27,7 @@ import { Menu, X } from 'lucide-react';
 
 interface Cta { href: string; label: string }
 
-export default function MarketingNav({ cta, showSignIn }: { cta: Cta; showSignIn: boolean }) {
+export default function MarketingNav({ cta, showSignIn, frostless = false }: { cta: Cta; showSignIn: boolean; frostless?: boolean }) {
   const [scrolled, setScrolled] = useState(false);
   const [open, setOpen] = useState(false);
 
@@ -61,9 +61,9 @@ export default function MarketingNav({ cta, showSignIn }: { cta: Cta; showSignIn
     <nav
       className="sticky top-0 z-50 backdrop-blur"
       style={{
-        background:        'rgba(255,255,255,0.82)',
-        WebkitBackdropFilter: 'saturate(180%) blur(12px)',
-        backdropFilter:    'saturate(180%) blur(12px)',
+        background:        frostless ? 'transparent' : 'rgba(255,255,255,0.82)',
+        WebkitBackdropFilter: frostless ? 'none' : 'saturate(180%) blur(12px)',
+        backdropFilter:    frostless ? 'none' : 'saturate(180%) blur(12px)',
         borderBottom:      `1px solid ${scrolled || open ? '#e8eaed' : 'transparent'}`,
         boxShadow:         scrolled ? '0 1px 0 rgba(60,64,67,0.04)' : 'none',
         transition:        'border-color .25s, box-shadow .25s',

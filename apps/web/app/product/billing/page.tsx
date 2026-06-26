@@ -23,7 +23,7 @@ export default async function BillingMarketingPage() {
 
   return (
     <div data-marketing-scroll className="h-full overflow-y-auto font-sys bg-sys-bg text-sys-primary" style={{ scrollBehavior: 'smooth' }}>
-      <MarketingNav cta={cta} showSignIn={state === 'out'} />
+      <MarketingNav cta={cta} showSignIn={state === 'out'} frostless />
       <Hero cta={cta} />
       <Pipeline />
       <Features />
@@ -57,7 +57,8 @@ function PaperworkLink({ children }: { children: React.ReactNode }) {
 
 function Hero({ cta }: { cta: { href: string; label: string } }) {
   return (
-    <section className="relative flex flex-col justify-center" style={{ background: 'radial-gradient(120% 90% at 92% -8%, rgba(168,206,250,0.7) 0%, rgba(255,255,255,0) 56%), linear-gradient(180deg, #eef4fe 0%, #f6f9fe 42%, #ffffff 92%)', paddingTop: 56, paddingBottom: 150, minHeight: 'calc(100vh - 68px)' }}>
+    <>
+    <section className="flex flex-col justify-center" style={{ background: 'radial-gradient(120% 90% at 92% -8%, rgba(168,206,250,0.7) 0%, rgba(255,255,255,0) 56%), linear-gradient(180deg, #eef4fe 0%, #f6f9fe 42%, #ffffff 92%)', paddingTop: 56, paddingBottom: 48, minHeight: 'calc(100vh - 168px)' }}>
       <div className={`${WRAP} grid items-center gap-10 lg:gap-16 grid-cols-1 lg:grid-cols-[1fr_1.4fr]`}>
         <div>
           <Reveal>
@@ -104,10 +105,9 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
         </Reveal>
       </div>
 
-      <div className="absolute inset-x-0 bottom-16 sm:bottom-20 z-10">
-        <HeroFeatureNav items={HERO_TABS} />
-      </div>
     </section>
+    <HeroFeatureNav items={HERO_TABS} sticky />
+    </>
   );
 }
 
@@ -115,7 +115,7 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
 
 function Pipeline() {
   return (
-    <section id="features" style={{ padding: '90px 0 86px', scrollMarginTop: 80 }}>
+    <section id="features" style={{ padding: '90px 0 86px', scrollMarginTop: 150 }}>
       <style>{`@media (max-width: 879px){.bl-hide-sm{display:none!important}}`}</style>
       <div className={WRAP}>
         <Reveal style={{ maxWidth: 680 }}>
@@ -152,7 +152,7 @@ function FeatureRow({ id, Icon, iconBg, iconColor, kicker, title, body, card, fl
 }) {
   return (
     <Reveal>
-      <div id={id} style={{ scrollMarginTop: 80 }} className={`grid items-center gap-12 lg:gap-[60px] grid-cols-1 ${flip ? 'lg:grid-cols-[1.12fr_1fr]' : 'lg:grid-cols-[1fr_1.12fr]'}`}>
+      <div id={id} style={{ scrollMarginTop: 150 }} className={`grid items-center gap-12 lg:gap-[60px] grid-cols-1 ${flip ? 'lg:grid-cols-[1.12fr_1fr]' : 'lg:grid-cols-[1fr_1.12fr]'}`}>
         <div className={flip ? 'order-1 lg:order-2' : 'order-1'}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <span style={{ width: 46, height: 46, flex: 'none', borderRadius: 13, background: iconBg, color: iconColor, display: 'grid', placeItems: 'center' }}><Icon size={20} strokeWidth={2.2} /></span>
@@ -231,6 +231,7 @@ function FinalCta({ cta }: { cta: { href: string; label: string } }) {
 function Footer() {
   const cols: ReadonlyArray<[string, ReadonlyArray<[string, string]>]> = [
     ['Product', [
+      ['Calendar',  '/product/calendar'],
       ['Payroll',   '/product/payroll'],
       ['Dashboard', '/product/dashboard'],
       ['Paperwork', '/product/paperwork'],
