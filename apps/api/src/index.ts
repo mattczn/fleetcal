@@ -64,6 +64,7 @@ import { runConfirmReminders } from "./jobs/confirmReminders.js";
 import { runAiUsageSweep } from "./jobs/aiUsageSweep.js";
 import { trackCronRun } from "./lib/cronRun.js";
 import { runFuelAutoMatchSweep } from "./jobs/fuelAutoMatchSweep.js";
+import { runMudflapSyncSweep } from "./jobs/mudflapSyncSweep.js";
 import pkg from "../package.json" with { type: "json" };
 
 import type { HealthResponse } from "@fleetcal/types";
@@ -443,6 +444,53 @@ async function fireOdometerSnapshot(label: string): Promise<void> {
 }
 setTimeout(() => void fireOdometerSnapshot("startup pass"), ODOMETER_STARTUP_DELAY_MS).unref();
 setInterval(() => void fireOdometerSnapshot("hourly tick"), ODOMETER_CHECK_INTERVAL_MS).unref();
+
+// ── Mudflap Carriers API sync ──────────────────────────────────────────
+//
+// Pulls recent card transactions from the Mudflap Carriers API into
+// fuel_transactions on a fixed interval — the automated equivalent of
+// the manual "Sync Mudflap" button on the Equipment page. Without it,
+// card-side transactions only land when a dispatcher clicks sync; the
+// fuel-auto-match sweep below then pairs each one to its driver report.
+//
+// Pulls a rolling MUDFLAP_SYNC_WINDOW_DAYS-day window (default 3) each
+// run. The ingest is idempotent (a duplicate provider_transaction_id
+// counts as a duplicate, not an error), so overlapping windows are
+// cheap and self-heal any gap from a missed run. See
+// jobs/mudflapSyncSweep.ts for the org-scoping + no-token-skip logic.
+//
+// Cadence: every 30 min — Mudflap delivers a receipt ~30 min after the
+// pump swipe, so a 30-min pull keeps card transactions fresh for the
+// 15-min match sweep to pair.
+//
+// Single-replica caveat: same as the other in-process crons. The
+// idempotent ingest makes accidental double-runs harmless.
+
+const MUDFLAP_SYNC_INTERVAL_MS   = Number(process.env.MUDFLAP_SYNC_INTERVAL_MS   ?? 30 * 60 * 1000);
+const MUDFLAP_SYNC_STARTUP_DELAY = Number(process.env.MUDFLAP_SYNC_STARTUP_DELAY_MS ?? 150_000);
+
+async function fireMudflapSync(label: string): Promise<void> {
+  try {
+    await trackCronRun("mudflap-sync", async () => {
+      const r = await runMudflapSyncSweep();
+      if (r.skipped || !r.result) {
+        return { meta: { skipped: true, reason: r.reason ?? "skipped" } };
+      }
+      const { fetched, inserted, duplicates, failed, assetLinked } = r.result;
+      if (fetched > 0) {
+        console.log(
+          `[mudflap-sync] ${label}: fetched=${fetched}, inserted=${inserted}, ` +
+          `duplicates=${duplicates}, failed=${failed}, assetLinked=${assetLinked} (${r.from}→${r.to})`,
+        );
+      }
+      return { meta: { fetched, inserted, duplicates, failed, assetLinked, from: r.from, to: r.to } };
+    });
+  } catch (err) {
+    console.error(`[mudflap-sync] ${label} failed:`, err);
+  }
+}
+setTimeout(() => void fireMudflapSync("startup pass"), MUDFLAP_SYNC_STARTUP_DELAY).unref();
+setInterval(() => void fireMudflapSync("tick"), MUDFLAP_SYNC_INTERVAL_MS).unref();
 
 // ── Fuel auto-match sweep ──────────────────────────────────────────────
 //
