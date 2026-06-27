@@ -21,6 +21,7 @@ export default function HeroFeatureNav({ items, sticky = false }: { items: Reado
   const [stuck, setStuck] = useState(false);
   const [barH, setBarH] = useState(73);
   const barRef = useRef<HTMLDivElement>(null);
+  const railRef = useRef<HTMLDivElement>(null);
 
   // Active-tab scrollspy.
   useEffect(() => {
@@ -39,6 +40,19 @@ export default function HeroFeatureNav({ items, sticky = false }: { items: Reado
     });
     return () => obs.disconnect();
   }, [items]);
+
+  // Keep the active tab centered in the horizontally-scrollable rail as the
+  // scrollspy advances it — on mobile the rail scrolls, so the current
+  // section's tab is always brought into view (no-op on desktop where it fits).
+  useEffect(() => {
+    const rail = railRef.current;
+    if (!rail) return;
+    const btn = rail.querySelector<HTMLElement>(`[data-tab-id="${active}"]`);
+    if (!btn) return;
+    const br = btn.getBoundingClientRect();
+    const rr = rail.getBoundingClientRect();
+    rail.scrollBy({ left: (br.left + br.width / 2) - (rr.left + rr.width / 2), behavior: 'smooth' });
+  }, [active]);
 
   // Stuck detection (sticky mode): the row reports < 1 visibility the moment
   // it pins under the 68px nav, which toggles the frosted backdrop.
@@ -66,6 +80,7 @@ export default function HeroFeatureNav({ items, sticky = false }: { items: Reado
     <nav className="mx-auto w-full max-w-[1600px] px-5 sm:px-6 md:px-8 lg:px-12 flex justify-center">
       <style>{`.hfn-rail::-webkit-scrollbar{display:none}`}</style>
       <div
+        ref={railRef}
         className="hfn-rail flex items-center gap-1"
         style={{
           background: '#fff',
@@ -84,6 +99,7 @@ export default function HeroFeatureNav({ items, sticky = false }: { items: Reado
             <button
               key={it.id}
               type="button"
+              data-tab-id={it.id}
               onClick={() => jump(it.id)}
               aria-current={on ? 'true' : undefined}
               className="font-display whitespace-nowrap transition-all"

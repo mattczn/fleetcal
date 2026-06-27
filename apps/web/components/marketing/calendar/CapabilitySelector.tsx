@@ -238,29 +238,61 @@ export default function CapabilitySelector() {
   const t = TABS[active];
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-[0.82fr_1.5fr] gap-8 items-start">
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <>
+      {/* Mobile (<lg): accordion — tapping a capability expands its detail
+          inline, so the choice and what it shows stay together. */}
+      <div className="lg:hidden" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {TABS.map((tab, i) => {
           const on = i === active;
           return (
-            <button key={tab.tab} type="button" onClick={() => setActive(i)} style={{ textAlign: 'left', width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '13px 15px', borderRadius: 12, border: `1px solid ${on ? tab.color : '#e8eaed'}`, background: on ? tab.light : '#fff', cursor: 'pointer', transition: 'background .15s, border-color .15s' }}>
-              <span style={{ width: 34, height: 34, flex: 'none', borderRadius: 9, background: on ? '#fff' : tab.light, color: tab.color, display: 'grid', placeItems: 'center' }}><tab.Icon size={16} strokeWidth={2.3} /></span>
-              <span className="font-display" style={{ fontWeight: 700, fontSize: 14.5, color: on ? tab.color : '#3c4043' }}>{tab.tab}</span>
-            </button>
+            <div key={tab.tab} style={{ border: `1px solid ${on ? tab.color : '#e8eaed'}`, borderRadius: 14, overflow: 'hidden', background: '#fff', transition: 'border-color .15s' }}>
+              <button type="button" onClick={() => setActive(i)} aria-expanded={on} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', background: on ? tab.light : '#fff', border: 'none', cursor: 'pointer', textAlign: 'left' }}>
+                <span style={{ width: 34, height: 34, flex: 'none', borderRadius: 9, background: on ? '#fff' : tab.light, color: tab.color, display: 'grid', placeItems: 'center' }}><tab.Icon size={16} strokeWidth={2.3} /></span>
+                <span className="font-display" style={{ flex: 1, fontWeight: 700, fontSize: 15, color: on ? tab.color : '#3c4043' }}>{tab.tab}</span>
+                <ChevronDown size={18} style={{ flex: 'none', color: '#9aa0a6', transform: on ? 'rotate(180deg)' : 'none', transition: 'transform .2s' }} />
+              </button>
+              {on && (
+                <div style={{ borderTop: '1px solid #e8eaed' }}>
+                  <div style={{ padding: '16px 16px 4px' }}>
+                    <span style={{ fontFamily: MONO, fontSize: 11, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: tab.color }}>{tab.kicker}</span>
+                    <h3 className="font-display" style={{ fontWeight: 700, fontSize: 18, lineHeight: 1.2, margin: '8px 0 0', color: '#202124' }}>{tab.title}</h3>
+                    <p style={{ fontSize: 14, lineHeight: 1.55, color: '#5f6368', margin: '6px 0 0' }}>{tab.desc}</p>
+                  </div>
+                  <div style={{ background: '#f8f9fa', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+                    {VISUALS[i]}
+                  </div>
+                </div>
+              )}
+            </div>
           );
         })}
       </div>
 
-      <div style={{ background: '#fff', border: '1px solid #e8eaed', borderRadius: 18, boxShadow: '0 10px 30px -16px rgba(26,35,50,.18)', overflow: 'hidden' }}>
-        <div style={{ padding: '22px 24px 18px', borderBottom: '1px solid #e8eaed' }}>
-          <span style={{ fontFamily: MONO, fontSize: 11, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: t.color }}>{t.kicker}</span>
-          <h3 className="font-display" style={{ fontWeight: 700, fontSize: 20, lineHeight: 1.2, margin: '9px 0 0', color: '#202124' }}>{t.title}</h3>
-          <p style={{ fontSize: 14.5, lineHeight: 1.55, color: '#5f6368', margin: '7px 0 0', minHeight: 45 }}>{t.desc}</p>
+      {/* Desktop (lg+): tab list on the left, fixed detail card on the right. */}
+      <div className="hidden lg:grid lg:grid-cols-[0.82fr_1.5fr] gap-8 items-start">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {TABS.map((tab, i) => {
+            const on = i === active;
+            return (
+              <button key={tab.tab} type="button" onClick={() => setActive(i)} style={{ textAlign: 'left', width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '13px 15px', borderRadius: 12, border: `1px solid ${on ? tab.color : '#e8eaed'}`, background: on ? tab.light : '#fff', cursor: 'pointer', transition: 'background .15s, border-color .15s' }}>
+                <span style={{ width: 34, height: 34, flex: 'none', borderRadius: 9, background: on ? '#fff' : tab.light, color: tab.color, display: 'grid', placeItems: 'center' }}><tab.Icon size={16} strokeWidth={2.3} /></span>
+                <span className="font-display" style={{ fontWeight: 700, fontSize: 14.5, color: on ? tab.color : '#3c4043' }}>{tab.tab}</span>
+              </button>
+            );
+          })}
         </div>
-        <div style={{ height: 320, background: '#f8f9fa', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, overflow: 'hidden' }}>
-          {VISUALS[active]}
+
+        <div style={{ background: '#fff', border: '1px solid #e8eaed', borderRadius: 18, boxShadow: '0 10px 30px -16px rgba(26,35,50,.18)', overflow: 'hidden' }}>
+          <div style={{ padding: '22px 24px 18px', borderBottom: '1px solid #e8eaed' }}>
+            <span style={{ fontFamily: MONO, fontSize: 11, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: t.color }}>{t.kicker}</span>
+            <h3 className="font-display" style={{ fontWeight: 700, fontSize: 20, lineHeight: 1.2, margin: '9px 0 0', color: '#202124' }}>{t.title}</h3>
+            <p style={{ fontSize: 14.5, lineHeight: 1.55, color: '#5f6368', margin: '7px 0 0', minHeight: 45 }}>{t.desc}</p>
+          </div>
+          <div style={{ height: 320, background: '#f8f9fa', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, overflow: 'hidden' }}>
+            {VISUALS[active]}
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }

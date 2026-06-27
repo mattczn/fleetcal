@@ -134,6 +134,23 @@
     position: static !important;
     margin-top: 12px;
   }
+  /* Paperwork group opts out of the stack: its chip + invoice bar stay
+   * overlaid on the screenshot on mobile. */
+  .group-topbadge.grp-overlay {
+    position: absolute !important;
+    top: 8px !important;
+    left: 8px !important;
+    right: auto !important;
+    margin-top: 0 !important;
+  }
+  .group-secondary.grp-overlay {
+    position: absolute !important;
+    bottom: 8px !important;
+    left: 50% !important;
+    transform: translateX(-50%) !important;
+    width: 92% !important;
+    margin-top: 0 !important;
+  }
 }
 @media (max-width: 560px) {
   /* On the smallest viewports trim the section even further so the

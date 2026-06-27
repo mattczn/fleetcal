@@ -894,6 +894,13 @@ function GroupCopy({ group }: { group: FeatureGroup }) {
 function GroupVisual({ group, flip }: { group: FeatureGroup; flip: boolean }) {
   const off = -10;
   const sec = group.secondary;
+  // The dispatch group's overlays (AI badge + drag-drop video) turn the
+  // mobile stack into three calendar-ish blocks; on phones show only the
+  // primary calendar screenshot.
+  const hideSecOnMobile = group.key === 'dispatch';
+  // The paperwork group keeps its chip + invoice bar overlaid on the
+  // screenshot (instead of stacking) even on mobile.
+  const mobileOverlay = group.key === 'paperwork';
   // Reserve extra padding below the primary so the floating overlay
   // doesn't get clipped by the parent grid row.
   const pad = !sec ? 0 : sec.kind === 'badge' ? 34 : sec.kind === 'invoicebar' ? 30 : 44;
@@ -925,7 +932,7 @@ function GroupVisual({ group, flip }: { group: FeatureGroup; flip: boolean }) {
 
       {group.topBadge && (
         <div
-          className="group-topbadge"
+          className={`group-topbadge${hideSecOnMobile ? ' max-[880px]:hidden' : ''}${mobileOverlay ? ' grp-overlay' : ''}`}
           style={{
             position: 'absolute',
             top: -16,
@@ -957,7 +964,7 @@ function GroupVisual({ group, flip }: { group: FeatureGroup; flip: boolean }) {
 
       {sec && sec.kind === 'invoicebar' && (
         <div
-          className="group-secondary"
+          className={`group-secondary${mobileOverlay ? ' grp-overlay' : ''}`}
           style={{
             position: 'absolute',
             bottom: 16,
@@ -1000,7 +1007,7 @@ function GroupVisual({ group, flip }: { group: FeatureGroup; flip: boolean }) {
 
       {sec && sec.kind === 'video' && (
         <div
-          className="group-secondary"
+          className={`group-secondary${hideSecOnMobile ? ' max-[880px]:hidden' : ''}`}
           style={{
             position: 'absolute',
             width: `${sec.widthPct}%`,
