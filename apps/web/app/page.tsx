@@ -1078,7 +1078,7 @@ function Features() {
         borderBottom:  '1px solid #e8eaed',
       }}>
       <div className={WRAP}>
-        <Reveal style={{ maxWidth: 760 }}>
+        <Reveal style={{ maxWidth: 760, margin: '0 auto', textAlign: 'center' }}>
           <SectionTitle>
             Carrier first tools that<br /><span style={{ color: 'var(--gc-blue)' }}>keep trucks moving.</span>
           </SectionTitle>
