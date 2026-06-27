@@ -100,7 +100,7 @@ export default function PayrollHeroCard() {
         </div>
 
         {/* KPI tiles */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1, background: '#e8eaed' }}>
+        <div className="grid grid-cols-1 sm:grid-cols-2" style={{ gap: 1, background: '#e8eaed' }}>
           <div style={{ background: '#fff', padding: 22 }}>
             <div className="font-mono" style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#5f6368' }}>Total Weekly Gross</div>
             <div ref={grossRef} className="font-display" style={{ fontWeight: 800, fontSize: 34, letterSpacing: '-0.02em', color: '#202124', marginTop: 8 }}>{money(GROSS)}</div>

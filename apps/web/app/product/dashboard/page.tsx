@@ -144,7 +144,7 @@ function RevenueSources() {
                       <div style={{ height: '100%', width: t.barW, background: t.color, borderRadius: 999 }} />
                     </div>
                     <span className="font-display" style={{ width: 48, flex: 'none', textAlign: 'right', fontWeight: 700, fontSize: 13, color: '#202124' }}>{t.value}</span>
-                    <span style={{ width: 84, flex: 'none', textAlign: 'right', fontSize: 12, color: '#5f6368' }}>{t.loads}</span>
+                    <span className="hidden sm:block" style={{ width: 84, flex: 'none', textAlign: 'right', fontSize: 12, color: '#5f6368' }}>{t.loads}</span>
                   </div>
                 ))}
               </div>

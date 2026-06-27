@@ -27,20 +27,20 @@ export default function ModifyPayCard() {
         <span style={{ fontSize: 13, color: '#1a73e8', fontWeight: 600 }}>FreightTec · #6165015</span>
       </div>
       <div style={{ padding: '22px 20px' }}>
-        <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 'clamp(6px, 2.6vw, 16px)' }}>
           <div>
             <div style={{ fontSize: 12, color: '#5f6368', marginBottom: 4 }}>Linehaul</div>
-            <div className="font-display" style={{ fontWeight: 700, fontSize: 24, color: '#202124' }}>{money(LINEHAUL)}</div>
+            <div className="font-display" style={{ fontWeight: 700, fontSize: 'clamp(15px, 4.6vw, 24px)', color: '#202124' }}>{money(LINEHAUL)}</div>
           </div>
           <div style={{ fontSize: 22, color: '#cdd2d8' }}>×</div>
           <div style={{ textAlign: 'center' }}>
             <div style={{ fontSize: 12, color: '#5f6368', marginBottom: 4 }}>Pay %</div>
-            <div className="font-display" style={{ fontWeight: 700, fontSize: 24, color: '#1a73e8' }}>{pct}%</div>
+            <div className="font-display" style={{ fontWeight: 700, fontSize: 'clamp(15px, 4.6vw, 24px)', color: '#1a73e8' }}>{pct}%</div>
           </div>
           <div style={{ fontSize: 22, color: '#cdd2d8' }}>=</div>
           <div style={{ textAlign: 'right' }}>
             <div style={{ fontSize: 12, color: '#5f6368', marginBottom: 4 }}>Driver pay</div>
-            <div className="font-display" style={{ fontWeight: 800, fontSize: 26, color: '#1e8e3e', letterSpacing: '-0.01em' }}>{money(driverPay)}</div>
+            <div className="font-display" style={{ fontWeight: 800, fontSize: 'clamp(16px, 4.8vw, 26px)', color: '#1e8e3e', letterSpacing: '-0.01em' }}>{money(driverPay)}</div>
           </div>
         </div>
 

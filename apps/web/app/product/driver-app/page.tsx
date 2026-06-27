@@ -172,7 +172,7 @@ function LoadDetails() {
             </div>
 
             {/* green-check list */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 18, width: 250, maxWidth: '100%', marginLeft: 38 }}>
+            <div className="lg:ml-[38px]" style={{ display: 'flex', flexDirection: 'column', gap: 18, width: 250, maxWidth: '100%' }}>
               {checks.map(([title, sub]) => (
                 <div key={title} style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
                   <span style={{ width: 22, height: 22, flex: 'none', borderRadius: 999, background: '#e6f4ea', display: 'grid', placeItems: 'center', marginTop: 1 }}><Check size={13} strokeWidth={2.6} style={{ color: '#1e8e3e' }} /></span>

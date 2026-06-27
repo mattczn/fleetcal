@@ -157,7 +157,7 @@ export default function ReviewQueueCard() {
               })}
             </div>
 
-            <div style={{ padding: '14px 20px 18px', borderTop: '1px solid #e8eaed', marginTop: 8, display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ padding: '14px 20px 18px', borderTop: '1px solid #e8eaed', marginTop: 8, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               <button type="button" onClick={() => ready && advance('released')} disabled={!ready} className="font-display" style={{ flex: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 9, fontWeight: 600, fontSize: 14, border: 'none', borderRadius: 10, padding: '13px 16px', cursor: ready ? 'pointer' : 'default', background: ready ? '#1e8e3e' : '#eef1f4', color: ready ? '#fff' : '#9aa0a6' }}>
                 <Check size={15} strokeWidth={2.6} /> Release for invoicing <Kbd label="R" tone={ready ? 'green' : 'gray'} />
               </button>
