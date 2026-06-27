@@ -134,22 +134,46 @@
     position: static !important;
     margin-top: 12px;
   }
-  /* Paperwork group opts out of the stack: its chip + invoice bar stay
-   * overlaid on the screenshot on mobile. */
-  .group-topbadge.grp-overlay {
+  /* Paperwork + payroll opt out of the stack: overlays stay on the
+   * screenshot on mobile. Card overlays (chip / invoice bar / finalize
+   * pill) scale ~2.6x down; a screenshot secondary just overlaps the
+   * primary a little. */
+  .group-topbadge.grp-card-sm {
     position: absolute !important;
-    top: 8px !important;
-    left: 8px !important;
+    top: 6px !important;
+    left: 6px !important;
     right: auto !important;
     margin-top: 0 !important;
+    transform: scale(0.38) !important;
+    transform-origin: top left !important;
   }
-  .group-secondary.grp-overlay {
+  .group-secondary.grp-card-sm {
     position: absolute !important;
-    bottom: 8px !important;
+    bottom: 4px !important;
     left: 50% !important;
-    transform: translateX(-50%) !important;
+    right: auto !important;
     width: 92% !important;
     margin-top: 0 !important;
+    transform: translateX(-50%) scale(0.38) !important;
+    transform-origin: center bottom !important;
+  }
+  .group-secondary.grp-shot {
+    position: absolute !important;
+    bottom: 8px !important;
+    right: 6px !important;
+    left: auto !important;
+    width: 56% !important;
+    margin-top: 0 !important;
+    transform: none !important;
+  }
+  .finalize-wrap.grp-card-sm {
+    position: absolute !important;
+    bottom: -4px !important;
+    left: 6px !important;
+    right: auto !important;
+    margin-top: 0 !important;
+    transform: scale(0.42) !important;
+    transform-origin: bottom left !important;
   }
 }
 @media (max-width: 560px) {

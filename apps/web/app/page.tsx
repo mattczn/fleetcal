@@ -898,9 +898,10 @@ function GroupVisual({ group, flip }: { group: FeatureGroup; flip: boolean }) {
   // mobile stack into three calendar-ish blocks; on phones show only the
   // primary calendar screenshot.
   const hideSecOnMobile = group.key === 'dispatch';
-  // The paperwork group keeps its chip + invoice bar overlaid on the
-  // screenshot (instead of stacking) even on mobile.
-  const mobileOverlay = group.key === 'paperwork';
+  // Paperwork + payroll keep their overlays on the screenshot (instead of
+  // stacking) on mobile: card overlays (chip/invoice bar/finalize pill) scale
+  // way down; a screenshot secondary just overlaps the primary a little.
+  const mobileOverlay = group.key === 'paperwork' || group.key === 'payroll';
   // Reserve extra padding below the primary so the floating overlay
   // doesn't get clipped by the parent grid row.
   const pad = !sec ? 0 : sec.kind === 'badge' ? 34 : sec.kind === 'invoicebar' ? 30 : 44;
@@ -932,7 +933,7 @@ function GroupVisual({ group, flip }: { group: FeatureGroup; flip: boolean }) {
 
       {group.topBadge && (
         <div
-          className={`group-topbadge${hideSecOnMobile ? ' max-[880px]:hidden' : ''}${mobileOverlay ? ' grp-overlay' : ''}`}
+          className={`group-topbadge${hideSecOnMobile ? ' max-[880px]:hidden' : ''}${mobileOverlay ? ' grp-card-sm' : ''}`}
           style={{
             position: 'absolute',
             top: -16,
@@ -964,7 +965,7 @@ function GroupVisual({ group, flip }: { group: FeatureGroup; flip: boolean }) {
 
       {sec && sec.kind === 'invoicebar' && (
         <div
-          className={`group-secondary${mobileOverlay ? ' grp-overlay' : ''}`}
+          className={`group-secondary${mobileOverlay ? ' grp-card-sm' : ''}`}
           style={{
             position: 'absolute',
             bottom: 16,
@@ -980,7 +981,7 @@ function GroupVisual({ group, flip }: { group: FeatureGroup; flip: boolean }) {
 
       {sec && sec.kind === 'image' && (
         <div
-          className="group-secondary"
+          className={`group-secondary${mobileOverlay ? ' grp-shot' : ''}`}
           style={{
             position: 'absolute',
             width: `${sec.widthPct}%`,
@@ -998,7 +999,7 @@ function GroupVisual({ group, flip }: { group: FeatureGroup; flip: boolean }) {
             />
           </BareFrame>
           {sec.overlay?.kind === 'finalizepay' && (
-            <div className="finalize-wrap" style={{ position: 'absolute', bottom: -16, left: -12, zIndex: 4 }}>
+            <div className={`finalize-wrap${mobileOverlay ? ' grp-card-sm' : ''}`} style={{ position: 'absolute', bottom: -16, left: -12, zIndex: 4 }}>
               <FinalizePay label={sec.overlay.label} amount={sec.overlay.amount} />
             </div>
           )}

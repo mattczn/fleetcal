@@ -147,7 +147,7 @@ export default function HeroFeatureNav({ items, sticky = false }: { items: Reado
       />
       <div
         ref={barRef}
-        className="sticky z-40"
+        className="sticky z-40 hidden md:block"
         style={{
           top: 68,
           paddingTop: 12,

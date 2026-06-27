@@ -227,7 +227,7 @@ function ReviewQueue() {
         </Reveal>
 
         <Reveal>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 items-center" style={{ marginTop: 24 }}>
+          <div className="hidden lg:grid grid-cols-1 lg:grid-cols-2 gap-10 items-center" style={{ marginTop: 24 }}>
             <FlagModal />
             <div style={{ display: 'grid', gap: 22 }}>
               <div className="hidden lg:grid" style={{ background: '#fff', border: '1px solid #e8eaed', borderRadius: 18, boxShadow: '0 1px 2px rgba(60,64,67,.08)', padding: '22px 24px', gap: 16 }}>

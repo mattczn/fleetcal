@@ -69,8 +69,10 @@ export default function DispatchNotify() {
         </div>
       </div>
 
-      {/* synthetic iPhone lock screen — the notification swaps on select */}
-      <div style={{ display: 'flex', justifyContent: 'center' }}>
+      {/* synthetic iPhone lock screen — the notification swaps on select.
+          Hidden on mobile: it's a hover/tap demo that reads as dead space
+          stacked under the menu on a phone. */}
+      <div className="hidden lg:flex" style={{ justifyContent: 'center' }}>
         <div style={{ width: 262, maxWidth: '100%', background: '#0b0b0c', borderRadius: 42, padding: 8, boxShadow: '0 26px 54px -24px rgba(11,18,32,.55)' }}>
           <div style={{ position: 'relative', borderRadius: 34, overflow: 'hidden', background: 'linear-gradient(165deg,#1b2a4a,#0e1830 58%,#0a1124)', aspectRatio: '1206 / 2622' }}>
             <div style={{ position: 'absolute', top: 11, left: '50%', transform: 'translateX(-50%)', width: 96, height: 26, background: '#000', borderRadius: 999, zIndex: 5 }} />
