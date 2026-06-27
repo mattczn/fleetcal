@@ -136,7 +136,7 @@ function BuildLoads() {
         <Reveal className="order-1 lg:order-1">
           <div style={{ position: 'relative' }}>
             <div className="feat-frame-shadow feat-wide" style={{ position: 'relative', border: '1px solid #e8eaed', borderRadius: 16, overflow: 'hidden', background: '#f8f9fa' }}>
-              <HeroVideo src="/rateconai.mp4" width={1896} height={1080} ariaLabel="AI extracting load details from a dropped rate confirmation" />
+              <HeroVideo src="/rateconai.mp4" width={1952} height={1080} ariaLabel="AI extracting load details from a dropped rate confirmation" />
             </div>
 
             {/* Duplicate / +1 Week modal buttons (bottom-right) */}
@@ -189,7 +189,7 @@ function NudgeRow({ Icon, label, done }: { Icon: React.ComponentType<{ size?: nu
 
 function TruckView() {
   return (
-    <section id="truck" style={{ background: '#f8f9fa', borderTop: '1px solid #e8eaed', borderBottom: '1px solid #e8eaed', padding: '92px 0', scrollMarginTop: 150 }}>
+    <section id="truck" style={{ background: '#f8f9fa', borderTop: '1px solid #e8eaed', padding: '92px 0', scrollMarginTop: 150 }}>
       <div className={WRAP}>
         <Reveal style={{ maxWidth: 880, margin: '0 auto', textAlign: 'center' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
@@ -242,7 +242,7 @@ function TruckView() {
 
 function LoadDetails() {
   return (
-    <section id="load-details" style={{ padding: '94px 0 88px', scrollMarginTop: 150 }}>
+    <section id="load-details" style={{ borderTop: '1px solid #e8eaed', padding: '94px 0 88px', scrollMarginTop: 150 }}>
       <div className={`${WRAP} grid items-center gap-12 lg:gap-[50px] grid-cols-1 lg:grid-cols-[0.78fr_1.48fr]`}>
         <Reveal>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -264,7 +264,7 @@ function LoadDetails() {
 
 function MoreThanCalendar() {
   return (
-    <section id="more" style={{ borderTop: '1px solid #e8eaed', padding: '90px 0 84px', scrollMarginTop: 150 }}>
+    <section id="more" style={{ background: '#f8f9fa', borderTop: '1px solid #e8eaed', padding: '90px 0 84px', scrollMarginTop: 150 }}>
       <div className={WRAP}>
         <Reveal style={{ textAlign: 'center', maxWidth: 680, margin: '0 auto 44px' }}>
           <span className="font-mono" style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.14em', textTransform: 'uppercase', color: '#1967d2' }}>More than just a calendar</span>

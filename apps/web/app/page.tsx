@@ -362,7 +362,7 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
                   first frame. See its docstring for details. */}
               <HeroVideo
                 src="/rateconai.mp4"
-                width={1844}
+                width={1952}
                 height={1080}
                 ariaLabel="AI parsing a rate confirmation PDF into a load"
               />
@@ -1077,13 +1077,9 @@ function Features() {
       style={{
         padding:         '110px 0 100px',
         scrollMarginTop: 150,
-        // Pale-brand-blue canvas + matching borders. Establishes a
-        // distinct third tone alongside the white hero and the gray
-        // TrustBand / HowItWorks / Story, so the "Built by a carrier"
-        // section reads as its own block instead of flowing visually
-        // out of the hero.
+        // First content section flows out of the hero (no top hairline);
+        // later sections alternate white / gray with a top hairline.
         background:    '#fff',
-        borderBottom:  '1px solid #e8eaed',
       }}>
       <div className={WRAP}>
         <Reveal style={{ maxWidth: 760, margin: '0 auto', textAlign: 'center' }}>
@@ -1159,7 +1155,6 @@ function HowItWorks() {
         padding:       '100px 0',
         background:    '#f8f9fa',
         borderTop:     '1px solid #e8eaed',
-        borderBottom:  '1px solid #e8eaed',
         scrollMarginTop: 150,
       }}
     >
@@ -1229,7 +1224,7 @@ function HowItWorks() {
 
 function Pricing() {
   return (
-    <section id="pricing" style={{ padding: '110px 0 100px', scrollMarginTop: 150 }}>
+    <section id="pricing" style={{ padding: '110px 0 100px', borderTop: '1px solid #e8eaed', scrollMarginTop: 150 }}>
       <div className={WRAP}>
         <Reveal style={{ textAlign: 'center', maxWidth: 680, margin: '0 auto' }}>
           <SectionLabel>Pricing</SectionLabel>
@@ -1259,7 +1254,6 @@ function Story() {
         padding:       '100px 0',
         background:    '#f8f9fa',
         borderTop:     '1px solid #e8eaed',
-        borderBottom:  '1px solid #e8eaed',
         scrollMarginTop: 150,
       }}
     >
@@ -1368,7 +1362,7 @@ const FAQS = [
 
 function Faq() {
   return (
-    <section id="faq" style={{ padding: '110px 0', scrollMarginTop: 150 }}>
+    <section id="faq" style={{ padding: '110px 0', borderTop: '1px solid #e8eaed', scrollMarginTop: 150 }}>
       <div
         className={`${WRAP} grid items-start gap-10 lg:gap-16 grid-cols-1 lg:grid-cols-[0.8fr_1.4fr]`}
       >

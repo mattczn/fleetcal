@@ -123,7 +123,7 @@ const DONUT = 'conic-gradient(#1a73e8 0 20.3%, #1e8e3e 0 39.7%, #ea4335 0 51.1%,
 
 function RevenueSources() {
   return (
-    <section id="revenue" style={{ background: '#f8f9fa', borderBottom: '1px solid #e8eaed', padding: '88px 0', scrollMarginTop: 150 }}>
+    <section id="revenue" style={{ padding: '88px 0', scrollMarginTop: 150 }}>
       <div className={WRAP}>
         <Reveal style={{ maxWidth: 640 }}>
           <span className="font-mono" style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.14em', textTransform: 'uppercase', color: '#1e8e3e' }}>Where the money comes from</span>
@@ -196,7 +196,7 @@ const GRID = ['$20.0K', '$15.0K', '$10.0K', '$5.0K', '$0'];
 
 function ReportsAndTrends() {
   return (
-    <section id="reports" style={{ padding: '92px 0', scrollMarginTop: 150 }}>
+    <section id="reports" style={{ background: '#f8f9fa', borderTop: '1px solid #e8eaed', padding: '92px 0', scrollMarginTop: 150 }}>
       {/* Overlap: chart (76%) left, report builder (62%) pulled up over its
           bottom-right corner. Collapses to a stack below 880px. */}
       <style>{`.db-overlap > :first-child { width: 100%; } .db-overlap > :last-child { width: 100%; margin-top: 18px; } @media (min-width: 880px) { .db-overlap > :first-child { width: 76%; max-width: 920px; } .db-overlap > :last-child { width: 62%; margin-left: auto; margin-top: -68px; position: relative; z-index: 2; } }`}</style>

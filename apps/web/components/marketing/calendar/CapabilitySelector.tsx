@@ -241,7 +241,7 @@ export default function CapabilitySelector() {
     <>
       {/* Mobile (<lg): accordion — tapping a capability expands its detail
           inline, so the choice and what it shows stay together. */}
-      <div className="lg:hidden" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div className="lg:hidden flex flex-col" style={{ gap: 10 }}>
         {TABS.map((tab, i) => {
           const on = i === active;
           return (
