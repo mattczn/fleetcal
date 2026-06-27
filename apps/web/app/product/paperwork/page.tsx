@@ -1,11 +1,12 @@
 import Link from 'next/link';
 import Image from 'next/image';
 import { auth } from '@clerk/nextjs/server';
-import { ArrowLeft, Play, Check, ChevronDown, DollarSign, CreditCard, Flag, FileText } from 'lucide-react';
+import { Play, Check, ChevronDown, DollarSign, Flag, FileText } from 'lucide-react';
 import MarketingNav from '@/components/marketing/MarketingNav';
 import Reveal from '@/components/marketing/Reveal';
 import HeroVideo from '@/components/marketing/HeroVideo';
 import HeroFeatureNav from '@/components/marketing/HeroFeatureNav';
+import ProductFlowFooter from '@/components/marketing/ProductFlowFooter';
 import ReviewQueueCard from '@/components/marketing/paperwork/ReviewQueueCard';
 import FlagModal from '@/components/marketing/paperwork/FlagModal';
 
@@ -27,6 +28,7 @@ export default async function PaperworkMarketingPage() {
       <Hero cta={cta} />
       <VerifyAndRelease />
       <ReviewQueue />
+      <ProductFlowFooter current="paperwork" />
       <FinalCta cta={cta} />
       <Footer />
     </div>
@@ -80,11 +82,8 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
               <Link href={cta.href} className="font-display" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'var(--gc-blue)', color: '#fff', fontWeight: 600, fontSize: 17, padding: '16px 32px', borderRadius: 999, textDecoration: 'none', boxShadow: 'var(--shadow-1)', whiteSpace: 'nowrap' }}>
                 {cta.label.replace(' →', '')}
               </Link>
-              <Link href="/" className="font-display" style={{ display: 'inline-flex', alignItems: 'center', gap: 9, color: '#1967d2', fontWeight: 600, fontSize: 17, padding: '16px 22px', borderRadius: 999, textDecoration: 'none', whiteSpace: 'nowrap' }}>
-                <span style={{ width: 26, height: 26, borderRadius: 999, background: '#e8f0fe', display: 'grid', placeItems: 'center' }}>
-                  <ArrowLeft size={14} style={{ color: '#1967d2' }} strokeWidth={2.4} />
-                </span>
-                Back to home
+              <Link href="/contact-sales" className="font-display" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: '#fff', color: '#1967d2', border: '1px solid #dadce0', fontWeight: 600, fontSize: 17, padding: '15px 28px', borderRadius: 999, textDecoration: 'none', whiteSpace: 'nowrap' }}>
+                Book a demo
               </Link>
             </div>
           </Reveal>
@@ -138,7 +137,7 @@ function VerifyAndRelease() {
         <Reveal style={{ maxWidth: 680 }}>
           <span className="font-mono" style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.14em', textTransform: 'uppercase', color: '#1967d2' }}>Verify &amp; release</span>
           <h2 className="font-display" style={{ fontWeight: 800, fontSize: 'clamp(28px, 3.4vw, 40px)', lineHeight: 1.08, letterSpacing: '-0.022em', margin: '14px 0 0', color: '#202124' }}>Every delivered load lands here, ready to verify.</h2>
-          <p style={{ fontSize: 17.5, lineHeight: 1.6, color: '#5f6368', margin: '14px 0 0' }}>One board for paperwork verification. See what&rsquo;s ready, what&rsquo;s flagged, and what&rsquo;s released, and filter by accessorial so a pending detention or lumper never slips into an under-billed invoice. Everything you release flows straight into <BillingLink>Billing</BillingLink>.</p>
+          <p style={{ fontSize: 17.5, lineHeight: 1.6, color: '#5f6368', margin: '14px 0 0' }}>Once a load is marked delivered, it lands in the paperwork verification queue. Here you can see what&rsquo;s ready to release for billing, flag loads that need to be followed up with, and filter by accessorial so a pending detention request or lumper reimbursement never slips into an under-billed invoice.</p>
         </Reveal>
 
         <Reveal>
@@ -214,7 +213,7 @@ function ReviewQueue() {
         <Reveal style={{ maxWidth: 700 }}>
           <span className="font-mono" style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.14em', textTransform: 'uppercase', color: '#1e8e3e' }}>The review queue</span>
           <h2 className="font-display" style={{ fontWeight: 800, fontSize: 'clamp(28px, 3.4vw, 40px)', lineHeight: 1.08, letterSpacing: '-0.022em', margin: '14px 0 0', color: '#202124' }}>Verify side by side. Clear the queue. Release to Billing.</h2>
-          <p style={{ fontSize: 17.5, lineHeight: 1.6, color: '#5f6368', margin: '14px 0 0' }}>Open a delivered load and the POD sits next to the rate con and the stops. FleetCal gives each load a verdict, so you press R to release a clean one, F to flag what needs follow-up, or skip and keep moving. Released loads hand off to <BillingLink>Billing</BillingLink> automatically.</p>
+          <p style={{ fontSize: 17.5, lineHeight: 1.6, color: '#5f6368', margin: '14px 0 0' }}>Open the review queue and the POD sits next to the rate con and a list of the stops. FleetCal checks which documents are present and which are missing, so you know when it&rsquo;s ready to release. Use the keyboard shortcuts R to release, F to flag, or skip to review later.</p>
         </Reveal>
 
         <Reveal>
@@ -240,20 +239,6 @@ function ReviewQueue() {
             </div>
           </div>
         </Reveal>
-
-        <Reveal>
-          <Link href="/product/billing" style={{ display: 'flex', alignItems: 'center', gap: 18, marginTop: 24, background: '#fff', border: '1px solid #e8eaed', borderRadius: 16, padding: '20px 24px', textDecoration: 'none', boxShadow: '0 1px 2px rgba(60,64,67,.10)' }}>
-            <span style={{ width: 46, height: 46, flex: 'none', borderRadius: 12, background: '#e8f0fe', color: '#1967d2', display: 'grid', placeItems: 'center' }}>
-              <CreditCard size={21} strokeWidth={2.2} />
-            </span>
-            <div style={{ flex: 1 }}>
-              <div className="font-mono" style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#1967d2' }}>Next step</div>
-              <div className="font-display" style={{ fontWeight: 700, fontSize: 18, color: '#202124', marginTop: 3 }}>Released loads are ready to invoice in Billing</div>
-              <div style={{ fontSize: 14, color: '#5f6368', marginTop: 2 }}>Every load you release here lands in the Billing module, already verified and complete.</div>
-            </div>
-            <span className="font-display" style={{ fontWeight: 600, fontSize: 15, color: '#1967d2', whiteSpace: 'nowrap' }}>Explore Billing →</span>
-          </Link>
-        </Reveal>
       </div>
     </section>
   );
@@ -277,6 +262,9 @@ function FinalCta({ cta }: { cta: { href: string; label: string } }) {
             <Link href={cta.href} className="font-display" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: '#fff', color: '#1967d2', fontWeight: 600, fontSize: 17, padding: '16px 32px', borderRadius: 999, textDecoration: 'none', boxShadow: 'var(--shadow-1)', whiteSpace: 'nowrap' }}>
               {cta.label.replace(' →', '')}
             </Link>
+            <Link href="/contact-sales" className="font-display" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.14)', color: '#fff', fontWeight: 600, fontSize: 17, padding: '16px 32px', borderRadius: 999, textDecoration: 'none', whiteSpace: 'nowrap' }}>
+              Book a demo
+            </Link>
             <Link href="/product/billing" className="font-display" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, justifyContent: 'center', background: 'rgba(255,255,255,0.14)', color: '#fff', fontWeight: 600, fontSize: 17, padding: '16px 32px', borderRadius: 999, textDecoration: 'none', whiteSpace: 'nowrap' }}>
               See the Billing module →
             </Link>
@@ -297,7 +285,7 @@ function Footer() {
       ['Dashboard', '/product/dashboard'],
       ['Paperwork', '/product/paperwork'],
       ['Billing',   '/product/billing'],
-      ['Pricing',   '/#pricing'],
+      ['Driver app', '/product/driver-app'],
     ]],
     ['Company', [
       ['Why FleetCal',  '/#story'],

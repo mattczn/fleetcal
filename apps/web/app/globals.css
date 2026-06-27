@@ -60,7 +60,7 @@
 }
 
 /* ── Landing /features section — interactive states ──────────────────
- * Hover-scale on product screenshots + sliding-arrow learn-more pills.
+ * Resting shadow on product screenshots + sliding-arrow learn-more pills.
  * Keeping the :hover behaviors as utility classes (vs inline styles)
  * because Tailwind v4's @hover doesn't compose with the bespoke
  * scale + raised-z-index pattern we want here. Everything else for
@@ -68,28 +68,7 @@
  * stylesheet rule. */
 .feat-frame-shadow {
   box-shadow: var(--shadow-soft);
-  transition: transform .4s cubic-bezier(.2,.7,.3,1), box-shadow .4s;
-  /* Per-element transform-origin so a frame on the right side of the
-   * viewport grows LEFTWARD (anchored at its right edge) instead of
-   * pushing its right edge off-screen, and vice versa for left-side
-   * frames. Set inline via style={{ ['--feat-origin']: 'right center' }}.
-   * Defaults to center so any frame that doesn't set it stays
-   * symmetric. */
-  transform-origin: var(--feat-origin, center);
 }
-.feat-frame-shadow:hover {
-  transform: scale(var(--feat-scale, 1.25));
-  box-shadow: 0 44px 90px -26px rgba(26,35,50,.42), 0 14px 36px -12px rgba(26,35,50,.24);
-  position: relative;
-  z-index: 6;
-}
-/* Per-side transform-origin so an edge frame grows inward instead of off-screen,
- * and a gentler scale for full-bleed boards that span the whole content column
- * (1.25 would spill past the viewport). Applied via className alongside
- * .feat-frame-shadow, e.g. `feat-frame-shadow feat-right` or `feat-wide`. */
-.feat-frame-shadow.feat-left  { --feat-origin: left center; }
-.feat-frame-shadow.feat-right { --feat-origin: right center; }
-.feat-frame-shadow.feat-wide  { --feat-scale: 1.05; }
 .learn-link .learn-arrow {
   display: inline-flex;
   transition: transform .2s;
@@ -98,12 +77,8 @@
   transform: translateX(3px);
 }
 @media (prefers-reduced-motion: reduce) {
-  .feat-frame-shadow,
   .learn-link .learn-arrow {
     transition: none;
-  }
-  .feat-frame-shadow:hover {
-    transform: none;
   }
   .learn-link:hover .learn-arrow {
     transform: none;

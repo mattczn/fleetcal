@@ -1,11 +1,12 @@
 import Link from 'next/link';
 import Image from 'next/image';
 import { auth } from '@clerk/nextjs/server';
-import { ArrowLeft, Zap, Truck, NotebookPen, Sparkles, Copy, Circle, Package, MapPin, FileText, Container } from 'lucide-react';
+import { Zap, Truck, NotebookPen, Sparkles, Copy, Circle, Package, MapPin, FileText, Container } from 'lucide-react';
 import MarketingNav from '@/components/marketing/MarketingNav';
 import Reveal from '@/components/marketing/Reveal';
 import HeroVideo from '@/components/marketing/HeroVideo';
 import HeroFeatureNav from '@/components/marketing/HeroFeatureNav';
+import ProductFlowFooter from '@/components/marketing/ProductFlowFooter';
 import LiveTruckCard from '@/components/marketing/calendar/LiveTruckCard';
 import LoadDocsViewer from '@/components/marketing/calendar/LoadDocsViewer';
 import CapabilitySelector from '@/components/marketing/calendar/CapabilitySelector';
@@ -28,6 +29,7 @@ export default async function CalendarMarketingPage() {
       <TruckView />
       <LoadDetails />
       <MoreThanCalendar />
+      <ProductFlowFooter current="calendar" />
       <FinalCta cta={cta} />
       <Footer />
     </div>
@@ -79,11 +81,8 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
               <Link href={cta.href} className="font-display" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'var(--gc-blue)', color: '#fff', fontWeight: 600, fontSize: 17, padding: '16px 32px', borderRadius: 999, textDecoration: 'none', boxShadow: 'var(--shadow-1)', whiteSpace: 'nowrap' }}>
                 {cta.label.replace(' →', '')}
               </Link>
-              <Link href="/" className="font-display" style={{ display: 'inline-flex', alignItems: 'center', gap: 9, color: '#1967d2', fontWeight: 600, fontSize: 17, padding: '16px 22px', borderRadius: 999, textDecoration: 'none', whiteSpace: 'nowrap' }}>
-                <span style={{ width: 26, height: 26, borderRadius: 999, background: '#e8f0fe', display: 'grid', placeItems: 'center' }}>
-                  <ArrowLeft size={14} style={{ color: '#1967d2' }} strokeWidth={2.4} />
-                </span>
-                Back to home
+              <Link href="/contact-sales" className="font-display" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: '#fff', color: '#1967d2', border: '1px solid #dadce0', fontWeight: 600, fontSize: 17, padding: '15px 28px', borderRadius: 999, textDecoration: 'none', whiteSpace: 'nowrap' }}>
+                Book a demo
               </Link>
             </div>
           </Reveal>
@@ -298,6 +297,9 @@ function FinalCta({ cta }: { cta: { href: string; label: string } }) {
             <Link href={cta.href} className="font-display" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: '#fff', color: '#1967d2', fontWeight: 600, fontSize: 17, padding: '16px 32px', borderRadius: 999, textDecoration: 'none', boxShadow: 'var(--shadow-1)', whiteSpace: 'nowrap' }}>
               {cta.label.replace(' →', '')}
             </Link>
+            <Link href="/contact-sales" className="font-display" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.14)', color: '#fff', fontWeight: 600, fontSize: 17, padding: '16px 32px', borderRadius: 999, textDecoration: 'none', whiteSpace: 'nowrap' }}>
+              Book a demo
+            </Link>
             <Link href="/" className="font-display" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.14)', color: '#fff', fontWeight: 600, fontSize: 17, padding: '16px 32px', borderRadius: 999, textDecoration: 'none', whiteSpace: 'nowrap' }}>
               Back to home
             </Link>
@@ -318,6 +320,7 @@ function Footer() {
       ['Dashboard', '/product/dashboard'],
       ['Paperwork', '/product/paperwork'],
       ['Billing',   '/product/billing'],
+      ['Driver app', '/product/driver-app'],
     ]],
     ['Company', [
       ['Why FleetCal',  '/#story'],

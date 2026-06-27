@@ -1,9 +1,9 @@
 import Link from 'next/link';
 import Image from 'next/image';
 import { auth } from '@clerk/nextjs/server';
-import { ArrowLeft } from 'lucide-react';
 import MarketingNav from '@/components/marketing/MarketingNav';
 import HeroFeatureNav from '@/components/marketing/HeroFeatureNav';
+import ProductFlowFooter from '@/components/marketing/ProductFlowFooter';
 import Reveal from '@/components/marketing/Reveal';
 import DashboardHeroCard from '@/components/marketing/dashboard/DashboardHeroCard';
 import ReportBuilderCard from '@/components/marketing/dashboard/ReportBuilderCard';
@@ -27,6 +27,7 @@ export default async function DashboardMarketingPage() {
       <Hero cta={cta} />
       <RevenueSources />
       <ReportsAndTrends />
+      <ProductFlowFooter current="dashboard" />
       <FinalCta cta={cta} />
       <Footer />
     </div>
@@ -76,11 +77,8 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
               <Link href={cta.href} className="font-display" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'var(--gc-blue)', color: '#fff', fontWeight: 600, fontSize: 17, padding: '16px 32px', borderRadius: 999, textDecoration: 'none', boxShadow: 'var(--shadow-1)', whiteSpace: 'nowrap' }}>
                 {cta.label.replace(' →', '')}
               </Link>
-              <Link href="/" className="font-display" style={{ display: 'inline-flex', alignItems: 'center', gap: 9, color: '#1967d2', fontWeight: 600, fontSize: 17, padding: '16px 22px', borderRadius: 999, textDecoration: 'none', whiteSpace: 'nowrap' }}>
-                <span style={{ width: 26, height: 26, borderRadius: 999, background: '#e8f0fe', display: 'grid', placeItems: 'center' }}>
-                  <ArrowLeft size={14} style={{ color: '#1967d2' }} strokeWidth={2.4} />
-                </span>
-                Back to home
+              <Link href="/contact-sales" className="font-display" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: '#fff', color: '#1967d2', border: '1px solid #dadce0', fontWeight: 600, fontSize: 17, padding: '15px 28px', borderRadius: 999, textDecoration: 'none', whiteSpace: 'nowrap' }}>
+                Book a demo
               </Link>
             </div>
           </Reveal>
@@ -136,7 +134,7 @@ function RevenueSources() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-[22px]" style={{ marginTop: 38 }}>
           {/* Revenue by Truck */}
           <Reveal>
-            <div className="feat-frame-shadow feat-wide" style={{ background: '#fff', border: '1px solid #e8eaed', borderRadius: 16, padding: '22px 24px', height: '100%' }}>
+            <div className="feat-frame-shadow feat-left" style={{ background: '#fff', border: '1px solid #e8eaed', borderRadius: 16, padding: '22px 24px', height: '100%' }}>
               <div className="font-display" style={{ fontWeight: 700, fontSize: 15, color: '#202124', marginBottom: 18 }}>Revenue by Truck</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 13 }}>
                 {TRUCKS.map((t, i) => (
@@ -155,7 +153,7 @@ function RevenueSources() {
 
           {/* Revenue by Customer */}
           <Reveal delay={80}>
-            <div className="feat-frame-shadow feat-wide" style={{ background: '#fff', border: '1px solid #e8eaed', borderRadius: 16, padding: '22px 24px', height: '100%' }}>
+            <div className="feat-frame-shadow feat-right" style={{ background: '#fff', border: '1px solid #e8eaed', borderRadius: 16, padding: '22px 24px', height: '100%' }}>
               <span className="font-display" style={{ fontWeight: 700, fontSize: 15, color: '#202124' }}>Revenue by Customer</span>
               <div className="grid grid-cols-1 sm:grid-cols-[170px_1fr] gap-5 items-center" style={{ marginTop: 16 }}>
                 <div style={{ display: 'grid', placeItems: 'center' }}>
@@ -267,6 +265,9 @@ function FinalCta({ cta }: { cta: { href: string; label: string } }) {
             <Link href={cta.href} className="font-display" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: '#fff', color: '#1967d2', fontWeight: 600, fontSize: 17, padding: '16px 32px', borderRadius: 999, textDecoration: 'none', boxShadow: 'var(--shadow-1)', whiteSpace: 'nowrap' }}>
               {cta.label.replace(' →', '')}
             </Link>
+            <Link href="/contact-sales" className="font-display" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.14)', color: '#fff', fontWeight: 600, fontSize: 17, padding: '16px 32px', borderRadius: 999, textDecoration: 'none', whiteSpace: 'nowrap' }}>
+              Book a demo
+            </Link>
             <Link href="/" className="font-display" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.14)', color: '#fff', fontWeight: 600, fontSize: 17, padding: '16px 32px', borderRadius: 999, textDecoration: 'none', whiteSpace: 'nowrap' }}>
               Back to home
             </Link>
@@ -288,7 +289,7 @@ function Footer() {
       ['Dashboard', '/product/dashboard'],
       ['Paperwork', '/product/paperwork'],
       ['Billing',   '/product/billing'],
-      ['Pricing',   '/#pricing'],
+      ['Driver app', '/product/driver-app'],
     ]],
     ['Company', [
       ['Why FleetCal',  '/#story'],

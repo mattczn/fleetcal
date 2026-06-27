@@ -2,7 +2,7 @@ import { Fragment } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { auth } from '@clerk/nextjs/server';
-import { Calendar, Receipt, Send, Wallet, Check, Play, Sparkles, ArrowRight, FileText } from 'lucide-react';
+import { Calendar, Receipt, Send, Wallet, Check, Sparkles, ArrowRight, FileText, Smartphone } from 'lucide-react';
 import PricingCards from '@/components/marketing/PricingCards';
 import MarketingNav from '@/components/marketing/MarketingNav';
 import FaqAccordion from '@/components/marketing/FaqAccordion';
@@ -85,6 +85,7 @@ const WRAP = 'mx-auto w-full max-w-[1600px] px-5 sm:px-6 md:px-8 lg:px-12';
 
 const HERO_TABS: ReadonlyArray<{ id: string; label: string }> = [
   { id: 'dispatch', label: 'Dispatch Calendar' },
+  { id: 'driver', label: 'Driver app' },
   { id: 'paperwork', label: 'Paperwork & Billing' },
   { id: 'payroll', label: 'Payroll & Insights' },
   { id: 'how', label: 'How it works' },
@@ -332,38 +333,8 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
               >
                 {cta.label.replace(' →', '')}
               </Link>
-              <Link
-                href="#how"
-                className="font-display"
-                style={{
-                  display:        'inline-flex',
-                  alignItems:     'center',
-                  justifyContent: 'center',
-                  gap:            10,
-                  background:     'transparent',
-                  color:          '#1967d2',
-                  fontWeight:     600,
-                  fontSize:       17,
-                  padding:        '17px 28px 17px 8px',
-                  borderRadius:   999,
-                  textDecoration: 'none',
-                  transition:     'background .2s, padding .2s',
-                  whiteSpace:     'nowrap',
-                }}
-              >
-                <span
-                  style={{
-                    width:        26,
-                    height:       26,
-                    borderRadius: 999,
-                    background:   '#e8f0fe',
-                    display:      'grid',
-                    placeItems:   'center',
-                  }}
-                >
-                  <Play size={11} fill="#1a73e8" style={{ color: '#1a73e8' }} />
-                </span>
-                See how it works
+              <Link href="/contact-sales" className="font-display" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: '#fff', color: '#1967d2', border: '1px solid #dadce0', fontWeight: 600, fontSize: 17, padding: '15px 28px', borderRadius: 999, textDecoration: 'none', whiteSpace: 'nowrap' }}>
+                Book a demo
               </Link>
             </div>
           </Reveal>
@@ -564,6 +535,19 @@ const FEATURE_GROUPS: ReadonlyArray<FeatureGroup> = [
     primary:   { kind: 'image', src: '/calendar-view.png', alt: 'FleetCal dispatch calendar with one column per truck' },
     topBadge:  { kind: 'ai', text: 'Extracting Load Details' },
     secondary: { kind: 'video', src: '/calendar-dragdrop.mp4', alt: 'Dispatcher dragging a rate-con PDF onto the calendar', widthPct: 45, bottomOffset: -16 },
+  },
+  {
+    key:    'driver',
+    n:      '02',
+    kicker: 'Driver app',
+    Icon:   Smartphone,
+    color:  '#7c3aed',
+    light:  '#f1ebfe',
+    title:  "Every load, in the driver's pocket.",
+    body:   "Drivers get every assigned load on their phone, with live tracking, in-app navigation, and a built-in POD scanner. Every confirm, check-in, and upload syncs straight back to the dispatch calendar in real time.",
+    chips:  ['Live ELD tracking', 'In-app navigation', 'Built-in POD scanner', 'Real-time sync'],
+    links:  [['Explore the driver app', '/product/driver-app']],
+    primary: { kind: 'image', src: '/driver-active-loads.png', alt: 'FleetCal driver app, active loads' },
   },
   {
     key:    'paperwork',
@@ -1039,6 +1023,45 @@ function GroupVisual({ group, flip }: { group: FeatureGroup; flip: boolean }) {
   );
 }
 
+/** Home-page visual for the Driver App group — the active-loads phone with a
+ *  floating push notification and the dispatch-calendar card the action lands
+ *  on. Overlays anchor to the outer (viewport) edge so they don't crowd the
+ *  copy when the row flips, and hide below lg. Mockup; positions are easy to
+ *  tune. */
+function DriverHomeVisual({ flip }: { flip: boolean }) {
+  const notifSide = flip ? { left: -150 } : { right: -150 };
+  const cardSide  = flip ? { right: -108 } : { left: -108 };
+  return (
+    <div style={{ display: 'flex', justifyContent: 'center' }}>
+      <div style={{ position: 'relative', width: 256 }}>
+        <div style={{ width: 256, background: '#0b0b0c', borderRadius: 44, padding: 9, boxShadow: '0 30px 62px -24px rgba(26,35,50,.46),0 10px 26px -14px rgba(26,35,50,.26)' }}>
+          <div style={{ borderRadius: 36, overflow: 'hidden', background: '#fff' }}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/driver-active-loads.png" alt="FleetCal driver app, active loads" style={{ display: 'block', width: '100%', height: 'auto' }} />
+          </div>
+        </div>
+
+        {/* floating push notification */}
+        <div className="hidden lg:block" style={{ position: 'absolute', top: 48, zIndex: 3, width: 270, ...notifSide, background: 'rgba(250,250,252,0.96)', border: '0.5px solid rgba(0,0,0,0.06)', borderRadius: 18, boxShadow: '0 18px 40px -14px rgba(26,35,50,.3),0 4px 12px rgba(26,35,50,.08)', padding: '13px 15px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span className="font-display" style={{ width: 22, height: 22, flex: 'none', borderRadius: 6, background: '#1a73e8', display: 'grid', placeItems: 'center', color: '#fff', fontWeight: 800, fontSize: 10, letterSpacing: '-0.02em' }}>FC</span>
+            <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#6b6f76' }}>FleetCal</span>
+            <span style={{ marginLeft: 'auto', fontSize: 12, color: '#9aa0a6' }}>now</span>
+          </div>
+          <div style={{ fontWeight: 600, fontSize: 14, color: '#1c1c1e', marginTop: 6 }}>New load assigned</div>
+          <div style={{ fontSize: 13.5, lineHeight: 1.4, color: '#3a3a3c', marginTop: 2 }}>Ardent: Lancaster, TX &rarr; Dallas, TX, picking up at 11:30am. Tap to confirm.</div>
+        </div>
+
+        {/* the dispatch-calendar card the tap lands on */}
+        <div className="hidden lg:block" style={{ position: 'absolute', bottom: -2, zIndex: 3, ...cardSide }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/dispatch-card-hero.png" alt="The load on the dispatcher's calendar" style={{ display: 'block', width: 180, height: 'auto', filter: 'drop-shadow(0 16px 30px rgba(26,35,50,.26))' }} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Features() {
   return (
     <section
@@ -1088,7 +1111,7 @@ function Features() {
                     <GroupCopy group={group} />
                   </div>
                   <div style={{ order: flip ? 1 : 2 }}>
-                    <GroupVisual group={group} flip={flip} />
+                    {group.key === 'driver' ? <DriverHomeVisual flip={flip} /> : <GroupVisual group={group} flip={flip} />}
                   </div>
                 </div>
               </Reveal>
@@ -1428,6 +1451,9 @@ function FinalCta({ cta }: { cta: { href: string; label: string } }) {
             >
               {cta.label.replace(' →', '')}
             </Link>
+            <Link href="/contact-sales" className="font-display" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.14)', color: '#fff', fontWeight: 600, fontSize: 17, padding: '17px 34px', borderRadius: 999, textDecoration: 'none', whiteSpace: 'nowrap' }}>
+              Book a demo
+            </Link>
             <Link
               href="#pricing"
               className="font-display"
@@ -1465,14 +1491,12 @@ function Footer() {
   // removed rather than left as decoration.
   const cols: ReadonlyArray<[string, ReadonlyArray<[string, string]>]> = [
     ['Product', [
-      ['Features',     '#features'],
       ['Calendar',     '/product/calendar'],
       ['Payroll',      '/product/payroll'],
       ['Dashboard',    '/product/dashboard'],
       ['Paperwork',    '/product/paperwork'],
       ['Billing',      '/product/billing'],
-      ['How it works', '#how'],
-      ['Pricing',      '#pricing'],
+      ['Driver app',   '/product/driver-app'],
     ]],
     ['Company', [
       ['Why FleetCal',  '#story'],
