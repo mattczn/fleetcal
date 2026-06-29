@@ -1,21 +1,21 @@
 {
   "project_info": {
-    "project_number": "446210122040",
-    "project_id": "curzon-driver-app",
-    "storage_bucket": "curzon-driver-app.firebasestorage.app"
+    "project_number": "327357443763",
+    "project_id": "fleetcal-6565d",
+    "storage_bucket": "fleetcal-6565d.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:446210122040:android:6b4a3488f6c476a4b861cd",
+        "mobilesdk_app_id": "1:327357443763:android:321a7b9901319bf6150ac6",
         "android_client_info": {
-          "package_name": "com.curzontrucking.driver"
+          "package_name": "com.systematica.fleetcal.driver"
         }
       },
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyAwwwNNiQ1zdbTxVbdu7hrZmo26FbLVMMg"
+          "current_key": "AIzaSyCmqVBpEs6rUzrTsp4-91GctIhW1Vd_cUQ"
         }
       ],
       "services": {
