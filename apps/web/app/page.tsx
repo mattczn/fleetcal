@@ -572,7 +572,7 @@ const FEATURE_GROUPS: ReadonlyArray<FeatureGroup> = [
     color:  '#1e8e3e',
     light:  '#e6f4ea',
     title:  'Close the Week. Track Performance.',
-    body:   'Driver events roll straight into the weekly payroll page — adjust and finalize in minutes. Then see performance by truck, driver, and lane, so you know exactly what is making money.',
+    body:   'Driver events roll straight into the weekly payroll page where you can adjust and finalize in minutes. Then see performance by truck, driver, and lane, so you know exactly what is making money.',
     chips:  ['Auto-filled payroll', 'Bonus & adjustment', 'Revenue by truck', 'Revenue by lane'],
     links:  [['Payroll', '/product/payroll'], ['Dashboard & reports', '/product/dashboard']],
     primary:   { kind: 'image', src: '/weekly-dashboard.png', alt: 'Revenue by truck, customer, and over time' },
@@ -1257,93 +1257,62 @@ function Story() {
         scrollMarginTop: 150,
       }}
     >
-      {/* Editorial two-column. Founder card sits in the narrower
-          left column under the title; paragraphs + decorative big-
-          blue opening quote sit in the wider right. Old layout had
-          the signature inline at the bottom of the paragraph block;
-          relocating it into a card on the left elevates the
-          attribution from a footer note to part of the section's
-          opening composition. */}
-      <div className={`${WRAP} story-grid`}>
-        <Reveal>
-          <SectionLabel>Built by carriers</SectionLabel>
-          <SectionTitle>
-            Made by people who&apos;ve actually{' '}
-            <span style={{ color: 'var(--gc-blue)' }}>run a dispatch desk.</span>
-          </SectionTitle>
-          <div
-            style={{
-              marginTop:    30,
-              padding:      '24px 26px',
-              background:   '#fff',
-              border:       '1px solid #e8eaed',
-              borderRadius: 24,
-              boxShadow:    'var(--shadow-card)',
-            }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 15 }}>
-              <div
-                className="font-display"
-                style={{
-                  width:        56,
-                  height:       56,
-                  borderRadius: 999,
-                  flex:         'none',
-                  background:   'var(--gc-blue)',
-                  color:        '#fff',
-                  display:      'grid',
-                  placeItems:   'center',
-                  fontWeight:   800,
-                  fontSize:     19,
-                  letterSpacing: '0.02em',
-                  boxShadow:    'var(--shadow-1)',
-                }}>
-                MC
+      {/* Customer proof — "Real fleet. Real results." (design handoff 1b):
+          a 4-up stat band on top, the testimonial card beneath. Mapped to
+          the site's fonts/tokens; initials avatar until we have a headshot. */}
+      <div className={WRAP}>
+        <Reveal style={{ maxWidth: 1240, margin: '0 auto' }}>
+          {/* Header */}
+          <div style={{ marginBottom: 36 }}>
+            <SectionLabel>Why FleetCal</SectionLabel>
+            <h2 className="font-display" style={{ fontSize: 'clamp(36px, 4.4vw, 56px)', fontWeight: 800, letterSpacing: '-0.02em', lineHeight: 1.04, color: '#202124', margin: '14px 0 0' }}>
+              Real fleet. <span style={{ color: 'var(--gc-blue)' }}>Real results.</span>
+            </h2>
+          </div>
+
+          {/* Stat band — 4-up; hairline dividers via the 1px gap over the card bg */}
+          <div style={{ background: '#e8eaed', border: '1px solid #e8eaed', borderRadius: 22, boxShadow: '0 18px 48px -34px rgba(11,13,18,0.16)', overflow: 'hidden', marginBottom: 24 }}>
+            <div className="grid grid-cols-2 lg:grid-cols-4" style={{ gap: 1 }}>
+              <div style={{ background: '#fff', padding: 'clamp(26px, 3.4vw, 42px) clamp(20px, 2.6vw, 34px)' }}>
+                <div className="font-display" style={{ fontSize: 'clamp(40px, 5vw, 60px)', fontWeight: 800, letterSpacing: '-0.03em', lineHeight: 1, color: 'var(--gc-blue)' }}>5&times;</div>
+                <div className="font-mono" style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--gc-blue)', margin: '12px 0 8px' }}>Faster</div>
+                <div style={{ fontSize: 13, lineHeight: 1.45, color: '#5f6368' }}>load dispatching with the AI rate-con parser</div>
               </div>
-              <div>
-                <div className="font-display" style={{ fontWeight: 700, fontSize: 17, color: '#202124' }}>
-                  Matt Curzon
-                </div>
-                <div style={{ fontSize: 14.5, color: '#5f6368', marginTop: 2 }}>
-                  Founder &amp; Operator, Curzon Trucking LLC
-                </div>
-                <div style={{ fontSize: 14.5, color: '#5f6368' }}>
-                  Salt Lake City, UT
-                </div>
+              <div style={{ background: '#fff', padding: 'clamp(26px, 3.4vw, 42px) clamp(20px, 2.6vw, 34px)' }}>
+                <div className="font-display" style={{ fontSize: 'clamp(40px, 5vw, 60px)', fontWeight: 800, letterSpacing: '-0.03em', lineHeight: 1, color: 'var(--gc-blue)' }}>25+</div>
+                <div className="font-mono" style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--gc-blue)', margin: '12px 0 8px' }}>Hours</div>
+                <div style={{ fontSize: 13, lineHeight: 1.45, color: '#5f6368' }}>of admin time saved every week</div>
+              </div>
+              <div style={{ background: '#fff', padding: 'clamp(26px, 3.4vw, 42px) clamp(20px, 2.6vw, 34px)' }}>
+                <div className="font-display" style={{ fontSize: 'clamp(40px, 5vw, 60px)', fontWeight: 800, letterSpacing: '-0.03em', lineHeight: 1, color: 'var(--gc-blue)' }}>30%</div>
+                <div className="font-mono" style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--gc-blue)', margin: '12px 0 8px' }}>More</div>
+                <div style={{ fontSize: 13, lineHeight: 1.45, color: '#5f6368' }}>fleet utilization with the truck calendar</div>
+              </div>
+              <div style={{ background: '#fff', padding: 'clamp(26px, 3.4vw, 42px) clamp(20px, 2.6vw, 34px)' }}>
+                <div className="font-display" style={{ fontSize: 'clamp(40px, 5vw, 60px)', fontWeight: 800, letterSpacing: '-0.03em', lineHeight: 1, color: 'var(--gc-blue)' }}>98%</div>
+                <div className="font-mono" style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--gc-blue)', margin: '12px 0 8px' }}>Accuracy</div>
+                <div style={{ fontSize: 13, lineHeight: 1.45, color: '#5f6368' }}>of load details extracted by AI</div>
               </div>
             </div>
           </div>
-        </Reveal>
-        <Reveal delay={100}>
-          <div style={{ position: 'relative' }}>
-            {/* Decorative opening quote mark — purely visual, sits
-                behind the lead paragraph in pale brand blue. Marked
-                aria-hidden so screen readers skip it. */}
-            <span
-              className="font-display story-quote"
-              aria-hidden="true">
-              &ldquo;
-            </span>
-            <div style={{ position: 'relative', fontSize: 17.5, lineHeight: 1.85, color: '#3c4043', display: 'grid', gap: 20 }}>
-              <p style={{ fontSize: 20, lineHeight: 1.7, color: '#202124' }}>
-                FleetCal is built on years of industry experience and a deep understanding
-                of the workflows dispatchers run every day. We tried enterprise TMS products
-                like Alvys and RoseRocket, but they&apos;re weighed down by bloat that pulls
-                dispatchers away from what actually matters. They treat loads like another
-                row in a spreadsheet. We treat loads as the core unit of dispatch, organized
-                in a calendar so you can see at a glance which trucks are moving and which
-                need attention.
-              </p>
-              <p>
-                As we grew our fleet from 3 to 15 trucks, we couldn&apos;t find tools that
-                gave us real visibility into our bottom line. We wanted certainty that
-                invoices were getting paid. We wanted certainty that every asset was
-                earning every day.
-              </p>
-              <p>
-                FleetCal&apos;s philosophy is practical software for the people who actually
-                run the business: owners, dispatchers, and owner-operators. Simple workflows.
-                Powerful fundamentals. Everything in one ecosystem, from rate con to invoice.
-              </p>
+
+          {/* Proof card — quote on the left, attribution boxed on the right */}
+          <div style={{ background: '#fff', border: '1px solid #e8eaed', borderRadius: 22, boxShadow: '0 24px 60px -32px rgba(11,13,18,0.18)', padding: 'clamp(28px, 3.4vw, 44px) clamp(24px, 3.4vw, 48px)' }}>
+            <div className="grid grid-cols-1 lg:grid-cols-[1.5fr_1fr] gap-9 lg:gap-12 items-center">
+              <div>
+                <p className="font-display" style={{ fontSize: 'clamp(21px, 2.2vw, 27px)', lineHeight: 1.28, fontWeight: 700, letterSpacing: '-0.015em', color: '#202124', margin: '0 0 16px' }}>
+                  FleetCal put <span style={{ color: 'var(--gc-blue)' }}>every load on a calendar</span>, so I can see at a glance which trucks are sitting and which are moving.
+                </p>
+                <p style={{ fontSize: 16, lineHeight: 1.6, color: '#5f6368', margin: 0 }}>
+                  We grew to 14 trucks on spreadsheets and group chats, but things kept slipping: trucks sitting empty, loads we scrambled to cover, hours lost chasing down PODs and unpaid invoices. <span style={{ color: '#1e7a3d', fontWeight: 600 }}>Now I know we&rsquo;re not leaving money on the table, and every load&rsquo;s getting paid.</span>
+                </p>
+              </div>
+              <div className="border-t pt-8 lg:border-t-0 lg:pt-0 lg:border-l lg:pl-11" style={{ borderColor: '#eef1f4' }}>
+                <div className="font-display" style={{ width: 56, height: 56, borderRadius: 999, background: 'var(--gc-blue)', color: '#fff', display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: 18, marginBottom: 16, boxShadow: 'var(--shadow-1)' }}>JC</div>
+                <div className="font-display" style={{ fontSize: 17, fontWeight: 700, color: '#202124', marginBottom: 4 }}>Jon Curzon</div>
+                <div style={{ fontSize: 14, lineHeight: 1.5, color: '#5f6368' }}>Owner, Curzon Trucking LLC</div>
+                <div className="font-mono" style={{ fontSize: 12, letterSpacing: '0.06em', color: '#9aa0a6', marginTop: 8 }}>Salt Lake City, UT</div>
+              </div>
             </div>
           </div>
         </Reveal>
