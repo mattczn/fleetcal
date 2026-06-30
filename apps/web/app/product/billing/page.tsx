@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import Image from 'next/image';
 import { auth } from '@clerk/nextjs/server';
@@ -18,6 +19,11 @@ import LifecycleCard from '@/components/marketing/billing/LifecycleCard';
  * accent, full-bleed hero. The step after Paperwork — links back to it. The
  * authed app for this is `/billing`. Light mode only.
  */
+export const metadata: Metadata = {
+  title: 'Load to Invoice Billing Software | FleetCal',
+  description: "Batch a week of invoices in one pass. AI reads each customer's billing instructions so you get paid clean.",
+};
+
 export default async function BillingMarketingPage() {
   const { userId, orgId } = await auth();
   const state: AuthCta = !userId ? 'out' : !orgId ? 'mid-signup' : 'in';

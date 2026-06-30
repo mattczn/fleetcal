@@ -1,4 +1,5 @@
 import { Fragment } from 'react';
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import Image from 'next/image';
 import { auth } from '@clerk/nextjs/server';
@@ -36,6 +37,11 @@ import { FLOW } from '@/components/marketing/ProductFlowFooter';
  * PricingCards), so this file can stay an async server component
  * with `auth()` access for the 3-state CTA logic below.
  */
+export const metadata: Metadata = {
+  title: 'FleetCal - Dispatch Calendar for Fleets, Load to Invoice in One System',
+  description: 'See every truck and load on one calendar. FleetCal takes you from load to invoice in one system, built by a 14-truck carrier.',
+};
+
 export default async function HomePage() {
   const { userId, orgId } = await auth();
   // Three states the CTAs need to handle:

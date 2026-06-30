@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import Image from 'next/image';
 import { auth } from '@clerk/nextjs/server';
@@ -16,6 +17,11 @@ import DispatchNotify from '@/components/marketing/driver/DispatchNotify';
  * back on the dispatcher's calendar in real time. Built in the same visual
  * language as the Calendar/Payroll/Dashboard/Paperwork/Billing pages.
  */
+export const metadata: Metadata = {
+  title: 'Trucking Driver App | FleetCal Dispatch Calendar',
+  description: "Loads, navigation, and POD scanning in the driver's pocket. Syncs live to the dispatch calendar. iOS and Android.",
+};
+
 export default async function DriverMarketingPage() {
   const { userId, orgId } = await auth();
   const state: AuthCta = !userId ? 'out' : !orgId ? 'mid-signup' : 'in';

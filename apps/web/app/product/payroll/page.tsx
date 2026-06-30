@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import Image from 'next/image';
 import { auth } from '@clerk/nextjs/server';
@@ -22,6 +23,11 @@ import DeferCard from '@/components/marketing/payroll/DeferCard';
  *
  * Built from design_handoff_payroll_page. Light mode only.
  */
+export const metadata: Metadata = {
+  title: 'Driver Payroll Software | FleetCal Dispatch Calendar',
+  description: 'Driver pay calculates itself from delivered loads. Adjust, defer, and finalize payroll in minutes.',
+};
+
 export default async function PayrollMarketingPage() {
   const { userId, orgId } = await auth();
   const state: AuthCta = !userId ? 'out' : !orgId ? 'mid-signup' : 'in';

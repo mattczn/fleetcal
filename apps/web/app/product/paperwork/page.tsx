@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import Image from 'next/image';
 import { auth } from '@clerk/nextjs/server';
@@ -18,6 +19,11 @@ import FlagModal from '@/components/marketing/paperwork/FlagModal';
  * `/closeout`. Forward-links to `/product/billing` (not built yet) per the
  * handoff. Light mode only.
  */
+export const metadata: Metadata = {
+  title: 'POD & Paperwork Verification | FleetCal Dispatch Calendar',
+  description: "Verify PODs against the rate con side by side, flag what's missing, release clean loads for billing.",
+};
+
 export default async function PaperworkMarketingPage() {
   const { userId, orgId } = await auth();
   const state: AuthCta = !userId ? 'out' : !orgId ? 'mid-signup' : 'in';

@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import Image from 'next/image';
 import { auth } from '@clerk/nextjs/server';
@@ -17,6 +18,11 @@ import ReportBuilderCard from '@/components/marketing/dashboard/ReportBuilderCar
  * landing + payroll marketing pages — same visual language, blue accent. The
  * authed dashboard APP lives separately at `/dashboard`. Light mode only.
  */
+export const metadata: Metadata = {
+  title: 'Fleet Revenue & Performance Dashboard | FleetCal',
+  description: "Revenue by truck, customer, and lane, updated live. Know exactly what's making money.",
+};
+
 export default async function DashboardMarketingPage() {
   const { userId, orgId } = await auth();
   const state: AuthCta = !userId ? 'out' : !orgId ? 'mid-signup' : 'in';

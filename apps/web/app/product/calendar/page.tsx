@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import Image from 'next/image';
 import { auth } from '@clerk/nextjs/server';
@@ -17,6 +18,11 @@ import CapabilitySelector from '@/components/marketing/calendar/CapabilitySelect
  * module. Public (same 3-state CTA rules as `/`). Blue accent, full-bleed
  * hero. Authed app lives at `/calendar`. Light mode only.
  */
+export const metadata: Metadata = {
+  title: 'Dispatch Calendar Software for Trucking Fleets | FleetCal',
+  description: 'Drop a rate con, drag it to a truck, dispatch in seconds. One column per truck on a live dispatch calendar.',
+};
+
 export default async function CalendarMarketingPage() {
   const { userId, orgId } = await auth();
   const state: AuthCta = !userId ? 'out' : !orgId ? 'mid-signup' : 'in';
