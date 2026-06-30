@@ -1,4 +1,6 @@
 import type { Metadata } from 'next';
+import JsonLd from '@/components/JsonLd';
+import { productJsonLd } from '@/lib/structuredData';
 import Link from 'next/link';
 import Image from 'next/image';
 import { auth } from '@clerk/nextjs/server';
@@ -47,6 +49,7 @@ export default async function DashboardMarketingPage() {
 
   return (
     <div data-marketing-scroll className="h-full overflow-y-auto font-sys bg-sys-bg text-sys-primary" style={{ scrollBehavior: 'smooth' }}>
+      <JsonLd data={productJsonLd('dashboard')} />
       <MarketingNav cta={cta} showSignIn={state === 'out'} frostless />
       <Hero cta={cta} />
       <RevenueSources />

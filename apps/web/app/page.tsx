@@ -1,5 +1,7 @@
 import { Fragment } from 'react';
 import type { Metadata } from 'next';
+import JsonLd from '@/components/JsonLd';
+import { organizationLd, websiteLd, fleetcalAppLd, faqPageLd } from '@/lib/structuredData';
 import Link from 'next/link';
 import Image from 'next/image';
 import { auth } from '@clerk/nextjs/server';
@@ -64,6 +66,7 @@ export default async function HomePage() {
       className="h-full overflow-y-auto font-sys bg-sys-bg text-sys-primary"
       style={{ scrollBehavior: 'smooth' }}
     >
+      <JsonLd data={[organizationLd, websiteLd, fleetcalAppLd, faqPageLd(FAQS)]} />
       <MarketingNav cta={cta} showSignIn={state === 'out'} frostless />
       <Hero cta={cta} />
       <Features />
