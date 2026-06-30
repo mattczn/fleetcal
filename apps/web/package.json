@@ -19,6 +19,7 @@
     "@supabase/supabase-js": "^2.104.0",
     "@tanstack/react-table": "^8.21.3",
     "@types/mapbox-gl": "^3.4.1",
+    "@vercel/analytics": "^2.0.1",
     "buffer": "^6.0.3",
     "dotenv": "^17.4.2",
     "geo-tz": "^8.1.6",
