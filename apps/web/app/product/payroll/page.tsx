@@ -26,6 +26,23 @@ import DeferCard from '@/components/marketing/payroll/DeferCard';
 export const metadata: Metadata = {
   title: 'Driver Payroll Software | FleetCal Dispatch Calendar',
   description: 'Driver pay calculates itself from delivered loads. Adjust, defer, and finalize payroll in minutes.',
+  openGraph: {
+    title: 'Driver Payroll Software | FleetCal Dispatch Calendar',
+    description: 'Driver pay calculates itself from delivered loads. Adjust, defer, and finalize payroll in minutes.',
+    url: 'https://fleetcal.app/product/payroll',
+    siteName: 'FleetCal',
+    images: [{ url: 'https://fleetcal.app/og-image.png', width: 1200, height: 630, alt: 'FleetCal: Every Load. One Calendar. Dispatch to invoice in one platform.' }],
+    type: 'website',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'Driver Payroll Software | FleetCal Dispatch Calendar',
+    description: 'Driver pay calculates itself from delivered loads. Adjust, defer, and finalize payroll in minutes.',
+    images: ['https://fleetcal.app/og-image.png'],
+  },
+  alternates: {
+    canonical: 'https://fleetcal.app/product/payroll',
+  },
 };
 
 export default async function PayrollMarketingPage() {

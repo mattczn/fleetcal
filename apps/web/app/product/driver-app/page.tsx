@@ -20,6 +20,23 @@ import DispatchNotify from '@/components/marketing/driver/DispatchNotify';
 export const metadata: Metadata = {
   title: 'Trucking Driver App | FleetCal Dispatch Calendar',
   description: "Loads, navigation, and POD scanning in the driver's pocket. Syncs live to the dispatch calendar. iOS and Android.",
+  openGraph: {
+    title: 'Trucking Driver App | FleetCal Dispatch Calendar',
+    description: "Loads, navigation, and POD scanning in the driver's pocket. Syncs live to the dispatch calendar. iOS and Android.",
+    url: 'https://fleetcal.app/product/driver-app',
+    siteName: 'FleetCal',
+    images: [{ url: 'https://fleetcal.app/og-image.png', width: 1200, height: 630, alt: 'FleetCal: Every Load. One Calendar. Dispatch to invoice in one platform.' }],
+    type: 'website',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'Trucking Driver App | FleetCal Dispatch Calendar',
+    description: "Loads, navigation, and POD scanning in the driver's pocket. Syncs live to the dispatch calendar. iOS and Android.",
+    images: ['https://fleetcal.app/og-image.png'],
+  },
+  alternates: {
+    canonical: 'https://fleetcal.app/product/driver-app',
+  },
 };
 
 export default async function DriverMarketingPage() {

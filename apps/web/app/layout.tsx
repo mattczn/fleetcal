@@ -45,7 +45,7 @@ const ibmMono = IBM_Plex_Mono({
 export const metadata: Metadata = {
   metadataBase: new URL('https://fleetcal.app'),
   title: 'FleetCal',
-  description: 'The TMS built by a carrier, for carriers.',
+  description: 'Dispatch calendar built by a carrier, for fleets. From load to invoice in one platform.',
   openGraph: {
     type: 'website',
     siteName: 'FleetCal',

@@ -21,6 +21,23 @@ import CapabilitySelector from '@/components/marketing/calendar/CapabilitySelect
 export const metadata: Metadata = {
   title: 'Dispatch Calendar Software for Trucking Fleets | FleetCal',
   description: 'Drop a rate con, drag it to a truck, dispatch in seconds. One column per truck on a live dispatch calendar.',
+  openGraph: {
+    title: 'Dispatch Calendar Software for Trucking Fleets | FleetCal',
+    description: 'Drop a rate con, drag it to a truck, dispatch in seconds. One column per truck on a live dispatch calendar.',
+    url: 'https://fleetcal.app/product/calendar',
+    siteName: 'FleetCal',
+    images: [{ url: 'https://fleetcal.app/og-image.png', width: 1200, height: 630, alt: 'FleetCal: Every Load. One Calendar. Dispatch to invoice in one platform.' }],
+    type: 'website',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'Dispatch Calendar Software for Trucking Fleets | FleetCal',
+    description: 'Drop a rate con, drag it to a truck, dispatch in seconds. One column per truck on a live dispatch calendar.',
+    images: ['https://fleetcal.app/og-image.png'],
+  },
+  alternates: {
+    canonical: 'https://fleetcal.app/product/calendar',
+  },
 };
 
 export default async function CalendarMarketingPage() {

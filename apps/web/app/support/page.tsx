@@ -105,7 +105,7 @@ export default function SupportPage() {
   }
 
   return (
-    <div style={{ background: '#fff', minHeight: '100vh' }}>
+    <div data-marketing-scroll className="h-full overflow-y-auto" style={{ background: '#fff' }}>
       <MarketingNav cta={CTA} showSignIn />
 
       <section style={{ padding: '56px 20px 80px' }}>

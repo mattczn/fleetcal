@@ -40,6 +40,9 @@ import { FLOW } from '@/components/marketing/ProductFlowFooter';
 export const metadata: Metadata = {
   title: 'FleetCal - Dispatch Calendar for Fleets, Load to Invoice in One System',
   description: 'See every truck and load on one calendar. FleetCal takes you from load to invoice in one system, built by a 14-truck carrier.',
+  alternates: {
+    canonical: 'https://fleetcal.app',
+  },
 };
 
 export default async function HomePage() {

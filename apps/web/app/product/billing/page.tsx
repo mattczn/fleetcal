@@ -22,6 +22,23 @@ import LifecycleCard from '@/components/marketing/billing/LifecycleCard';
 export const metadata: Metadata = {
   title: 'Load to Invoice Billing Software | FleetCal',
   description: "Batch a week of invoices in one pass. AI reads each customer's billing instructions so you get paid clean.",
+  openGraph: {
+    title: 'Load to Invoice Billing Software | FleetCal',
+    description: "Batch a week of invoices in one pass. AI reads each customer's billing instructions so you get paid clean.",
+    url: 'https://fleetcal.app/product/billing',
+    siteName: 'FleetCal',
+    images: [{ url: 'https://fleetcal.app/og-image.png', width: 1200, height: 630, alt: 'FleetCal: Every Load. One Calendar. Dispatch to invoice in one platform.' }],
+    type: 'website',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'Load to Invoice Billing Software | FleetCal',
+    description: "Batch a week of invoices in one pass. AI reads each customer's billing instructions so you get paid clean.",
+    images: ['https://fleetcal.app/og-image.png'],
+  },
+  alternates: {
+    canonical: 'https://fleetcal.app/product/billing',
+  },
 };
 
 export default async function BillingMarketingPage() {

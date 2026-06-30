@@ -21,6 +21,23 @@ import ReportBuilderCard from '@/components/marketing/dashboard/ReportBuilderCar
 export const metadata: Metadata = {
   title: 'Fleet Revenue & Performance Dashboard | FleetCal',
   description: "Revenue by truck, customer, and lane, updated live. Know exactly what's making money.",
+  openGraph: {
+    title: 'Fleet Revenue & Performance Dashboard | FleetCal',
+    description: "Revenue by truck, customer, and lane, updated live. Know exactly what's making money.",
+    url: 'https://fleetcal.app/product/dashboard',
+    siteName: 'FleetCal',
+    images: [{ url: 'https://fleetcal.app/og-image.png', width: 1200, height: 630, alt: 'FleetCal: Every Load. One Calendar. Dispatch to invoice in one platform.' }],
+    type: 'website',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'Fleet Revenue & Performance Dashboard | FleetCal',
+    description: "Revenue by truck, customer, and lane, updated live. Know exactly what's making money.",
+    images: ['https://fleetcal.app/og-image.png'],
+  },
+  alternates: {
+    canonical: 'https://fleetcal.app/product/dashboard',
+  },
 };
 
 export default async function DashboardMarketingPage() {
