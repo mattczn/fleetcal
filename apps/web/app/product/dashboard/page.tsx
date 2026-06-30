@@ -291,7 +291,7 @@ function Footer() {
       ['Dashboard', '/product/dashboard'],
       ['Paperwork', '/product/paperwork'],
       ['Billing',   '/product/billing'],
-      ['Driver app', '/product/driver-app'],
+      ['Driver App', '/product/driver-app'],
     ]],
     ['Company', [
       ['Why FleetCal',  '/#story'],

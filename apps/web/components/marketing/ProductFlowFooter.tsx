@@ -19,9 +19,9 @@ type Step = {
 };
 
 export const FLOW: ReadonlyArray<Step> = [
-  { key: 'calendar',   label: 'Dispatch calendar',      short: 'Calendar',   href: '/product/calendar',   Icon: Calendar,   color: '#1a73e8', light: '#e8f0fe', blurb: 'See every truck on a live calendar and drag loads to drivers.' },
-  { key: 'driver-app', label: 'Driver app',             short: 'Driver app', href: '/product/driver-app', Icon: Smartphone, color: '#7c3aed', light: '#f1ebfe', blurb: 'Every assigned load in the driver’s pocket, synced to the board.' },
-  { key: 'paperwork',  label: 'Paperwork verification', short: 'Paperwork',  href: '/product/paperwork',  Icon: FileCheck,  color: '#ea580c', light: '#fcebe2', blurb: 'Verify the POD against the rate con, then release clean loads.' },
+  { key: 'calendar',   label: 'Dispatch Calendar',      short: 'Calendar',   href: '/product/calendar',   Icon: Calendar,   color: '#1a73e8', light: '#e8f0fe', blurb: 'See every truck on a live calendar and drag loads to drivers.' },
+  { key: 'driver-app', label: 'Driver App',             short: 'Driver App', href: '/product/driver-app', Icon: Smartphone, color: '#7c3aed', light: '#f1ebfe', blurb: 'Every assigned load in the driver’s pocket, synced to the board.' },
+  { key: 'paperwork',  label: 'Paperwork Verification', short: 'Paperwork',  href: '/product/paperwork',  Icon: FileCheck,  color: '#ea580c', light: '#fcebe2', blurb: 'Verify the POD against the rate con, then release clean loads.' },
   { key: 'billing',    label: 'Billing',                short: 'Billing',    href: '/product/billing',    Icon: CreditCard, color: '#1e8e3e', light: '#e6f4ea', blurb: 'Batch a week’s invoices and send them in a single sweep.' },
   { key: 'payroll',    label: 'Payroll',                short: 'Payroll',    href: '/product/payroll',    Icon: Wallet,     color: '#0d9488', light: '#e0f2f0', blurb: 'Driver events roll into weekly payroll, ready to finalize.' },
   { key: 'dashboard',  label: 'Insights',               short: 'Insights',   href: '/product/dashboard',  Icon: BarChart3,  color: '#e11d48', light: '#fce8ec', blurb: 'Revenue by truck, customer, and lane at a glance.' },

@@ -64,7 +64,7 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
           <Reveal>
             <span className="inline-flex items-center gap-2 font-display" style={{ fontSize: 13, fontWeight: 600, color: '#7c3aed', background: '#f1ebfe', padding: '7px 16px 7px 13px', borderRadius: 999 }}>
               <span style={{ width: 7, height: 7, borderRadius: 999, background: '#7c3aed', boxShadow: '0 0 0 3px rgba(124,58,237,0.18)' }} />
-              Driver app
+              Driver App
             </span>
           </Reveal>
           <Reveal delay={60}>
@@ -346,7 +346,7 @@ function Footer() {
       ['Dashboard',  '/product/dashboard', false],
       ['Paperwork',  '/product/paperwork', false],
       ['Billing',    '/product/billing', false],
-      ['Driver app', '/product/driver-app', true],
+      ['Driver App', '/product/driver-app', true],
     ]],
     ['Company', [
       ['Why FleetCal',  '/#story', false],

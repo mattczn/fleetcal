@@ -53,10 +53,10 @@ interface PricingTier {
 const SHARED_FEATURES = [
   'AI rate-con parser',
   'Truck dispatch calendar',
-  'Driver app',
+  'Driver App',
   'Driver payroll',
   'Custom reports',
-  'Paperwork verification',
+  'Paperwork Verification',
   'Billing & invoicing',
   '… and more',
 ] as const;

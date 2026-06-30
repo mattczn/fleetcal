@@ -89,7 +89,7 @@ const WRAP = 'mx-auto w-full max-w-[1600px] px-5 sm:px-6 md:px-8 lg:px-12';
 
 const HERO_TABS: ReadonlyArray<{ id: string; label: string }> = [
   { id: 'dispatch', label: 'Dispatch Calendar' },
-  { id: 'driver', label: 'Driver app' },
+  { id: 'driver', label: 'Driver App' },
   { id: 'paperwork', label: 'Paperwork & Billing' },
   { id: 'payroll', label: 'Payroll & Insights' },
   { id: 'how', label: 'How it works' },
@@ -522,14 +522,14 @@ const FEATURE_GROUPS: ReadonlyArray<FeatureGroup> = [
   {
     key:    'dispatch',
     n:      '01',
-    kicker: 'Dispatch calendar',
+    kicker: 'Dispatch Calendar',
     Icon:   Calendar,
     color:  '#1a73e8',
     light:  '#e8f0fe',
     title:  'Find the gaps. Fill the trucks.',
     body:   "See every truck's schedule in its own column on a live calendar. Empty space means it's time to start booking loads. Drop a rate-con PDF and AI fills in the load details and maps the stops. Drag and drop to assign loads to drivers and trucks.",
     chips:  ['Color per truck', 'Unassigned load queue', 'AI rate-con parser', 'Drag-to-assign'],
-    links:  [['Dispatch calendar', '/product/calendar']],
+    links:  [['Dispatch Calendar', '/product/calendar']],
     // Static calendar screenshot is the hero; the rate-con drag-drop
     // video plays underneath as a smaller overlapping frame (~45%
     // width). The AI extraction badge floats over the TOP of the
@@ -543,14 +543,14 @@ const FEATURE_GROUPS: ReadonlyArray<FeatureGroup> = [
   {
     key:    'driver',
     n:      '02',
-    kicker: 'Driver app',
+    kicker: 'Driver App',
     Icon:   Smartphone,
     color:  '#7c3aed',
     light:  '#f1ebfe',
     title:  "Every load, in the driver's pocket.",
     body:   "Drivers get every assigned load on their phone, with live tracking, in-app navigation, and a built-in POD scanner. Every confirm, check-in, and upload syncs straight back to the dispatch calendar in real time.",
     chips:  ['Live ELD tracking', 'In-app navigation', 'Built-in POD scanner', 'Real-time sync'],
-    links:  [['Explore the driver app', '/product/driver-app']],
+    links:  [['Driver App', '/product/driver-app']],
     primary: { kind: 'image', src: '/driver-active-loads.png', alt: 'FleetCal driver app, active loads' },
   },
   {
@@ -563,7 +563,7 @@ const FEATURE_GROUPS: ReadonlyArray<FeatureGroup> = [
     title:  'Stay ahead of paperwork and cashflow.',
     body:   "Verify paperwork effortlessly with the POD on one side and the rate con on the other. Then batch the whole week's invoices in a single pass. AI reads each customer's invoicing instructions so you get paid clean.",
     chips:  ['Side-by-side review', 'Release for invoicing', 'One-click or bulk', 'Customer billing rules'],
-    links:  [['Paperwork verification', '/product/paperwork'], ['Billing', '/product/billing']],
+    links:  [['Paperwork Verification', '/product/paperwork'], ['Billing', '/product/billing']],
     primary:   { kind: 'image', src: '/paperwork-verification.png', alt: 'Side-by-side POD and rate-con review for closeout' },
     topBadge:  { kind: 'chip', title: 'Ready to release', sub: '42 loads · $28,496' },
     secondary: { kind: 'invoicebar' },
@@ -1512,7 +1512,7 @@ function Footer() {
       ['Dashboard',    '/product/dashboard'],
       ['Paperwork',    '/product/paperwork'],
       ['Billing',      '/product/billing'],
-      ['Driver app',   '/product/driver-app'],
+      ['Driver App',   '/product/driver-app'],
     ]],
     ['Company', [
       ['Why FleetCal',  '#story'],

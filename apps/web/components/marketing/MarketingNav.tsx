@@ -22,8 +22,9 @@
  */
 import Link from 'next/link';
 import Image from 'next/image';
-import { useEffect, useState } from 'react';
-import { Menu, X } from 'lucide-react';
+import { useEffect, useState, Fragment } from 'react';
+import { Menu, X, ChevronDown } from 'lucide-react';
+import { FLOW } from '@/components/marketing/ProductFlowFooter';
 
 interface Cta { href: string; label: string }
 
@@ -83,14 +84,16 @@ export default function MarketingNav({ cta, showSignIn, frostless = false }: { c
           </Link>
 
           <div className="hidden md:flex items-center gap-7 font-display">
-            {NAV.map(n => (
-              <Link
-                key={n.href}
-                href={n.href}
-                className="text-[15px] font-medium text-sys-text-2 hover:text-sys-blue-text transition-colors"
-              >
-                {n.label}
-              </Link>
+            {NAV.map((n, i) => (
+              <Fragment key={n.href}>
+                <Link
+                  href={n.href}
+                  className="text-[15px] font-medium text-sys-text-2 hover:text-sys-blue-text transition-colors"
+                >
+                  {n.label}
+                </Link>
+                {i === 0 && <ProductMenu />}
+              </Fragment>
             ))}
           </div>
         </div>
@@ -142,15 +145,17 @@ export default function MarketingNav({ cta, showSignIn, frostless = false }: { c
           }}
         >
           <div className="flex flex-col font-display">
-            {NAV.map(n => (
-              <Link
-                key={n.href}
-                href={n.href}
-                onClick={() => setOpen(false)}
-                className="block text-[16px] font-medium text-sys-text-2 hover:text-sys-blue-text py-3 border-b border-[#f1f3f4] last:border-b-0"
-              >
-                {n.label}
-              </Link>
+            {NAV.map((n, i) => (
+              <Fragment key={n.href}>
+                <Link
+                  href={n.href}
+                  onClick={() => setOpen(false)}
+                  className="block text-[16px] font-medium text-sys-text-2 hover:text-sys-blue-text py-3 border-b border-[#f1f3f4] last:border-b-0"
+                >
+                  {n.label}
+                </Link>
+                {i === 0 && <ProductMobileLinks onNavigate={() => setOpen(false)} />}
+              </Fragment>
             ))}
             {showSignIn && (
               <Link
@@ -165,5 +170,47 @@ export default function MarketingNav({ cta, showSignIn, frostless = false }: { c
         </div>
       )}
     </nav>
+  );
+}
+
+/** Desktop "Product" hover dropdown listing every product page. */
+function ProductMenu() {
+  return (
+    <div className="relative group">
+      <button type="button" className="inline-flex items-center gap-1 text-[15px] font-medium text-sys-text-2 hover:text-sys-blue-text transition-colors">
+        Product
+        <ChevronDown size={15} strokeWidth={2.5} className="transition-transform duration-200 group-hover:rotate-180" />
+      </button>
+      {/* pt-3 is a transparent bridge so the menu stays open while the cursor crosses the gap */}
+      <div className="absolute left-1/2 -translate-x-1/2 top-full pt-3 opacity-0 invisible translate-y-1 transition-all duration-150 group-hover:opacity-100 group-hover:visible group-hover:translate-y-0">
+        <div style={{ background: '#fff', border: '1px solid #e8eaed', borderRadius: 14, boxShadow: 'var(--shadow-3)', padding: 7, width: 236 }}>
+          {FLOW.map((p) => (
+            <Link key={p.key} href={p.href} className="flex items-center gap-3 rounded-[9px] hover:bg-[#f8f9fa] transition-colors" style={{ padding: '9px 10px' }}>
+              <span style={{ width: 32, height: 32, flex: 'none', borderRadius: 9, background: p.light, display: 'grid', placeItems: 'center' }}>
+                <p.Icon size={17} strokeWidth={2} style={{ color: p.color }} />
+              </span>
+              <span className="font-display" style={{ fontWeight: 600, fontSize: 14, color: '#202124' }}>{p.label}</span>
+            </Link>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Mobile panel "Product" section — every product page, expanded inline. */
+function ProductMobileLinks({ onNavigate }: { onNavigate: () => void }) {
+  return (
+    <div className="py-3 border-b border-[#f1f3f4]">
+      <div className="font-display" style={{ fontSize: 12.5, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#9aa0a6', marginBottom: 2 }}>Product</div>
+      {FLOW.map((p) => (
+        <Link key={p.key} href={p.href} onClick={onNavigate} className="flex items-center gap-3" style={{ padding: '10px 0' }}>
+          <span style={{ width: 30, height: 30, flex: 'none', borderRadius: 8, background: p.light, display: 'grid', placeItems: 'center' }}>
+            <p.Icon size={16} strokeWidth={2} style={{ color: p.color }} />
+          </span>
+          <span className="font-display" style={{ fontWeight: 500, fontSize: 15.5, color: '#3c4043' }}>{p.label}</span>
+        </Link>
+      ))}
+    </div>
   );
 }

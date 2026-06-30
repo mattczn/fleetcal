@@ -66,7 +66,7 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
           <Reveal>
             <span className="inline-flex items-center gap-2 font-display" style={{ fontSize: 13, fontWeight: 600, color: '#ea580c', background: '#fcebe2', padding: '7px 15px 7px 12px', borderRadius: 999 }}>
               <span style={{ width: 7, height: 7, borderRadius: 999, background: '#ea580c', boxShadow: '0 0 0 3px rgba(234,88,12,0.18)' }} />
-              Paperwork verification
+              Paperwork Verification
             </span>
           </Reveal>
           <Reveal delay={60}>
@@ -284,7 +284,7 @@ function Footer() {
       ['Dashboard', '/product/dashboard'],
       ['Paperwork', '/product/paperwork'],
       ['Billing',   '/product/billing'],
-      ['Driver app', '/product/driver-app'],
+      ['Driver App', '/product/driver-app'],
     ]],
     ['Company', [
       ['Why FleetCal',  '/#story'],
