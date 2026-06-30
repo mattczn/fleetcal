@@ -1270,7 +1270,7 @@ function Story() {
           <div style={{ marginBottom: 36 }}>
             <SectionLabel>Why FleetCal</SectionLabel>
             <h2 className="font-display" style={{ fontSize: 'clamp(36px, 4.4vw, 56px)', fontWeight: 800, letterSpacing: '-0.02em', lineHeight: 1.04, color: '#202124', margin: '14px 0 0' }}>
-              Real fleet. <span style={{ color: 'var(--gc-blue)' }}>Real results.</span>
+              Real Fleets. <span style={{ color: 'var(--gc-blue)' }}>Real Results.</span>
             </h2>
           </div>
 
