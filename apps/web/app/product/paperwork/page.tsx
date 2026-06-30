@@ -7,6 +7,7 @@ import Reveal from '@/components/marketing/Reveal';
 import HeroVideo from '@/components/marketing/HeroVideo';
 import HeroFeatureNav from '@/components/marketing/HeroFeatureNav';
 import ProductFlowFooter from '@/components/marketing/ProductFlowFooter';
+import BeforeAfterSection, { BA_PRESETS } from '@/components/marketing/BeforeAfterSection';
 import ReviewQueueCard from '@/components/marketing/paperwork/ReviewQueueCard';
 import FlagModal from '@/components/marketing/paperwork/FlagModal';
 
@@ -28,6 +29,7 @@ export default async function PaperworkMarketingPage() {
       <Hero cta={cta} />
       <VerifyAndRelease />
       <ReviewQueue />
+      <BeforeAfterSection rows={BA_PRESETS.paperwork} />
       <ProductFlowFooter current="paperwork" />
       <FinalCta cta={cta} />
       <Footer />
@@ -265,9 +267,6 @@ function FinalCta({ cta }: { cta: { href: string; label: string } }) {
             <Link href="/contact-sales" className="font-display" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.14)', color: '#fff', fontWeight: 600, fontSize: 17, padding: '16px 32px', borderRadius: 999, textDecoration: 'none', whiteSpace: 'nowrap' }}>
               Book a demo
             </Link>
-            <Link href="/product/billing" className="font-display" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, justifyContent: 'center', background: 'rgba(255,255,255,0.14)', color: '#fff', fontWeight: 600, fontSize: 17, padding: '16px 32px', borderRadius: 999, textDecoration: 'none', whiteSpace: 'nowrap' }}>
-              See the Billing module →
-            </Link>
           </div>
         </Reveal>
       </div>
@@ -318,7 +317,7 @@ function Footer() {
       </div>
       <div className={`${WRAP} flex flex-wrap justify-between gap-3 py-[22px]`} style={{ borderTop: '1px solid #e8eaed' }}>
         <span className="font-mono" style={{ fontSize: 12, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#5f6368' }}>
-          © {new Date().getFullYear()} FleetCal · Built in Salt Lake City
+          © {new Date().getFullYear()} FleetCal
         </span>
         <div style={{ display: 'flex', gap: 24 }}>
           <Link href="/privacy" style={{ fontSize: 15, color: '#5f6368', textDecoration: 'none' }}>Privacy</Link>

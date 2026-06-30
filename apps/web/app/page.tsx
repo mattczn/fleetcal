@@ -2,7 +2,8 @@ import { Fragment } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { auth } from '@clerk/nextjs/server';
-import { Calendar, Receipt, Send, Wallet, Check, Sparkles, ArrowRight, FileText, Smartphone } from 'lucide-react';
+import { Calendar, Receipt, Send, Wallet, Check, Sparkles, ArrowRight, FileText, Smartphone, Upload, X } from 'lucide-react';
+import BeforeAfterSection, { BA_PRESETS } from '@/components/marketing/BeforeAfterSection';
 import PricingCards from '@/components/marketing/PricingCards';
 import MarketingNav from '@/components/marketing/MarketingNav';
 import FaqAccordion from '@/components/marketing/FaqAccordion';
@@ -59,6 +60,7 @@ export default async function HomePage() {
       <HowItWorks />
       <Pricing />
       <Story />
+      <BeforeAfterSection rows={BA_PRESETS.home} sub="Dispatch used to mean spreadsheets, group chats, and re-keyed numbers. The pain points each FleetCal page solves." />
       <Faq />
       <FinalCta cta={cta} />
       <Footer />
@@ -1321,6 +1323,9 @@ function Story() {
   );
 }
 
+// Before/After section now lives in components/marketing/BeforeAfterSection.tsx
+// (shared by the home page and every product page; copy in BA_PRESETS).
+
 const FAQS = [
   { q: 'Is there a per-driver or per-seat fee?',       a: 'Never. You pay one flat monthly price based on your truck count. Add as many dispatchers, drivers, and office staff as you need at no extra cost.' },
   { q: 'How does the free trial work?',                a: "Every plan starts with a 14-day free trial. Pick a plan, add your card, and you're set up. You won't be charged until day 15, and you can cancel any time before then in the app." },
@@ -1331,7 +1336,7 @@ const FAQS = [
 
 function Faq() {
   return (
-    <section id="faq" style={{ padding: '110px 0', borderTop: '1px solid #e8eaed', scrollMarginTop: 150 }}>
+    <section id="faq" style={{ padding: '110px 0', background: '#f8f9fa', borderTop: '1px solid #e8eaed', scrollMarginTop: 150 }}>
       <div
         className={`${WRAP} grid items-start gap-10 lg:gap-16 grid-cols-1 lg:grid-cols-[0.8fr_1.4fr]`}
       >
@@ -1545,7 +1550,7 @@ function Footer() {
             color:          '#5f6368',
           }}
         >
-          © {new Date().getFullYear()} FleetCal · Built in Salt Lake City
+          © {new Date().getFullYear()} FleetCal
         </span>
         <div style={{ display: 'flex', gap: 24 }}>
           <Link href="/privacy" style={{ fontSize: 15, color: '#5f6368', textDecoration: 'none' }}>Privacy</Link>

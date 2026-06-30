@@ -103,7 +103,7 @@ export default async function PricingPage() {
               color:         '#5f6368',
             }}
           >
-            © {new Date().getFullYear()} · Built in Salt Lake City
+            © {new Date().getFullYear()}
           </div>
           <div className="flex gap-6 font-display" style={{ fontSize: 14, color: '#5f6368' }}>
             <Link href="/sign-in" className="hover:text-[#1967d2] transition-colors">Sign in</Link>

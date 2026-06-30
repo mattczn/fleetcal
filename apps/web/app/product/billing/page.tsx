@@ -7,6 +7,7 @@ import Reveal from '@/components/marketing/Reveal';
 import HeroVideo from '@/components/marketing/HeroVideo';
 import HeroFeatureNav from '@/components/marketing/HeroFeatureNav';
 import ProductFlowFooter from '@/components/marketing/ProductFlowFooter';
+import BeforeAfterSection, { BA_PRESETS } from '@/components/marketing/BeforeAfterSection';
 import RoutingCard from '@/components/marketing/billing/RoutingCard';
 import InvoiceDocsCard from '@/components/marketing/billing/InvoiceDocsCard';
 import LifecycleCard from '@/components/marketing/billing/LifecycleCard';
@@ -28,6 +29,7 @@ export default async function BillingMarketingPage() {
       <Hero cta={cta} />
       <Pipeline />
       <Features />
+      <BeforeAfterSection rows={BA_PRESETS.billing} />
       <ProductFlowFooter current="billing" />
       <FinalCta cta={cta} />
       <Footer />
@@ -271,7 +273,7 @@ function Footer() {
       </div>
       <div className={`${WRAP} flex flex-wrap justify-between gap-3 py-[22px]`} style={{ borderTop: '1px solid #e8eaed' }}>
         <span className="font-mono" style={{ fontSize: 12, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#5f6368' }}>
-          © {new Date().getFullYear()} FleetCal · Built in Salt Lake City
+          © {new Date().getFullYear()} FleetCal
         </span>
         <div style={{ display: 'flex', gap: 24 }}>
           <Link href="/privacy" style={{ fontSize: 15, color: '#5f6368', textDecoration: 'none' }}>Privacy</Link>

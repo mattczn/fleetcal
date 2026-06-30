@@ -6,6 +6,7 @@ import MarketingNav from '@/components/marketing/MarketingNav';
 import Reveal from '@/components/marketing/Reveal';
 import HeroFeatureNav from '@/components/marketing/HeroFeatureNav';
 import ProductFlowFooter from '@/components/marketing/ProductFlowFooter';
+import BeforeAfterSection, { BA_PRESETS } from '@/components/marketing/BeforeAfterSection';
 import DispatchNotify from '@/components/marketing/driver/DispatchNotify';
 
 /**
@@ -27,6 +28,7 @@ export default async function DriverMarketingPage() {
       <LoadDetails />
       <PaperworkAndScheduling />
       <DispatchSection />
+      <BeforeAfterSection rows={BA_PRESETS.driverApp} />
       <ProductFlowFooter current="driver-app" />
       <FinalCta cta={cta} />
       <Footer />
@@ -56,7 +58,7 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
   return (
     <>
     <section style={{ background: 'radial-gradient(ellipse 82% 92% at 80% 0%, #f1ebfe 0%, #ffffff 58%)', paddingTop: 60, paddingBottom: 68 }}>
-      <div className={`${WRAP} grid items-center gap-10 lg:gap-14 grid-cols-1 lg:grid-cols-[1fr_1.05fr]`}>
+      <div className={`${WRAP} grid items-start gap-10 lg:gap-14 grid-cols-1 lg:grid-cols-[1fr_1.05fr]`}>
         {/* copy */}
         <div>
           <Reveal>
@@ -368,7 +370,7 @@ function Footer() {
         ))}
       </div>
       <div className={`${WRAP}`} style={{ borderTop: '1px solid #e8eaed', paddingTop: 20, paddingBottom: 20 }}>
-        <span className="font-mono" style={{ fontSize: 12, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#5f6368' }}>© 2026 FleetCal · Built in Salt Lake City</span>
+        <span className="font-mono" style={{ fontSize: 12, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#5f6368' }}>© 2026 FleetCal</span>
       </div>
     </footer>
   );

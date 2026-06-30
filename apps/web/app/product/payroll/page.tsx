@@ -5,6 +5,7 @@ import { Calendar, Percent, Plus, CornerDownRight, Check } from 'lucide-react';
 import MarketingNav from '@/components/marketing/MarketingNav';
 import HeroFeatureNav from '@/components/marketing/HeroFeatureNav';
 import ProductFlowFooter from '@/components/marketing/ProductFlowFooter';
+import BeforeAfterSection, { BA_PRESETS } from '@/components/marketing/BeforeAfterSection';
 import Reveal from '@/components/marketing/Reveal';
 import PayrollHeroCard from '@/components/marketing/payroll/PayrollHeroCard';
 import ModifyPayCard from '@/components/marketing/payroll/ModifyPayCard';
@@ -35,6 +36,7 @@ export default async function PayrollMarketingPage() {
       <MarketingNav cta={cta} showSignIn={state === 'out'} frostless />
       <Hero cta={cta} />
       <Features />
+      <BeforeAfterSection rows={BA_PRESETS.payroll} />
       <ProductFlowFooter current="payroll" />
       <FinalCta cta={cta} />
       <Footer />
@@ -369,7 +371,7 @@ function Footer() {
       </div>
       <div className={`${WRAP} flex flex-wrap justify-between gap-3 py-[22px]`} style={{ borderTop: '1px solid #e8eaed' }}>
         <span className="font-mono" style={{ fontSize: 12, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#5f6368' }}>
-          © {new Date().getFullYear()} FleetCal · Built in Salt Lake City
+          © {new Date().getFullYear()} FleetCal
         </span>
         <div style={{ display: 'flex', gap: 24 }}>
           <Link href="/privacy" style={{ fontSize: 15, color: '#5f6368', textDecoration: 'none' }}>Privacy</Link>
