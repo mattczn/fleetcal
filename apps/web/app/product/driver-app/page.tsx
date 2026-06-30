@@ -57,19 +57,19 @@ const HERO_TABS: ReadonlyArray<{ id: string; label: string }> = [
 function Hero({ cta }: { cta: { href: string; label: string } }) {
   return (
     <>
-    <section style={{ background: 'radial-gradient(ellipse 82% 92% at 80% 0%, #f1ebfe 0%, #ffffff 58%)', paddingTop: 60, paddingBottom: 68 }}>
-      <div className={`${WRAP} grid items-start gap-10 lg:gap-14 grid-cols-1 lg:grid-cols-[1fr_1.05fr]`}>
+    <section className="flex flex-col justify-center" style={{ background: 'radial-gradient(120% 90% at 92% -8%, rgba(214,197,250,0.7) 0%, rgba(255,255,255,0) 56%), linear-gradient(180deg, #f3effe 0%, #f9f7fe 42%, #ffffff 92%)', paddingTop: 56, paddingBottom: 48, minHeight: 'calc(100vh - 168px)' }}>
+      <div className={`${WRAP} grid items-center gap-10 lg:gap-14 grid-cols-1 lg:grid-cols-[1fr_1.05fr]`}>
         {/* copy */}
         <div>
           <Reveal>
-            <span className="inline-flex items-center gap-2 font-display" style={{ fontSize: 13, fontWeight: 600, color: '#1967d2', background: '#e8f0fe', padding: '7px 16px 7px 13px', borderRadius: 999 }}>
-              <span style={{ width: 7, height: 7, borderRadius: 999, background: '#1a73e8', boxShadow: '0 0 0 3px rgba(26,115,232,0.18)' }} />
+            <span className="inline-flex items-center gap-2 font-display" style={{ fontSize: 13, fontWeight: 600, color: '#7c3aed', background: '#f1ebfe', padding: '7px 16px 7px 13px', borderRadius: 999 }}>
+              <span style={{ width: 7, height: 7, borderRadius: 999, background: '#7c3aed', boxShadow: '0 0 0 3px rgba(124,58,237,0.18)' }} />
               Driver app
             </span>
           </Reveal>
           <Reveal delay={60}>
             <h1 className="font-display" style={{ fontWeight: 800, fontSize: 'clamp(37px, 4.6vw, 57px)', lineHeight: 1.04, letterSpacing: '-0.022em', margin: '22px 0 0', color: '#202124' }}>
-              Built for drivers<br /><span style={{ color: '#1a73e8' }}>on the go.</span>
+              Built for drivers<br /><span style={{ color: '#7c3aed' }}>on the go.</span>
             </h1>
           </Reveal>
           <Reveal delay={120}>
@@ -78,9 +78,11 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
             </p>
           </Reveal>
           <Reveal delay={180}>
-            <div style={{ display: 'flex', gap: 12, marginTop: 30, flexWrap: 'wrap' }}>
-              <AppStoreBadge kind="apple" href="https://apps.apple.com/us/app/fleetcal-driver/id6781803786" />
-              <Link href="/contact-sales" className="font-display" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: '#fff', color: '#1967d2', border: '1px solid #dadce0', fontWeight: 600, fontSize: 16, padding: '14px 24px', borderRadius: 12, textDecoration: 'none', whiteSpace: 'nowrap' }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 13, marginTop: 30 }}>
+              <Link href={cta.href} className="font-display" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: '#7c3aed', color: '#fff', fontWeight: 600, fontSize: 17, padding: '16px 32px', borderRadius: 999, textDecoration: 'none', boxShadow: 'var(--shadow-1)', whiteSpace: 'nowrap' }}>
+                {cta.label.replace(' →', '')}
+              </Link>
+              <Link href="/contact-sales" className="font-display" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: '#fff', color: '#7c3aed', border: '1px solid #dadce0', fontWeight: 600, fontSize: 17, padding: '15px 28px', borderRadius: 999, textDecoration: 'none', whiteSpace: 'nowrap' }}>
                 Book a demo
               </Link>
             </div>
@@ -89,27 +91,33 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
 
         {/* phone + side cards */}
         <Reveal delay={140}>
-          <div style={{ position: 'relative', width: 272, maxWidth: '100%', margin: '0 auto' }}>
-            <div style={{ background: '#0b0b0c', borderRadius: 46, padding: 9, boxShadow: '0 34px 70px -26px rgba(26,35,50,.5),0 10px 28px -14px rgba(26,35,50,.3)' }}>
-              <div style={{ borderRadius: 38, overflow: 'hidden', background: '#fff' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 22 }}>
+            <div style={{ position: 'relative', width: 216, maxWidth: '100%' }}>
+              <div style={{ background: '#0b0b0c', borderRadius: 46, padding: 9, boxShadow: '0 34px 70px -26px rgba(26,35,50,.5),0 10px 28px -14px rgba(26,35,50,.3)' }}>
+                <div style={{ borderRadius: 38, overflow: 'hidden', background: '#fff' }}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src="/driver-active-loads.png" alt="FleetCal driver app, active loads" style={{ display: 'block', width: '100%', height: 'auto' }} />
+                </div>
+              </div>
+              {/* push notification, floating off the phone's right */}
+              <div className="hidden sm:block" style={{ position: 'absolute', top: 56, right: -76, zIndex: 3, width: 224 }}>
+                <PushCard title="New load assigned" body="Ardent: Lancaster, TX → Dallas, TX. Tap to confirm." style={{ borderRadius: 18, background: 'rgba(250,250,252,0.96)', boxShadow: '0 18px 40px -14px rgba(26,35,50,.32),0 4px 12px rgba(26,35,50,.08)' }} />
+              </div>
+              {/* the dispatch-calendar card it lands on, floating bottom-right */}
+              <div className="hidden sm:block" style={{ position: 'absolute', bottom: 24, right: -46, zIndex: 3 }}>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src="/driver-active-loads.png" alt="FleetCal driver app, active loads" style={{ display: 'block', width: '100%', height: 'auto' }} />
+                <img src="/dispatch-card-hero.png" alt="Load on the dispatcher's calendar" style={{ display: 'block', width: 166, height: 'auto', filter: 'drop-shadow(0 16px 28px rgba(26,35,50,.24))' }} />
               </div>
             </div>
-            {/* push notification, floating off the phone's right */}
-            <div className="hidden sm:block" style={{ position: 'absolute', top: 56, right: -76, zIndex: 3, width: 224 }}>
-              <PushCard title="New load assigned" body="Ardent: Lancaster, TX → Dallas, TX. Tap to confirm." style={{ borderRadius: 18, background: 'rgba(250,250,252,0.96)', boxShadow: '0 18px 40px -14px rgba(26,35,50,.32),0 4px 12px rgba(26,35,50,.08)' }} />
-            </div>
-            {/* the dispatch-calendar card it lands on, floating bottom-right */}
-            <div className="hidden sm:block" style={{ position: 'absolute', bottom: 24, right: -46, zIndex: 3 }}>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/dispatch-card-hero.png" alt="Load on the dispatcher's calendar" style={{ display: 'block', width: 166, height: 'auto', filter: 'drop-shadow(0 16px 28px rgba(26,35,50,.24))' }} />
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', justifyContent: 'center' }}>
+              <AppStoreBadge kind="apple" href="https://apps.apple.com/us/app/fleetcal-driver/id6781803786" />
+              <AppStoreBadge kind="google" href="#" />
             </div>
           </div>
         </Reveal>
       </div>
     </section>
-    <HeroFeatureNav items={HERO_TABS} sticky />
+    <HeroFeatureNav items={HERO_TABS} sticky accent="#7c3aed" />
     </>
   );
 }
@@ -357,7 +365,7 @@ function Footer() {
         <div className="col-span-2 md:col-span-1">
           <Image src="/logo-horizontal.png" alt="FleetCal" width={140} height={32} style={{ height: 32, width: 'auto', objectFit: 'contain', display: 'block' }} />
           <p style={{ fontSize: 14.5, lineHeight: 1.6, color: '#5f6368', marginTop: 18, maxWidth: 260 }}>
-            The dispatch-to-invoice TMS built by a carrier, for fleets like yours.
+            Dispatch to invoice, on one calendar. Built by a carrier, for fleets like yours.
           </p>
         </div>
         {cols.map(([title, links]) => (
@@ -417,23 +425,38 @@ function PushCard({ title, body, style }: { title: string; body: string; style?:
 }
 
 /** Black app-store badge pill (placeholder SVG glyphs per the handoff). */
-function AppStoreBadge({ kind, href }: { kind: 'apple' | 'google'; href: string }) {
-  return (
-    <Link href={href} target="_blank" rel="noopener noreferrer" aria-label={kind === 'apple' ? 'Download on the App Store' : 'Get it on Google Play'} style={{ display: 'inline-flex', alignItems: 'center', gap: 11, background: '#000', borderRadius: 12, padding: '10px 18px', textDecoration: 'none' }}>
-      {kind === 'apple' ? (
-        <svg viewBox="0 0 384 512" width="22" height="22" fill="#fff" aria-hidden="true"><path d="M318.7 268.7c-.2-36.7 16.4-64.4 50-84.8-18.8-26.9-47.2-41.7-84.7-44.6-35.5-2.8-74.3 20.7-88.5 20.7-15 0-49.4-19.7-76.4-19.7C63.3 141.2 4 184.8 4 273.5q0 39.3 14.4 81.2c12.8 36.7 59 126.7 107.2 125.2 25.2-.6 43-17.9 75.8-17.9 31.8 0 48.3 17.9 76.4 17.9 48.6-.7 90.4-82.5 102.6-119.3-65.2-30.7-61.7-90-61.7-91.9zm-56.6-164.2c27.3-32.4 24.8-61.9 24-72.5-24.1 1.4-52 16.4-67.9 34.9-17.5 19.8-27.8 44.3-25.6 71.9 26.1 2 49.9-11.4 69.5-34.3z" /></svg>
-      ) : (
-        <svg viewBox="0 0 24 26" width="21" height="23" aria-hidden="true">
-          <polygon points="2.5,2 9,13 2.5,24" fill="#00C3FF" />
-          <polygon points="2.5,2 9,13 20,11.5" fill="#00E676" />
-          <polygon points="9,13 20,11.5 20,14.5" fill="#FFCE00" />
-          <polygon points="2.5,24 9,13 20,14.5" fill="#FF3D47" />
-        </svg>
-      )}
+function AppStoreBadge({ kind, href, placeholder = false }: { kind: 'apple' | 'google'; href?: string; placeholder?: boolean }) {
+  const icon = kind === 'apple' ? (
+    <svg viewBox="0 0 384 512" width="22" height="22" fill="#fff" aria-hidden="true"><path d="M318.7 268.7c-.2-36.7 16.4-64.4 50-84.8-18.8-26.9-47.2-41.7-84.7-44.6-35.5-2.8-74.3 20.7-88.5 20.7-15 0-49.4-19.7-76.4-19.7C63.3 141.2 4 184.8 4 273.5q0 39.3 14.4 81.2c12.8 36.7 59 126.7 107.2 125.2 25.2-.6 43-17.9 75.8-17.9 31.8 0 48.3 17.9 76.4 17.9 48.6-.7 90.4-82.5 102.6-119.3-65.2-30.7-61.7-90-61.7-91.9zm-56.6-164.2c27.3-32.4 24.8-61.9 24-72.5-24.1 1.4-52 16.4-67.9 34.9-17.5 19.8-27.8 44.3-25.6 71.9 26.1 2 49.9-11.4 69.5-34.3z" /></svg>
+  ) : (
+    <svg viewBox="0 0 24 26" width="21" height="23" aria-hidden="true">
+      <polygon points="2.5,2 9,13 2.5,24" fill="#00C3FF" />
+      <polygon points="2.5,2 9,13 20,11.5" fill="#00E676" />
+      <polygon points="9,13 20,11.5 20,14.5" fill="#FFCE00" />
+      <polygon points="2.5,24 9,13 20,14.5" fill="#FF3D47" />
+    </svg>
+  );
+  const label = kind === 'apple' ? 'App Store' : 'Google Play';
+  const top = placeholder ? 'Coming soon to' : kind === 'apple' ? 'Download on the' : 'Get it on';
+  const body = (
+    <>
+      {icon}
       <span style={{ display: 'flex', flexDirection: 'column', lineHeight: 1 }}>
-        <span style={{ fontSize: 10, fontWeight: 500, letterSpacing: kind === 'apple' ? '0.02em' : '0.06em', textTransform: kind === 'apple' ? 'none' : 'uppercase', color: '#fff' }}>{kind === 'apple' ? 'Download on the' : 'Get it on'}</span>
-        <span className="font-display" style={{ fontWeight: 700, fontSize: 18, color: '#fff', marginTop: 3 }}>{kind === 'apple' ? 'App Store' : 'Google Play'}</span>
+        <span style={{ fontSize: 10, fontWeight: 500, letterSpacing: kind === 'apple' ? '0.02em' : '0.06em', textTransform: kind === 'apple' ? 'none' : 'uppercase', color: '#fff' }}>{top}</span>
+        <span className="font-display" style={{ fontWeight: 700, fontSize: 18, color: '#fff', marginTop: 3 }}>{label}</span>
       </span>
+    </>
+  );
+  if (placeholder) {
+    return (
+      <div aria-label={`${label}, coming soon`} style={{ display: 'inline-flex', alignItems: 'center', gap: 11, background: '#000', borderRadius: 12, padding: '10px 18px', opacity: 0.5, cursor: 'default' }}>
+        {body}
+      </div>
+    );
+  }
+  return (
+    <Link href={href ?? '#'} target="_blank" rel="noopener noreferrer" aria-label={kind === 'apple' ? 'Download on the App Store' : 'Get it on Google Play'} style={{ display: 'inline-flex', alignItems: 'center', gap: 11, background: '#000', borderRadius: 12, padding: '10px 18px', textDecoration: 'none' }}>
+      {body}
     </Link>
   );
 }

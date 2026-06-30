@@ -94,18 +94,18 @@ function FeatureCopy({
 function Hero({ cta }: { cta: { href: string; label: string } }) {
   return (
     <>
-    <section className="flex flex-col justify-center" style={{ background: 'radial-gradient(120% 90% at 92% -8%, rgba(176,230,196,0.75) 0%, rgba(255,255,255,0) 56%), linear-gradient(180deg, #ecfaf1 0%, #f5fbf7 42%, #ffffff 92%)', paddingTop: 56, paddingBottom: 48, minHeight: 'calc(100vh - 168px)' }}>
+    <section className="flex flex-col justify-center" style={{ background: 'radial-gradient(120% 90% at 92% -8%, rgba(165,225,217,0.7) 0%, rgba(255,255,255,0) 56%), linear-gradient(180deg, #e8f7f5 0%, #f3faf9 42%, #ffffff 92%)', paddingTop: 56, paddingBottom: 48, minHeight: 'calc(100vh - 168px)' }}>
       <div className={`${WRAP} grid items-center gap-12 lg:gap-[60px] grid-cols-1 lg:grid-cols-[1fr_1.18fr]`}>
         <div>
           <Reveal>
-            <span className="inline-flex items-center gap-2 font-display" style={{ fontSize: 13, fontWeight: 600, color: '#1e8e3e', background: '#e6f4ea', padding: '7px 16px 7px 13px', borderRadius: 999 }}>
-              <span style={{ width: 7, height: 7, borderRadius: 999, background: '#1e8e3e', boxShadow: '0 0 0 3px rgba(30,142,62,0.18)' }} />
+            <span className="inline-flex items-center gap-2 font-display" style={{ fontSize: 13, fontWeight: 600, color: '#0d9488', background: '#e0f2f0', padding: '7px 16px 7px 13px', borderRadius: 999 }}>
+              <span style={{ width: 7, height: 7, borderRadius: 999, background: '#0d9488', boxShadow: '0 0 0 3px rgba(13,148,136,0.18)' }} />
               Payroll &amp; Insights
             </span>
           </Reveal>
           <Reveal delay={60}>
             <h1 className="font-display" style={{ fontWeight: 800, fontSize: 'clamp(40px, 4.8vw, 60px)', lineHeight: 1.04, letterSpacing: '-0.022em', margin: '22px 0 0', color: '#202124' }}>
-              Payroll that<br />manages <span style={{ color: '#1e8e3e' }}>itself.</span>
+              Payroll that<br />manages <span style={{ color: '#0d9488' }}>itself.</span>
             </h1>
           </Reveal>
           <Reveal delay={120}>
@@ -115,10 +115,10 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
           </Reveal>
           <Reveal delay={180}>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 13, marginTop: 32 }}>
-              <Link href={cta.href} className="font-display" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'var(--gc-blue)', color: '#fff', fontWeight: 600, fontSize: 17, padding: '16px 32px', borderRadius: 999, textDecoration: 'none', boxShadow: 'var(--shadow-1)', whiteSpace: 'nowrap' }}>
+              <Link href={cta.href} className="font-display" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: '#0d9488', color: '#fff', fontWeight: 600, fontSize: 17, padding: '16px 32px', borderRadius: 999, textDecoration: 'none', boxShadow: 'var(--shadow-1)', whiteSpace: 'nowrap' }}>
                 {cta.label.replace(' →', '')}
               </Link>
-              <Link href="/contact-sales" className="font-display" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: '#fff', color: '#1967d2', border: '1px solid #dadce0', fontWeight: 600, fontSize: 17, padding: '15px 28px', borderRadius: 999, textDecoration: 'none', whiteSpace: 'nowrap' }}>
+              <Link href="/contact-sales" className="font-display" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: '#fff', color: '#0d9488', border: '1px solid #dadce0', fontWeight: 600, fontSize: 17, padding: '15px 28px', borderRadius: 999, textDecoration: 'none', whiteSpace: 'nowrap' }}>
                 Book a demo
               </Link>
             </div>
@@ -130,7 +130,7 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
         </Reveal>
       </div>
     </section>
-    <HeroFeatureNav items={HERO_TABS} sticky />
+    <HeroFeatureNav items={HERO_TABS} sticky accent="#0d9488" />
     </>
   );
 }
@@ -167,7 +167,7 @@ function Features() {
             <FeatureCopy
               Icon={Calendar} iconBg="#e6f4ea" accent="#1e8e3e" kicker="Auto-filled"
               title="Every load is already on the payroll."
-              body="As soon as a load is delivered on the calendar, it lands on that driver's week: date, lane, load number, miles, load value, and pay. No re-keying, no spreadsheet, no missed runs. Carlos drove 13 loads this week; all 13 are right here."
+              body="Every load event linked to a driver autofills in the payroll page for the week. From there you can see the event date, total miles, load value and driver pay. You determine what is shared with drivers and what is hidden in their pay stub."
               chips={['Pulled from the calendar', 'Categorized by relay leg', 'Per-driver pay stub PDF']}
             />
             <div style={{ position: 'relative' }}>
@@ -195,7 +195,7 @@ function Features() {
               <FeatureCopy
                 Icon={Percent} iconBg="#e8f0fe" accent="#1967d2" kicker="Default pay settings"
                 title="Set the percent once. Override anywhere."
-                body="Pick a default driver-pay percentage and FleetCal applies it to every load. Need to bump a tough run or a relay leg? Change it right in the load details on the calendar, or adjust the whole week from the payroll page. The dollar amount recalculates instantly."
+                body="Pick a default driver-pay percentage and FleetCal applies it to every load. You can easily edit the pay for the load in the calendar, and directly in the payroll page when finalizing the week."
                 chips={['Org-wide default', 'Per-load override', 'Flat $ or %']}
               />
             </div>
@@ -234,8 +234,8 @@ function Features() {
             <div className="order-1 lg:order-2">
               <FeatureCopy
                 Icon={CornerDownRight} iconBg="#f3e8fd" accent="#6941c6" kicker="Defer pay"
-                title="Crossing the Saturday cutoff? Defer it."
-                body="Over-the-road runs don't care about your Sat–Fri week. Push a load's pay into a future week and FleetCal writes a matched pair of adjustments, negative here and positive there, so both weeks reconcile cleanly. FleetCal even flags loads whose delivery spills into next week."
+                title="Defer Payments"
+                body="Whenever a load runs over the weekend, you can simply push the load's pay into a future week. FleetCal makes the adjustments so both weeks reconcile cleanly."
                 chips={['Matched +/− pair', 'Spanning-load alerts', 'One-click undo']}
               />
             </div>
@@ -357,7 +357,7 @@ function Footer() {
         <div className="col-span-2 md:col-span-1">
           <Image src="/logo-horizontal.png" alt="FleetCal" width={140} height={32} style={{ height: 32, width: 'auto', objectFit: 'contain', display: 'block' }} />
           <p style={{ fontSize: 14.5, lineHeight: 1.6, color: '#5f6368', marginTop: 18, maxWidth: 260 }}>
-            The dispatch-to-invoice TMS built by a carrier, for fleets like yours.
+            Dispatch to invoice, on one calendar. Built by a carrier, for fleets like yours.
           </p>
         </div>
         {cols.map(([title, links]) => (

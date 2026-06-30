@@ -10,6 +10,7 @@ import FaqAccordion from '@/components/marketing/FaqAccordion';
 import Reveal from '@/components/marketing/Reveal';
 import HeroVideo from '@/components/marketing/HeroVideo';
 import HeroFeatureNav from '@/components/marketing/HeroFeatureNav';
+import { FLOW } from '@/components/marketing/ProductFlowFooter';
 
 /**
  * Marketing landing page at `/`.
@@ -60,8 +61,9 @@ export default async function HomePage() {
       <HowItWorks />
       <Pricing />
       <Story />
-      <BeforeAfterSection rows={BA_PRESETS.home} sub="Dispatch used to mean spreadsheets, group chats, and re-keyed numbers. The pain points each FleetCal page solves." />
+      <BeforeAfterSection rows={BA_PRESETS.home} sub="Dispatch used to mean spreadsheets, group chats, and re-keyed numbers. Here is what changes the day a fleet moves onto FleetCal." />
       <Faq />
+      <ExploreFleetCal />
       <FinalCta cta={cta} />
       <Footer />
     </div>
@@ -1089,7 +1091,7 @@ function Features() {
             Carrier first tools that<br /><span style={{ color: 'var(--gc-blue)' }}>keep trucks moving.</span>
           </SectionTitle>
           <SectionSub>
-            Focus on optimizing your fleet without the bloat or the enterprise price tag.
+            Everything a carrier needs to optimize its fleet and leave spreadsheets behind.
           </SectionSub>
         </Reveal>
 
@@ -1327,8 +1329,9 @@ function Story() {
 // (shared by the home page and every product page; copy in BA_PRESETS).
 
 const FAQS = [
-  { q: 'Is there a per-driver or per-seat fee?',       a: 'Never. You pay one flat monthly price based on your truck count. Add as many dispatchers, drivers, and office staff as you need at no extra cost.' },
-  { q: 'How does the free trial work?',                a: "Every plan starts with a 14-day free trial. Pick a plan, add your card, and you're set up. You won't be charged until day 15, and you can cancel any time before then in the app." },
+  { q: 'Is there a per-driver or per-seat fee?',       a: "No, you pay one flat monthly price based on the number of active trucks you are running. Add up to 10 team members per organization and as many drivers as you'd like." },
+  { q: 'Is the driver app included?',                  a: 'Yes, the driver app is free with all plans. Just add a driver in the system and they can log in with their phone number.' },
+  { q: 'How does the free trial work?',                a: "You can start managing your loads on FleetCal today. Pick a plan, add your card, and you're set up. You won't be charged until day 15, and you can cancel any time before then in the app." },
   { q: 'Can I bring my existing loads and customers over?', a: "Yes. You can import your current loads, customers, drivers, and equipment so you're not starting from an empty calendar on day one." },
   { q: 'Who is FleetCal built for?',                   a: 'Small to mid-size carriers running roughly 1–14 trucks. From owner-operators acting as their own dispatcher up through fleets where dispatch is its own department.' },
   { q: 'What if I grow past 14 trucks?',               a: "Reach out to sales and we'll set you up with a plan sized to your fleet. The product is the same. Only the truck cap changes." },
@@ -1349,13 +1352,50 @@ function Faq() {
               href="/contact-sales"
               style={{ color: '#1967d2', fontWeight: 600, textDecoration: 'none' }}
             >
-              Talk to a human →
+              Talk to our team →
             </Link>
           </SectionSub>
         </Reveal>
         <Reveal delay={80}>
           <FaqAccordion items={FAQS as unknown as { q: string; a: string }[]} />
         </Reveal>
+      </div>
+    </section>
+  );
+}
+
+// ── Explore FleetCal (kick off the product tour) ────────────────────────────
+
+function ExploreFleetCal() {
+  return (
+    <section id="explore" style={{ padding: '100px 0', background: '#fff', borderTop: '1px solid #e8eaed', scrollMarginTop: 150 }}>
+      <div className={WRAP}>
+        <Reveal style={{ textAlign: 'center', maxWidth: 720, margin: '0 auto 40px' }}>
+          <SectionLabel>Explore FleetCal</SectionLabel>
+          <SectionTitle>See it work, end to end.</SectionTitle>
+          <SectionSub>Start with the dispatch calendar and follow a load all the way to paid, or jump straight to any product.</SectionSub>
+          <div style={{ marginTop: 28 }}>
+            <Link href="/product/calendar" className="font-display" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8, background: 'var(--gc-blue)', color: '#fff', fontWeight: 600, fontSize: 17, padding: '16px 32px', borderRadius: 999, textDecoration: 'none', boxShadow: 'var(--shadow-1)' }}>
+              Start the tour <ArrowRight size={18} strokeWidth={2.4} />
+            </Link>
+          </div>
+        </Reveal>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5" style={{ maxWidth: 1180, margin: '0 auto' }}>
+          {FLOW.map((p) => (
+            <Link key={p.key} href={p.href} className="transition-transform duration-200 hover:-translate-y-1" style={{ display: 'flex', flexDirection: 'column', gap: 14, background: '#fff', border: '1px solid #e8eaed', borderRadius: 16, padding: '24px 24px 26px', textDecoration: 'none', boxShadow: '0 1px 2px rgba(60,64,67,.10), 0 4px 14px -8px rgba(60,64,67,.14)' }}>
+              <span style={{ width: 48, height: 48, flex: 'none', borderRadius: 13, background: p.light, display: 'grid', placeItems: 'center' }}>
+                <p.Icon size={23} strokeWidth={2} style={{ color: p.color }} />
+              </span>
+              <div>
+                <div className="font-display" style={{ fontWeight: 700, fontSize: 18, color: '#202124' }}>{p.label}</div>
+                <div style={{ fontSize: 14.5, lineHeight: 1.5, color: '#5f6368', marginTop: 5 }}>{p.blurb}</div>
+              </div>
+              <span className="font-display" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontWeight: 600, fontSize: 14.5, color: p.color, marginTop: 'auto' }}>
+                Explore <ArrowRight size={15} strokeWidth={2.4} />
+              </span>
+            </Link>
+          ))}
+        </div>
       </div>
     </section>
   );
@@ -1498,7 +1538,7 @@ function Footer() {
             style={{ height: 32, width: 'auto', objectFit: 'contain', display: 'block' }}
           />
           <p style={{ fontSize: 14.5, lineHeight: 1.6, color: '#5f6368', marginTop: 18, maxWidth: 260 }}>
-            The dispatch-to-invoice TMS built by a carrier, for fleets like yours.
+            Dispatch to invoice, on one calendar. Built by a carrier, for fleets like yours.
           </p>
         </div>
         {cols.map(([title, links]) => (

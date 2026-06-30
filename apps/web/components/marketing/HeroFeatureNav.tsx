@@ -16,7 +16,7 @@ import { useEffect, useRef, useState } from 'react';
 
 export interface FeatureTab { id: string; label: string }
 
-export default function HeroFeatureNav({ items, sticky = false }: { items: ReadonlyArray<FeatureTab>; sticky?: boolean }) {
+export default function HeroFeatureNav({ items, sticky = false, accent = '#202124' }: { items: ReadonlyArray<FeatureTab>; sticky?: boolean; accent?: string }) {
   const [active, setActive] = useState<string>(items[0]?.id ?? '');
   const [stuck, setStuck] = useState(false);
   const [barH, setBarH] = useState(73);
@@ -107,7 +107,7 @@ export default function HeroFeatureNav({ items, sticky = false }: { items: Reado
                 fontWeight: on ? 700 : 500,
                 fontSize: 14.5,
                 lineHeight: 1,
-                color: on ? '#202124' : '#5f6368',
+                color: on ? accent : '#5f6368',
                 background: 'transparent',
                 border: 'none',
                 borderRadius: 999,

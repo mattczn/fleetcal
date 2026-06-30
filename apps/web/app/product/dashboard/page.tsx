@@ -55,18 +55,18 @@ const HERO_TABS: ReadonlyArray<{ id: string; label: string }> = [
 function Hero({ cta }: { cta: { href: string; label: string } }) {
   return (
     <>
-    <section className="flex flex-col justify-center" style={{ background: 'radial-gradient(120% 90% at 92% -8%, rgba(168,206,250,0.7) 0%, rgba(255,255,255,0) 56%), linear-gradient(180deg, #eef4fe 0%, #f6f9fe 42%, #ffffff 92%)', paddingTop: 56, paddingBottom: 48, minHeight: 'calc(100vh - 168px)' }}>
+    <section className="flex flex-col justify-center" style={{ background: 'radial-gradient(120% 90% at 92% -8%, rgba(250,195,205,0.7) 0%, rgba(255,255,255,0) 56%), linear-gradient(180deg, #fdeef1 0%, #fdf6f7 42%, #ffffff 92%)', paddingTop: 56, paddingBottom: 48, minHeight: 'calc(100vh - 168px)' }}>
       <div className={`${WRAP} grid items-center gap-12 lg:gap-14 grid-cols-1 lg:grid-cols-[1fr_1.24fr]`}>
         <div>
           <Reveal>
-            <span className="inline-flex items-center gap-2 font-display" style={{ fontSize: 13, fontWeight: 600, color: '#1967d2', background: '#e8f0fe', padding: '7px 16px 7px 13px', borderRadius: 999 }}>
-              <span style={{ width: 7, height: 7, borderRadius: 999, background: '#1a73e8', boxShadow: '0 0 0 3px rgba(26,115,232,0.18)' }} />
+            <span className="inline-flex items-center gap-2 font-display" style={{ fontSize: 13, fontWeight: 600, color: '#e11d48', background: '#fce8ec', padding: '7px 16px 7px 13px', borderRadius: 999 }}>
+              <span style={{ width: 7, height: 7, borderRadius: 999, background: '#e11d48', boxShadow: '0 0 0 3px rgba(225,29,72,0.18)' }} />
               Dashboard &amp; Reports
             </span>
           </Reveal>
           <Reveal delay={60}>
             <h1 className="font-display" style={{ fontWeight: 800, fontSize: 'clamp(38px, 4.6vw, 58px)', lineHeight: 1.05, letterSpacing: '-0.022em', margin: '22px 0 0', color: '#202124' }}>
-              Know exactly what&rsquo;s <span style={{ color: '#1a73e8' }}>making money.</span>
+              Know exactly what&rsquo;s <span style={{ color: '#e11d48' }}>making money.</span>
             </h1>
           </Reveal>
           <Reveal delay={120}>
@@ -76,10 +76,10 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
           </Reveal>
           <Reveal delay={180}>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 13, marginTop: 30 }}>
-              <Link href={cta.href} className="font-display" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'var(--gc-blue)', color: '#fff', fontWeight: 600, fontSize: 17, padding: '16px 32px', borderRadius: 999, textDecoration: 'none', boxShadow: 'var(--shadow-1)', whiteSpace: 'nowrap' }}>
+              <Link href={cta.href} className="font-display" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: '#e11d48', color: '#fff', fontWeight: 600, fontSize: 17, padding: '16px 32px', borderRadius: 999, textDecoration: 'none', boxShadow: 'var(--shadow-1)', whiteSpace: 'nowrap' }}>
                 {cta.label.replace(' →', '')}
               </Link>
-              <Link href="/contact-sales" className="font-display" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: '#fff', color: '#1967d2', border: '1px solid #dadce0', fontWeight: 600, fontSize: 17, padding: '15px 28px', borderRadius: 999, textDecoration: 'none', whiteSpace: 'nowrap' }}>
+              <Link href="/contact-sales" className="font-display" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: '#fff', color: '#e11d48', border: '1px solid #dadce0', fontWeight: 600, fontSize: 17, padding: '15px 28px', borderRadius: 999, textDecoration: 'none', whiteSpace: 'nowrap' }}>
                 Book a demo
               </Link>
             </div>
@@ -91,7 +91,7 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
         </Reveal>
       </div>
     </section>
-    <HeroFeatureNav items={HERO_TABS} sticky />
+    <HeroFeatureNav items={HERO_TABS} sticky accent="#e11d48" />
     </>
   );
 }
@@ -310,7 +310,7 @@ function Footer() {
         <div className="col-span-2 md:col-span-1">
           <Image src="/logo-horizontal.png" alt="FleetCal" width={140} height={32} style={{ height: 32, width: 'auto', objectFit: 'contain', display: 'block' }} />
           <p style={{ fontSize: 14.5, lineHeight: 1.6, color: '#5f6368', marginTop: 18, maxWidth: 260 }}>
-            The dispatch-to-invoice TMS built by a carrier, for fleets like yours.
+            Dispatch to invoice, on one calendar. Built by a carrier, for fleets like yours.
           </p>
         </div>
         {cols.map(([title, links]) => (

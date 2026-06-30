@@ -35,7 +35,7 @@ export default function BeforeAfterSection({
   rows,
   eyebrow = 'Before & after',
   title = DEFAULT_TITLE,
-  sub = 'The pain points each FleetCal page solves.',
+  sub = 'Here is what changes the day a fleet moves onto FleetCal.',
 }: {
   rows: BeforeAfterRow[];
   eyebrow?: React.ReactNode;

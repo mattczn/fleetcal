@@ -124,7 +124,7 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
       </div>
 
     </section>
-    <HeroFeatureNav items={HERO_TABS} sticky />
+    <HeroFeatureNav items={HERO_TABS} sticky accent="#1a73e8" />
     </>
   );
 }
@@ -341,7 +341,7 @@ function Footer() {
         <div className="col-span-2 md:col-span-1">
           <Image src="/logo-horizontal.png" alt="FleetCal" width={140} height={32} style={{ height: 32, width: 'auto', objectFit: 'contain', display: 'block' }} />
           <p style={{ fontSize: 14.5, lineHeight: 1.6, color: '#5f6368', marginTop: 18, maxWidth: 260 }}>
-            The dispatch-to-invoice TMS built by a carrier, for fleets like yours.
+            Dispatch to invoice, on one calendar. Built by a carrier, for fleets like yours.
           </p>
         </div>
         {cols.map(([title, links]) => (
