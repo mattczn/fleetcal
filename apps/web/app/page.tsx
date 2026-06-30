@@ -252,7 +252,6 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
         background:    'radial-gradient(120% 90% at 92% -8%, rgba(168,206,250,0.7) 0%, rgba(255,255,255,0) 56%), linear-gradient(180deg, #eef4fe 0%, #f6f9fe 42%, #ffffff 92%)',
         paddingTop:    72,
         paddingBottom: 48,
-        minHeight:     'calc(100vh - 168px)',
       }}
     >
       <div

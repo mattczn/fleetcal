@@ -94,7 +94,7 @@ function FeatureCopy({
 function Hero({ cta }: { cta: { href: string; label: string } }) {
   return (
     <>
-    <section className="flex flex-col justify-center" style={{ background: 'radial-gradient(120% 90% at 92% -8%, rgba(165,225,217,0.7) 0%, rgba(255,255,255,0) 56%), linear-gradient(180deg, #e8f7f5 0%, #f3faf9 42%, #ffffff 92%)', paddingTop: 56, paddingBottom: 48, minHeight: 'calc(100vh - 168px)' }}>
+    <section className="flex flex-col justify-center" style={{ background: 'radial-gradient(120% 90% at 92% -8%, rgba(165,225,217,0.7) 0%, rgba(255,255,255,0) 56%), linear-gradient(180deg, #e8f7f5 0%, #f3faf9 42%, #ffffff 92%)', paddingTop: 56, paddingBottom: 48 }}>
       <div className={`${WRAP} grid items-center gap-12 lg:gap-[60px] grid-cols-1 lg:grid-cols-[1fr_1.18fr]`}>
         <div>
           <Reveal>

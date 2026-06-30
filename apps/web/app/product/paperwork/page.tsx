@@ -60,7 +60,7 @@ function BillingLink({ children }: { children: React.ReactNode }) {
 function Hero({ cta }: { cta: { href: string; label: string } }) {
   return (
     <>
-    <section className="flex flex-col justify-center" style={{ background: 'radial-gradient(120% 90% at 92% -8%, rgba(250,205,175,0.7) 0%, rgba(255,255,255,0) 56%), linear-gradient(180deg, #fdf0e9 0%, #fdf7f2 42%, #ffffff 92%)', paddingTop: 56, paddingBottom: 48, minHeight: 'calc(100vh - 168px)' }}>
+    <section className="flex flex-col justify-center" style={{ background: 'radial-gradient(120% 90% at 92% -8%, rgba(250,205,175,0.7) 0%, rgba(255,255,255,0) 56%), linear-gradient(180deg, #fdf0e9 0%, #fdf7f2 42%, #ffffff 92%)', paddingTop: 56, paddingBottom: 48 }}>
       <div className={`${WRAP} grid items-center gap-10 lg:gap-16 grid-cols-1 lg:grid-cols-[1fr_1.4fr]`}>
         <div>
           <Reveal>

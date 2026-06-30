@@ -54,16 +54,19 @@ export default function HeroFeatureNav({ items, sticky = false, accent = '#20212
     rail.scrollBy({ left: (br.left + br.width / 2) - (rr.left + rr.width / 2), behavior: 'smooth' });
   }, [active]);
 
-  // Stuck detection (sticky mode): the row reports < 1 visibility the moment
-  // it pins under the 68px nav, which toggles the frosted backdrop.
+  // Stuck detection (sticky mode): the row counts as "stuck" (which grows the
+  // frosted backdrop) only once it has actually pinned up under the 68px nav
+  // (its top reaches 68). It must NOT count as stuck just because it starts
+  // below the fold on a tall hero at scroll 0 — that wrongly grew the frost and
+  // looked like the nav bar sliding down at the very top of the page.
   useEffect(() => {
     if (!sticky) return;
     const el = barRef.current;
     if (!el) return;
     setBarH(el.offsetHeight);
     const obs = new IntersectionObserver(
-      ([e]) => setStuck(e.intersectionRatio < 1),
-      { rootMargin: '-69px 0px 0px 0px', threshold: [1] },
+      ([e]) => setStuck(e.boundingClientRect.top <= 69),
+      { rootMargin: '-69px 0px 0px 0px', threshold: [0, 1] },
     );
     obs.observe(el);
     return () => obs.disconnect();
