@@ -73,6 +73,12 @@ function fmtMiles(n: number): string {
   return `${Math.round(n).toLocaleString('en-US')} mi`;
 }
 
+/** "$2.15" — per-mile money (RPM / cost-per-mile). Two decimals because
+ *  these live in the $0.40–$3.00 range where the cents carry the signal. */
+function fmtPerMile(n: number): string {
+  return `$${n.toFixed(2)}`;
+}
+
 function parseEventDate(start: string): Date {
   const [y, m, d] = start.split('T')[0].split('-').map(Number);
   return new Date(y, m - 1, d);
@@ -338,7 +344,7 @@ function CostBar({
 }
 
 function KpiCard({
-  label, value, sub, icon, accent, badge, loading, formula, hoverContent,
+  label, value, sub, icon, accent, badge, loading, formula, hoverContent, extra,
 }: {
   label: string; value: string; sub: string;
   icon: React.ReactNode; accent: string;
@@ -362,6 +368,10 @@ function KpiCard({
    *  miles + ELD/EST source badges without permanently spending a
    *  card on it. Skipped during `loading`. */
   hoverContent?: React.ReactNode;
+  /** Optional secondary stat rendered in a thin divider row below the
+   *  sub line — e.g. Loaded RPM inside the Total Loaded Miles tile.
+   *  Skipped during `loading`. Its own Info tooltip carries the formula. */
+  extra?: { label: string; value: string; formula?: React.ReactNode };
 }) {
   return (
     <Card>
@@ -426,11 +436,37 @@ function KpiCard({
               <div className="text-xs" style={{ color: 'var(--gc-text-3)' }}>{sub}</div>
             </div>
           );
-          return hoverContent ? (
+          const wrapped = hoverContent ? (
             <Tooltip content={hoverContent} placement="bottom">
               {valueBlock}
             </Tooltip>
           ) : valueBlock;
+          return (
+            <>
+              {wrapped}
+              {extra && (
+                <div
+                  className="mt-2.5 pt-2.5 flex items-baseline justify-between gap-2"
+                  style={{ borderTop: '1px solid var(--gc-border-light)' }}
+                >
+                  <span
+                    className="text-[10.5px] font-semibold uppercase tracking-wider inline-flex items-center gap-1"
+                    style={{ color: 'var(--gc-text-3)' }}
+                  >
+                    {extra.label}
+                    {extra.formula && (
+                      <Tooltip content={extra.formula} placement="bottom">
+                        <Info size={10} style={{ color: 'var(--gc-text-3)', opacity: 0.6, cursor: 'help' }} />
+                      </Tooltip>
+                    )}
+                  </span>
+                  <span className="text-[15px] font-semibold leading-none" style={{ color: 'var(--gc-text-1)' }}>
+                    {extra.value}
+                  </span>
+                </div>
+              )}
+            </>
+          );
         })()
       )}
     </Card>
@@ -1158,6 +1194,21 @@ export default function DashboardView() {
     return eldMiles + extra;
   }, [eldMiles, revenueByAsset]);
 
+  // ── Per-mile economics (fuel module) ──────────────────────────────────
+  // Surfaced inside the miles / fuel KPI tiles + the revenue breakdown
+  // when the fuel module is on. RPM uses each tile's own mileage (loaded
+  // vs total); cost-per-mile uses TOTAL miles — fuel and payroll are spent
+  // over every mile driven, loaded or empty. All null when the mileage
+  // denominator is missing (loading or no ELD), so the row just hides.
+  const loadedRpm = showFuelKpi && kpis.miles > 0
+    ? kpis.revenue / kpis.miles : null;
+  const totalRpm  = showFuelKpi && eldMilesAll != null && eldMilesAll > 0
+    ? kpis.revenue / eldMilesAll : null;
+  const fuelCpm   = showFuelKpi && fuelSpend != null && eldMilesAll != null && eldMilesAll > 0
+    ? fuelSpend / eldMilesAll : null;
+  const estCpm    = showFuelKpi && eldMilesAll != null && eldMilesAll > 0
+    ? ((payrollTotal ?? 0) + (fuelSpend ?? 0)) / eldMilesAll : null;
+
   const eldMilesBreakdown = useMemo<React.ReactNode | null>(() => {
     const rows = revenueByAsset
       .filter(r => r.eldMilesSource !== null && r.eldMiles != null && r.eldMiles > 0)
@@ -1553,6 +1604,11 @@ export default function DashboardView() {
                     Sum of <strong>Total Charged</strong> on every fuel transaction (diesel + DEF + fees + taxes) whose transaction date falls in the selected period.
                   </>
                 }
+                extra={fuelCpm != null ? {
+                  label: 'Fuel cost / mile',
+                  value: fmtPerMile(fuelCpm),
+                  formula: <>Total Fuel Spend ÷ Total Miles (all miles driven) for the period.</>,
+                } : undefined}
               />
             )}
             {/* Row 2 ─ volume — gated on the performance module. MVP
@@ -1571,6 +1627,11 @@ export default function DashboardView() {
                     Sum of every leg&rsquo;s <strong>loaded miles</strong> for loads with a pickup in the period. Relay loads sum across legs. Deadhead between loads is excluded.
                   </>
                 }
+                extra={loadedRpm != null ? {
+                  label: 'Loaded RPM',
+                  value: fmtPerMile(loadedRpm),
+                  formula: <>Total Revenue ÷ Total Loaded Miles for the period — revenue per loaded mile.</>,
+                } : undefined}
               />
             )}
             {showEldMiles && (
@@ -1587,6 +1648,11 @@ export default function DashboardView() {
                   </>
                 }
                 hoverContent={eldMilesBreakdown}
+                extra={totalRpm != null ? {
+                  label: 'Total RPM',
+                  value: fmtPerMile(totalRpm),
+                  formula: <>Total Revenue ÷ Total Miles (all miles driven) for the period — revenue per total mile.</>,
+                } : undefined}
               />
             )}
             {showVolumeKpis && (
@@ -1626,6 +1692,23 @@ export default function DashboardView() {
           <Card>
             <div className="flex items-center justify-between mb-3">
               <CardTitle>Revenue Breakdown</CardTitle>
+              {estCpm != null && (
+                <span
+                  className="text-[11px] font-semibold uppercase tracking-wider inline-flex items-baseline gap-1.5"
+                  style={{ color: 'var(--gc-text-3)' }}
+                >
+                  <span className="inline-flex items-center gap-1">
+                    Est. cost / mile
+                    <Tooltip
+                      content={<>(Total Payroll + Total Fuel Spend) ÷ Total Miles for the period — payroll per mile plus fuel per mile. Excludes fixed costs, maintenance, and tolls.</>}
+                      placement="bottom"
+                    >
+                      <Info size={11} style={{ color: 'var(--gc-text-3)', opacity: 0.6, cursor: 'help' }} />
+                    </Tooltip>
+                  </span>
+                  <span className="text-[15px]" style={{ color: 'var(--gc-text-1)' }}>{fmtPerMile(estCpm)}</span>
+                </span>
+              )}
             </div>
             {kpis.revenue > 0 ? (
               <CostBar
