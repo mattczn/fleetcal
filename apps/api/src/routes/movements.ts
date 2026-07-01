@@ -565,7 +565,9 @@ movements.get("/odometer-summary", async (c) => {
   // Also drop trucks explicitly flagged exclude_from_reports on the asset
   // itself — the per-truck toggle. This catches a truck run by BOTH an
   // owner-op and a company driver (where the driver-based rule above
-  // can't), keeping its ELD miles out of Total Miles entirely.
+  // can't), keeping its ELD miles out of Total Miles entirely. Mirrors
+  // the asset filter in /v1/reports/loads so Total Miles and the top-line
+  // KPIs agree on which trucks count.
   const flaggedAssets = await loadExcludedAssetIds(orgId);
   if (flaggedAssets.size > 0) {
     eldAssets = eldAssets.filter(a => !flaggedAssets.has(a.id));
