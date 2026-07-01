@@ -1187,12 +1187,27 @@ export default function DashboardView() {
     if (eldMiles === null) return null;
     let extra = 0;
     for (const r of revenueByAsset) {
+      // Hidden/archived trucks are withheld from reports (the Loads Report
+      // filters !hidden); skip their loaded-mile estimates too.
+      if (r.asset.hidden) continue;
       if (r.eldMilesSource === 'loaded_estimate' && r.eldMiles != null) {
         extra += r.eldMiles;
       }
     }
-    return eldMiles + extra;
-  }, [eldMiles, revenueByAsset]);
+    // The raw server ELD total sums EVERY truck's odometer/GPS miles —
+    // including ones withheld from reports: hidden/archived trucks, and
+    // owner-op trucks whose default driver is flagged exclude_from_reports.
+    // Subtract their ELD miles so Total Miles matches the Loads Report and
+    // the per-truck rollups, instead of silently re-including a parked or
+    // owner-operator truck that's still logging Motive miles.
+    let withheld = 0;
+    for (const asset of assets) {
+      if ((asset.hidden || asset.excludeFromReports) && asset.motiveVehicleId) {
+        withheld += eldMilesByAsset[String(asset.id)] ?? 0;
+      }
+    }
+    return eldMiles + extra - withheld;
+  }, [eldMiles, revenueByAsset, assets, eldMilesByAsset]);
 
   // ── Per-mile economics (fuel module) ──────────────────────────────────
   // Surfaced inside the miles / fuel KPI tiles + the revenue breakdown
