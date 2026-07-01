@@ -43,6 +43,7 @@ import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability, effectiveCanForOrg } from "../middleware/require.js";
 import { appendLoadAudit } from "../lib/auditLog.js";
 import { getUserDisplayName } from "../lib/clerk.js";
+import { ensureEventRouteCached } from "../lib/routeGeometry.js";
 
 const events = new Hono<{ Variables: AuthVariables }>();
 
@@ -58,7 +59,8 @@ const EVENT_COLS =
   "notes,driver_pay,loaded_miles,relay_role,event_kind,non_revenue_type,trailer_id," +
   "trailer_type,deleted_at,load_id,created_at,updated_at," +
   "confirmed_at,confirmed_by,confirm_reminder_sent_at," +
-  "trailer_dropoff_lat,trailer_dropoff_lng,trailer_dropoff_at,trailer_dropoff_address";
+  "trailer_dropoff_lat,trailer_dropoff_lng,trailer_dropoff_at,trailer_dropoff_address," +
+  "route_polyline,route_stops_key";
 
 const LOAD_COLS =
   "id,internal_load_id,load_num,broker,load_price,total_billable,commodity,weight," +
@@ -144,6 +146,16 @@ async function fetchEventJoined(
 
   const joined = joinEventLoadToApp(evRow, loadRow);
   joined.stops = stops;
+  // Warm the route-geometry cache (route_polyline + loaded_miles) so map
+  // clients draw from the stored polyline instead of calling Google Directions.
+  // No-op on a cache hit; one Mapbox call on a miss; never throws.
+  const cached = await ensureEventRouteCached(eventId, stops, {
+    routePolyline: joined.routePolyline,
+    routeStopsKey: (evRow.route_stops_key as string | null) ?? null,
+    loadedMiles:   joined.loadedMiles ?? null,
+  }, joined.relayRole ?? null);
+  joined.routePolyline = cached.routePolyline ?? undefined;
+  joined.loadedMiles   = cached.loadedMiles ?? undefined;
   // documentCounts is denormalized onto loads.document_counts and
   // populated by joinEventLoadToApp directly off the load row. No
   // extra query needed — the trigger guarantees it's fresh.
@@ -189,6 +201,13 @@ events.get("/:id", async (c) => {
       partnerJoined.stops = ((pStopsRaw ?? []) as unknown as StopRow[])
         .map(rowToStop)
         .sort((a, b) => a.sequence - b.sequence);
+      const pCached = await ensureEventRouteCached(pRow.id, partnerJoined.stops, {
+        routePolyline: partnerJoined.routePolyline,
+        routeStopsKey: (pRow.route_stops_key as string | null) ?? null,
+        loadedMiles:   partnerJoined.loadedMiles ?? null,
+      }, partnerJoined.relayRole ?? null);
+      partnerJoined.routePolyline = pCached.routePolyline ?? undefined;
+      partnerJoined.loadedMiles   = pCached.loadedMiles ?? undefined;
       // No need to mirror documentCounts onto the partner — both legs
       // share load_id, and joinEventLoadToApp pulls document_counts
       // directly from the load row, so partnerJoined already has

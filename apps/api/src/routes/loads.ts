@@ -50,6 +50,7 @@ import {
 } from "@fleetcal/types";
 
 import { supabase } from "../lib/supabase.js";
+import { ensureEventRouteCached } from "../lib/routeGeometry.js";
 import { getUserDisplayName } from "../lib/clerk.js";
 import { appendEventAudit, appendLoadAudit } from "../lib/auditLog.js";
 import type { AuthVariables } from "../middleware/clerk.js";
@@ -72,7 +73,8 @@ const EVENT_COLS =
   "notes,driver_pay,loaded_miles,deferred_to_week,relay_role,event_kind,non_revenue_type,trailer_id," +
   "trailer_type,deleted_at,load_id,created_at,updated_at," +
   "confirmed_at,confirmed_by,confirm_reminder_sent_at," +
-  "trailer_dropoff_lat,trailer_dropoff_lng,trailer_dropoff_at,trailer_dropoff_address";
+  "trailer_dropoff_lat,trailer_dropoff_lng,trailer_dropoff_at,trailer_dropoff_address," +
+  "route_polyline,route_stops_key";
 
 const LOAD_COLS =
   "id,internal_load_id,load_num,broker,load_price,total_billable,commodity,weight," +
@@ -170,13 +172,26 @@ async function fetchLoadJoined(
   // by the load_documents_refresh_counts trigger). joinEventLoadToApp
   // reads it off the load row — no extra query needed.
 
-  return eventRows.map((ev) => {
+  return Promise.all(eventRows.map(async (ev) => {
     const joined = joinEventLoadToApp(ev, loadRow);
     joined.stops = (stopsByEvent.get(ev.id) ?? []).slice().sort(
       (a, b) => a.sequence - b.sequence,
     );
+    // Warm the route-geometry cache (route_polyline + loaded_miles) so a
+    // load written here (create, split-relay, unsplit-relay) gets its
+    // routed miles computed the moment its stops are saved — not only when
+    // a human later re-opens it in the modal. Relay-aware so each leg's
+    // miles reflect just its own hauled distance. No-op on a cache hit;
+    // at most one Mapbox call per cold event; never throws.
+    const cached = await ensureEventRouteCached(ev.id, joined.stops, {
+      routePolyline: joined.routePolyline,
+      routeStopsKey: (ev.route_stops_key as string | null) ?? null,
+      loadedMiles:   joined.loadedMiles ?? null,
+    }, joined.relayRole ?? null);
+    joined.routePolyline = cached.routePolyline ?? undefined;
+    joined.loadedMiles   = cached.loadedMiles ?? undefined;
     return joined;
-  });
+  }));
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

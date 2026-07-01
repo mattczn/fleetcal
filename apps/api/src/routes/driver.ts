@@ -22,6 +22,7 @@ import {
 } from "@fleetcal/types";
 
 import { supabase } from "../lib/supabase.js";
+import { ensureEventRouteCached } from "../lib/routeGeometry.js";
 import { driverAuth, type DriverAuthVariables } from "../middleware/driverAuth.js";
 import { convertIfHeicAtUpload as convertIfHeic, HEIC_DECODE_FAILED } from "../lib/heicToJpeg.js";
 
@@ -45,7 +46,8 @@ const EVENT_COLS =
   "notes,driver_pay,loaded_miles,relay_role,event_kind,non_revenue_type,trailer_id," +
   "trailer_type,deleted_at,load_id,created_at,updated_at," +
   "confirmed_at,confirmed_by,confirm_reminder_sent_at," +
-  "trailer_dropoff_lat,trailer_dropoff_lng,trailer_dropoff_at";
+  "trailer_dropoff_lat,trailer_dropoff_lng,trailer_dropoff_at," +
+  "route_polyline,route_stops_key";
 
 const LOAD_COLS =
   "id,internal_load_id,load_num,broker,load_price,commodity,weight," +
@@ -632,6 +634,16 @@ driver.get("/loads/:id", async (c) => {
   }
 
   const [load] = buildLoads([ev], stopsByEvent, assetsById, trailersById);
+
+  // Warm the route-geometry cache so the driver RouteMap draws from the
+  // stored polyline instead of calling Google Directions on the device.
+  const routeCache = await ensureEventRouteCached(id, stopsByEvent.get(id) ?? [], {
+    routePolyline: load.routePolyline,
+    routeStopsKey: (ev.route_stops_key as string | null) ?? null,
+    loadedMiles:   load.loadedMiles ?? null,
+  }, load.relayRole ?? null);
+  load.routePolyline = routeCache.routePolyline ?? undefined;
+  load.loadedMiles   = routeCache.loadedMiles ?? undefined;
 
   // Relay partner — same load_id, different event id. Surface stops + driver
   // name so the driver knows where their leg hands off (or starts from).

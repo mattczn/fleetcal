@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from "react";
-import { View, Text, TouchableOpacity, Modal, StyleSheet } from "react-native";
+import { View, Text, TouchableOpacity, Modal, StyleSheet, Image } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import WebView from "react-native-webview";
 import { Maximize2, X, MapPin, Clock } from "lucide-react-native";
@@ -57,6 +57,7 @@ function buildMapHtml(
   apiKey: string,
   interactive: boolean,
   truck: TruckPos | null,
+  routePolyline: string | null,
 ): string {
   const geocoded = stops.filter((s) => typeof s.lat === "number" && typeof s.lng === "number");
   const stopsJson = JSON.stringify(
@@ -73,6 +74,7 @@ function buildMapHtml(
   const colorsJson = JSON.stringify(STOP_COLOR);
   const interactiveStr = interactive ? "true" : "false";
   const truckJson = JSON.stringify(truck);
+  const routePolylineJson = JSON.stringify(routePolyline);
 
   return `<!DOCTYPE html>
 <html>
@@ -114,6 +116,7 @@ function buildMapHtml(
   const COLORS     = ${colorsJson};
   const interactive = ${interactiveStr};
   const truck      = ${truckJson};
+  const routePolyline = ${routePolylineJson};
   const truckSvg   = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14"/><circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/></svg>';
   const post = (msg) => { try { window.ReactNativeWebView.postMessage(JSON.stringify(msg)); } catch(e){} };
   const markersById = {};
@@ -195,8 +198,19 @@ function buildMapHtml(
       makeOverlay({ lat: truck.lat, lng: truck.lon }, truckHtml, null);
     }
 
-    // Road-following polyline via Directions Service (chained for >2 stops)
-    if (stops.length >= 2) {
+    // Route line. Prefer the server-cached road geometry (route_polyline) so
+    // we don't spend a billable Directions request on every map open. Only
+    // when it's absent (e.g. Mapbox was down at cache time) do we fall back to
+    // a client-side DirectionsService call.
+    if (routePolyline) {
+      const path = google.maps.geometry.encoding.decodePath(routePolyline);
+      new google.maps.Polyline({ path, strokeColor: '#1a73e8', strokeWeight: 4, strokeOpacity: 0.9, map });
+
+      const bounds = new google.maps.LatLngBounds();
+      stops.forEach(s => bounds.extend({ lat: s.lat, lng: s.lng }));
+      if (truck) bounds.extend({ lat: truck.lat, lng: truck.lon });
+      map.fitBounds(bounds, 50);
+    } else if (stops.length >= 2) {
       const directionsService = new google.maps.DirectionsService();
       const renderer = new google.maps.DirectionsRenderer({
         map,
@@ -261,6 +275,36 @@ function buildMapHtml(
 </html>`;
 }
 
+/**
+ * Google Static Maps URL for the thumbnail — a single billable Static Maps
+ * request (far cheaper than a Dynamic Maps SDK load, and NO Directions call).
+ * Draws the cached route_polyline (precision-5, `path=enc:`) when present, else
+ * straight segments between stops. Static Maps caps URLs at ~8192 chars; the
+ * stored polyline is the `simplified` overview so it stays well under. Omitting
+ * center/zoom lets Static Maps auto-fit to the path + markers.
+ */
+function buildStaticMapUrl(
+  geocoded: Stop[],
+  routePolyline: string | null,
+  apiKey: string,
+): string {
+  const params: string[] = ["size=640x360", "scale=2"];
+  if (routePolyline) {
+    params.push(`path=color:0x1a73e8ff|weight:4|enc:${encodeURIComponent(routePolyline)}`);
+  } else if (geocoded.length >= 2) {
+    const pts = geocoded.map((s) => `${s.lat},${s.lng}`).join("|");
+    params.push(`path=color:0x1a73e8ff|weight:4|${pts}`);
+  }
+  // Stop markers — colored by type, numbered 1..9 (Static Maps labels are a
+  // single char). Beyond 9 stops we drop the label but keep the pin.
+  geocoded.forEach((s, i) => {
+    const hex = (STOP_COLOR[s.type] ?? "#5f6368").replace("#", "0x");
+    const label = i < 9 ? `|label:${i + 1}` : "";
+    params.push(`markers=color:${hex}${label}|${s.lat},${s.lng}`);
+  });
+  return `https://maps.googleapis.com/maps/api/staticmap?${params.join("&")}&key=${apiKey}`;
+}
+
 interface Props {
   stops:   Stop[];
   height?: number;
@@ -269,9 +313,13 @@ interface Props {
   truckLng?:   number | null;
   /** Asset color to tint the truck pin. Falls back to brand blue. */
   assetColor?: string | null;
+  /** Server-cached road geometry (precision-5 encoded polyline). When present,
+   *  the thumbnail is a Static Maps image and the fullscreen map draws this
+   *  instead of calling the Directions API. */
+  routePolyline?: string | null;
 }
 
-export function RouteMap({ stops, height = 220, truckLat, truckLng, assetColor }: Props) {
+export function RouteMap({ stops, height = 220, truckLat, truckLng, assetColor, routePolyline = null }: Props) {
   const [fullscreen, setFullscreen]   = useState(false);
   const [selectedIdx, setSelectedIdx] = useState<number>(0);
   const insets = useSafeAreaInsets();
@@ -284,19 +332,21 @@ export function RouteMap({ stops, height = 220, truckLat, truckLng, assetColor }
 
   const apiKey = env.googleMapsKey ?? "";
 
-  const thumbnailHtml = useMemo(() => {
-    const truck: TruckPos | null = (truckLat != null && truckLng != null)
-      ? { lat: truckLat, lon: truckLng, color: assetColor ?? "#1a73e8" }
-      : null;
-    return buildMapHtml(stops, apiKey, false, truck);
-  }, [stops, apiKey, truckLat, truckLng, assetColor]);
+  // Thumbnail is a cheap Static Maps image (no Dynamic Maps SDK load, no
+  // Directions call). Truck live-position is intentionally omitted here so the
+  // preview URL stays stable across GPS pings; the live truck shows in the
+  // fullscreen map below.
+  const staticMapUrl = useMemo(
+    () => buildStaticMapUrl(geocoded, routePolyline, apiKey),
+    [geocoded, routePolyline, apiKey],
+  );
 
   const fullscreenHtml = useMemo(() => {
     const truck: TruckPos | null = (truckLat != null && truckLng != null)
       ? { lat: truckLat, lon: truckLng, color: assetColor ?? "#1a73e8" }
       : null;
-    return buildMapHtml(stops, apiKey, true, truck);
-  }, [stops, apiKey, truckLat, truckLng, assetColor]);
+    return buildMapHtml(stops, apiKey, true, truck, routePolyline);
+  }, [stops, apiKey, truckLat, truckLng, assetColor, routePolyline]);
 
   function focusStopInWebview(index: number) {
     const js = `document.dispatchEvent(new CustomEvent('rn:focus-stop',{detail:{index:${index}}})); true;`;
@@ -341,12 +391,9 @@ export function RouteMap({ stops, height = 220, truckLat, truckLng, assetColor }
         onPress={() => { setSelectedIdx(0); setFullscreen(true); }}
         style={{ height, borderRadius: 14, overflow: "hidden", borderWidth: 1, borderColor: "#e8eaed" }}
       >
-        <WebView
-          source={{ html: thumbnailHtml }}
-          originWhitelist={["*"]}
-          javaScriptEnabled
-          domStorageEnabled
-          scrollEnabled={false}
+        <Image
+          source={{ uri: staticMapUrl }}
+          resizeMode="cover"
           style={{ flex: 1, backgroundColor: "#ffffff" }}
         />
         <View pointerEvents="none" style={{

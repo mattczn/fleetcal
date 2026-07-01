@@ -32,6 +32,9 @@ interface FocusedRoute {
   color:     string;
   vehicleId: string | null;
   stops:     { lat: number; lng: number; type: string; sequence: number }[];
+  /** Server-cached road geometry (precision-5 encoded polyline). Drawn instead
+   *  of a client Directions call when present. */
+  routePolyline: string | null;
 }
 
 const STOP_COLOR: Record<string, string> = {
@@ -217,29 +220,37 @@ function buildHtml(
     });
     mapInstance = map;
 
-    // Draw the focused route via Google Directions (road-following).
+    // Draw the focused route. Prefer the server-cached road geometry so we
+    // don't fire a billable Directions request every time the WebView HTML
+    // rebuilds (e.g. on each truck-location refresh). Fall back to Directions
+    // only when no polyline is cached.
     if (focused && focused.stops.length >= 2) {
-      const directionsService = new google.maps.DirectionsService();
-      renderer = new google.maps.DirectionsRenderer({
-        map,
-        suppressMarkers: true,
-        preserveViewport: true,
-        polylineOptions: { strokeColor: focused.color, strokeWeight: 4.5, strokeOpacity: 0.95 },
-      });
-      const origin      = { lat: focused.stops[0].lat, lng: focused.stops[0].lng };
-      const destination = { lat: focused.stops[focused.stops.length - 1].lat, lng: focused.stops[focused.stops.length - 1].lng };
-      const waypoints   = focused.stops.slice(1, -1).map(s => ({ location: { lat: s.lat, lng: s.lng }, stopover: true }));
-      directionsService.route(
-        { origin, destination, waypoints, travelMode: google.maps.TravelMode.DRIVING },
-        (result, status) => {
-          if (status === 'OK' && result) renderer.setDirections(result);
-          else {
-            // Fallback: straight polyline
-            const path = focused.stops.map(s => ({ lat: s.lat, lng: s.lng }));
-            new google.maps.Polyline({ path, strokeColor: focused.color, strokeWeight: 4, strokeOpacity: 0.95, map });
-          }
-        },
-      );
+      if (focused.routePolyline) {
+        const path = google.maps.geometry.encoding.decodePath(focused.routePolyline);
+        new google.maps.Polyline({ path, strokeColor: focused.color, strokeWeight: 4.5, strokeOpacity: 0.95, map });
+      } else {
+        const directionsService = new google.maps.DirectionsService();
+        renderer = new google.maps.DirectionsRenderer({
+          map,
+          suppressMarkers: true,
+          preserveViewport: true,
+          polylineOptions: { strokeColor: focused.color, strokeWeight: 4.5, strokeOpacity: 0.95 },
+        });
+        const origin      = { lat: focused.stops[0].lat, lng: focused.stops[0].lng };
+        const destination = { lat: focused.stops[focused.stops.length - 1].lat, lng: focused.stops[focused.stops.length - 1].lng };
+        const waypoints   = focused.stops.slice(1, -1).map(s => ({ location: { lat: s.lat, lng: s.lng }, stopover: true }));
+        directionsService.route(
+          { origin, destination, waypoints, travelMode: google.maps.TravelMode.DRIVING },
+          (result, status) => {
+            if (status === 'OK' && result) renderer.setDirections(result);
+            else {
+              // Fallback: straight polyline
+              const path = focused.stops.map(s => ({ lat: s.lat, lng: s.lng }));
+              new google.maps.Polyline({ path, strokeColor: focused.color, strokeWeight: 4, strokeOpacity: 0.95, map });
+            }
+          },
+        );
+      }
       // Stop markers (numbered, type-colored)
       focused.stops.forEach((s, i) => makeStopMarker(s, i, focused.stops.length));
     }
@@ -278,7 +289,7 @@ function buildHtml(
     }
   };
 </script>
-<script src="https://maps.googleapis.com/maps/api/js?key=${apiKey}&callback=initMap&v=quarterly" async defer></script>
+<script src="https://maps.googleapis.com/maps/api/js?key=${apiKey}&callback=initMap&libraries=geometry&v=quarterly" async defer></script>
 </body>
 </html>`;
 }
@@ -470,6 +481,9 @@ export default function MapScreen() {
       color:     asset?.color ?? "#1a73e8",
       vehicleId: asset?.motiveVehicleId ?? null,
       stops,
+      // Relay legs merge into a combined route the single-leg polyline can't
+      // cover — leave null there so the Directions fallback draws the full route.
+      routePolyline: focusedLoad.relayRole ? null : (focusedLoad.routePolyline ?? null),
     };
   }, [focusedLoad, assets]);
 

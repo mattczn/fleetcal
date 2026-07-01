@@ -108,6 +108,7 @@ export function joinEventLoadToApp(
     trailerType:    (e.trailer_type as string | null) ?? undefined,
     driverPay:      (e.driver_pay as number | null) ?? undefined,
     loadedMiles:    (e.loaded_miles as number | null) ?? undefined,
+    routePolyline:  (e.route_polyline as string | null) ?? undefined,
     deferredToWeek: (e.deferred_to_week as string | null) ?? undefined,
     eventNotes:     (e.notes as string | null) ?? undefined,
     priority:       (e.priority as boolean | null) ?? false,

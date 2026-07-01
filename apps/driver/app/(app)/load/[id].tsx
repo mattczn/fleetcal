@@ -1304,6 +1304,7 @@ export default function LoadDetailScreen() {
             <RouteMap
               ref={routeMapRef}
               stops={load.stops}
+              routePolyline={load.routePolyline}
               truckLat={truckLoc?.lat}
               truckLng={truckLoc?.lon}
               assetColor={truckLoc?.color}

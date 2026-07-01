@@ -13,7 +13,6 @@ import {
 import { fetchLoad, updateLoadStatus, updateLoadTrailer, updateLoadFields, fetchAssets, fetchDrivers, fetchDriverAssetPrefs, fetchCustomers, displayBrokerName, saveStops, splitIntoRelay, removeRelay, softDeleteLoad } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
 import { fetchMotiveLocations, distanceMiles, type MotiveLocation } from "@/lib/motive";
-import { calcRoadMiles } from "@/lib/directions";
 import { env } from "@/lib/env";
 import { RouteMap } from "@/components/RouteMap";
 import { MotiveStatusBar } from "@/components/MotiveStatusBar";
@@ -972,6 +971,10 @@ function StopsTab({
       <View style={{ marginBottom: 14 }}>
         <RouteMap
           stops={combined.map((e) => e.stop)}
+          // Non-relay: draw the cached leg polyline (no Directions call).
+          // Relay combined view merges both legs, which the single-leg polyline
+          // doesn't cover — fall back to the full-route Directions draw there.
+          routePolyline={load.relayRole ? null : load.routePolyline}
           truckLat={truckLoc?.lat}
           truckLng={truckLoc?.lon}
           assetColor={assetColor ?? undefined}
@@ -2016,21 +2019,11 @@ export default function LoadDetail() {
     saveAccessorialsM(accessorialsCurrent.filter((a) => a.id !== initial.id));
   }
 
-  // Loaded miles — Google Directions road distance through this load's geocoded stops.
-  const stopsKey = (load?.stops ?? [])
-    .filter((s) => s.lat != null && s.lng != null)
-    .map((s) => `${s.lat},${s.lng}`)
-    .join("|");
-  const { data: loadedMiles } = useQuery({
-    queryKey: ["loaded-miles", id, stopsKey],
-    queryFn:  () => calcRoadMiles(
-      (load?.stops ?? [])
-        .filter((s): s is typeof s & { lat: number; lng: number } => s.lat != null && s.lng != null)
-        .map((s) => ({ lat: s.lat, lng: s.lng })),
-    ),
-    enabled:   !!load && stopsKey.length > 0,
-    staleTime: 60 * 60 * 1000,
-  });
+  // Loaded miles — server-computed road distance, cached on events.loaded_miles
+  // and warmed compute-on-read (Mapbox) by GET /v1/events/:id. Read the stored
+  // value instead of firing a Google Directions call from the device on every
+  // load open.
+  const loadedMiles = load?.loadedMiles ?? null;
 
   // Realtime: listen for updates to THIS event from other dispatchers. Show a
   // banner; the user decides whether to refresh (and discard their draft) or

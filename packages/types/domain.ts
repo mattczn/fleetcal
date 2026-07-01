@@ -929,6 +929,15 @@ export interface Load {
    * calcRoadMiles resolves; cleared/recomputed whenever stops change.
    */
   loadedMiles?: number;
+  /**
+   * Encoded polyline (precision-5) of the driving route through this leg's
+   * geocoded stops, cached server-side (Mapbox) so map views can draw the
+   * route without each client calling Google Directions. Populated
+   * compute-on-read by the event/load detail endpoints and self-invalidated
+   * when stops change. Undefined until first computed or when <2 geocoded
+   * stops. Directly usable by Google Static Maps `path=enc:`.
+   */
+  routePolyline?: string;
   detention?: number;
   lumperFees?: number;
   ratePerMile?: number; // legacy column

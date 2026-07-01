@@ -58,6 +58,10 @@ export const env = {
   /** Shared secret for internal cron endpoints. When unset, the
    *  endpoint returns 503 so a misconfigured deploy fails loudly. */
   internalCronToken:       process.env.INTERNAL_CRON_TOKEN || undefined,
+  /** Mapbox access token for server-side route geometry (route_polyline
+   *  compute-on-read). Optional — when unset, the detail endpoints skip
+   *  polyline caching and clients fall back to their own route draw. */
+  mapboxToken:             process.env.MAPBOX_TOKEN || process.env.NEXT_PUBLIC_MAPBOX_TOKEN || undefined,
 } as const;
 
 export const isProd = env.nodeEnv === "production";

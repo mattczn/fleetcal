@@ -571,6 +571,8 @@ export type Database = {
           ref_nums: string | null
           relay_group_id: string | null
           relay_role: string | null
+          route_polyline: string | null
+          route_stops_key: string | null
           special_instructions: string | null
           start: string
           status: string
@@ -610,6 +612,8 @@ export type Database = {
           ref_nums?: string | null
           relay_group_id?: string | null
           relay_role?: string | null
+          route_polyline?: string | null
+          route_stops_key?: string | null
           special_instructions?: string | null
           start: string
           status?: string
@@ -649,6 +653,8 @@ export type Database = {
           ref_nums?: string | null
           relay_group_id?: string | null
           relay_role?: string | null
+          route_polyline?: string | null
+          route_stops_key?: string | null
           special_instructions?: string | null
           start?: string
           status?: string
