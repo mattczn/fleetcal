@@ -743,6 +743,7 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove, on
   const [color,           setColor]           = useState(asset.color);
   const [motiveVehicleId,     setMotiveVehicleId]     = useState(asset.motiveVehicleId ?? '');
   const [mudflapCardLast4,    setMudflapCardLast4]    = useState(asset.mudflapCardLast4 ?? '');
+  const [excludeFromReports,  setExcludeFromReports]  = useState(asset.excludeFromReports ?? false);
   const [confirmDelete,       setConfirmDelete]       = useState(false);
 
   // Top-of-panel tab selector. 'details' covers everything except the
@@ -771,7 +772,8 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove, on
     color             !== asset.color                          ||
     type              !== asset.type                           ||
     motiveVehicleId   !== (asset.motiveVehicleId   ?? '')     ||
-    mudflapCardLast4  !== (asset.mudflapCardLast4  ?? '');
+    mudflapCardLast4  !== (asset.mudflapCardLast4  ?? '')     ||
+    excludeFromReports !== (asset.excludeFromReports ?? false);
 
   // Notify parent so it can intercept close/select while dirty.
   useEffect(() => { onDirtyChange?.(isDirty); }, [isDirty, onDirtyChange]);
@@ -797,6 +799,7 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove, on
       type,
       motiveVehicleId:   motiveVehicleId.trim() || undefined,
       mudflapCardLast4:  mudflapCardLast4.trim() || undefined,
+      excludeFromReports,
     });
   };
 
@@ -816,6 +819,7 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove, on
     setType(asset.type);
     setMotiveVehicleId(asset.motiveVehicleId ?? '');
     setMudflapCardLast4(asset.mudflapCardLast4 ?? '');
+    setExcludeFromReports(asset.excludeFromReports ?? false);
   };
 
   useImperativeHandle(ref, () => ({
@@ -1119,6 +1123,26 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove, on
         </PField>
         )}
       </div>
+
+      {/* Reporting — withhold this truck from every report rollup
+          (dashboard KPIs, per-truck charts, loads report) regardless of
+          which driver ran it. Distinct from Hide/archive: the truck stays
+          visible and dispatchable, its numbers just don't count. */}
+      <label className="flex items-center justify-between gap-3 px-4 py-3 rounded-xl mb-8 cursor-pointer transition-colors"
+        style={{ border: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}
+        onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+        onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-bg)')}>
+        <div className="min-w-0">
+          <div className="text-sm font-bold" style={{ color: 'var(--gc-text-1)' }}>Exclude from reports</div>
+          <div className="text-xs mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
+            Keeps this truck out of dashboard KPIs, per-truck charts, and the loads report — no matter who drives it. Use for owner-operator or non-fleet trucks.
+          </div>
+        </div>
+        <input type="checkbox" checked={excludeFromReports}
+          onChange={e => setExcludeFromReports(e.target.checked)}
+          disabled={!canEdit}
+          style={{ width: 18, height: 18, accentColor: 'var(--gc-blue)', cursor: canEdit ? 'pointer' : 'default', flexShrink: 0 }} />
+      </label>
 
       {/* Quick links to the truck-scoped views on the Fuel and
           Maintenance pages. Each pre-fills its respective filter via

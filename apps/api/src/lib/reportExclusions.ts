@@ -52,6 +52,26 @@ export async function loadExcludedDrivers(orgId: string): Promise<ExcludedDriver
 }
 
 /**
+ * Trucks (assets) flagged `exclude_from_reports` — withheld from report
+ * rollups regardless of which driver ran them (the per-truck analog of
+ * loadExcludedDrivers). An event is dropped if EITHER its driver or its
+ * asset is excluded. Returned as a Set for in-TS filtering after fetch.
+ */
+export async function loadExcludedAssetIds(orgId: string): Promise<Set<number>> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (supabase as any)
+    .from("assets")
+    .select("id")
+    .eq("org_id", orgId)
+    .eq("exclude_from_reports", true);
+  if (error) {
+    console.error("[reportExclusions] asset fetch failed:", error);
+    return new Set();
+  }
+  return new Set(((data ?? []) as Array<{ id: number }>).map(r => r.id));
+}
+
+/**
  * Predicate for filtering an event row by the excluded set. Checks
  * driver_id first (modern path); falls back to driver_name for legacy
  * rows whose FK was never backfilled.

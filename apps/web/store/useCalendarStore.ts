@@ -1296,6 +1296,7 @@ export const useCalendarStore = create<CalendarStore>()(
       ...(updates.truck !== undefined           ? { truck: updates.truck ?? null } : {}),
       ...(updates.notes !== undefined           ? { notes: updates.notes ?? null } : {}),
       ...(updates.hidden !== undefined          ? { hidden: updates.hidden } : {}),
+      ...(updates.excludeFromReports !== undefined ? { excludeFromReports: updates.excludeFromReports } : {}),
       ...(updates.motiveVehicleId !== undefined ? { motiveVehicleId: updates.motiveVehicleId ?? null } : {}),
       ...(updates.mudflapCardLast4 !== undefined ? { mudflapCardLast4: updates.mudflapCardLast4 ?? null } : {}),
       ...(updates.activeFrom !== undefined      ? { activeFrom: updates.activeFrom } : {}),

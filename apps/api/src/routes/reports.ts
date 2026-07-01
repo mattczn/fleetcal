@@ -40,7 +40,7 @@ import {
 } from "@fleetcal/types";
 
 import { supabase } from "../lib/supabase.js";
-import { loadExcludedDrivers, isExcludedEvent } from "../lib/reportExclusions.js";
+import { loadExcludedDrivers, loadExcludedAssetIds, isExcludedEvent } from "../lib/reportExclusions.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability } from "../middleware/require.js";
 
@@ -470,10 +470,15 @@ reports.get("/loads", async (c) => {
   // report naturally because buildLoadSummary requires at least one
   // surviving event.
   const excluded = await loadExcludedDrivers(orgId);
+  // Trucks flagged exclude_from_reports drop out entirely, regardless of
+  // driver — so an owner-op truck that the owner occasionally runs a load
+  // on still stays out of the rollups.
+  const excludedAssets = await loadExcludedAssetIds(orgId);
   const eventsByLoad = new Map<string, EventRow[]>();
   for (const e of eventRows) {
     if (!e.load_id) continue;
     if (isExcludedEvent(excluded, e)) continue;
+    if (e.asset_id != null && excludedAssets.has(e.asset_id)) continue;
     const arr = eventsByLoad.get(e.load_id) ?? [];
     arr.push(e);
     eventsByLoad.set(e.load_id, arr);

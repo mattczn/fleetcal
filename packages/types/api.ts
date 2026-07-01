@@ -568,6 +568,10 @@ export interface CreateAssetRequest {
   licenseExpiration?: string | null;
   notes?:             string | null;
   hidden?:            boolean;
+  /** When true, withhold this truck from all report rollups (dashboard
+   *  KPIs, per-truck charts, loads report) regardless of driver. Distinct
+   *  from `hidden`. Mirrors drivers.exclude_from_reports. */
+  excludeFromReports?: boolean;
   motiveVehicleId?:   string | null;
   /** Last 4 of the Mudflap fuel card assigned to this truck. */
   mudflapCardLast4?:  string | null;
@@ -594,6 +598,9 @@ export interface UpdateAssetRequest  {
   licenseExpiration?: string | null;
   notes?:             string | null;
   hidden?:          boolean;
+  /** Withhold this truck from all report rollups regardless of driver.
+   *  Distinct from `hidden`. Mirrors drivers.exclude_from_reports. */
+  excludeFromReports?: boolean;
   motiveVehicleId?: string | null;
   /** Last 4 of the Mudflap fuel card assigned to this truck. */
   mudflapCardLast4?: string | null;

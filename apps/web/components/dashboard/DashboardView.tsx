@@ -867,14 +867,25 @@ export default function DashboardView() {
     return () => { cancelled = true; };
   }, [dbReady, periodIso]);
 
-  // Filter to period — based on each event's start date; exclude placeholder unassigned asset
+  // Trucks flagged "exclude from reports" (owner-op / non-fleet) — their
+  // loads are withheld from every dashboard rollup regardless of driver.
+  // Mirrors the server /v1/reports/loads asset filter so the client-side
+  // charts/tables agree with the top-line KPIs.
+  const reportExcludedAssetIds = useMemo(
+    () => new Set(assets.filter(a => a.excludeFromReports).map(a => a.id)),
+    [assets],
+  );
+
+  // Filter to period — based on each event's start date; exclude placeholder
+  // unassigned asset and any truck withheld from reports.
   const filtered = useMemo(
     () => events.filter(e => {
       if (unassignedAssetId !== null && e.assetId === unassignedAssetId) return false;
+      if (e.assetId != null && reportExcludedAssetIds.has(e.assetId)) return false;
       const d = parseEventDate(e.start);
       return d >= pStart && d <= pEnd;
     }),
-    [events, pStart, pEnd, unassignedAssetId],
+    [events, pStart, pEnd, unassignedAssetId, reportExcludedAssetIds],
   );
 
   // Deduplicate relay (split) loads so they are counted as ONE load.
@@ -1187,22 +1198,20 @@ export default function DashboardView() {
     if (eldMiles === null) return null;
     let extra = 0;
     for (const r of revenueByAsset) {
-      // Hidden/archived trucks are withheld from reports (the Loads Report
-      // filters !hidden); skip their loaded-mile estimates too.
-      if (r.asset.hidden) continue;
+      // revenueByAsset already drops excludeFromReports trucks, so their
+      // loaded-mile estimates never reach here.
       if (r.eldMilesSource === 'loaded_estimate' && r.eldMiles != null) {
         extra += r.eldMiles;
       }
     }
-    // The raw server ELD total sums EVERY truck's odometer/GPS miles —
-    // including ones withheld from reports: hidden/archived trucks, and
-    // owner-op trucks whose default driver is flagged exclude_from_reports.
-    // Subtract their ELD miles so Total Miles matches the Loads Report and
-    // the per-truck rollups, instead of silently re-including a parked or
-    // owner-operator truck that's still logging Motive miles.
+    // The raw server ELD total sums EVERY truck's odometer/GPS miles,
+    // including trucks flagged "exclude from reports" (owner-op / non-
+    // fleet). Subtract their ELD miles so Total Miles matches the per-truck
+    // rollups + loads report instead of re-including a truck that's still
+    // logging Motive miles.
     let withheld = 0;
     for (const asset of assets) {
-      if ((asset.hidden || asset.excludeFromReports) && asset.motiveVehicleId) {
+      if (asset.excludeFromReports && asset.motiveVehicleId) {
         withheld += eldMilesByAsset[String(asset.id)] ?? 0;
       }
     }

@@ -46,6 +46,7 @@ interface DbAssetRow {
   license_expiration: string | null;
   notes: string | null;
   hidden: boolean;
+  exclude_from_reports: boolean;
   motive_vehicle_id: string | null;
   mudflap_card_last4: string | null;
   sort_order: number;
@@ -55,7 +56,7 @@ interface DbAssetRow {
 
 // Columns shared across all endpoints — single source of truth so we
 // can't forget to add a new column to one of the SELECTs.
-const ASSET_COLS = "id,name,color,type,unit,truck,make,model,vin,license_plate,license_state,license_expiration,notes,hidden,motive_vehicle_id,mudflap_card_last4,sort_order,active_from,active_to";
+const ASSET_COLS = "id,name,color,type,unit,truck,make,model,vin,license_plate,license_state,license_expiration,notes,hidden,exclude_from_reports,motive_vehicle_id,mudflap_card_last4,sort_order,active_from,active_to";
 
 function rowToAsset(r: DbAssetRow): Asset {
   return {
@@ -72,6 +73,9 @@ function rowToAsset(r: DbAssetRow): Asset {
     licenseState:      r.license_state      ?? undefined,
     licenseExpiration: r.license_expiration ?? null,
     hidden:            r.hidden,
+    // Base value from the asset's own flag; the GET handler additionally
+    // OR's in the owner-op-driver derivation (driver_asset_prefs).
+    excludeFromReports: r.exclude_from_reports,
     notes:             r.notes              ?? undefined,
     motiveVehicleId:   r.motive_vehicle_id  ?? undefined,
     mudflapCardLast4:  r.mudflap_card_last4 ?? undefined,
@@ -225,6 +229,7 @@ assets.post("/", requireCapability("assets.create"), async (c) => {
     license_expiration: body.licenseExpiration ?? null,
     notes:              body.notes             ?? null,
     hidden:             body.hidden            ?? false,
+    exclude_from_reports: body.excludeFromReports ?? false,
     motive_vehicle_id:  body.motiveVehicleId   ?? null,
     mudflap_card_last4: body.mudflapCardLast4  ?? null,
     sort_order:         sortOrder,
@@ -268,6 +273,7 @@ assets.patch("/:id", requireCapability("assets.edit"), async (c) => {
   if ("licenseExpiration" in body) update.license_expiration = body.licenseExpiration ?? null;
   if ("notes"             in body) update.notes              = body.notes             ?? null;
   if ("hidden"          in body) update.hidden            = body.hidden           ?? false;
+  if ("excludeFromReports" in body) update.exclude_from_reports = body.excludeFromReports ?? false;
   if ("motiveVehicleId" in body) update.motive_vehicle_id = body.motiveVehicleId  ?? null;
   if ("mudflapCardLast4" in body) update.mudflap_card_last4 = body.mudflapCardLast4 ?? null;
   if ("sortOrder"       in body) update.sort_order        = body.sortOrder;
