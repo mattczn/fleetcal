@@ -20,6 +20,7 @@
     "@tanstack/react-table": "^8.21.3",
     "@types/mapbox-gl": "^3.4.1",
     "@vercel/analytics": "^2.0.1",
+    "@vercel/speed-insights": "^2.0.0",
     "buffer": "^6.0.3",
     "dotenv": "^17.4.2",
     "geo-tz": "^8.1.6",

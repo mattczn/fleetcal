@@ -4,6 +4,7 @@ import { ClerkProvider } from '@clerk/nextjs';
 import { Plus_Jakarta_Sans, Figtree, Hanken_Grotesk, IBM_Plex_Mono } from 'next/font/google';
 import { Toaster } from 'sonner';
 import { Analytics } from '@vercel/analytics/next';
+import { SpeedInsights } from '@vercel/speed-insights/next';
 import ThemeProvider from '@/components/ThemeProvider';
 import { RailwayClientProvider } from '@/components/RailwayClientProvider';
 import { clerkAppearance } from '@/lib/clerkAppearance';
@@ -138,6 +139,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
             }}
           />
           <Analytics />
+          <SpeedInsights />
         </body>
       </html>
     </ClerkProvider>
