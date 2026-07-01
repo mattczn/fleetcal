@@ -15,7 +15,7 @@ import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability } from "../middleware/require.js";
 import { syncBackfill, syncIncremental, getOrgMotiveKey, snapshotOdometers } from "../lib/motiveIngest.js";
-import { loadExcludedDrivers } from "../lib/reportExclusions.js";
+import { loadExcludedDrivers, loadExcludedAssetIds } from "../lib/reportExclusions.js";
 
 const movements = new Hono<{ Variables: AuthVariables }>();
 
@@ -560,6 +560,15 @@ movements.get("/odometer-summary", async (c) => {
     if (excludedAssetIds.size > 0) {
       eldAssets = eldAssets.filter(a => !excludedAssetIds.has(a.id));
     }
+  }
+
+  // Also drop trucks explicitly flagged exclude_from_reports on the asset
+  // itself — the per-truck toggle. This catches a truck run by BOTH an
+  // owner-op and a company driver (where the driver-based rule above
+  // can't), keeping its ELD miles out of Total Miles entirely.
+  const flaggedAssets = await loadExcludedAssetIds(orgId);
+  if (flaggedAssets.size > 0) {
+    eldAssets = eldAssets.filter(a => !flaggedAssets.has(a.id));
   }
 
   if (eldAssets.length === 0) {
