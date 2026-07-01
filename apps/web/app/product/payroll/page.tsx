@@ -165,14 +165,13 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
 
 /** Framed product screenshot with the inward hover-zoom (origin toward the
  *  page center so the scaled frame isn't clipped). */
-function Screenshot({ src, alt, origin }: { src: string; alt: string; origin: 'left' | 'right' }) {
+function Screenshot({ src, alt, origin, width, height }: { src: string; alt: string; origin: 'left' | 'right'; width: number; height: number }) {
   return (
     <div
       className={`feat-frame-shadow ${origin === 'right' ? 'feat-right' : 'feat-left'} overflow-hidden`}
       style={{ border: '1px solid #e8eaed', borderRadius: 16 }}
     >
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={src} alt={alt} style={{ display: 'block', width: '100%', height: 'auto', background: '#f8f9fa' }} />
+      <Image src={src} alt={alt} width={width} height={height} sizes="100vw" style={{ display: 'block', width: '100%', height: 'auto', background: '#f8f9fa' }} />
     </div>
   );
 }
@@ -197,7 +196,7 @@ function Features() {
               chips={['Pulled from the calendar', 'Categorized by relay leg', 'Per-driver pay stub PDF']}
             />
             <div style={{ position: 'relative' }}>
-              <Screenshot src="/payroll-carlos-report.png" alt="Carlos Ramirez weekly payroll report, 13 loads auto-filled" origin="right" />
+              <Screenshot src="/payroll-carlos-report.png" alt="Carlos Ramirez weekly payroll report, 13 loads auto-filled" origin="right" width={1319} height={1044} />
               <div className="hidden sm:flex" style={{ position: 'absolute', top: -16, left: -14, zIndex: 3, background: '#fff', border: '1px solid #e8eaed', borderRadius: 14, boxShadow: 'var(--shadow-3)', padding: '11px 15px', alignItems: 'center', gap: 10 }}>
                 <span style={{ width: 30, height: 30, borderRadius: 999, background: '#1e8e3e', display: 'grid', placeItems: 'center' }}>
                   <Check size={15} strokeWidth={3} style={{ color: '#fff' }} />
@@ -239,8 +238,7 @@ function Features() {
             />
             <div style={{ position: 'relative' }}>
               <div className="feat-frame-shadow feat-right" style={{ position: 'relative', border: '1px solid #e8eaed', borderRadius: 14, overflow: 'hidden' }}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src="/payroll-load-financials.png" alt="Financial section inside the load modal, accessorial marked pay-to-driver" style={{ display: 'block', width: '100%', height: 'auto', background: '#f8f9fa' }} />
+                <Image src="/payroll-load-financials.png" alt="Financial section inside the load modal, accessorial marked pay-to-driver" width={968} height={279} sizes="100vw" style={{ display: 'block', width: '100%', height: 'auto', background: '#f8f9fa' }} />
               </div>
               {/* Overlap the driver-adjustments card up onto the screenshot's
                   bottom edge — layered on top via z-index + its own shadow. */}

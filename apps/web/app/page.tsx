@@ -511,7 +511,7 @@ interface FeatureGroup {
   chips:     ReadonlyArray<string>;
   links:     ReadonlyArray<readonly [string, string]>;
   /** Bare-frame primary media (rounded card, no browser chrome). */
-  primary:   { kind: 'video' | 'image'; src: string; alt?: string };
+  primary:   { kind: 'video'; src: string; alt?: string } | { kind: 'image'; src: string; alt?: string; w: number; h: number };
   /** Optional top-of-frame badge. `chip` is the green check + title +
    *  sub variant (group 02 "Ready to release"); `ai` is the purple
    *  sparkle + progress-bar variant with the sparkle on the trailing
@@ -525,7 +525,7 @@ interface FeatureGroup {
   secondary?:
     | { kind: 'badge'; text: string }
     | { kind: 'invoicebar' }
-    | { kind: 'image'; src: string; alt?: string; widthPct: number; bottomOffset: number; overlay?: { kind: 'finalizepay'; label: string; amount: string } }
+    | { kind: 'image'; src: string; alt?: string; w: number; h: number; widthPct: number; bottomOffset: number; overlay?: { kind: 'finalizepay'; label: string; amount: string } }
     | { kind: 'video'; src: string; alt?: string; widthPct: number; bottomOffset: number };
 }
 
@@ -547,7 +547,7 @@ const FEATURE_GROUPS: ReadonlyArray<FeatureGroup> = [
     // calendar screenshot with the sparkle on the right edge — reads
     // as a status indicator on the live screen rather than a load
     // detail tooltip.
-    primary:   { kind: 'image', src: '/calendar-view.png', alt: 'FleetCal dispatch calendar with one column per truck' },
+    primary:   { kind: 'image', src: '/calendar-view.png', alt: 'FleetCal dispatch calendar with one column per truck', w: 1822, h: 1049 },
     topBadge:  { kind: 'ai', text: 'Extracting Load Details' },
     secondary: { kind: 'video', src: '/calendar-dragdrop.mp4', alt: 'Dispatcher dragging a rate-con PDF onto the calendar', widthPct: 45, bottomOffset: -16 },
   },
@@ -562,7 +562,7 @@ const FEATURE_GROUPS: ReadonlyArray<FeatureGroup> = [
     body:   "Drivers get every assigned load on their phone, with live tracking, in-app navigation, and a built-in POD scanner. Every confirm, check-in, and upload syncs straight back to the dispatch calendar in real time.",
     chips:  ['Live ELD tracking', 'In-app navigation', 'Built-in POD scanner', 'Real-time sync'],
     links:  [['Driver App', '/product/driver-app']],
-    primary: { kind: 'image', src: '/driver-active-loads.png', alt: 'FleetCal driver app, active loads' },
+    primary: { kind: 'image', src: '/driver-active-loads.png', alt: 'FleetCal driver app, active loads', w: 1206, h: 2622 },
   },
   {
     key:    'paperwork',
@@ -575,7 +575,7 @@ const FEATURE_GROUPS: ReadonlyArray<FeatureGroup> = [
     body:   "Verify paperwork effortlessly with the POD on one side and the rate con on the other. Then batch the whole week's invoices in a single pass. AI reads each customer's invoicing instructions so you get paid clean.",
     chips:  ['Side-by-side review', 'Release for invoicing', 'One-click or bulk', 'Customer billing rules'],
     links:  [['Paperwork Verification', '/product/paperwork'], ['Billing', '/product/billing']],
-    primary:   { kind: 'image', src: '/paperwork-verification.png', alt: 'Side-by-side POD and rate-con review for closeout' },
+    primary:   { kind: 'image', src: '/paperwork-verification.png', alt: 'Side-by-side POD and rate-con review for closeout', w: 1677, h: 928 },
     topBadge:  { kind: 'chip', title: 'Ready to release', sub: '42 loads · $28,496' },
     secondary: { kind: 'invoicebar' },
   },
@@ -590,11 +590,13 @@ const FEATURE_GROUPS: ReadonlyArray<FeatureGroup> = [
     body:   'Driver events roll straight into the weekly payroll page where you can adjust and finalize in minutes. Then see performance by truck, driver, and lane, so you know exactly what is making money.',
     chips:  ['Auto-filled payroll', 'Bonus & adjustment', 'Revenue by truck', 'Revenue by lane'],
     links:  [['Payroll', '/product/payroll'], ['Dashboard & reports', '/product/dashboard']],
-    primary:   { kind: 'image', src: '/weekly-dashboard.png', alt: 'Revenue by truck, customer, and over time' },
+    primary:   { kind: 'image', src: '/weekly-dashboard.png', alt: 'Revenue by truck, customer, and over time', w: 1600, h: 786 },
     secondary: {
       kind:         'image',
       src:          '/payroll-week.png',
       alt:          'Weekly driver pay table',
+      w:            1595,
+      h:            633,
       widthPct:     72,
       bottomOffset: -16,
       overlay:      { kind: 'finalizepay', label: 'Finalize weekly pay', amount: '$1,825' },
@@ -937,10 +939,12 @@ function GroupVisual({ group, flip }: { group: FeatureGroup; flip: boolean }) {
             ariaLabel={group.primary.alt ?? ''}
           />
         ) : (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
+          <Image
             src={group.primary.src}
             alt={group.primary.alt ?? ''}
+            width={group.primary.w}
+            height={group.primary.h}
+            sizes="100vw"
             style={{ display: 'block', width: '100%', height: 'auto', background: '#f8f9fa' }}
           />
         )}
@@ -1006,10 +1010,12 @@ function GroupVisual({ group, flip }: { group: FeatureGroup; flip: boolean }) {
             left:  flip ? off    : 'auto',
           }}>
           <BareFrame origin={frameOrigin}>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
+            <Image
               src={sec.src}
               alt={sec.alt ?? ''}
+              width={sec.w}
+              height={sec.h}
+              sizes="100vw"
               style={{ display: 'block', width: '100%', height: 'auto', background: '#f8f9fa' }}
             />
           </BareFrame>
@@ -1059,8 +1065,7 @@ function DriverHomeVisual({ flip }: { flip: boolean }) {
       <div style={{ position: 'relative', width: 256 }}>
         <div style={{ width: 256, background: '#0b0b0c', borderRadius: 44, padding: 9, boxShadow: '0 30px 62px -24px rgba(26,35,50,.46),0 10px 26px -14px rgba(26,35,50,.26)' }}>
           <div style={{ borderRadius: 36, overflow: 'hidden', background: '#fff' }}>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/driver-active-loads.png" alt="FleetCal driver app, active loads" style={{ display: 'block', width: '100%', height: 'auto' }} />
+            <Image src="/driver-active-loads.png" alt="FleetCal driver app, active loads" width={1206} height={2622} sizes="256px" style={{ display: 'block', width: '100%', height: 'auto' }} />
           </div>
         </div>
 
@@ -1077,8 +1082,7 @@ function DriverHomeVisual({ flip }: { flip: boolean }) {
 
         {/* the dispatch-calendar card the tap lands on */}
         <div className="hidden lg:block" style={{ position: 'absolute', bottom: -2, zIndex: 3, ...cardSide }}>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/dispatch-card-hero.png" alt="The load on the dispatcher's calendar" style={{ display: 'block', width: 180, height: 'auto', filter: 'drop-shadow(0 16px 30px rgba(26,35,50,.26))' }} />
+          <Image src="/dispatch-card-hero.png" alt="The load on the dispatcher's calendar" width={367} height={369} sizes="180px" style={{ display: 'block', width: 180, height: 'auto', filter: 'drop-shadow(0 16px 30px rgba(26,35,50,.26))' }} />
         </div>
       </div>
     </div>

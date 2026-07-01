@@ -153,8 +153,7 @@ function Pipeline() {
 
         <Reveal>
           <div className="feat-frame-shadow feat-wide" style={{ position: 'relative', marginTop: 34, border: '1px solid #e8eaed', borderRadius: 16 }}>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/billing-board.png" alt="Billing board with released loads ready to invoice" style={{ display: 'block', width: '100%', height: 'auto', borderRadius: 16 }} />
+            <Image src="/billing-board.png" alt="Billing board with released loads ready to invoice" width={1491} height={944} sizes="100vw" style={{ display: 'block', width: '100%', height: 'auto', borderRadius: 16 }} />
 
             <div className="bl-hide-sm" style={{ position: 'absolute', left: '50%', transform: 'translateX(-50%)', bottom: '5%', display: 'flex', alignItems: 'center', gap: 18, background: '#202124', color: '#fff', borderRadius: 14, padding: '12px 14px 12px 20px', boxShadow: '0 22px 50px -14px rgba(0,0,0,.5)', whiteSpace: 'nowrap' }}>
               <span className="font-display" style={{ fontWeight: 600, fontSize: 15 }}>4 selected <span style={{ color: '#9aa0a6', margin: '0 4px' }}>·</span> $3,345.00</span>

@@ -119,8 +119,7 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
         <Reveal delay={140}>
           <div style={{ position: 'relative' }}>
             <div className="feat-frame-shadow feat-right" style={{ border: '1px solid #e8eaed', borderRadius: 16, overflow: 'hidden', background: '#fff' }}>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/calendar-view.png" alt="FleetCal dispatch calendar, one color-coded column per truck" style={{ display: 'block', width: '100%', height: 'auto' }} />
+              <Image src="/calendar-view.png" alt="FleetCal dispatch calendar, one color-coded column per truck" width={1822} height={1049} sizes="100vw" style={{ display: 'block', width: '100%', height: 'auto' }} />
             </div>
 
             {/* AI build chip (top-right) */}

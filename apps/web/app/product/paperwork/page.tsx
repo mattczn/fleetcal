@@ -171,8 +171,7 @@ function VerifyAndRelease() {
         <Reveal>
           <div style={{ position: 'relative', marginTop: 34 }}>
             <div className="feat-frame-shadow feat-wide" style={{ border: '1px solid #e8eaed', borderRadius: 16, overflow: 'hidden' }}>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/paperwork-board.png" alt="Paperwork board filtered to loads with accessorials" style={{ display: 'block', width: '100%', height: 'auto' }} />
+              <Image src="/paperwork-board.png" alt="Paperwork board filtered to loads with accessorials" width={1694} height={1010} sizes="100vw" style={{ display: 'block', width: '100%', height: 'auto' }} />
             </div>
 
             {/* Review Queue badge */}
@@ -246,8 +245,7 @@ function ReviewQueue() {
 
         <Reveal>
           <div className="feat-frame-shadow feat-wide" style={{ position: 'relative', marginTop: 34, border: '1px solid #e8eaed', borderRadius: 16, overflow: 'hidden' }}>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/paperwork-sidebyside.png" alt="Load closeout: rate con and POD side by side with the ready-to-release verdict" style={{ display: 'block', width: '100%', height: 'auto' }} />
+            <Image src="/paperwork-sidebyside.png" alt="Load closeout: rate con and POD side by side with the ready-to-release verdict" width={1677} height={928} sizes="100vw" style={{ display: 'block', width: '100%', height: 'auto' }} />
             <div style={{ position: 'absolute', bottom: 18, left: 20, display: 'inline-flex', alignItems: 'center', gap: 9, background: '#fff', color: '#202124', fontWeight: 600, fontSize: 13.5, padding: '9px 14px', borderRadius: 999, boxShadow: '0 6px 16px -4px rgba(60,64,67,.3)' }} className="font-display">
               <span style={{ width: 8, height: 8, borderRadius: 999, background: '#1e8e3e' }} /> Rate con &amp; POD, side by side
             </div>

@@ -121,8 +121,7 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
             <div style={{ position: 'relative', width: 216, maxWidth: '100%' }}>
               <div style={{ background: '#0b0b0c', borderRadius: 46, padding: 9, boxShadow: '0 34px 70px -26px rgba(26,35,50,.5),0 10px 28px -14px rgba(26,35,50,.3)' }}>
                 <div style={{ borderRadius: 38, overflow: 'hidden', background: '#fff' }}>
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src="/driver-active-loads.png" alt="FleetCal driver app, active loads" style={{ display: 'block', width: '100%', height: 'auto' }} />
+                  <Image src="/driver-active-loads.png" alt="FleetCal driver app, active loads" width={1206} height={2622} sizes="256px" style={{ display: 'block', width: '100%', height: 'auto' }} />
                 </div>
               </div>
               {/* push notification, floating off the phone's right */}
@@ -131,8 +130,7 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
               </div>
               {/* the dispatch-calendar card it lands on, floating bottom-right */}
               <div className="hidden sm:block" style={{ position: 'absolute', bottom: 24, right: -46, zIndex: 3 }}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src="/dispatch-card-hero.png" alt="Load on the dispatcher's calendar" style={{ display: 'block', width: 166, height: 'auto', filter: 'drop-shadow(0 16px 28px rgba(26,35,50,.24))' }} />
+                <Image src="/dispatch-card-hero.png" alt="Load on the dispatcher's calendar" width={367} height={369} sizes="166px" style={{ display: 'block', width: 166, height: 'auto', filter: 'drop-shadow(0 16px 28px rgba(26,35,50,.24))' }} />
               </div>
             </div>
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', justifyContent: 'center' }}>
@@ -176,8 +174,7 @@ function LoadDetails() {
             {/* phone + floating Details card */}
             <div style={{ position: 'relative', width: 276, maxWidth: '100%', background: '#0b0b0c', borderRadius: 44, padding: 9, boxShadow: '0 28px 64px -24px rgba(26,35,50,.42),0 8px 24px -12px rgba(26,35,50,.24)' }}>
               <div style={{ borderRadius: 36, overflow: 'hidden', background: '#fff' }}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src="/driver-stops-detail.png" alt="Load detail, stops, route map, status" style={{ display: 'block', width: '100%', height: 'auto' }} />
+                <Image src="/driver-stops-detail.png" alt="Load detail, stops, route map, status" width={1206} height={2622} sizes="256px" style={{ display: 'block', width: '100%', height: 'auto' }} />
               </div>
               <div className="hidden lg:block" style={{ position: 'absolute', top: 40, left: -118, zIndex: 5, width: 208, background: '#fff', border: '1px solid #e8eaed', borderRadius: 14, boxShadow: '0 16px 34px -14px rgba(26,35,50,.32)', padding: '13px 15px' }}>
                 <div className="font-mono" style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#1967d2' }}>Details</div>
@@ -266,8 +263,7 @@ function PaperworkAndScheduling() {
                     <div style={{ fontSize: 12, color: '#9aa0a6', marginTop: 1 }}>Jun 26 at 12:53 PM · 436 KB</div>
                   </div>
                 </div>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src="/dispatch-card-hero.png" alt="Load on the dispatcher's calendar with a POD icon" style={{ display: 'block', width: 190, maxWidth: '100%', height: 'auto', margin: '0 auto', filter: 'drop-shadow(0 14px 26px rgba(26,35,50,.2))' }} />
+                <Image src="/dispatch-card-hero.png" alt="Load on the dispatcher's calendar with a POD icon" width={367} height={369} sizes="190px" style={{ display: 'block', width: 190, maxWidth: '100%', height: 'auto', margin: '0 auto', filter: 'drop-shadow(0 14px 26px rgba(26,35,50,.2))' }} />
                 <div style={{ fontSize: 12.5, color: '#5f6368', textAlign: 'center', maxWidth: 240, margin: '0 auto' }}>A POD icon hits the event in the calendar the moment it&rsquo;s uploaded.</div>
               </div>
             </div>
@@ -427,9 +423,8 @@ function CardHeader({ title, right }: { title: string; right?: React.ReactNode }
 function HalfPhone({ src, alt }: { src: string; alt: string }) {
   return (
     <div style={{ width: 236, maxWidth: '100%', background: '#0b0b0c', borderRadius: '38px 38px 0 0', padding: '8px 8px 0', boxShadow: '0 20px 44px -22px rgba(26,35,50,.4)' }}>
-      <div style={{ borderRadius: '31px 31px 0 0', overflow: 'hidden', background: '#fff' }}>
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={src} alt={alt} style={{ display: 'block', width: '100%', height: 340, objectFit: 'cover', objectPosition: 'top' }} />
+      <div style={{ position: 'relative', width: '100%', height: 340, borderRadius: '31px 31px 0 0', overflow: 'hidden', background: '#fff' }}>
+        <Image src={src} alt={alt} fill sizes="236px" style={{ objectFit: 'cover', objectPosition: 'top' }} />
       </div>
     </div>
   );
