@@ -158,7 +158,16 @@ export type Capability =
 
   // Dashboard / reports
   | "dashboard.access"
-  | "reports.access";
+  | "reports.access"
+
+  // CRM — INTERNAL sales tooling (FMCSA leads, outreach, call queue).
+  // Admin-only by default; grant `crm.access` to dispatcher via
+  // role_overrides if sales hires shouldn't be full admins. Both caps
+  // are additionally gated by the `crm` module flag AND the internal-
+  // org allowlist, so granting them to a customer org's role does
+  // nothing.
+  | "crm.access"   // see + work the CRM (leads, call queue, outbox)
+  | "crm.manage";  // edit sequences, CRM settings, trigger syncs
 
 // ── Capability matrix ────────────────────────────────────────────────────
 //
@@ -182,6 +191,7 @@ const ALL_CAPS: Capability[] = [
   "maintenance.access", "maintenance.edit",
   "fuel.access", "fuel.edit",
   "dashboard.access", "reports.access",
+  "crm.access", "crm.manage",
 ];
 
 export const ROLE_CAPABILITIES: Record<OrgRole, ReadonlySet<Capability>> = {

@@ -18,6 +18,7 @@ import { Hono } from "hono";
 import type { MiddlewareHandler } from "hono";
 import { env } from "../lib/env.js";
 import { sweepAutoDeliver } from "../lib/autoDeliverSweep.js";
+import { runCrmFmcsaSyncSweep, syncCrmLeadsForOrg } from "../jobs/crmFmcsaSyncSweep.js";
 
 const internal = new Hono();
 
@@ -46,6 +47,34 @@ internal.post("/auto-deliver", async (c) => {
     console.error("[POST /v1/internal/auto-deliver] failed:", err);
     return c.json(
       { error: "sweep_failed", detail: (err as Error).message },
+      500,
+    );
+  }
+});
+
+// Manual CRM FMCSA sync trigger (dev/ops). Body (all optional):
+//   { orgId?: string, maxPages?: number, resetCursorToDot?: number }
+// Without orgId, sweeps every org in CRM_INTERNAL_ORG_IDS — same code
+// path as the 6h cron. resetCursorToDot rewinds the keyset cursor
+// (e.g. to backfill recent registrants); inserts stay idempotent.
+internal.post("/crm/fmcsa-sync", async (c) => {
+  const body = await c.req
+    .json<{ orgId?: string; maxPages?: number; resetCursorToDot?: number }>()
+    .catch(() => ({} as { orgId?: string; maxPages?: number; resetCursorToDot?: number }));
+  try {
+    if (body.orgId) {
+      const result = await syncCrmLeadsForOrg(body.orgId, {
+        maxPages: body.maxPages,
+        resetCursorToDot: body.resetCursorToDot,
+      });
+      return c.json({ orgId: body.orgId, result });
+    }
+    const result = await runCrmFmcsaSyncSweep();
+    return c.json(result);
+  } catch (err) {
+    console.error("[POST /v1/internal/crm/fmcsa-sync] failed:", err);
+    return c.json(
+      { error: "sync_failed", detail: (err as Error).message },
       500,
     );
   }

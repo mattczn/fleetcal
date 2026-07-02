@@ -31,6 +31,7 @@ import {
   type OrgModuleFlags,
 } from "@fleetcal/types";
 import { supabase } from "../lib/supabase.js";
+import { env } from "../lib/env.js";
 import type { AuthVariables } from "./clerk.js";
 
 // ── Per-org role-override cache ─────────────────────────────────────────
@@ -182,6 +183,36 @@ export function requireModule(
     await next();
   };
 }
+
+/**
+ * Internal-org allowlist gate for FleetCal-internal tooling (the sales
+ * CRM). Checks the caller's org against env CRM_INTERNAL_ORG_IDS.
+ *
+ * Returns **404** (not 403) on denial so the routes are invisible to
+ * probing — a customer org poking /v1/crm/* gets the same response as
+ * a route that doesn't exist. Mount FIRST in the group, before
+ * requireModule/requireCapability:
+ *
+ *   crm.use("*", requireInternalOrg, requireModule("crm"), requireCapability("crm.access"));
+ */
+export const requireInternalOrg: MiddlewareHandler<{ Variables: AuthVariables }> =
+  async (c, next) => {
+    const orgId = c.get("orgId");
+    if (!orgId || !env.crmInternalOrgIds.includes(orgId)) {
+      return c.json({ error: "not_found" }, 404);
+    }
+    // Optional per-user tightening: when CRM_INTERNAL_USER_IDS is set,
+    // being in an allowlisted org isn't enough — the specific Clerk
+    // user must be listed too (e.g. founder-only, excluding other org
+    // admins). Same 404 so the surface stays invisible.
+    if (env.crmInternalUserIds.length > 0) {
+      const userId = c.get("userId");
+      if (!userId || !env.crmInternalUserIds.includes(userId)) {
+        return c.json({ error: "not_found" }, 404);
+      }
+    }
+    await next();
+  };
 
 /**
  * Convenience for "this whole route group requires at least admin" —

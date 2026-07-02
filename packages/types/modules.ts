@@ -48,7 +48,9 @@ export type OrgModule =
   | "team_roles"         // gates multi-role / multi-dispatcher team management (Settings → Dispatchers + Role Permissions). OFF for MVP — every team member is an owner/admin to keep onboarding simple.
   | "trailer_categories" // gates the per-trailer Category field (Swing/Roll Up/Reefer/Flat Bed/Other). Off for MVP — most 1-14 truck carriers have a uniform fleet (all dry vans), so the category dropdown is noise. Curzon flips on for their mixed fleet.
   | "relay_advanced"     // gates relay handoff photo documentation (basic relay logic stays in StopsSection)
-  | "invoicing_advanced"; // gates the Advanced section in Settings → Invoicing (custom From-address, remit-to instructions, invoice-number prefix, footer notes, email template overrides). OFF for MVP — defaults work end-to-end. Carriers that want a custom invoice template or a verified domain flip this on per-org.
+  | "invoicing_advanced" // gates the Advanced section in Settings → Invoicing (custom From-address, remit-to instructions, invoice-number prefix, footer notes, email template overrides). OFF for MVP — defaults work end-to-end. Carriers that want a custom invoice template or a verified domain flip this on per-org.
+  // ── Internal-only modules (2026-07-02) ──────────────────────────────
+  | "crm";               // INTERNAL sales tooling (FMCSA lead ingest, outreach, call queue). Never for customer orgs — default-OFF (see DEFAULT_OFF_MODULES) and double-gated by the internal-org allowlist on both API and web.
 
 export const ORG_MODULES: readonly OrgModule[] = [
   "closeout",
@@ -66,6 +68,7 @@ export const ORG_MODULES: readonly OrgModule[] = [
   "trailer_categories",
   "relay_advanced",
   "invoicing_advanced",
+  "crm",
 ] as const;
 
 /** Display labels (singular). Used in Settings → Modules toggles
@@ -86,6 +89,7 @@ export const ORG_MODULE_LABEL: Record<OrgModule, string> = {
   trailer_categories: "Trailer categories",
   relay_advanced:     "Relay handoff documentation",
   invoicing_advanced: "Advanced invoicing",
+  crm:                "Sales CRM (internal)",
 };
 
 /** Short description for the Settings → Modules toggle UI. */
@@ -105,9 +109,22 @@ export const ORG_MODULE_BLURB: Record<OrgModule, string> = {
   trailer_categories: "Per-trailer category labels (Swing, Roll Up, Reefer, Flat Bed, Other). Useful for mixed fleets; most uniform-fleet carriers can leave this off.",
   relay_advanced:     "Photo upload + handoff documentation for relay-leg pickups (basic relay routing is included in core).",
   invoicing_advanced: "Advanced invoice template tweaks — custom From-address (own verified domain), remit-to block, invoice-number prefix, footer notes, outbound email template overrides. Defaults work end-to-end without this.",
+  crm:                "FleetCal-internal sales tooling — FMCSA lead ingest, outreach sequences, call queue. Not a customer feature.",
 };
 
 // ── Check API ─────────────────────────────────────────────────────
+
+/**
+ * Modules that are OFF unless explicitly enabled — the inverse of the
+ * absent-key-means-enabled rule below. Reserved for internal-only
+ * surfaces (CRM) that must NEVER light up for customer orgs just
+ * because their stored flags map predates the module's existence.
+ * Flip one on by writing `{crm: true}` into the internal org's
+ * org_settings.modules.
+ */
+export const DEFAULT_OFF_MODULES: ReadonlySet<OrgModule> = new Set<OrgModule>([
+  "crm",
+]);
 
 /**
  * Returns true if the module is enabled for the org. An absent key
@@ -117,11 +134,16 @@ export const ORG_MODULE_BLURB: Record<OrgModule, string> = {
  *
  * Explicit `false` is the only way to disable. `null` / `undefined`
  * flags maps (org_settings row missing entirely) → all modules ON.
+ *
+ * EXCEPTION: modules in DEFAULT_OFF_MODULES invert the rule — absent
+ * (or missing flags map) means DISABLED, and explicit `true` is the
+ * only way to enable. Internal-only surfaces opt in, never out.
  */
 export function isModuleEnabled(
   module: OrgModule,
   flags: OrgModuleFlags | null | undefined,
 ): boolean {
+  if (DEFAULT_OFF_MODULES.has(module)) return flags?.[module] === true;
   if (!flags) return true;
   return flags[module] !== false;
 }
@@ -146,6 +168,7 @@ export const MVP_LAUNCH_DEFAULTS: Required<Pick<OrgModuleFlags,
   | "motive_integration" | "trailers" | "performance" | "driver_app"
   | "dispatch_board" | "custom_documents" | "team_roles"
   | "trailer_categories" | "relay_advanced" | "invoicing_advanced"
+  | "crm"
 >> = {
   // Pre-launch core modules
   // - closeout / accounting / payroll: core to the rate-con-to-paid
@@ -190,4 +213,8 @@ export const MVP_LAUNCH_DEFAULTS: Required<Pick<OrgModuleFlags,
   // templates, or their own verified From-domain flip this on
   // per-org from Settings → Modules.
   invoicing_advanced: false,
+  // Internal-only: sales CRM. Explicit false for every new org; the
+  // internal org opts in with {crm: true}. Also default-off via
+  // DEFAULT_OFF_MODULES even when the key is absent.
+  crm:                false,
 };

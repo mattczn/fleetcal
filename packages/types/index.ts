@@ -113,3 +113,7 @@ export * from "./modules";
 // ── Invoice-packet document selection (single source of truth) ──────────
 
 export * from "./invoicePacket";
+
+// ── CRM (internal sales tooling) ─────────────────────────────────────────
+
+export * from "./crm";

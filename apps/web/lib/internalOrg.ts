@@ -25,3 +25,21 @@ export function isInternalOrg(orgId: string | null | undefined): boolean {
   if (!orgId) return false;
   return INTERNAL_ORG_IDS.has(orgId);
 }
+
+/**
+ * Optional per-USER tightening for the CRM surfaces. When
+ * NEXT_PUBLIC_CRM_USER_IDS (comma-separated Clerk user ids, inlined at
+ * build time) is set, the CRM nav/pages render only for those users —
+ * not every admin of an internal org. Unset = fall back to the org
+ * gate alone. UX-only like the org gate; the API enforces the same
+ * allowlist server-side via CRM_INTERNAL_USER_IDS (404s).
+ */
+const CRM_USER_IDS: ReadonlySet<string> = new Set(
+  (process.env.NEXT_PUBLIC_CRM_USER_IDS ?? "")
+    .split(",").map((s) => s.trim()).filter(Boolean),
+);
+
+export function isCrmUser(userId: string | null | undefined): boolean {
+  if (CRM_USER_IDS.size === 0) return true;
+  return !!userId && CRM_USER_IDS.has(userId);
+}

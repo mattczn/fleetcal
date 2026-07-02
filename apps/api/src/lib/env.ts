@@ -62,6 +62,21 @@ export const env = {
    *  compute-on-read). Optional — when unset, the detail endpoints skip
    *  polyline caching and clients fall back to their own route draw. */
   mapboxToken:             process.env.MAPBOX_TOKEN || process.env.NEXT_PUBLIC_MAPBOX_TOKEN || undefined,
+  /** Comma-separated Clerk org ids allowed to use the INTERNAL sales
+   *  CRM (routes/crm.ts + FMCSA sync). Unset = CRM disabled entirely;
+   *  requireInternalOrg 404s and the sync job no-ops. */
+  crmInternalOrgIds:       (process.env.CRM_INTERNAL_ORG_IDS ?? "")
+                             .split(",").map((s) => s.trim()).filter(Boolean),
+  /** Optional comma-separated Clerk USER ids additionally allowed —
+   *  when set, CRM access requires org allowlist AND user allowlist
+   *  (e.g. only the founder, not every org admin). Unset = any member
+   *  of an allowlisted org who has the crm.* capabilities. */
+  crmInternalUserIds:      (process.env.CRM_INTERNAL_USER_IDS ?? "")
+                             .split(",").map((s) => s.trim()).filter(Boolean),
+  /** Optional Socrata app token for the FMCSA census pulls
+   *  (data.transportation.gov). Works without one, but anonymous
+   *  requests get throttled harder. */
+  fmcsaSodaAppToken:       process.env.FMCSA_SODA_APP_TOKEN || undefined,
 } as const;
 
 export const isProd = env.nodeEnv === "production";

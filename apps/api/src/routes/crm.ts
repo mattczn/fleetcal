@@ -1,0 +1,430 @@
+/**
+ * CRM routes — INTERNAL sales tooling (Phase 1: leads foundation).
+ *
+ *   GET    /v1/crm/leads                 — list with filters + paging
+ *   POST   /v1/crm/leads                 — add a manual lead
+ *   GET    /v1/crm/leads/:id             — lead + activity timeline
+ *   PATCH  /v1/crm/leads/:id             — edit fields / move status
+ *   POST   /v1/crm/leads/:id/activities  — add a note
+ *   GET    /v1/crm/stats                 — pipeline counts
+ *   GET    /v1/crm/settings              — resolved CrmSettings
+ *   PATCH  /v1/crm/settings              — merge-write crm_settings   (crm.manage)
+ *   POST   /v1/crm/sync                  — manual FMCSA sync           (crm.manage)
+ *
+ * Triple-gated: requireInternalOrg (404s non-allowlisted orgs — the
+ * routes are invisible to customer orgs), the `crm` module flag
+ * (default-OFF), and crm.access/crm.manage capabilities. Phase 2 adds
+ * sequences/enrollments/emails; Phase 3 adds the call queue.
+ */
+
+import { Hono } from "hono";
+import {
+  CRM_LEAD_STATUSES,
+  resolveCrmSettings,
+  type ApiErrorResponse,
+  type CrmActivity,
+  type CrmLead,
+  type CrmLeadStatus,
+  type CrmSettings,
+  type CrmStats,
+  type Database,
+  type Json,
+} from "@fleetcal/types";
+import { supabase } from "../lib/supabase.js";
+import { syncCrmLeadsForOrg } from "../jobs/crmFmcsaSyncSweep.js";
+import {
+  requireCapability,
+  requireInternalOrg,
+  requireModule,
+} from "../middleware/require.js";
+import type { AuthVariables } from "../middleware/clerk.js";
+
+const crm = new Hono<{ Variables: AuthVariables }>();
+
+// Order matters: the internal-org 404 fires before the module/cap 403s
+// so non-allowlisted orgs can't distinguish the CRM from a dead route.
+crm.use("*", requireInternalOrg, requireModule("crm"), requireCapability("crm.access"));
+
+// ── Row mappers ─────────────────────────────────────────────────────────
+
+const LEAD_COLS =
+  "id,org_id,dot_number,source,legal_name,dba_name,email,phone,cell_phone," +
+  "phy_street,phy_city,phy_state,phy_zip,power_units,total_drivers," +
+  "carrier_operation,interstate_within_100,interstate_beyond_100," +
+  "intrastate_within_100,intrastate_beyond_100,hm_ind,mcs150_date," +
+  "fmcsa_add_date,status,status_changed_at,owner_user_id,next_action_at," +
+  "call_attempts,created_at,updated_at";
+
+type LeadRow = Record<string, unknown>;
+type CrmLeadUpdate = Database["public"]["Tables"]["crm_leads"]["Update"];
+
+function rowToLead(r: LeadRow): CrmLead {
+  return {
+    id:              r.id as string,
+    dotNumber:       (r.dot_number as number | null) ?? undefined,
+    source:          r.source as CrmLead["source"],
+    legalName:       r.legal_name as string,
+    dbaName:         (r.dba_name as string | null) ?? undefined,
+    email:           (r.email as string | null) ?? undefined,
+    phone:           (r.phone as string | null) ?? undefined,
+    cellPhone:       (r.cell_phone as string | null) ?? undefined,
+    phyStreet:       (r.phy_street as string | null) ?? undefined,
+    phyCity:         (r.phy_city as string | null) ?? undefined,
+    phyState:        (r.phy_state as string | null) ?? undefined,
+    phyZip:          (r.phy_zip as string | null) ?? undefined,
+    powerUnits:      (r.power_units as number | null) ?? undefined,
+    totalDrivers:    (r.total_drivers as number | null) ?? undefined,
+    carrierOperation:    (r.carrier_operation as string | null) ?? undefined,
+    interstateWithin100: (r.interstate_within_100 as number | null) ?? undefined,
+    interstateBeyond100: (r.interstate_beyond_100 as number | null) ?? undefined,
+    intrastateWithin100: (r.intrastate_within_100 as number | null) ?? undefined,
+    intrastateBeyond100: (r.intrastate_beyond_100 as number | null) ?? undefined,
+    hmInd:           (r.hm_ind as boolean | null) ?? undefined,
+    mcs150Date:      (r.mcs150_date as string | null) ?? undefined,
+    fmcsaAddDate:    (r.fmcsa_add_date as string | null) ?? undefined,
+    status:          r.status as CrmLeadStatus,
+    statusChangedAt: r.status_changed_at as string,
+    ownerUserId:     (r.owner_user_id as string | null) ?? undefined,
+    nextActionAt:    (r.next_action_at as string | null) ?? undefined,
+    callAttempts:    (r.call_attempts as number) ?? 0,
+    createdAt:       r.created_at as string,
+    updatedAt:       r.updated_at as string,
+  };
+}
+
+function rowToActivity(r: Record<string, unknown>): CrmActivity {
+  return {
+    id:          r.id as string,
+    leadId:      r.lead_id as string,
+    kind:        r.kind as CrmActivity["kind"],
+    body:        (r.body as string | null) ?? undefined,
+    meta:        (r.meta as Record<string, unknown> | null) ?? undefined,
+    actorUserId: (r.actor_user_id as string | null) ?? undefined,
+    createdAt:   r.created_at as string,
+  };
+}
+
+async function logActivity(
+  orgId: string,
+  leadId: string,
+  kind: CrmActivity["kind"],
+  fields: { body?: string; meta?: Record<string, unknown>; actorUserId?: string } = {},
+): Promise<void> {
+  await supabase.from("crm_activities").insert({
+    org_id:        orgId,
+    lead_id:       leadId,
+    kind,
+    body:          fields.body ?? null,
+    meta:          (fields.meta ?? null) as Json,
+    actor_user_id: fields.actorUserId ?? null,
+  });
+}
+
+// ── Leads ───────────────────────────────────────────────────────────────
+
+crm.get("/leads", async (c) => {
+  const orgId = c.get("orgId");
+  const url = new URL(c.req.url);
+  const status  = url.searchParams.get("status");
+  const state   = url.searchParams.get("state");
+  const puMin   = url.searchParams.get("puMin");
+  const puMax   = url.searchParams.get("puMax");
+  const hasEmail = url.searchParams.get("hasEmail");
+  const local   = url.searchParams.get("local");
+  const q       = url.searchParams.get("q")?.trim();
+  const limit   = Math.min(Number(url.searchParams.get("limit") ?? 50), 200);
+  const offset  = Math.max(Number(url.searchParams.get("offset") ?? 0), 0);
+
+  let query = supabase
+    .from("crm_leads")
+    .select(LEAD_COLS, { count: "exact" })
+    .eq("org_id", orgId);
+
+  if (status && (CRM_LEAD_STATUSES as readonly string[]).includes(status)) {
+    query = query.eq("status", status);
+  }
+  if (state)  query = query.eq("phy_state", state.toUpperCase());
+  if (puMin)  query = query.gte("power_units", Number(puMin));
+  if (puMax)  query = query.lte("power_units", Number(puMax));
+  if (hasEmail === "true")  query = query.not("email", "is", null);
+  if (hasEmail === "false") query = query.is("email", null);
+  if (local === "true") {
+    // Local proxy: some within-100 drivers, no beyond-100 drivers.
+    query = query
+      .or("interstate_within_100.gt.0,intrastate_within_100.gt.0")
+      .or("interstate_beyond_100.is.null,interstate_beyond_100.eq.0")
+      .or("intrastate_beyond_100.is.null,intrastate_beyond_100.eq.0");
+  }
+  if (q) {
+    const like = `%${q.replaceAll("%", "").replaceAll(",", "")}%`;
+    const asDot = Number(q);
+    query = Number.isInteger(asDot) && asDot > 0
+      ? query.or(`legal_name.ilike.${like},dba_name.ilike.${like},dot_number.eq.${asDot}`)
+      : query.or(`legal_name.ilike.${like},dba_name.ilike.${like}`);
+  }
+
+  const { data, count, error } = await query
+    .order("created_at", { ascending: false })
+    .range(offset, offset + limit - 1);
+  if (error) {
+    return c.json({ error: "list_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  }
+  return c.json({ leads: ((data ?? []) as unknown as LeadRow[]).map(rowToLead), total: count ?? 0 });
+});
+
+crm.post("/leads", async (c) => {
+  const orgId = c.get("orgId");
+  const userId = c.get("userId");
+  const body = await c.req.json<Partial<CrmLead>>();
+  if (!body.legalName?.trim()) {
+    return c.json({ error: "validation_failed", errors: ["legalName required"] } satisfies ApiErrorResponse, 400);
+  }
+  const email = body.email?.trim().toLowerCase() || null;
+  const { data, error } = await supabase
+    .from("crm_leads")
+    .insert({
+      org_id:     orgId,
+      source:     "manual",
+      dot_number: body.dotNumber ?? null,
+      legal_name: body.legalName.trim(),
+      dba_name:   body.dbaName?.trim() || null,
+      email,
+      phone:      body.phone?.trim() || null,
+      cell_phone: body.cellPhone?.trim() || null,
+      phy_street: body.phyStreet?.trim() || null,
+      phy_city:   body.phyCity?.trim() || null,
+      phy_state:  body.phyState?.trim().toUpperCase() || null,
+      phy_zip:    body.phyZip?.trim() || null,
+      power_units: body.powerUnits ?? null,
+      status:     email ? "enriched" : "new",
+    })
+    .select(LEAD_COLS)
+    .single();
+  if (error || !data) {
+    // 23505 = duplicate dot_number for this org
+    const dup = error?.code === "23505";
+    return c.json(
+      { error: dup ? "duplicate_dot_number" : "insert_failed", detail: error?.message } satisfies ApiErrorResponse,
+      dup ? 409 : 500,
+    );
+  }
+  const lead = rowToLead(data as unknown as LeadRow);
+  await logActivity(orgId, lead.id, "system", { body: "Lead added manually", actorUserId: userId });
+  return c.json({ lead }, 201);
+});
+
+crm.get("/leads/:id", async (c) => {
+  const orgId = c.get("orgId");
+  const id = c.req.param("id");
+  const { data, error } = await supabase
+    .from("crm_leads")
+    .select(LEAD_COLS)
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (error) {
+    return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  }
+  if (!data) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+
+  const { data: activityRows } = await supabase
+    .from("crm_activities")
+    .select("id,lead_id,kind,body,meta,actor_user_id,created_at")
+    .eq("org_id", orgId)
+    .eq("lead_id", id)
+    .order("created_at", { ascending: false })
+    .limit(200);
+
+  return c.json({
+    lead: rowToLead(data as unknown as LeadRow),
+    activities: ((activityRows ?? []) as unknown as Record<string, unknown>[]).map(rowToActivity),
+  });
+});
+
+crm.patch("/leads/:id", async (c) => {
+  const orgId = c.get("orgId");
+  const userId = c.get("userId");
+  const id = c.req.param("id");
+  const body = await c.req.json<Partial<CrmLead>>();
+
+  const { data: existingRaw } = await supabase
+    .from("crm_leads")
+    .select("id,status")
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (!existingRaw) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+  const prevStatus = (existingRaw as { status: CrmLeadStatus }).status;
+
+  const update: CrmLeadUpdate = {};
+  if ("legalName" in body && body.legalName?.trim()) update.legal_name = body.legalName.trim();
+  if ("dbaName" in body)    update.dba_name   = body.dbaName?.trim() || null;
+  if ("email" in body)      update.email      = body.email?.trim().toLowerCase() || null;
+  if ("phone" in body)      update.phone      = body.phone?.trim() || null;
+  if ("cellPhone" in body)  update.cell_phone = body.cellPhone?.trim() || null;
+  if ("phyStreet" in body)  update.phy_street = body.phyStreet?.trim() || null;
+  if ("phyCity" in body)    update.phy_city   = body.phyCity?.trim() || null;
+  if ("phyState" in body)   update.phy_state  = body.phyState?.trim().toUpperCase() || null;
+  if ("phyZip" in body)     update.phy_zip    = body.phyZip?.trim() || null;
+  if ("powerUnits" in body) update.power_units = body.powerUnits ?? null;
+  if ("ownerUserId" in body)  update.owner_user_id  = body.ownerUserId ?? null;
+  if ("nextActionAt" in body) update.next_action_at = body.nextActionAt ?? null;
+
+  const statusChanging =
+    "status" in body && body.status != null && body.status !== prevStatus;
+  if (statusChanging) {
+    if (!(CRM_LEAD_STATUSES as readonly string[]).includes(body.status!)) {
+      return c.json({ error: "validation_failed", errors: [`invalid status: ${body.status}`] } satisfies ApiErrorResponse, 400);
+    }
+    update.status = body.status;
+    update.status_changed_at = new Date().toISOString();
+  }
+
+  if (Object.keys(update).length === 0) {
+    return c.json({ error: "validation_failed", errors: ["no editable fields in body"] } satisfies ApiErrorResponse, 400);
+  }
+
+  const { data, error } = await supabase
+    .from("crm_leads")
+    .update(update)
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .select(LEAD_COLS)
+    .single();
+  if (error || !data) {
+    return c.json({ error: "update_failed", detail: error?.message } satisfies ApiErrorResponse, 500);
+  }
+
+  if (statusChanging) {
+    await logActivity(orgId, id, "status_change", {
+      meta: { from: prevStatus, to: body.status },
+      actorUserId: userId,
+    });
+    // Phase 2 wires unsubscribed/do_not_contact transitions to the
+    // suppression list + enrollment stop here.
+  }
+
+  return c.json({ lead: rowToLead(data as unknown as LeadRow) });
+});
+
+crm.post("/leads/:id/activities", async (c) => {
+  const orgId = c.get("orgId");
+  const userId = c.get("userId");
+  const id = c.req.param("id");
+  const body = await c.req.json<{ body?: string }>();
+  if (!body.body?.trim()) {
+    return c.json({ error: "validation_failed", errors: ["body required"] } satisfies ApiErrorResponse, 400);
+  }
+  const { data: lead } = await supabase
+    .from("crm_leads")
+    .select("id")
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (!lead) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+
+  const { data, error } = await supabase
+    .from("crm_activities")
+    .insert({ org_id: orgId, lead_id: id, kind: "note", body: body.body.trim(), actor_user_id: userId })
+    .select("id,lead_id,kind,body,meta,actor_user_id,created_at")
+    .single();
+  if (error || !data) {
+    return c.json({ error: "insert_failed", detail: error?.message } satisfies ApiErrorResponse, 500);
+  }
+  return c.json({ activity: rowToActivity(data as Record<string, unknown>) }, 201);
+});
+
+// ── Stats ───────────────────────────────────────────────────────────────
+
+crm.get("/stats", async (c) => {
+  const orgId = c.get("orgId");
+  // Small pipeline (thousands of leads) — count per status in one
+  // round-trip each; fine at this scale, revisit if it ever isn't.
+  const byStatus: CrmStats["byStatus"] = {};
+  let totalLeads = 0;
+  await Promise.all(
+    CRM_LEAD_STATUSES.map(async (status) => {
+      const { count } = await supabase
+        .from("crm_leads")
+        .select("id", { count: "exact", head: true })
+        .eq("org_id", orgId)
+        .eq("status", status);
+      if (count) { byStatus[status] = count; totalLeads += count; }
+    }),
+  );
+  const { data: syncRow } = await supabase
+    .from("crm_sync_state")
+    .select("last_run_at")
+    .eq("org_id", orgId)
+    .eq("source", "fmcsa_census")
+    .maybeSingle();
+  const stats: CrmStats = {
+    byStatus,
+    totalLeads,
+    lastSyncAt: (syncRow as { last_run_at?: string } | null)?.last_run_at ?? undefined,
+  };
+  return c.json({ stats });
+});
+
+// ── Settings ────────────────────────────────────────────────────────────
+
+crm.get("/settings", async (c) => {
+  const orgId = c.get("orgId");
+  const { data } = await supabase
+    .from("org_settings")
+    .select("crm_settings")
+    .eq("org_id", orgId)
+    .maybeSingle();
+  const settings = resolveCrmSettings((data as { crm_settings?: unknown } | null)?.crm_settings);
+  return c.json({ settings });
+});
+
+crm.patch("/settings", requireCapability("crm.manage"), async (c) => {
+  const orgId = c.get("orgId");
+  const body = await c.req.json<Partial<CrmSettings>>();
+  // Merge over the currently-resolved settings so a partial PATCH
+  // (e.g. just dailySendCap) doesn't wipe the rest.
+  const { data: current } = await supabase
+    .from("org_settings")
+    .select("crm_settings")
+    .eq("org_id", orgId)
+    .maybeSingle();
+  const cur = resolveCrmSettings((current as { crm_settings?: unknown } | null)?.crm_settings);
+  // Deep-merge the nested bags so a partial PATCH (e.g. just
+  // icp.powerUnitsMax) keeps the org's other stored values instead of
+  // silently resetting them to code defaults.
+  const merged = resolveCrmSettings({
+    ...cur,
+    ...body,
+    icp:        { ...cur.icp,        ...(body.icp ?? {}) },
+    sendWindow: { ...cur.sendWindow, ...(body.sendWindow ?? {}) },
+  });
+  const { error } = await supabase
+    .from("org_settings")
+    .upsert({ org_id: orgId, crm_settings: merged as unknown as Json }, { onConflict: "org_id" });
+  if (error) {
+    return c.json({ error: "update_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  }
+  return c.json({ settings: merged });
+});
+
+// ── Manual sync trigger ─────────────────────────────────────────────────
+
+crm.post("/sync", requireCapability("crm.manage"), async (c) => {
+  const orgId = c.get("orgId");
+  const body = await c.req.json<{ maxPages?: number }>().catch(() => ({} as { maxPages?: number }));
+  try {
+    const result = await syncCrmLeadsForOrg(orgId, {
+      maxPages: body.maxPages != null ? Math.min(body.maxPages, 25) : undefined,
+    });
+    return c.json({ result });
+  } catch (err) {
+    console.error("[POST /v1/crm/sync] failed:", err);
+    return c.json(
+      { error: "sync_failed", detail: err instanceof Error ? err.message : String(err) } satisfies ApiErrorResponse,
+      502,
+    );
+  }
+});
+
+export { crm as crmRoute };

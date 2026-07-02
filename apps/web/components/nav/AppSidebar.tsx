@@ -36,11 +36,13 @@ import { useEffect, useState } from 'react';
 import {
   Calendar, BarChart2, LayoutDashboard, FileCheck2, Receipt, Package,
   Gauge, Users, Settings, ChevronDown, ChevronRight, ChevronsLeft, ChevronsRight,
-  Wrench, ClipboardCheck, Fuel as FuelIcon,
+  Wrench, ClipboardCheck, Fuel as FuelIcon, Target,
 } from 'lucide-react';
+import { useOrganization, useUser } from '@clerk/nextjs';
 import type { Capability, OrgModule } from '@fleetcal/types';
 import { usePermissions } from '@/lib/usePermissions';
 import { useModules } from '@/lib/useModules';
+import { isCrmUser, isInternalOrg } from '@/lib/internalOrg';
 
 interface NavLeaf {
   kind:   'leaf';
@@ -51,6 +53,10 @@ interface NavLeaf {
   icon:   React.ComponentType<{ size?: number; style?: React.CSSProperties }>;
   cap:    Capability;
   module?: OrgModule;
+  /** Only show for orgs on the internal allowlist (lib/internalOrg.ts).
+   *  Third gate on top of cap + module — used by the CRM entry, which
+   *  is FleetCal-internal sales tooling, never a customer surface. */
+  internalOnly?: boolean;
 }
 interface NavGroup {
   kind:    'group';
@@ -59,6 +65,7 @@ interface NavGroup {
   icon:    React.ComponentType<{ size?: number; style?: React.CSSProperties }>;
   cap:     Capability;
   module?: OrgModule;
+  internalOnly?: boolean;
   children: NavLeaf[];
 }
 type NavItem = NavLeaf | NavGroup;
@@ -87,6 +94,7 @@ const PRIMARY_NAV: NavItem[] = [
   },
   { kind: 'leaf', href: '/payroll',     label: 'Payroll',        icon: Users,           cap: 'payroll.access',    module: 'payroll' },
   { kind: 'leaf', href: '/drivers',     label: 'Drivers',        icon: Gauge,           cap: 'drivers.view',      module: 'performance' },
+  { kind: 'leaf', href: '/crm',         label: 'CRM',            icon: Target,          cap: 'crm.access',        module: 'crm', internalOnly: true },
 ];
 
 const SECONDARY_NAV: NavItem[] = [
@@ -102,6 +110,16 @@ export default function AppSidebar() {
   const searchParams = useSearchParams();
   const { can, isLoading: permsLoading } = usePermissions();
   const { enabled: moduleEnabled } = useModules();
+  // Internal-org gate for internalOnly entries (CRM). Unlike the
+  // cap/module gates there's no optimistic-while-loading rendering:
+  // isInternalOrg(undefined) is false during Clerk hydration, so the
+  // entry appears only once the org resolves to an allowlisted id —
+  // customer orgs never see even a flicker of it. The per-user CRM
+  // allowlist (NEXT_PUBLIC_CRM_USER_IDS) tightens it further so other
+  // admins of the internal org don't see the entry either.
+  const { organization } = useOrganization();
+  const { user } = useUser();
+  const internal = isInternalOrg(organization?.id) && isCrmUser(user?.id);
 
   // Collapse state — defaults to expanded; hydrates from localStorage
   // on mount so SSR doesn't mismatch. We render expanded on first paint
@@ -132,9 +150,10 @@ export default function AppSidebar() {
   }, [onEquipment]);
 
   const filterVisible = (items: NavItem[]): NavItem[] =>
-    permsLoading
+    (permsLoading
       ? items
-      : items.filter(it => can(it.cap) && (!it.module || moduleEnabled(it.module)));
+      : items.filter(it => can(it.cap) && (!it.module || moduleEnabled(it.module)))
+    ).filter(it => !it.internalOnly || internal);
 
   const primary   = filterVisible(PRIMARY_NAV);
   const secondary = filterVisible(SECONDARY_NAV);

@@ -79,6 +79,8 @@ import type {
   CreateMaintenanceActionItemRequest, CreateMaintenanceActionItemResponse,
   UpdateMaintenanceActionItemRequest, UpdateMaintenanceActionItemResponse,
   UploadMaintenanceActionItemPhotoResponse, DeleteMaintenanceActionItemPhotoResponse,
+  CrmLead, CrmActivity, CrmSettings, CrmStats, CrmSyncResult,
+  CrmListLeadsQuery, CrmListLeadsResponse, CrmLeadDetailResponse,
 } from '@fleetcal/types';
 
 const BASE_URL =
@@ -1549,6 +1551,55 @@ class RailwayClient {
     return this.req<DeleteMaintenanceActionItemPhotoResponse>(
       'DELETE',
       `/v1/maintenance-action-items/photos/${photoId}`,
+    );
+  }
+
+  // ── CRM (internal sales tooling) ──────────────────────────────────────
+  //
+  // Every /v1/crm endpoint is triple-gated server-side (internal-org
+  // allowlist + `crm` module flag + `crm.access` capability); the web
+  // pages mirror the same gates for UX. See packages/types/crm.ts.
+  crmListLeads(query: CrmListLeadsQuery = {}) {
+    const qs = new URLSearchParams();
+    if (query.status)          qs.set('status',   query.status);
+    if (query.state)           qs.set('state',    query.state);
+    if (query.puMin  != null)  qs.set('puMin',    String(query.puMin));
+    if (query.puMax  != null)  qs.set('puMax',    String(query.puMax));
+    if (query.hasEmail != null) qs.set('hasEmail', String(query.hasEmail));
+    if (query.local != null)   qs.set('local',    String(query.local));
+    if (query.q)               qs.set('q',        query.q);
+    if (query.limit  != null)  qs.set('limit',    String(query.limit));
+    if (query.offset != null)  qs.set('offset',   String(query.offset));
+    const s = qs.toString();
+    return this.req<CrmListLeadsResponse>('GET', `/v1/crm/leads${s ? `?${s}` : ''}`);
+  }
+  crmCreateLead(fields: Partial<CrmLead> & { legalName: string }) {
+    return this.req<{ lead: CrmLead }>('POST', '/v1/crm/leads', fields);
+  }
+  crmGetLead(id: string) {
+    return this.req<CrmLeadDetailResponse>('GET', `/v1/crm/leads/${id}`);
+  }
+  crmPatchLead(id: string, fields: Partial<CrmLead>) {
+    return this.req<{ lead: CrmLead }>('PATCH', `/v1/crm/leads/${id}`, fields);
+  }
+  /** Append a manual note to the lead's activity timeline. */
+  crmAddNote(id: string, body: string) {
+    return this.req<{ activity: CrmActivity }>('POST', `/v1/crm/leads/${id}/activities`, { body });
+  }
+  crmGetStats() {
+    return this.req<{ stats: CrmStats }>('GET', '/v1/crm/stats');
+  }
+  crmGetSettings() {
+    return this.req<{ settings: CrmSettings }>('GET', '/v1/crm/settings');
+  }
+  crmPatchSettings(partial: Partial<CrmSettings>) {
+    return this.req<{ settings: CrmSettings }>('PATCH', '/v1/crm/settings', partial);
+  }
+  /** Trigger an FMCSA census ingest pass. crm.manage only (server-
+   *  enforced). maxPages caps how many census pages one click pulls. */
+  crmSync(maxPages?: number) {
+    return this.req<{ result: CrmSyncResult }>(
+      'POST', '/v1/crm/sync', maxPages != null ? { maxPages } : {},
     );
   }
 }

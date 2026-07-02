@@ -108,6 +108,171 @@ export type Database = {
           },
         ]
       }
+      crm_activities: {
+        Row: {
+          actor_user_id: string | null
+          body: string | null
+          created_at: string
+          id: string
+          kind: string
+          lead_id: string
+          meta: Json | null
+          org_id: string
+        }
+        Insert: {
+          actor_user_id?: string | null
+          body?: string | null
+          created_at?: string
+          id?: string
+          kind: string
+          lead_id: string
+          meta?: Json | null
+          org_id: string
+        }
+        Update: {
+          actor_user_id?: string | null
+          body?: string | null
+          created_at?: string
+          id?: string
+          kind?: string
+          lead_id?: string
+          meta?: Json | null
+          org_id?: string
+        }
+        Relationships: []
+      }
+      crm_leads: {
+        Row: {
+          call_attempts: number
+          carrier_operation: string | null
+          cell_phone: string | null
+          created_at: string
+          dba_name: string | null
+          dot_number: number | null
+          email: string | null
+          fmcsa_add_date: string | null
+          hm_ind: boolean | null
+          id: string
+          interstate_beyond_100: number | null
+          interstate_within_100: number | null
+          intrastate_beyond_100: number | null
+          intrastate_within_100: number | null
+          legal_name: string
+          mcs150_date: string | null
+          next_action_at: string | null
+          org_id: string
+          owner_user_id: string | null
+          phone: string | null
+          phy_city: string | null
+          phy_state: string | null
+          phy_street: string | null
+          phy_zip: string | null
+          power_units: number | null
+          raw: Json | null
+          source: string
+          status: string
+          status_changed_at: string
+          total_drivers: number | null
+          unsubscribe_token: string
+          updated_at: string
+        }
+        Insert: {
+          call_attempts?: number
+          carrier_operation?: string | null
+          cell_phone?: string | null
+          created_at?: string
+          dba_name?: string | null
+          dot_number?: number | null
+          email?: string | null
+          fmcsa_add_date?: string | null
+          hm_ind?: boolean | null
+          id?: string
+          interstate_beyond_100?: number | null
+          interstate_within_100?: number | null
+          intrastate_beyond_100?: number | null
+          intrastate_within_100?: number | null
+          legal_name: string
+          mcs150_date?: string | null
+          next_action_at?: string | null
+          org_id: string
+          owner_user_id?: string | null
+          phone?: string | null
+          phy_city?: string | null
+          phy_state?: string | null
+          phy_street?: string | null
+          phy_zip?: string | null
+          power_units?: number | null
+          raw?: Json | null
+          source?: string
+          status?: string
+          status_changed_at?: string
+          total_drivers?: number | null
+          unsubscribe_token?: string
+          updated_at?: string
+        }
+        Update: {
+          call_attempts?: number
+          carrier_operation?: string | null
+          cell_phone?: string | null
+          created_at?: string
+          dba_name?: string | null
+          dot_number?: number | null
+          email?: string | null
+          fmcsa_add_date?: string | null
+          hm_ind?: boolean | null
+          id?: string
+          interstate_beyond_100?: number | null
+          interstate_within_100?: number | null
+          intrastate_beyond_100?: number | null
+          intrastate_within_100?: number | null
+          legal_name?: string
+          mcs150_date?: string | null
+          next_action_at?: string | null
+          org_id?: string
+          owner_user_id?: string | null
+          phone?: string | null
+          phy_city?: string | null
+          phy_state?: string | null
+          phy_street?: string | null
+          phy_zip?: string | null
+          power_units?: number | null
+          raw?: Json | null
+          source?: string
+          status?: string
+          status_changed_at?: string
+          total_drivers?: number | null
+          unsubscribe_token?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      crm_sync_state: {
+        Row: {
+          cursor: Json
+          last_error: string | null
+          last_run_at: string | null
+          org_id: string
+          source: string
+          updated_at: string
+        }
+        Insert: {
+          cursor?: Json
+          last_error?: string | null
+          last_run_at?: string | null
+          org_id: string
+          source?: string
+          updated_at?: string
+        }
+        Update: {
+          cursor?: Json
+          last_error?: string | null
+          last_run_at?: string | null
+          org_id?: string
+          source?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       customers: {
         Row: {
           aliases: string[] | null
@@ -1358,16 +1523,19 @@ export type Database = {
       }
       org_settings: {
         Row: {
+          crm_settings: Json | null
           motive_api_key: string | null
           org_id: string
           rate_con_settings: Json
         }
         Insert: {
+          crm_settings?: Json | null
           motive_api_key?: string | null
           org_id: string
           rate_con_settings?: Json
         }
         Update: {
+          crm_settings?: Json | null
           motive_api_key?: string | null
           org_id?: string
           rate_con_settings?: Json

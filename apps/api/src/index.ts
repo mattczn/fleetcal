@@ -65,6 +65,8 @@ import { runAiUsageSweep } from "./jobs/aiUsageSweep.js";
 import { trackCronRun } from "./lib/cronRun.js";
 import { runFuelAutoMatchSweep } from "./jobs/fuelAutoMatchSweep.js";
 import { runMudflapSyncSweep } from "./jobs/mudflapSyncSweep.js";
+import { runCrmFmcsaSyncSweep } from "./jobs/crmFmcsaSyncSweep.js";
+import { crmRoute } from "./routes/crm.js";
 import pkg from "../package.json" with { type: "json" };
 
 import type { HealthResponse } from "@fleetcal/types";
@@ -235,6 +237,9 @@ authed.route("/driver-documents", driverDocumentsRoute);
 authed.route("/asset-documents", assetDocumentsRoute);
 authed.route("/trailer-documents", trailerDocumentsRoute);
 authed.route("/reports", reportsRoute);
+// INTERNAL sales CRM — triple-gated inside the route group
+// (internal-org allowlist → 404, crm module flag, crm.* capabilities).
+authed.route("/crm", crmRoute);
 
 // ── Bot routes (API key auth, read-only load access) ────────────────────
 // Must be mounted before /v1 so Hono doesn't match /v1/bot/* against the
@@ -575,3 +580,41 @@ async function fireAiUsageSweep(label: string): Promise<void> {
 }
 setTimeout(() => void fireAiUsageSweep("startup pass"), AI_USAGE_SWEEP_STARTUP_DELAY).unref();
 setInterval(() => void fireAiUsageSweep("daily tick"), AI_USAGE_SWEEP_INTERVAL_MS).unref();
+
+// ── CRM FMCSA lead sync (INTERNAL) ─────────────────────────────────────
+//
+// Ingests newly-registered carriers from the FMCSA census (Socrata)
+// into crm_leads for the internal sales CRM. No-ops when
+// CRM_INTERNAL_ORG_IDS is unset. The dataset refreshes daily, so a
+// 6-hour interval is generous; the CRM UI's "Sync now" button covers
+// anything more urgent. Idempotent — duplicate DOT numbers hit the
+// (org_id, dot_number) unique index and are counted, not inserted,
+// and the keyset cursor persists per page so reruns resume cleanly.
+//
+// Single-replica caveat: same as the other in-process crons. If the
+// service is ever scaled horizontally we'd need to gate on a
+// "primary instance" flag — for now the unique deploy is the gate.
+const CRM_FMCSA_SYNC_INTERVAL_MS   = Number(process.env.CRM_FMCSA_SYNC_INTERVAL_MS   ?? 6 * 60 * 60 * 1000);
+const CRM_FMCSA_SYNC_STARTUP_DELAY = Number(process.env.CRM_FMCSA_SYNC_STARTUP_DELAY ?? 3 * 60 * 1000);
+async function fireCrmFmcsaSync(label: string): Promise<void> {
+  try {
+    await trackCronRun("crm-fmcsa-sync", async () => {
+      const r = await runCrmFmcsaSyncSweep();
+      if (r.skipped) {
+        console.log(`[crm-fmcsa-sync] ${label}: skipped (${r.reason})`);
+        return { meta: { skipped: true, reason: r.reason } };
+      }
+      const summary = (r.orgs ?? [])
+        .map((o) => o.error
+          ? `${o.orgId}: ERROR ${o.error}`
+          : `${o.orgId}: +${o.result?.inserted ?? 0} (${o.result?.duplicates ?? 0} dup, ${o.result?.disqualified ?? 0} dq, cursor=${o.result?.cursorDotNumber ?? "?"})`)
+        .join("; ");
+      console.log(`[crm-fmcsa-sync] ${label}: ${summary}`);
+      return { meta: { orgs: r.orgs } };
+    });
+  } catch (err) {
+    console.error(`[crm-fmcsa-sync] ${label} failed:`, err);
+  }
+}
+setTimeout(() => void fireCrmFmcsaSync("startup pass"), CRM_FMCSA_SYNC_STARTUP_DELAY).unref();
+setInterval(() => void fireCrmFmcsaSync("tick"), CRM_FMCSA_SYNC_INTERVAL_MS).unref();
