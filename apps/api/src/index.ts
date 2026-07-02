@@ -66,7 +66,9 @@ import { trackCronRun } from "./lib/cronRun.js";
 import { runFuelAutoMatchSweep } from "./jobs/fuelAutoMatchSweep.js";
 import { runMudflapSyncSweep } from "./jobs/mudflapSyncSweep.js";
 import { runCrmFmcsaSyncSweep } from "./jobs/crmFmcsaSyncSweep.js";
+import { runCrmSendSweep } from "./jobs/crmSendSweep.js";
 import { crmRoute } from "./routes/crm.js";
+import { crmPublicRoute } from "./routes/crm-public.js";
 import pkg from "../package.json" with { type: "json" };
 
 import type { HealthResponse } from "@fleetcal/types";
@@ -261,6 +263,11 @@ app.route("/v1/driver", driverRoute);
 // Same precedence trick — mounted before /v1 so the Clerk middleware
 // doesn't intercept. INTERNAL_CRON_TOKEN gates access.
 app.route("/v1/internal", internalRoute);
+
+// CRM public endpoints — unsubscribe links from outreach emails land
+// here (token IS the auth) plus the svix-signed Resend webhook. Same
+// mount-before-Clerk precedence trick.
+app.route("/v1/crm-public", crmPublicRoute);
 
 // Fuel transactions inbound-email — API key auth, NOT Clerk. Must
 // mount before /v1 so /v1/fuel-transactions/inbound-email resolves
@@ -618,3 +625,41 @@ async function fireCrmFmcsaSync(label: string): Promise<void> {
 }
 setTimeout(() => void fireCrmFmcsaSync("startup pass"), CRM_FMCSA_SYNC_STARTUP_DELAY).unref();
 setInterval(() => void fireCrmFmcsaSync("tick"), CRM_FMCSA_SYNC_INTERVAL_MS).unref();
+
+// ── CRM outreach send sweep (INTERNAL) ─────────────────────────────────
+//
+// Two idempotent passes (see jobs/crmSendSweep.ts): materialize due
+// sequence steps into the approval outbox, then send approved emails —
+// business-hours window, daily warm-up cap, and a HARD per-email
+// suppression re-check inside the send loop immediately before each
+// Resend call. approve-batch also kicks this inline for instant sends;
+// the 10-minute tick is the backstop. No-ops when CRM_INTERNAL_ORG_IDS
+// is unset.
+//
+// Single-replica caveat: same as the other in-process crons. Double-
+// fire is harmless — materialization dedupes on the (enrollment, step)
+// unique index and sends claim rows with a conditional UPDATE.
+const CRM_SEND_SWEEP_INTERVAL_MS   = Number(process.env.CRM_SEND_SWEEP_INTERVAL_MS   ?? 10 * 60 * 1000);
+const CRM_SEND_SWEEP_STARTUP_DELAY = Number(process.env.CRM_SEND_SWEEP_STARTUP_DELAY ?? 4 * 60 * 1000);
+async function fireCrmSendSweep(label: string): Promise<void> {
+  try {
+    await trackCronRun("crm-send-sweep", async () => {
+      const r = await runCrmSendSweep();
+      if (r.skipped) {
+        console.log(`[crm-send-sweep] ${label}: skipped (${r.reason})`);
+        return { meta: { skipped: true, reason: r.reason } };
+      }
+      const summary = (r.orgs ?? [])
+        .map((o) => o.error
+          ? `${o.orgId}: ERROR ${o.error}`
+          : `${o.orgId}: mat=${o.materialized} sent=${o.sent} sup=${o.suppressed} fail=${o.failed}${o.windowOpen === false ? " (window closed)" : ""}`)
+        .join("; ");
+      console.log(`[crm-send-sweep] ${label}: ${summary}`);
+      return { meta: { orgs: r.orgs } };
+    });
+  } catch (err) {
+    console.error(`[crm-send-sweep] ${label} failed:`, err);
+  }
+}
+setTimeout(() => void fireCrmSendSweep("startup pass"), CRM_SEND_SWEEP_STARTUP_DELAY).unref();
+setInterval(() => void fireCrmSendSweep("tick"), CRM_SEND_SWEEP_INTERVAL_MS).unref();

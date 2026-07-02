@@ -141,6 +141,99 @@ export type Database = {
         }
         Relationships: []
       }
+      crm_emails: {
+        Row: {
+          approved_at: string | null
+          approved_by: string | null
+          body: string
+          created_at: string
+          enrollment_id: string | null
+          error: string | null
+          id: string
+          lead_id: string
+          org_id: string
+          resend_message_id: string | null
+          sent_at: string | null
+          status: string
+          step_id: string | null
+          subject: string
+          to_email: string
+          updated_at: string
+        }
+        Insert: {
+          approved_at?: string | null
+          approved_by?: string | null
+          body: string
+          created_at?: string
+          enrollment_id?: string | null
+          error?: string | null
+          id?: string
+          lead_id: string
+          org_id: string
+          resend_message_id?: string | null
+          sent_at?: string | null
+          status?: string
+          step_id?: string | null
+          subject: string
+          to_email: string
+          updated_at?: string
+        }
+        Update: {
+          approved_at?: string | null
+          approved_by?: string | null
+          body?: string
+          created_at?: string
+          enrollment_id?: string | null
+          error?: string | null
+          id?: string
+          lead_id?: string
+          org_id?: string
+          resend_message_id?: string | null
+          sent_at?: string | null
+          status?: string
+          step_id?: string | null
+          subject?: string
+          to_email?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      crm_enrollments: {
+        Row: {
+          created_at: string
+          current_step: number
+          id: string
+          lead_id: string
+          next_send_at: string | null
+          org_id: string
+          sequence_id: string
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          current_step?: number
+          id?: string
+          lead_id: string
+          next_send_at?: string | null
+          org_id: string
+          sequence_id: string
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          current_step?: number
+          id?: string
+          lead_id?: string
+          next_send_at?: string | null
+          org_id?: string
+          sequence_id?: string
+          status?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       crm_leads: {
         Row: {
           call_attempts: number
@@ -243,6 +336,99 @@ export type Database = {
           total_drivers?: number | null
           unsubscribe_token?: string
           updated_at?: string
+        }
+        Relationships: []
+      }
+      crm_sequence_steps: {
+        Row: {
+          body_template: string
+          created_at: string
+          id: string
+          org_id: string
+          sequence_id: string
+          step_order: number
+          subject_template: string
+          updated_at: string
+          wait_days: number
+        }
+        Insert: {
+          body_template: string
+          created_at?: string
+          id?: string
+          org_id: string
+          sequence_id: string
+          step_order: number
+          subject_template: string
+          updated_at?: string
+          wait_days?: number
+        }
+        Update: {
+          body_template?: string
+          created_at?: string
+          id?: string
+          org_id?: string
+          sequence_id?: string
+          step_order?: number
+          subject_template?: string
+          updated_at?: string
+          wait_days?: number
+        }
+        Relationships: []
+      }
+      crm_sequences: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          id: string
+          is_active: boolean
+          name: string
+          org_id: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          is_active?: boolean
+          name: string
+          org_id: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          is_active?: boolean
+          name?: string
+          org_id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      crm_suppressions: {
+        Row: {
+          created_at: string
+          email: string
+          id: string
+          lead_id: string | null
+          org_id: string
+          reason: string
+        }
+        Insert: {
+          created_at?: string
+          email: string
+          id?: string
+          lead_id?: string | null
+          org_id: string
+          reason: string
+        }
+        Update: {
+          created_at?: string
+          email?: string
+          id?: string
+          lead_id?: string | null
+          org_id?: string
+          reason?: string
         }
         Relationships: []
       }
@@ -1441,10 +1627,13 @@ export type Database = {
           description: string
           driver_id: number
           id: string
+          inspection_item_id: string | null
+          inspection_report_id: string | null
           latitude: number | null
           longitude: number | null
           org_id: string
           reported_at: string
+          source: string
           state: string | null
           status: string
           submitted_by: string
@@ -1457,10 +1646,13 @@ export type Database = {
           description: string
           driver_id: number
           id?: string
+          inspection_item_id?: string | null
+          inspection_report_id?: string | null
           latitude?: number | null
           longitude?: number | null
           org_id: string
           reported_at?: string
+          source?: string
           state?: string | null
           status?: string
           submitted_by: string
@@ -1473,10 +1665,13 @@ export type Database = {
           description?: string
           driver_id?: number
           id?: string
+          inspection_item_id?: string | null
+          inspection_report_id?: string | null
           latitude?: number | null
           longitude?: number | null
           org_id?: string
           reported_at?: string
+          source?: string
           state?: string | null
           status?: string
           submitted_by?: string

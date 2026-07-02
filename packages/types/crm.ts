@@ -139,6 +139,10 @@ export interface CrmIcpFilters {
   /** Soft filter: long-haul-only carriers are still ingested but
    *  stamped `disqualified` (never dropped). Default false. */
   localOnly: boolean;
+  /** Only ingest for-hire carriers (census classdef contains
+   *  "AUTHORIZED FOR HIRE"). Private fleets haul their own goods and
+   *  don't buy dispatch software. Default true. */
+  forHireOnly?: boolean;
 }
 
 export interface CrmSettings {
@@ -175,6 +179,7 @@ export const CRM_SETTINGS_DEFAULTS: CrmSettings = {
     states: [],
     operationClasses: ["A", "B", "C"],
     localOnly: false,
+    forHireOnly: true,
   },
   dailySendCap: 25,
   sendWindow: { startHour: 9, endHour: 17, timezone: "America/Denver", weekdaysOnly: true },
@@ -194,6 +199,84 @@ export function resolveCrmSettings(stored: unknown): CrmSettings {
     icp: { ...CRM_SETTINGS_DEFAULTS.icp, ...(s.icp ?? {}) },
     sendWindow: { ...CRM_SETTINGS_DEFAULTS.sendWindow, ...(s.sendWindow ?? {}) },
   };
+}
+
+// ── Outreach (Phase 2) ───────────────────────────────────────────────
+
+export const CRM_ENROLLMENT_STATUSES = [
+  "active",
+  "paused",
+  "completed",     // ran every step
+  "stopped",       // manually ended / lead replied / lead blocked
+  "unsubscribed",
+] as const;
+export type CrmEnrollmentStatus = (typeof CRM_ENROLLMENT_STATUSES)[number];
+
+export const CRM_EMAIL_STATUSES = [
+  "pending_approval", // materialized, waiting in the outbox
+  "approved",         // human-approved (or autoSend), waiting for the send window
+  "sent",
+  "failed",           // Resend call failed — retryable from the outbox
+  "bounced",          // Resend webhook reported a bounce
+  "suppressed",       // blocked at send time (unsubscribe/suppression/status)
+  "cancelled",        // human-cancelled before send
+] as const;
+export type CrmEmailStatus = (typeof CRM_EMAIL_STATUSES)[number];
+
+export const CRM_SUPPRESSION_REASONS = ["unsubscribe", "bounce", "complaint", "manual"] as const;
+export type CrmSuppressionReason = (typeof CRM_SUPPRESSION_REASONS)[number];
+
+export interface CrmSequence {
+  id: string;
+  name: string;
+  isActive: boolean;
+  createdBy?: string;
+  steps: CrmSequenceStep[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CrmSequenceStep {
+  id: string;
+  sequenceId: string;
+  stepOrder: number;        // 1-based
+  /** Days after the previous step (step 1: after enrollment). */
+  waitDays: number;
+  /** Merge vars: {{legal_name}} {{dba_or_legal_name}} {{city}} {{state}}
+   *  {{power_units}} {{unsubscribe_url}} (auto-appended if missing). */
+  subjectTemplate: string;
+  bodyTemplate: string;
+}
+
+export interface CrmEnrollment {
+  id: string;
+  leadId: string;
+  sequenceId: string;
+  status: CrmEnrollmentStatus;
+  /** Last COMPLETED step (0 = none yet). */
+  currentStep: number;
+  nextSendAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CrmEmail {
+  id: string;
+  leadId: string;
+  enrollmentId?: string;
+  stepId?: string;
+  toEmail: string;
+  subject: string;          // rendered snapshot at materialize time
+  body: string;
+  status: CrmEmailStatus;
+  approvedBy?: string;
+  approvedAt?: string;
+  sentAt?: string;
+  resendMessageId?: string;
+  error?: string;
+  createdAt: string;
+  /** Joined for outbox display. */
+  leadName?: string;
 }
 
 // ── API request/response shapes ──────────────────────────────────────

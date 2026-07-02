@@ -73,10 +73,29 @@ export const env = {
    *  of an allowlisted org who has the crm.* capabilities. */
   crmInternalUserIds:      (process.env.CRM_INTERNAL_USER_IDS ?? "")
                              .split(",").map((s) => s.trim()).filter(Boolean),
+  /** Comma-separated Clerk org ids allowed to use the Truck History
+   *  module (equipment history + post-trip inspections + inspection-
+   *  sourced maintenance reports). Curzon-only today. Unset = module
+   *  disabled everywhere; requireTruckHistoryOrg 404s and the driver
+   *  org-settings flag reports false. */
+  truckHistoryOrgIds:      (process.env.TRUCK_HISTORY_ORG_IDS ?? "")
+                             .split(",").map((s) => s.trim()).filter(Boolean),
   /** Optional Socrata app token for the FMCSA census pulls
    *  (data.transportation.gov). Works without one, but anonymous
    *  requests get throttled harder. */
   fmcsaSodaAppToken:       process.env.FMCSA_SODA_APP_TOKEN || undefined,
+  /** CRM outreach sending identity. MUST be on the dedicated outreach
+   *  domain (fleetcalendar.app) — never fleetcal.app, so cold-email
+   *  reputation can't touch invoice deliverability. Unset = the send
+   *  sweep marks every approved email failed with a clear reason. */
+  outreachFromEmail:       process.env.OUTREACH_FROM_EMAIL || undefined,
+  outreachFromName:        process.env.OUTREACH_FROM_NAME  || "FleetCal",
+  outreachReplyTo:         process.env.OUTREACH_REPLY_TO   || undefined,
+  /** Svix signing secret for the Resend webhook (bounce/complaint
+   *  ingestion at /v1/crm-public/resend-webhook). Unset = webhook 503s. */
+  resendWebhookSecret:     process.env.RESEND_WEBHOOK_SECRET || undefined,
+  /** Public API base URL used to build unsubscribe links. */
+  publicApiUrl:            process.env.PUBLIC_API_URL || "https://fleetcalapi-production.up.railway.app",
 } as const;
 
 export const isProd = env.nodeEnv === "production";

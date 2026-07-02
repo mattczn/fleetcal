@@ -18,7 +18,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Target, Search, X, Loader2, ChevronLeft, ChevronRight, RefreshCw,
-  Mail, MailX, Settings as SettingsIcon,
+  Mail, MailX, Settings as SettingsIcon, ListOrdered, Inbox,
 } from 'lucide-react';
 import Link from 'next/link';
 import AppShell from '@/components/nav/AppShell';
@@ -168,11 +168,23 @@ function CrmPageInner() {
   return (
     <AppShell title="CRM" icon={Target} noPageScroll
       rightSlot={
-        <Link href="/crm/settings"
-          className="inline-flex items-center gap-1.5 text-[12px] font-medium px-3 py-1.5 rounded-lg transition-colors hover:bg-[var(--gc-hover)]"
-          style={{ color: 'var(--gc-text-2)', textDecoration: 'none' }}>
-          <SettingsIcon size={13} /> CRM settings
-        </Link>
+        <div className="flex items-center gap-1">
+          <Link href="/crm/sequences"
+            className="inline-flex items-center gap-1.5 text-[12px] font-medium px-3 py-1.5 rounded-lg transition-colors hover:bg-[var(--gc-hover)]"
+            style={{ color: 'var(--gc-text-2)', textDecoration: 'none' }}>
+            <ListOrdered size={13} /> Sequences
+          </Link>
+          <Link href="/crm/outbox"
+            className="inline-flex items-center gap-1.5 text-[12px] font-medium px-3 py-1.5 rounded-lg transition-colors hover:bg-[var(--gc-hover)]"
+            style={{ color: 'var(--gc-text-2)', textDecoration: 'none' }}>
+            <Inbox size={13} /> Outbox
+          </Link>
+          <Link href="/crm/settings"
+            className="inline-flex items-center gap-1.5 text-[12px] font-medium px-3 py-1.5 rounded-lg transition-colors hover:bg-[var(--gc-hover)]"
+            style={{ color: 'var(--gc-text-2)', textDecoration: 'none' }}>
+            <SettingsIcon size={13} /> CRM settings
+          </Link>
+        </div>
       }>
       <div className="flex-1 flex flex-col min-h-0 px-6 py-5 gap-4">
         <div className="w-full min-h-0 flex-1 flex flex-col gap-4">

@@ -81,6 +81,7 @@ import type {
   UploadMaintenanceActionItemPhotoResponse, DeleteMaintenanceActionItemPhotoResponse,
   CrmLead, CrmActivity, CrmSettings, CrmStats, CrmSyncResult,
   CrmListLeadsQuery, CrmListLeadsResponse, CrmLeadDetailResponse,
+  CrmSequence, CrmSequenceStep, CrmEmail, CrmEmailStatus,
 } from '@fleetcal/types';
 
 const BASE_URL =
@@ -1601,6 +1602,56 @@ class RailwayClient {
     return this.req<{ result: CrmSyncResult }>(
       'POST', '/v1/crm/sync', maxPages != null ? { maxPages } : {},
     );
+  }
+
+  // ── CRM outreach (Phase 2): sequences, enrollments, outbox ───────────
+  crmListSequences() {
+    return this.req<{ sequences: CrmSequence[] }>('GET', '/v1/crm/sequences');
+  }
+  crmCreateSequence(name: string) {
+    return this.req<{ sequence: CrmSequence }>('POST', '/v1/crm/sequences', { name });
+  }
+  crmPatchSequence(id: string, fields: { name?: string; isActive?: boolean }) {
+    return this.req<{ ok: boolean }>('PATCH', `/v1/crm/sequences/${id}`, fields);
+  }
+  /** Replace the sequence's FULL step list — order = array order
+   *  (stepOrder is assigned server-side). crm.manage only. */
+  crmReplaceSteps(
+    id: string,
+    steps: Array<Pick<CrmSequenceStep, 'waitDays' | 'subjectTemplate' | 'bodyTemplate'>>,
+  ) {
+    return this.req<{ steps: CrmSequenceStep[] }>('PUT', `/v1/crm/sequences/${id}/steps`, { steps });
+  }
+  /** 409 detail.error: already_enrolled | lead_blocked | lead_has_no_email. */
+  crmEnroll(leadId: string, sequenceId: string) {
+    return this.req<{ enrollmentId: string }>('POST', `/v1/crm/leads/${leadId}/enroll`, { sequenceId });
+  }
+  crmEnrollmentAction(id: string, action: 'pause' | 'resume' | 'stop') {
+    return this.req<{ ok: boolean }>('POST', `/v1/crm/enrollments/${id}/${action}`, {});
+  }
+  /** Stops active enrollments, cancels queued sends, lead → interested. */
+  crmMarkReplied(leadId: string) {
+    return this.req<{ ok: boolean }>('POST', `/v1/crm/leads/${leadId}/mark-replied`, {});
+  }
+  crmListEmails(query: { status?: CrmEmailStatus; limit?: number } = {}) {
+    const qs = new URLSearchParams();
+    if (query.status)        qs.set('status', query.status);
+    if (query.limit != null) qs.set('limit',  String(query.limit));
+    const s = qs.toString();
+    return this.req<{ emails: CrmEmail[]; total: number }>('GET', `/v1/crm/emails${s ? `?${s}` : ''}`);
+  }
+  /** Omitted ids = approve ALL pending_approval. crm.manage only. */
+  crmApproveBatch(ids?: string[]) {
+    return this.req<{ approved: number }>(
+      'POST', '/v1/crm/emails/approve-batch', ids && ids.length > 0 ? { ids } : {},
+    );
+  }
+  crmCancelEmail(id: string) {
+    return this.req<{ ok: boolean }>('POST', `/v1/crm/emails/${id}/cancel`, {});
+  }
+  /** failed → approved (next sweep resends). crm.manage only. */
+  crmRetryEmail(id: string) {
+    return this.req<{ ok: boolean }>('POST', `/v1/crm/emails/${id}/retry`, {});
   }
 }
 

@@ -26,6 +26,17 @@
  * CLIENT-side after Number() coercion — cheap at 1000-row pages and
  * avoids fighting SODA text-typing; per product direction we ingest
  * slightly broad and let the pipeline disqualify.
+ *
+ * LATE-ACTIVATION RE-SCAN: brand-new DOTs mostly sit status 'pending'
+ * for days-to-weeks before FMCSA flips them active (verified live
+ * 2026-07-02: only 179 of the trailing ~40k DOTs were 'A'). Because we
+ * filter status_code='A' server-side, a plain frontier cursor would
+ * advance past pending carriers and permanently miss them when they
+ * activate. So each sync starts RESCAN_WINDOW DOTs below the stored
+ * frontier: the A+carrier server filter collapses that window to the
+ * few hundred newly-activated rows (≈1 page), and the (org_id,
+ * dot_number) unique index absorbs the re-seen ones as duplicates.
+ * The stored frontier itself never regresses.
  */
 
 import { env } from "./env.js";
@@ -39,6 +50,10 @@ import type {
 
 const BASE_URL = "https://data.transportation.gov/resource/az4n-8mr2.json";
 const PAGE_SIZE = 1000;
+/** How far below the stored frontier each sync re-scans for carriers
+ *  that were pending on earlier passes and have since activated.
+ *  ~100k DOTs ≈ 6-8 weeks of assignments. */
+const RESCAN_WINDOW = Number(process.env.CRM_FMCSA_RESCAN_WINDOW ?? 100_000);
 /** Pause between pages — polite pacing well under Socrata's anonymous
  *  throttle; with an app token this is still fine at 10 pages/run. */
 const INTER_PAGE_MS = 1100;
@@ -49,7 +64,7 @@ const MAX_RETRIES = 3;
 const SELECT_FIELDS = [
   "dot_number", "legal_name", "dba_name", "email_address", "phone", "cell_phone",
   "phy_street", "phy_city", "phy_state", "phy_zip",
-  "power_units", "total_drivers", "carrier_operation", "carship", "hm_ind",
+  "power_units", "total_drivers", "carrier_operation", "carship", "classdef", "hm_ind",
   "mcs150_date", "add_date", "status_code",
   "interstate_within_100_miles", "interstate_beyond_100_miles",
   "intrastate_within_100_miles", "intrastate_beyond_100_miles",
@@ -157,6 +172,13 @@ function mapRow(row: CensusRow): CarrierLeadRecord | null {
 function icpVerdict(r: CarrierLeadRecord, icp: CrmIcpFilters): "pass" | "fail" | "local_fail" {
   const pu = r.powerUnits ?? 0;
   if (pu < icp.powerUnitsMin || pu > icp.powerUnitsMax) return "fail";
+  // For-hire gate (default on): census classdef is semicolon-joined
+  // (e.g. "PRIVATE PROPERTY;AUTHORIZED FOR HIRE"); any for-hire class
+  // qualifies. Private-only fleets don't buy dispatch software.
+  if (icp.forHireOnly !== false) {
+    const classdef = String(r.raw.classdef ?? "");
+    if (!classdef.includes("AUTHORIZED FOR HIRE")) return "fail";
+  }
   if (icp.states.length > 0 && (!r.phyState || !icp.states.includes(r.phyState))) return "fail";
   if (icp.operationClasses.length > 0 &&
       (!r.carrierOperation || !icp.operationClasses.includes(r.carrierOperation as "A" | "B" | "C"))) {
@@ -192,7 +214,9 @@ export const fmcsaCensusSource: LeadSource = {
     cursor: LeadSourceCursor,
     opts: { maxPages: number },
   ): Promise<FetchNewCarriersResult> {
-    let afterDot = cursor.lastDotNumber ?? 0;
+    const frontier = cursor.lastDotNumber ?? 0;
+    // Start below the frontier to catch late activations (see header).
+    let afterDot = Math.max(0, frontier - RESCAN_WINDOW);
     const records: CarrierLeadRecord[] = [];
     let fetched = 0;
     let exhausted = false;
@@ -217,6 +241,13 @@ export const fmcsaCensusSource: LeadSource = {
       if (rows.length < PAGE_SIZE) { exhausted = true; break; }
     }
 
-    return { records, nextCursor: { lastDotNumber: afterDot }, exhausted, fetched };
+    // Frontier never regresses: a re-scan pass that only saw rows below
+    // the stored frontier keeps it where it was.
+    return {
+      records,
+      nextCursor: { lastDotNumber: Math.max(afterDot, frontier) },
+      exhausted,
+      fetched,
+    };
   },
 };

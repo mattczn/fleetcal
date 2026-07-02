@@ -19,12 +19,17 @@
 
 import { Hono } from "hono";
 import {
+  CRM_EMAIL_STATUSES,
   CRM_LEAD_STATUSES,
+  SEND_BLOCKED_STATUSES,
   resolveCrmSettings,
   type ApiErrorResponse,
   type CrmActivity,
+  type CrmEmail,
   type CrmLead,
   type CrmLeadStatus,
+  type CrmSequence,
+  type CrmSequenceStep,
   type CrmSettings,
   type CrmStats,
   type Database,
@@ -300,8 +305,36 @@ crm.patch("/leads/:id", async (c) => {
       meta: { from: prevStatus, to: body.status },
       actorUserId: userId,
     });
-    // Phase 2 wires unsubscribed/do_not_contact transitions to the
-    // suppression list + enrollment stop here.
+    // Hard-block transitions: suppress the address, stop enrollments,
+    // cancel queued sends — the manual equivalents of the unsubscribe
+    // link. (won/lost/disqualified block sends via SEND_BLOCKED_STATUSES
+    // at send time but don't suppress the address forever.)
+    if (body.status === "unsubscribed" || body.status === "do_not_contact") {
+      const leadEmail = (data as unknown as LeadRow).email as string | null;
+      if (leadEmail) {
+        const { error: suppErr } = await supabase.from("crm_suppressions").insert({
+          org_id: orgId,
+          email: leadEmail.toLowerCase(),
+          reason: body.status === "unsubscribed" ? "unsubscribe" : "manual",
+          lead_id: id,
+        });
+        if (suppErr && suppErr.code !== "23505") {
+          console.error("[PATCH /v1/crm/leads/:id] suppression insert failed:", suppErr.message);
+        }
+      }
+      await supabase
+        .from("crm_enrollments")
+        .update({ status: "stopped", next_send_at: null })
+        .eq("org_id", orgId)
+        .eq("lead_id", id)
+        .in("status", ["active", "paused"]);
+      await supabase
+        .from("crm_emails")
+        .update({ status: "cancelled", error: `lead marked ${body.status}` })
+        .eq("org_id", orgId)
+        .eq("lead_id", id)
+        .in("status", ["pending_approval", "approved"]);
+    }
   }
 
   return c.json({ lead: rowToLead(data as unknown as LeadRow) });
@@ -406,6 +439,444 @@ crm.patch("/settings", requireCapability("crm.manage"), async (c) => {
     return c.json({ error: "update_failed", detail: error.message } satisfies ApiErrorResponse, 500);
   }
   return c.json({ settings: merged });
+});
+
+// ── Sequences (Phase 2) ─────────────────────────────────────────────────
+
+const STEP_COLS = "id,sequence_id,step_order,wait_days,subject_template,body_template";
+
+function rowToStep(r: Record<string, unknown>): CrmSequenceStep {
+  return {
+    id:              r.id as string,
+    sequenceId:      r.sequence_id as string,
+    stepOrder:       r.step_order as number,
+    waitDays:        r.wait_days as number,
+    subjectTemplate: r.subject_template as string,
+    bodyTemplate:    r.body_template as string,
+  };
+}
+
+crm.get("/sequences", async (c) => {
+  const orgId = c.get("orgId");
+  const { data: seqRaw, error } = await supabase
+    .from("crm_sequences")
+    .select("id,name,is_active,created_by,created_at,updated_at")
+    .eq("org_id", orgId)
+    .order("created_at", { ascending: false });
+  if (error) {
+    return c.json({ error: "list_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  }
+  const seqs = (seqRaw ?? []) as Record<string, unknown>[];
+  const ids = seqs.map((s) => s.id as string);
+  const stepsBySeq = new Map<string, CrmSequenceStep[]>();
+  if (ids.length > 0) {
+    const { data: stepRaw } = await supabase
+      .from("crm_sequence_steps")
+      .select(STEP_COLS)
+      .eq("org_id", orgId)
+      .in("sequence_id", ids)
+      .order("step_order", { ascending: true });
+    for (const r of (stepRaw ?? []) as Record<string, unknown>[]) {
+      const step = rowToStep(r);
+      const arr = stepsBySeq.get(step.sequenceId) ?? [];
+      arr.push(step);
+      stepsBySeq.set(step.sequenceId, arr);
+    }
+  }
+  const sequences: CrmSequence[] = seqs.map((s) => ({
+    id:        s.id as string,
+    name:      s.name as string,
+    isActive:  s.is_active as boolean,
+    createdBy: (s.created_by as string | null) ?? undefined,
+    steps:     stepsBySeq.get(s.id as string) ?? [],
+    createdAt: s.created_at as string,
+    updatedAt: s.updated_at as string,
+  }));
+  return c.json({ sequences });
+});
+
+crm.post("/sequences", requireCapability("crm.manage"), async (c) => {
+  const orgId = c.get("orgId");
+  const userId = c.get("userId");
+  const body = await c.req.json<{ name?: string }>();
+  if (!body.name?.trim()) {
+    return c.json({ error: "validation_failed", errors: ["name required"] } satisfies ApiErrorResponse, 400);
+  }
+  const { data, error } = await supabase
+    .from("crm_sequences")
+    .insert({ org_id: orgId, name: body.name.trim(), created_by: userId })
+    .select("id,name,is_active,created_by,created_at,updated_at")
+    .single();
+  if (error || !data) {
+    return c.json({ error: "insert_failed", detail: error?.message } satisfies ApiErrorResponse, 500);
+  }
+  const s = data as Record<string, unknown>;
+  return c.json({
+    sequence: {
+      id: s.id as string, name: s.name as string, isActive: s.is_active as boolean,
+      createdBy: (s.created_by as string | null) ?? undefined, steps: [],
+      createdAt: s.created_at as string, updatedAt: s.updated_at as string,
+    } satisfies CrmSequence,
+  }, 201);
+});
+
+crm.patch("/sequences/:id", requireCapability("crm.manage"), async (c) => {
+  const orgId = c.get("orgId");
+  const id = c.req.param("id");
+  const body = await c.req.json<{ name?: string; isActive?: boolean }>();
+  const update: Database["public"]["Tables"]["crm_sequences"]["Update"] = {};
+  if (body.name?.trim()) update.name = body.name.trim();
+  if (typeof body.isActive === "boolean") update.is_active = body.isActive;
+  if (Object.keys(update).length === 0) {
+    return c.json({ error: "validation_failed", errors: ["nothing to update"] } satisfies ApiErrorResponse, 400);
+  }
+  const { data, error } = await supabase
+    .from("crm_sequences")
+    .update(update)
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .select("id")
+    .maybeSingle();
+  if (error) {
+    return c.json({ error: "update_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  }
+  if (!data) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+  return c.json({ ok: true });
+});
+
+// Replace the full step list transactionally-ish: delete + reinsert.
+// Rendered crm_emails rows keep their snapshots (step_id goes stale via
+// ON DELETE SET NULL — the outbox shows exactly what was rendered).
+crm.put("/sequences/:id/steps", requireCapability("crm.manage"), async (c) => {
+  const orgId = c.get("orgId");
+  const id = c.req.param("id");
+  const body = await c.req.json<{ steps?: Array<Partial<CrmSequenceStep>> }>();
+  if (!Array.isArray(body.steps)) {
+    return c.json({ error: "validation_failed", errors: ["steps array required"] } satisfies ApiErrorResponse, 400);
+  }
+  const errors: string[] = [];
+  body.steps.forEach((s, i) => {
+    if (!s.subjectTemplate?.trim()) errors.push(`step ${i + 1}: subjectTemplate required`);
+    if (!s.bodyTemplate?.trim())    errors.push(`step ${i + 1}: bodyTemplate required`);
+    if (s.waitDays != null && (s.waitDays < 0 || s.waitDays > 90)) errors.push(`step ${i + 1}: waitDays out of range`);
+  });
+  if (errors.length) return badRequestCrm(c, errors);
+
+  const { data: seq } = await supabase
+    .from("crm_sequences")
+    .select("id")
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (!seq) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+
+  await supabase.from("crm_sequence_steps").delete().eq("sequence_id", id).eq("org_id", orgId);
+  if (body.steps.length > 0) {
+    const rows = body.steps.map((s, i) => ({
+      org_id:           orgId,
+      sequence_id:      id,
+      step_order:       i + 1,
+      wait_days:        s.waitDays ?? 0,
+      subject_template: s.subjectTemplate!.trim(),
+      body_template:    s.bodyTemplate!.trim(),
+    }));
+    const { error: insErr } = await supabase.from("crm_sequence_steps").insert(rows);
+    if (insErr) {
+      return c.json({ error: "steps_insert_failed", detail: insErr.message } satisfies ApiErrorResponse, 500);
+    }
+  }
+  const { data: stepRaw } = await supabase
+    .from("crm_sequence_steps")
+    .select(STEP_COLS)
+    .eq("org_id", orgId)
+    .eq("sequence_id", id)
+    .order("step_order", { ascending: true });
+  return c.json({ steps: ((stepRaw ?? []) as Record<string, unknown>[]).map(rowToStep) });
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AnyHonoContext = any;
+function badRequestCrm(c: AnyHonoContext, errors: string[]) {
+  return c.json({ error: "validation_failed", errors } satisfies ApiErrorResponse, 400);
+}
+
+// ── Enrollments (Phase 2) ───────────────────────────────────────────────
+
+crm.post("/leads/:id/enroll", async (c) => {
+  const orgId = c.get("orgId");
+  const userId = c.get("userId");
+  const leadId = c.req.param("id");
+  const body = await c.req.json<{ sequenceId?: string }>();
+  if (!body.sequenceId) {
+    return c.json({ error: "validation_failed", errors: ["sequenceId required"] } satisfies ApiErrorResponse, 400);
+  }
+
+  const { data: leadRaw } = await supabase
+    .from("crm_leads")
+    .select("id,status,email")
+    .eq("id", leadId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  const lead = leadRaw as { id: string; status: string; email: string | null } | null;
+  if (!lead) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+  if ((SEND_BLOCKED_STATUSES as readonly string[]).includes(lead.status)) {
+    return c.json({ error: "lead_blocked", detail: `lead status is ${lead.status}` } satisfies ApiErrorResponse, 409);
+  }
+  if (!lead.email) {
+    return c.json({ error: "lead_has_no_email" } satisfies ApiErrorResponse, 409);
+  }
+  const { data: seq } = await supabase
+    .from("crm_sequences")
+    .select("id,is_active")
+    .eq("id", body.sequenceId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (!seq) return c.json({ error: "sequence_not_found" } satisfies ApiErrorResponse, 404);
+
+  const { data, error } = await supabase
+    .from("crm_enrollments")
+    .insert({
+      org_id: orgId,
+      lead_id: leadId,
+      sequence_id: body.sequenceId,
+      status: "active",
+      current_step: 0,
+      next_send_at: new Date().toISOString(),
+    })
+    .select("id")
+    .single();
+  if (error || !data) {
+    const dup = error?.code === "23505";
+    return c.json(
+      { error: dup ? "already_enrolled" : "insert_failed", detail: error?.message } satisfies ApiErrorResponse,
+      dup ? 409 : 500,
+    );
+  }
+  await logActivity(orgId, leadId, "enrolled", { meta: { sequenceId: body.sequenceId }, actorUserId: userId });
+  await supabase
+    .from("crm_leads")
+    .update({ status: "queued", status_changed_at: new Date().toISOString() })
+    .eq("id", leadId)
+    .eq("org_id", orgId)
+    .in("status", ["new", "enriched"]);
+  return c.json({ enrollmentId: (data as { id: string }).id }, 201);
+});
+
+crm.post("/enrollments/:id/:action", async (c) => {
+  const orgId = c.get("orgId");
+  const userId = c.get("userId");
+  const id = c.req.param("id");
+  const action = c.req.param("action");
+  if (!["pause", "resume", "stop"].includes(action)) {
+    return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+  }
+  const { data: enrRaw } = await supabase
+    .from("crm_enrollments")
+    .select("id,lead_id,status,next_send_at")
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  const enr = enrRaw as { id: string; lead_id: string; status: string; next_send_at: string | null } | null;
+  if (!enr) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+
+  if (action === "pause") {
+    if (enr.status !== "active") {
+      return c.json({ error: "invalid_state", detail: `cannot pause a ${enr.status} enrollment` } satisfies ApiErrorResponse, 409);
+    }
+    await supabase.from("crm_enrollments").update({ status: "paused" }).eq("id", id).eq("org_id", orgId);
+  } else if (action === "resume") {
+    if (enr.status !== "paused") {
+      return c.json({ error: "invalid_state", detail: `cannot resume a ${enr.status} enrollment` } satisfies ApiErrorResponse, 409);
+    }
+    // Anything that came due while paused sends on the next sweep tick.
+    await supabase
+      .from("crm_enrollments")
+      .update({ status: "active", next_send_at: enr.next_send_at ?? new Date().toISOString() })
+      .eq("id", id)
+      .eq("org_id", orgId);
+  } else {
+    await supabase
+      .from("crm_enrollments")
+      .update({ status: "stopped", next_send_at: null })
+      .eq("id", id)
+      .eq("org_id", orgId);
+    await supabase
+      .from("crm_emails")
+      .update({ status: "cancelled", error: "enrollment stopped" })
+      .eq("org_id", orgId)
+      .eq("enrollment_id", id)
+      .in("status", ["pending_approval", "approved"]);
+    await logActivity(orgId, enr.lead_id, "unenrolled", { body: "Sequence stopped manually", actorUserId: userId });
+  }
+  return c.json({ ok: true });
+});
+
+crm.post("/leads/:id/mark-replied", async (c) => {
+  const orgId = c.get("orgId");
+  const userId = c.get("userId");
+  const leadId = c.req.param("id");
+  const { data: lead } = await supabase
+    .from("crm_leads")
+    .select("id,status")
+    .eq("id", leadId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (!lead) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+
+  await supabase
+    .from("crm_enrollments")
+    .update({ status: "stopped", next_send_at: null })
+    .eq("org_id", orgId)
+    .eq("lead_id", leadId)
+    .in("status", ["active", "paused"]);
+  await supabase
+    .from("crm_emails")
+    .update({ status: "cancelled", error: "lead replied" })
+    .eq("org_id", orgId)
+    .eq("lead_id", leadId)
+    .in("status", ["pending_approval", "approved"]);
+  await supabase
+    .from("crm_leads")
+    .update({ status: "interested", status_changed_at: new Date().toISOString() })
+    .eq("id", leadId)
+    .eq("org_id", orgId);
+  await logActivity(orgId, leadId, "email_replied", { body: "Marked replied", actorUserId: userId });
+  // Future: Gmail API polling of the outreach inbox keyed on
+  // In-Reply-To of stored resend_message_ids replaces this manual step.
+  return c.json({ ok: true });
+});
+
+// ── Outbox / approval queue (Phase 2) ───────────────────────────────────
+
+const EMAIL_COLS =
+  "id,lead_id,enrollment_id,step_id,to_email,subject,body,status," +
+  "approved_by,approved_at,sent_at,resend_message_id,error,created_at";
+
+function rowToEmail(r: Record<string, unknown>, leadName?: string): CrmEmail {
+  return {
+    id:              r.id as string,
+    leadId:          r.lead_id as string,
+    enrollmentId:    (r.enrollment_id as string | null) ?? undefined,
+    stepId:          (r.step_id as string | null) ?? undefined,
+    toEmail:         r.to_email as string,
+    subject:         r.subject as string,
+    body:            r.body as string,
+    status:          r.status as CrmEmail["status"],
+    approvedBy:      (r.approved_by as string | null) ?? undefined,
+    approvedAt:      (r.approved_at as string | null) ?? undefined,
+    sentAt:          (r.sent_at as string | null) ?? undefined,
+    resendMessageId: (r.resend_message_id as string | null) ?? undefined,
+    error:           (r.error as string | null) ?? undefined,
+    createdAt:       r.created_at as string,
+    leadName,
+  };
+}
+
+crm.get("/emails", async (c) => {
+  const orgId = c.get("orgId");
+  const url = new URL(c.req.url);
+  const status = url.searchParams.get("status");
+  const limit = Math.min(Number(url.searchParams.get("limit") ?? 100), 500);
+
+  let query = supabase
+    .from("crm_emails")
+    .select(EMAIL_COLS, { count: "exact" })
+    .eq("org_id", orgId);
+  if (status && (CRM_EMAIL_STATUSES as readonly string[]).includes(status)) {
+    query = query.eq("status", status);
+  }
+  const { data, count, error } = await query
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error) {
+    return c.json({ error: "list_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  }
+  const rows = (data ?? []) as unknown as Record<string, unknown>[];
+  // Join lead names for display (one IN query).
+  const leadIds = [...new Set(rows.map((r) => r.lead_id as string))];
+  const nameById = new Map<string, string>();
+  if (leadIds.length > 0) {
+    const { data: leadRows } = await supabase
+      .from("crm_leads")
+      .select("id,legal_name,dba_name")
+      .eq("org_id", orgId)
+      .in("id", leadIds);
+    for (const l of (leadRows ?? []) as Array<{ id: string; legal_name: string; dba_name: string | null }>) {
+      nameById.set(l.id, l.dba_name || l.legal_name);
+    }
+  }
+  return c.json({
+    emails: rows.map((r) => rowToEmail(r, nameById.get(r.lead_id as string))),
+    total: count ?? 0,
+  });
+});
+
+// Approve a batch. Body {ids?: string[]} — omitted = approve ALL
+// pending_approval for the org (the one-click daily approval). The
+// sweep still re-checks suppression at send time; approval is consent,
+// not a bypass.
+crm.post("/emails/approve-batch", requireCapability("crm.manage"), async (c) => {
+  const orgId = c.get("orgId");
+  const userId = c.get("userId");
+  const body = await c.req.json<{ ids?: string[] }>().catch(() => ({} as { ids?: string[] }));
+
+  let query = supabase
+    .from("crm_emails")
+    .update({ status: "approved", approved_by: userId, approved_at: new Date().toISOString() })
+    .eq("org_id", orgId)
+    .eq("status", "pending_approval");
+  if (Array.isArray(body.ids) && body.ids.length > 0) {
+    query = query.in("id", body.ids);
+  }
+  const { data, error } = await query.select("id");
+  if (error) {
+    return c.json({ error: "approve_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  }
+  // Kick an immediate send pass so approval feels instant when inside
+  // the send window (fire-and-forget; the 10-min cron is the backstop).
+  void import("../jobs/crmSendSweep.js").then(({ runCrmSendSweep }) =>
+    runCrmSendSweep().catch((err) => console.error("[approve-batch] inline send pass failed:", err)),
+  );
+  return c.json({ approved: data?.length ?? 0 });
+});
+
+crm.post("/emails/:id/cancel", async (c) => {
+  const orgId = c.get("orgId");
+  const id = c.req.param("id");
+  const { data, error } = await supabase
+    .from("crm_emails")
+    .update({ status: "cancelled", error: "cancelled from outbox" })
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .in("status", ["pending_approval", "approved", "failed"])
+    .select("id");
+  if (error) {
+    return c.json({ error: "cancel_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  }
+  if (!data || data.length === 0) {
+    return c.json({ error: "not_cancellable" } satisfies ApiErrorResponse, 409);
+  }
+  return c.json({ ok: true });
+});
+
+// Retry a failed send: back to approved; the next sweep picks it up.
+crm.post("/emails/:id/retry", requireCapability("crm.manage"), async (c) => {
+  const orgId = c.get("orgId");
+  const id = c.req.param("id");
+  const { data, error } = await supabase
+    .from("crm_emails")
+    .update({ status: "approved", error: null })
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .eq("status", "failed")
+    .select("id");
+  if (error) {
+    return c.json({ error: "retry_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  }
+  if (!data || data.length === 0) {
+    return c.json({ error: "not_retryable" } satisfies ApiErrorResponse, 409);
+  }
+  return c.json({ ok: true });
 });
 
 // ── Manual sync trigger ─────────────────────────────────────────────────

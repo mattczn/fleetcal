@@ -20,12 +20,13 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
 import {
   X, Loader2, Mail, MailWarning, MailCheck, Phone, MessageSquare,
-  ArrowRightLeft, ListPlus, ListX, BellOff, Cog, MapPin, Truck, Landmark,
+  ArrowRightLeft, ListPlus, ListX, BellOff, Cog, MapPin, Truck, Landmark, Send,
 } from 'lucide-react';
-import type { CrmActivity, CrmActivityKind, CrmLead, CrmLeadStatus } from '@fleetcal/types';
-import { CRM_LEAD_STATUSES } from '@fleetcal/types';
+import type { CrmActivity, CrmActivityKind, CrmLead, CrmLeadStatus, CrmSequence } from '@fleetcal/types';
+import { CRM_LEAD_STATUSES, SEND_BLOCKED_STATUSES } from '@fleetcal/types';
 import { railway, RailwayError } from '@/lib/railway';
 import { StyledSelect } from '@/components/ui/StyledSelect';
 import { STATUS_META, StatusChip, OPERATION_CLASS_LABELS, isLocalLead, fmtRelativeTime } from './crmMeta';
@@ -81,7 +82,14 @@ export default function LeadDetailDrawer({ leadId, onClose, onLeadUpdated }: Pro
   const [noteText,     setNoteText]     = useState('');
   const [noteSaving,   setNoteSaving]   = useState(false);
 
-  const refetch = useCallback(async () => {
+  // ── Outreach (Phase 2) state ────────────────────────────────────────
+  const [sequences,     setSequences]     = useState<CrmSequence[]>([]);
+  const [selectedSeqId, setSelectedSeqId] = useState('');
+  const [enrolling,     setEnrolling]     = useState(false);
+  const [outreachMsg,   setOutreachMsg]   = useState<string | null>(null);
+  const [markingReplied, setMarkingReplied] = useState(false);
+
+  const refetch = useCallback(async (): Promise<CrmLead | null> => {
     try {
       const res = await railway.crmGetLead(leadId);
       setLead(res.lead);
@@ -90,14 +98,26 @@ export default function LeadDetailDrawer({ leadId, onClose, onLeadUpdated }: Pro
       setPhone(res.lead.phone ?? '');
       setCell(res.lead.cellPhone ?? '');
       setError(null);
+      return res.lead;
     } catch (e) {
       setError(e instanceof RailwayError ? `Failed to load lead (${e.status})` : 'Failed to load lead.');
+      return null;
     } finally {
       setLoading(false);
     }
   }, [leadId]);
 
   useEffect(() => { void refetch(); }, [refetch]);
+
+  // Active sequences for the enroll picker (fire-and-forget; the
+  // section shows a hint if the list is empty or the fetch fails).
+  useEffect(() => {
+    let cancelled = false;
+    railway.crmListSequences()
+      .then(res => { if (!cancelled) setSequences(res.sequences.filter(s => s.isActive)); })
+      .catch(() => { /* picker just stays empty */ });
+    return () => { cancelled = true; };
+  }, []);
 
   // Esc closes — matches the app's modal affordances.
   useEffect(() => {
@@ -149,6 +169,49 @@ export default function LeadDetailDrawer({ leadId, onClose, onLeadUpdated }: Pro
       setError('Failed to change status.');
     } finally {
       setStatusSaving(false);
+    }
+  }
+
+  async function enroll() {
+    if (!lead || !selectedSeqId || enrolling) return;
+    setEnrolling(true);
+    setOutreachMsg(null);
+    try {
+      await railway.crmEnroll(lead.id, selectedSeqId);
+      setOutreachMsg('Enrolled.');
+      setSelectedSeqId('');
+      // Refetch pulls the server-written `enrolled` activity + the
+      // new/enriched → queued status bump.
+      const next = await refetch();
+      if (next) onLeadUpdated?.(next);
+    } catch (e) {
+      const detail = e instanceof RailwayError && e.detail && typeof e.detail === 'object'
+        ? (e.detail as { error?: string }).error
+        : undefined;
+      setOutreachMsg(
+        detail === 'already_enrolled'   ? 'Already enrolled in this sequence.'
+        : detail === 'lead_blocked'     ? 'Lead status blocks outreach.'
+        : detail === 'lead_has_no_email' ? 'Lead has no email on file.'
+        : 'Enroll failed.',
+      );
+    } finally {
+      setEnrolling(false);
+    }
+  }
+
+  async function markReplied() {
+    if (!lead || markingReplied) return;
+    setMarkingReplied(true);
+    setOutreachMsg(null);
+    try {
+      await railway.crmMarkReplied(lead.id);
+      setOutreachMsg('Marked replied — sequences stopped.');
+      const next = await refetch();
+      if (next) onLeadUpdated?.(next);
+    } catch {
+      setOutreachMsg('Failed to mark replied.');
+    } finally {
+      setMarkingReplied(false);
     }
   }
 
@@ -258,6 +321,79 @@ export default function LeadDetailDrawer({ leadId, onClose, onLeadUpdated }: Pro
                     </div>
                   )}
                 </div>
+              </Section>
+
+              {/* Outreach (Phase 2) — enroll picker + mark replied. */}
+              <Section title="Outreach" icon={Send}>
+                {(() => {
+                  const blocked = (SEND_BLOCKED_STATUSES as readonly CrmLeadStatus[]).includes(lead.status);
+                  const noEmail = !lead.email;
+                  const disabled = blocked || noEmail;
+                  return (
+                    <div className="flex flex-col gap-2">
+                      {sequences.length === 0 ? (
+                        <div className="text-[12.5px]" style={{ color: 'var(--gc-text-3)' }}>
+                          No active sequences.{' '}
+                          <Link href="/crm/sequences" style={{ color: '#1a73e8', textDecoration: 'none', fontWeight: 600 }}>
+                            Create one →
+                          </Link>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <div className="flex-1 min-w-0">
+                            <StyledSelect
+                              value={selectedSeqId}
+                              disabled={disabled || enrolling}
+                              onChange={e => setSelectedSeqId(e.target.value)}
+                              style={{
+                                ...inputStyle,
+                                width: '100%', borderRadius: 8, padding: '7px 10px', fontSize: 13,
+                                opacity: disabled ? 0.6 : 1,
+                              }}>
+                              <option value="">Enroll in a sequence…</option>
+                              {sequences.map(s => (
+                                <option key={s.id} value={s.id}>
+                                  {s.name} ({s.steps.length} step{s.steps.length === 1 ? '' : 's'})
+                                </option>
+                              ))}
+                            </StyledSelect>
+                          </div>
+                          <button onClick={() => void enroll()}
+                            disabled={disabled || !selectedSeqId || enrolling}
+                            className="text-[12px] font-semibold px-3.5 py-1.5 rounded-lg transition-opacity disabled:opacity-40 shrink-0"
+                            style={{ background: '#1a73e8', color: '#fff' }}>
+                            {enrolling ? 'Enrolling…' : 'Enroll'}
+                          </button>
+                        </div>
+                      )}
+                      {disabled && (
+                        <div className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
+                          {blocked
+                            ? `Enrollment is blocked while the lead is ${STATUS_META[lead.status].label.toLowerCase()}.`
+                            : 'Add an email address above to enroll this lead.'}
+                        </div>
+                      )}
+                      {outreachMsg && (
+                        <div className="text-[12px] font-semibold"
+                          style={{ color: outreachMsg === 'Enrolled.' || outreachMsg.startsWith('Marked replied') ? '#188038' : '#c5221f' }}>
+                          {outreachMsg}
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between gap-2 pt-1"
+                        style={{ borderTop: '1px solid var(--gc-border-light)', paddingTop: 8 }}>
+                        <span className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
+                          Replied off-thread? Stops sequences, cancels queued sends, moves to Interested.
+                        </span>
+                        <button onClick={() => void markReplied()} disabled={markingReplied}
+                          className="inline-flex items-center gap-1.5 text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50 shrink-0"
+                          style={{ background: '#e0f7fa', color: '#00838f' }}>
+                          {markingReplied ? <Loader2 size={11} className="animate-spin" /> : <MailCheck size={11} />}
+                          Mark replied
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()}
               </Section>
 
               {/* Address */}

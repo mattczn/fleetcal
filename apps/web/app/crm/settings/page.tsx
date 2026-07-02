@@ -8,9 +8,9 @@
  * crm.manage (the API enforces this on PATCH /v1/crm/settings — the
  * UI mirrors it by disabling the form).
  *
- * Email outreach settings (send window, daily cap, identity, talk
- * track) ship in Phase 2 — shown here read-only so the operator knows
- * where they'll live.
+ * Phase 2 added the email-outreach card: daily send cap, send window,
+ * auto-send, sender identity, and the CAN-SPAM physical-address footer
+ * (sends REFUSE while it's empty — enforced in the send sweep).
  */
 
 import React, { useEffect, useState } from 'react';
@@ -20,6 +20,7 @@ import AppShell from '@/components/nav/AppShell';
 import RequireCap from '@/components/auth/RequireCap';
 import RequireInternalOrg from '@/components/crm/RequireInternalOrg';
 import { OPERATION_CLASS_LABELS } from '@/components/crm/crmMeta';
+import { StyledSelect } from '@/components/ui/StyledSelect';
 import { usePermissions } from '@/lib/usePermissions';
 import { railway, RailwayError } from '@/lib/railway';
 import type { CrmSettings } from '@fleetcal/types';
@@ -55,6 +56,19 @@ function CrmSettingsPageInner() {
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
 
+  // ── Outreach form state (Phase 2) ──────────────────────────────────
+  const [dailyCap,     setDailyCap]     = useState('');
+  const [startHour,    setStartHour]    = useState('9');
+  const [endHour,      setEndHour]      = useState('17');
+  const [timezone,     setTimezone]     = useState('America/Denver');
+  const [weekdaysOnly, setWeekdaysOnly] = useState(true);
+  const [autoSend,     setAutoSend]     = useState(false);
+  const [fromName,     setFromName]     = useState('');
+  const [replyTo,      setReplyTo]      = useState('');
+  const [addressFooter, setAddressFooter] = useState('');
+  const [outreachSaving, setOutreachSaving] = useState(false);
+  const [outreachMsg,    setOutreachMsg]    = useState<string | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -67,6 +81,15 @@ function CrmSettingsPageInner() {
         setStates(s.icp.states.join(', '));
         setOpClasses(new Set(s.icp.operationClasses));
         setLocalOnly(s.icp.localOnly);
+        setDailyCap(String(s.dailySendCap));
+        setStartHour(String(s.sendWindow.startHour));
+        setEndHour(String(s.sendWindow.endHour));
+        setTimezone(s.sendWindow.timezone || 'America/Denver');
+        setWeekdaysOnly(s.sendWindow.weekdaysOnly);
+        setAutoSend(s.autoSend);
+        setFromName(s.fromName);
+        setReplyTo(s.replyTo);
+        setAddressFooter(s.physicalAddressFooter);
       } catch (e) {
         if (!cancelled) {
           setError(e instanceof RailwayError ? `Failed to load settings (${e.status})` : 'Failed to load settings.');
@@ -123,10 +146,56 @@ function CrmSettingsPageInner() {
     }
   }
 
+  async function handleSaveOutreach() {
+    if (!settings || outreachSaving || !canManage) return;
+    const cap = Number(dailyCap);
+    if (!Number.isFinite(cap) || cap < 1) {
+      setOutreachMsg('Daily send cap must be at least 1.');
+      return;
+    }
+    const start = Number(startHour);
+    const end   = Number(endHour);
+    if (start >= end) {
+      setOutreachMsg('Send window start must be before end.');
+      return;
+    }
+    if (!timezone.trim()) {
+      setOutreachMsg('Timezone is required (IANA, e.g. America/Denver).');
+      return;
+    }
+    setOutreachSaving(true);
+    setOutreachMsg(null);
+    try {
+      const { settings: next } = await railway.crmPatchSettings({
+        dailySendCap: cap,
+        sendWindow: {
+          startHour: start,
+          endHour:   end,
+          timezone:  timezone.trim(),
+          weekdaysOnly,
+        },
+        autoSend,
+        fromName: fromName.trim(),
+        replyTo:  replyTo.trim(),
+        physicalAddressFooter: addressFooter.trim(),
+      });
+      setSettings(next);
+      setOutreachMsg('Saved.');
+    } catch (e) {
+      setOutreachMsg(e instanceof RailwayError ? `Save failed (${e.status})` : 'Save failed.');
+    } finally {
+      setOutreachSaving(false);
+    }
+  }
+
   const inputStyle: React.CSSProperties = {
     background: 'var(--gc-bg)',
     border:     '1px solid var(--gc-border-light)',
     color:      'var(--gc-text-1)',
+  };
+
+  const hourSelectStyle: React.CSSProperties = {
+    ...inputStyle, borderRadius: 8, padding: '7px 10px', fontSize: 13,
   };
 
   return (
@@ -261,45 +330,163 @@ function CrmSettingsPageInner() {
               </div>
             </section>
 
-            {/* Phase-2 placeholder — email outreach settings */}
-            <section className="rounded-2xl px-5 py-4"
-              style={{ background: 'var(--gc-surface)', border: '1px dashed var(--gc-border)' }}>
-              <div className="flex items-center gap-2 mb-1">
-                <Mail size={14} style={{ color: 'var(--gc-text-3)' }} />
-                <h2 className="text-[14px] font-bold" style={{ color: 'var(--gc-text-1)' }}>
-                  Email outreach
-                </h2>
-                <span className="px-2 py-0.5 rounded-lg text-[10px] font-extrabold"
-                  style={{ background: '#f3e8fd', color: '#7b1fa2' }}>
-                  Phase 2
-                </span>
+            {/* Email outreach (Phase 2) */}
+            <section className="rounded-2xl px-5 py-4 flex flex-col gap-4"
+              style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border-light)' }}>
+              <div>
+                <div className="flex items-center gap-2">
+                  <Mail size={14} style={{ color: 'var(--gc-text-3)' }} />
+                  <h2 className="text-[14px] font-bold" style={{ color: 'var(--gc-text-1)' }}>
+                    Email outreach
+                  </h2>
+                </div>
+                <p className="text-[12px] mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
+                  Deliverability + identity settings for sequence sends. The FROM domain itself
+                  comes from the server environment — never fleetcal.app.
+                </p>
               </div>
-              <p className="text-[12px] mb-3" style={{ color: 'var(--gc-text-3)' }}>
-                Send window, daily cap, sender identity, and the call-queue talk track arrive with
-                outreach sequences in Phase 2. Current stored values (read-only):
-              </p>
-              <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-[12.5px]">
-                <ReadOnlyFact label="Daily send cap" value={String(settings.dailySendCap)} />
-                <ReadOnlyFact label="Send window"
-                  value={`${settings.sendWindow.startHour}:00–${settings.sendWindow.endHour}:00 ${settings.sendWindow.timezone}${settings.sendWindow.weekdaysOnly ? ' · weekdays' : ''}`} />
-                <ReadOnlyFact label="Auto-send" value={settings.autoSend ? 'On' : 'Off (approval batch)'} />
-                <ReadOnlyFact label="From name" value={settings.fromName || '—'} />
-                <ReadOnlyFact label="Reply-to" value={settings.replyTo || '—'} />
-                <ReadOnlyFact label="CAN-SPAM footer" value={settings.physicalAddressFooter ? 'Set' : 'Not set (sends refuse)'} />
+
+              {/* Daily send cap */}
+              <div className="flex items-start gap-3">
+                <label className="text-[12.5px] font-semibold w-36 shrink-0 pt-1.5" style={{ color: 'var(--gc-text-2)' }}>
+                  Daily send cap
+                </label>
+                <div className="flex-1 min-w-0">
+                  <input type="number" min={1} value={dailyCap} disabled={!canManage}
+                    onChange={e => setDailyCap(e.target.value)}
+                    className="w-24 rounded-lg px-2.5 py-1.5 text-[13px] outline-none tabular-nums disabled:opacity-60"
+                    style={inputStyle} />
+                  <div className="text-[11px] mt-1" style={{ color: 'var(--gc-text-3)' }}>
+                    Warm-up: start at 25, ramp to 50 → 100 over ~3 weeks.
+                  </div>
+                </div>
+              </div>
+
+              {/* Send window */}
+              <div className="flex items-start gap-3">
+                <label className="text-[12.5px] font-semibold w-36 shrink-0 pt-1.5" style={{ color: 'var(--gc-text-2)' }}>
+                  Send window
+                </label>
+                <div className="flex-1 min-w-0 flex flex-col gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <StyledSelect value={startHour} disabled={!canManage}
+                      onChange={e => setStartHour(e.target.value)}
+                      style={hourSelectStyle}>
+                      {Array.from({ length: 24 }, (_, h) => (
+                        <option key={h} value={String(h)}>{h}:00</option>
+                      ))}
+                    </StyledSelect>
+                    <span className="text-[12px]" style={{ color: 'var(--gc-text-3)' }}>to</span>
+                    <StyledSelect value={endHour} disabled={!canManage}
+                      onChange={e => setEndHour(e.target.value)}
+                      style={hourSelectStyle}>
+                      {Array.from({ length: 24 }, (_, h) => (
+                        <option key={h} value={String(h)}>{h}:00</option>
+                      ))}
+                    </StyledSelect>
+                    <input type="text" value={timezone} disabled={!canManage}
+                      onChange={e => setTimezone(e.target.value)}
+                      placeholder="America/Denver"
+                      className="w-44 rounded-lg px-2.5 py-1.5 text-[13px] outline-none disabled:opacity-60"
+                      style={inputStyle} />
+                  </div>
+                  <label className="inline-flex items-center gap-2 text-[13px] cursor-pointer select-none"
+                    style={{ color: 'var(--gc-text-1)', opacity: canManage ? 1 : 0.6 }}>
+                    <input type="checkbox"
+                      checked={weekdaysOnly}
+                      disabled={!canManage}
+                      onChange={e => setWeekdaysOnly(e.target.checked)}
+                      style={{ accentColor: '#1a73e8' }} />
+                    Weekdays only
+                  </label>
+                </div>
+              </div>
+
+              {/* Auto-send */}
+              <div className="flex items-start gap-3">
+                <label className="text-[12.5px] font-semibold w-36 shrink-0 pt-0.5" style={{ color: 'var(--gc-text-2)' }}>
+                  Auto-send
+                </label>
+                <div className="flex-1 min-w-0">
+                  <label className="inline-flex items-center gap-2 text-[13px] cursor-pointer select-none"
+                    style={{ color: 'var(--gc-text-1)', opacity: canManage ? 1 : 0.6 }}>
+                    <input type="checkbox"
+                      checked={autoSend}
+                      disabled={!canManage}
+                      onChange={e => setAutoSend(e.target.checked)}
+                      style={{ accentColor: '#1a73e8' }} />
+                    Send automatically without approval
+                  </label>
+                  <div className="text-[11px] mt-1" style={{ color: autoSend ? '#c5221f' : 'var(--gc-text-3)' }}>
+                    {autoSend
+                      ? 'Warning: outbox approval is skipped — rendered emails send as soon as the window opens.'
+                      : 'Off = approval-batch mode: sends wait in the outbox until approved.'}
+                  </div>
+                </div>
+              </div>
+
+              {/* From name */}
+              <div className="flex items-center gap-3">
+                <label className="text-[12.5px] font-semibold w-36 shrink-0" style={{ color: 'var(--gc-text-2)' }}>
+                  From name
+                </label>
+                <input type="text" value={fromName} disabled={!canManage}
+                  onChange={e => setFromName(e.target.value)}
+                  placeholder="FleetCal"
+                  className="w-64 rounded-lg px-2.5 py-1.5 text-[13px] outline-none disabled:opacity-60"
+                  style={inputStyle} />
+              </div>
+
+              {/* Reply-to */}
+              <div className="flex items-center gap-3">
+                <label className="text-[12.5px] font-semibold w-36 shrink-0" style={{ color: 'var(--gc-text-2)' }}>
+                  Reply-to
+                </label>
+                <input type="email" value={replyTo} disabled={!canManage}
+                  onChange={e => setReplyTo(e.target.value)}
+                  placeholder="you@example.com"
+                  className="w-64 rounded-lg px-2.5 py-1.5 text-[13px] outline-none disabled:opacity-60"
+                  style={inputStyle} />
+              </div>
+
+              {/* Physical address footer */}
+              <div className="flex items-start gap-3">
+                <label className="text-[12.5px] font-semibold w-36 shrink-0 pt-1.5" style={{ color: 'var(--gc-text-2)' }}>
+                  Physical address
+                </label>
+                <div className="flex-1 min-w-0">
+                  <textarea rows={3} value={addressFooter} disabled={!canManage}
+                    onChange={e => setAddressFooter(e.target.value)}
+                    placeholder={'Systematica LLC\n123 Main St\nOgden, UT 84401'}
+                    className="w-full rounded-lg px-2.5 py-1.5 text-[13px] outline-none resize-y disabled:opacity-60"
+                    style={inputStyle} />
+                  <div className="text-[11px] mt-1 font-medium"
+                    style={{ color: addressFooter.trim() ? 'var(--gc-text-3)' : '#c5221f' }}>
+                    Required — sends refuse while this is empty (CAN-SPAM). Appended to every
+                    outreach email alongside the unsubscribe link.
+                  </div>
+                </div>
+              </div>
+
+              {/* Save */}
+              <div className="flex items-center justify-end gap-3 pt-1"
+                style={{ borderTop: '1px solid var(--gc-border-light)', paddingTop: 12 }}>
+                {outreachMsg && (
+                  <span className="text-[12px] font-semibold"
+                    style={{ color: outreachMsg === 'Saved.' ? '#188038' : '#c5221f' }}>
+                    {outreachMsg}
+                  </span>
+                )}
+                <button onClick={() => void handleSaveOutreach()} disabled={!canManage || outreachSaving}
+                  className="text-[12.5px] font-semibold px-4 py-2 rounded-lg transition-opacity disabled:opacity-50"
+                  style={{ background: '#1a73e8', color: '#fff' }}>
+                  {outreachSaving ? 'Saving…' : 'Save outreach settings'}
+                </button>
               </div>
             </section>
           </>
         )}
       </div>
     </AppShell>
-  );
-}
-
-function ReadOnlyFact({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <div className="text-[10.5px] font-semibold" style={{ color: 'var(--gc-text-3)' }}>{label}</div>
-      <div className="font-medium" style={{ color: 'var(--gc-text-2)' }}>{value}</div>
-    </div>
   );
 }

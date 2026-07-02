@@ -19,6 +19,7 @@ import type { MiddlewareHandler } from "hono";
 import { env } from "../lib/env.js";
 import { sweepAutoDeliver } from "../lib/autoDeliverSweep.js";
 import { runCrmFmcsaSyncSweep, syncCrmLeadsForOrg } from "../jobs/crmFmcsaSyncSweep.js";
+import { runCrmSendSweep } from "../jobs/crmSendSweep.js";
 
 const internal = new Hono();
 
@@ -75,6 +76,22 @@ internal.post("/crm/fmcsa-sync", async (c) => {
     console.error("[POST /v1/internal/crm/fmcsa-sync] failed:", err);
     return c.json(
       { error: "sync_failed", detail: (err as Error).message },
+      500,
+    );
+  }
+});
+
+// Manual CRM outreach send-sweep trigger (dev/ops). Runs both passes
+// (materialize + send) for every org in CRM_INTERNAL_ORG_IDS — same
+// code path as the 10-minute cron. Idempotent.
+internal.post("/crm/send-sweep", async (c) => {
+  try {
+    const result = await runCrmSendSweep();
+    return c.json(result);
+  } catch (err) {
+    console.error("[POST /v1/internal/crm/send-sweep] failed:", err);
+    return c.json(
+      { error: "sweep_failed", detail: (err as Error).message },
       500,
     );
   }
