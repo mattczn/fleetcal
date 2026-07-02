@@ -129,17 +129,52 @@ export async function syncCrmLeadsForOrg(
     cursor = res.nextCursor;
 
     if (res.records.length > 0) {
-      const rows = res.records.map((r) => leadInsertRow(orgId, r));
       disqualified = res.records.filter((r) => r.failsLocalProxy).length;
-      // ignoreDuplicates → ON CONFLICT DO NOTHING on (org_id, dot_number).
-      // Returned data contains only the actually-inserted rows.
-      const { data: insertedRows, error } = await supabase
+      // Postgres won't accept our PARTIAL unique index (idx_crm_leads_org_dot
+      // WHERE dot_number IS NOT NULL) as an ON CONFLICT target — the
+      // constraint-lookup for `upsert(..., onConflict:'org_id,dot_number')`
+      // fails ("no unique or exclusion constraint matching..."). So we
+      // pre-filter existing DOTs for this org and insert only the new
+      // rows. Idempotent enough at 6h cadence + single-replica cron;
+      // any last-second race still hits the partial index and errors,
+      // which we catch below and count as a duplicate.
+      const dots = res.records.map((r) => r.dotNumber);
+      const { data: existing } = await supabase
         .from("crm_leads")
-        .upsert(rows, { onConflict: "org_id,dot_number", ignoreDuplicates: true })
-        .select("id");
-      if (error) throw new Error(`crm_leads insert failed: ${error.message}`);
-      inserted = insertedRows?.length ?? 0;
-      duplicates = res.records.length - inserted;
+        .select("dot_number")
+        .eq("org_id", orgId)
+        .in("dot_number", dots);
+      const existingSet = new Set(
+        ((existing ?? []) as Array<{ dot_number: number }>).map((r) => Number(r.dot_number)),
+      );
+      const fresh = res.records.filter((r) => !existingSet.has(r.dotNumber));
+      duplicates = res.records.length - fresh.length;
+
+      if (fresh.length > 0) {
+        const rows = fresh.map((r) => leadInsertRow(orgId, r));
+        const { data: insertedRows, error } = await supabase
+          .from("crm_leads")
+          .insert(rows)
+          .select("id");
+        if (error) {
+          // Last-second race with another writer: fall back to per-row
+          // inserts, treating 23505 as a duplicate.
+          if (error.code === "23505") {
+            let ok = 0;
+            for (const row of rows) {
+              const { error: e2 } = await supabase.from("crm_leads").insert(row).select("id").single();
+              if (!e2) ok++;
+              else if (e2.code === "23505") duplicates++;
+              else throw new Error(`crm_leads insert failed: ${e2.message}`);
+            }
+            inserted = ok;
+          } else {
+            throw new Error(`crm_leads insert failed: ${error.message}`);
+          }
+        } else {
+          inserted = insertedRows?.length ?? 0;
+        }
+      }
     }
 
     await persistCursor(cursor, null);
