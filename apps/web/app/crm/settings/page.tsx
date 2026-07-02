@@ -52,6 +52,12 @@ function CrmSettingsPageInner() {
   const [states, setStates] = useState('');
   const [opClasses, setOpClasses] = useState<Set<'A' | 'B' | 'C'>>(new Set());
   const [localOnly, setLocalOnly] = useState(false);
+  const [forHireOnly, setForHireOnly] = useState(true);
+  const [ageMin, setAgeMin] = useState('');
+  const [ageMax, setAgeMax] = useState('');
+  const [mcs150Months, setMcs150Months] = useState('');
+  const [rescanning, setRescanning] = useState(false);
+  const [rescanMsg, setRescanMsg] = useState<string | null>(null);
 
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
@@ -81,6 +87,10 @@ function CrmSettingsPageInner() {
         setStates(s.icp.states.join(', '));
         setOpClasses(new Set(s.icp.operationClasses));
         setLocalOnly(s.icp.localOnly);
+        setForHireOnly(s.icp.forHireOnly !== false);
+        setAgeMin(String(s.icp.establishedYearsMin ?? 1));
+        setAgeMax(String(s.icp.establishedYearsMax ?? 15));
+        setMcs150Months(String(s.icp.mcs150SinceMonths ?? 24));
         setDailyCap(String(s.dailySendCap));
         setStartHour(String(s.sendWindow.startHour));
         setEndHour(String(s.sendWindow.endHour));
@@ -134,6 +144,10 @@ function CrmSettingsPageInner() {
           states: parsedStates,
           operationClasses: classes,
           localOnly,
+          forHireOnly,
+          establishedYearsMin: Math.max(0, Number(ageMin) || 1),
+          establishedYearsMax: Math.max(1, Number(ageMax) || 15),
+          mcs150SinceMonths:   Math.max(1, Number(mcs150Months) || 24),
         },
       });
       setSettings(next);
@@ -252,6 +266,75 @@ function CrmSettingsPageInner() {
                   style={inputStyle} />
               </div>
 
+              {/* Established age range — filters out paperwork-only new
+                  registrations AND ancient carriers with entrenched software. */}
+              <div className="flex items-start gap-3">
+                <label className="text-[12.5px] font-semibold w-36 shrink-0 pt-1.5" style={{ color: 'var(--gc-text-2)' }}>
+                  Established
+                </label>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <input type="number" min={0} value={ageMin} disabled={!canManage}
+                      onChange={e => setAgeMin(e.target.value)}
+                      className="w-20 rounded-lg px-2.5 py-1.5 text-[13px] outline-none disabled:opacity-60"
+                      style={inputStyle} />
+                    <span className="text-[12px]" style={{ color: 'var(--gc-text-3)' }}>to</span>
+                    <input type="number" min={1} value={ageMax} disabled={!canManage}
+                      onChange={e => setAgeMax(e.target.value)}
+                      className="w-20 rounded-lg px-2.5 py-1.5 text-[13px] outline-none disabled:opacity-60"
+                      style={inputStyle} />
+                    <span className="text-[12px]" style={{ color: 'var(--gc-text-3)' }}>years since FMCSA registration</span>
+                  </div>
+                  <div className="text-[11px] mt-1" style={{ color: 'var(--gc-text-3)' }}>
+                    Drops carriers younger than the min (paperwork-only, no revenue) and older than the
+                    max (usually locked into legacy software). Default 1–15.
+                  </div>
+                </div>
+              </div>
+
+              {/* MCS-150 recency — proves the carrier is actively operating. */}
+              <div className="flex items-start gap-3">
+                <label className="text-[12.5px] font-semibold w-36 shrink-0 pt-1.5" style={{ color: 'var(--gc-text-2)' }}>
+                  MCS-150 filed in
+                </label>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[12px]" style={{ color: 'var(--gc-text-3)' }}>the last</span>
+                    <input type="number" min={1} value={mcs150Months} disabled={!canManage}
+                      onChange={e => setMcs150Months(e.target.value)}
+                      className="w-20 rounded-lg px-2.5 py-1.5 text-[13px] outline-none disabled:opacity-60"
+                      style={inputStyle} />
+                    <span className="text-[12px]" style={{ color: 'var(--gc-text-3)' }}>months</span>
+                  </div>
+                  <div className="text-[11px] mt-1" style={{ color: 'var(--gc-text-3)' }}>
+                    Filters out zombie carriers — DOTs on the books but not actively hauling.
+                    Default 24 months (one biennial update cycle).
+                  </div>
+                </div>
+              </div>
+
+              {/* For-hire only — private fleets don't buy dispatch software. */}
+              <div className="flex items-start gap-3">
+                <label className="text-[12.5px] font-semibold w-36 shrink-0 pt-0.5" style={{ color: 'var(--gc-text-2)' }}>
+                  For-hire only
+                </label>
+                <div className="flex-1 min-w-0">
+                  <label className="inline-flex items-center gap-2 text-[13px] cursor-pointer select-none"
+                    style={{ color: 'var(--gc-text-1)', opacity: canManage ? 1 : 0.6 }}>
+                    <input type="checkbox"
+                      checked={forHireOnly}
+                      disabled={!canManage}
+                      onChange={e => setForHireOnly(e.target.checked)}
+                      style={{ accentColor: '#1a73e8' }} />
+                    Only ingest carriers with authorized-for-hire status
+                  </label>
+                  <div className="text-[11px] mt-1" style={{ color: 'var(--gc-text-3)' }}>
+                    Drops private fleets (Nestle, landscapers). Recommended on — private fleets don't
+                    buy dispatch software.
+                  </div>
+                </div>
+              </div>
+
               {/* States */}
               <div className="flex items-start gap-3">
                 <label className="text-[12.5px] font-semibold w-36 shrink-0 pt-1.5" style={{ color: 'var(--gc-text-2)' }}>
@@ -313,20 +396,39 @@ function CrmSettingsPageInner() {
                 </div>
               </div>
 
-              {/* Save */}
-              <div className="flex items-center justify-end gap-3 pt-1"
+              {/* Save + rescan */}
+              <div className="flex items-center justify-between gap-3 pt-1 flex-wrap"
                 style={{ borderTop: '1px solid var(--gc-border-light)', paddingTop: 12 }}>
-                {saveMsg && (
-                  <span className="text-[12px] font-semibold"
-                    style={{ color: saveMsg === 'Saved.' ? '#188038' : '#c5221f' }}>
-                    {saveMsg}
-                  </span>
-                )}
-                <button onClick={() => void handleSave()} disabled={!canManage || saving}
-                  className="text-[12.5px] font-semibold px-4 py-2 rounded-lg transition-opacity disabled:opacity-50"
-                  style={{ background: '#1a73e8', color: '#fff' }}>
-                  {saving ? 'Saving…' : 'Save ICP filters'}
+                <button
+                  onClick={async () => {
+                    if (!canManage || rescanning) return;
+                    if (!confirm('Reset the FMCSA cursor to DOT 1 and rescan the whole census with the current ICP? Existing leads are never deleted; new matches will be inserted.')) return;
+                    setRescanning(true); setRescanMsg(null);
+                    try {
+                      const { result } = await railway.crmSync({ fromScratch: true });
+                      setRescanMsg(`Ingested +${result.inserted} new leads (${result.duplicates} dup, ${result.disqualified} disqualified, cursor now at DOT ${result.cursorDotNumber ?? '?'}).`);
+                    } catch (e) {
+                      setRescanMsg(e instanceof RailwayError ? `Rescan failed (${e.status})` : 'Rescan failed.');
+                    } finally { setRescanning(false); }
+                  }}
+                  disabled={!canManage || rescanning}
+                  className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-opacity disabled:opacity-50"
+                  style={{ background: 'var(--gc-bg)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border-light)' }}>
+                  {rescanning ? 'Rescanning…' : 'Rescan census from scratch'}
                 </button>
+                <div className="flex items-center gap-3">
+                  {(rescanMsg || saveMsg) && (
+                    <span className="text-[12px] font-semibold"
+                      style={{ color: (saveMsg === 'Saved.' || rescanMsg?.startsWith('Ingested')) ? '#188038' : '#c5221f' }}>
+                      {rescanMsg ?? saveMsg}
+                    </span>
+                  )}
+                  <button onClick={() => void handleSave()} disabled={!canManage || saving}
+                    className="text-[12.5px] font-semibold px-4 py-2 rounded-lg transition-opacity disabled:opacity-50"
+                    style={{ background: '#1a73e8', color: '#fff' }}>
+                    {saving ? 'Saving…' : 'Save ICP filters'}
+                  </button>
+                </div>
               </div>
             </section>
 

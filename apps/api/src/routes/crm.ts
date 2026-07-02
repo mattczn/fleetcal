@@ -883,10 +883,18 @@ crm.post("/emails/:id/retry", requireCapability("crm.manage"), async (c) => {
 
 crm.post("/sync", requireCapability("crm.manage"), async (c) => {
   const orgId = c.get("orgId");
-  const body = await c.req.json<{ maxPages?: number }>().catch(() => ({} as { maxPages?: number }));
+  const body = await c.req
+    .json<{ maxPages?: number; fromScratch?: boolean }>()
+    .catch(() => ({} as { maxPages?: number; fromScratch?: boolean }));
   try {
     const result = await syncCrmLeadsForOrg(orgId, {
-      maxPages: body.maxPages != null ? Math.min(body.maxPages, 25) : undefined,
+      // A from-scratch walk of the whole established-carrier set needs
+      // ~30 pages; the normal button click caps lower to keep UI-
+      // triggered runs snappy.
+      maxPages: body.maxPages != null
+        ? Math.min(body.maxPages, 50)
+        : (body.fromScratch ? 30 : undefined),
+      fromScratch: body.fromScratch,
     });
     return c.json({ result });
   } catch (err) {

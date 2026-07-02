@@ -1598,10 +1598,8 @@ class RailwayClient {
   }
   /** Trigger an FMCSA census ingest pass. crm.manage only (server-
    *  enforced). maxPages caps how many census pages one click pulls. */
-  crmSync(maxPages?: number) {
-    return this.req<{ result: CrmSyncResult }>(
-      'POST', '/v1/crm/sync', maxPages != null ? { maxPages } : {},
-    );
+  crmSync(opts: { maxPages?: number; fromScratch?: boolean } = {}) {
+    return this.req<{ result: CrmSyncResult }>('POST', '/v1/crm/sync', opts);
   }
 
   // ── CRM outreach (Phase 2): sequences, enrollments, outbox ───────────

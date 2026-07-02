@@ -23,13 +23,16 @@
 
 import { env } from "../lib/env.js";
 import { supabase } from "../lib/supabase.js";
-import { fmcsaCensusSource, probeMaxDotNumber } from "../lib/fmcsaCensus.js";
+import { fmcsaCensusSource } from "../lib/fmcsaCensus.js";
 import type { CarrierLeadRecord, LeadSourceCursor } from "../lib/leadSource.js";
 import { resolveCrmSettings, type CrmSyncResult, type Database, type Json } from "@fleetcal/types";
 
 type CrmLeadInsert = Database["public"]["Tables"]["crm_leads"]["Insert"];
 
-const DEFAULT_MAX_PAGES = Number(process.env.CRM_FMCSA_SYNC_MAX_PAGES ?? 10);
+/** Ceiling on pages per run. The initial backfill (~28k established
+ *  ICP carriers) fits in ~29 pages of 1000; 30 lets one tick finish it
+ *  cleanly. Ongoing runs terminate early once the walk exhausts. */
+const DEFAULT_MAX_PAGES = Number(process.env.CRM_FMCSA_SYNC_MAX_PAGES ?? 30);
 
 export interface CrmSyncSweepResult {
   skipped: boolean;
@@ -71,7 +74,7 @@ function leadInsertRow(orgId: string, r: CarrierLeadRecord): CrmLeadInsert {
 /** Run one org's sync. Exported for the manual trigger endpoints. */
 export async function syncCrmLeadsForOrg(
   orgId: string,
-  opts: { maxPages?: number; resetCursorToDot?: number } = {},
+  opts: { maxPages?: number; resetCursorToDot?: number; fromScratch?: boolean } = {},
 ): Promise<CrmSyncResult> {
   const maxPages = opts.maxPages ?? DEFAULT_MAX_PAGES;
   const source = fmcsaCensusSource;
@@ -95,14 +98,16 @@ export async function syncCrmLeadsForOrg(
   let cursor: LeadSourceCursor =
     ((stateRow as { cursor?: LeadSourceCursor } | null)?.cursor) ?? {};
 
-  if (opts.resetCursorToDot != null) {
+  if (opts.fromScratch) {
+    cursor = { lastDotNumber: 0 };
+  } else if (opts.resetCursorToDot != null) {
     cursor = { lastDotNumber: opts.resetCursorToDot };
   } else if (cursor.lastDotNumber == null) {
-    // First run: seed at settings override or the dataset's current max
-    // so we ingest only carriers registered from go-live onward.
-    cursor = {
-      lastDotNumber: settings.syncStartDotNumber ?? (await probeMaxDotNumber()),
-    };
+    // First run: walk the whole dataset from DOT 1 forward. The ICP
+    // server-side filters (add_date + mcs150_date + PU) collapse the
+    // 4.4M-row dataset to the ~28k matching carriers, so a fresh walk
+    // is ~29 pages and finishes in a single sync tick.
+    cursor = { lastDotNumber: 0 };
   }
 
   const persistCursor = async (c: LeadSourceCursor, lastError: string | null) => {

@@ -143,6 +143,18 @@ export interface CrmIcpFilters {
    *  "AUTHORIZED FOR HIRE"). Private fleets haul their own goods and
    *  don't buy dispatch software. Default true. */
   forHireOnly?: boolean;
+  /** Minimum years since FMCSA registration. Filters out brand-new
+   *  paperwork-only carriers that don't yet have revenue to buy
+   *  software. Default 1. Set 0 to include new registrants. */
+  establishedYearsMin?: number;
+  /** Maximum years since FMCSA registration. Older carriers are more
+   *  likely to have entrenched software they won't switch off. Default
+   *  15 (2010+). Set very high (e.g. 100) to include all. */
+  establishedYearsMax?: number;
+  /** Must have filed an MCS-150 biennial update within the last N
+   *  months (proves the carrier is actively operating, not a zombie
+   *  DOT with a paperwork trail). Default 24. */
+  mcs150SinceMonths?: number;
 }
 
 export interface CrmSettings {
@@ -180,6 +192,9 @@ export const CRM_SETTINGS_DEFAULTS: CrmSettings = {
     operationClasses: ["A", "B", "C"],
     localOnly: false,
     forHireOnly: true,
+    establishedYearsMin: 1,
+    establishedYearsMax: 15,
+    mcs150SinceMonths: 24,
   },
   dailySendCap: 25,
   sendWindow: { startHour: 9, endHour: 17, timezone: "America/Denver", weekdaysOnly: true },

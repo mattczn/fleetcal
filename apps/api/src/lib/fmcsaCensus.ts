@@ -11,32 +11,28 @@
  *     through SoQL's `::number` cast — critical because DOT numbers
  *     are about to roll from 7 to 8 digits, where lexicographic
  *     ordering breaks ('10000001' < '9999984').
- *   - add_date is "YYYYMMDD" text.
- *   - The *_within/beyond_100_miles fields are DRIVER COUNTS, not Y/N
- *     flags ("intrastate_within_100_miles":"9"). The "local carrier"
- *     proxy is: some within-100 drivers AND zero beyond-100 drivers.
+ *   - add_date is "YYYYMMDD" text (8 chars).
+ *   - mcs150_date is "YYYYMMDD HHMM" text (13 chars). Both compare
+ *     correctly as strings when the compared value is same-length.
+ *   - The *_within/beyond_100_miles fields are DRIVER COUNTS, not Y/N.
  *   - carship is semicolon-joined multi-value ("C", "C;S", "B", …).
  *     C = carrier. Server-side LIKE '%C%' is safe (no other token
  *     contains the letter C); we still re-check precisely client-side.
  *
- * Sync strategy: keyset pagination on dot_number (monotonically
- * assigned → "new carriers" = dot_number > cursor). NOT $offset (deep
- * offsets on a 4.4M-row dataset) and NOT add_date (text format, not
- * unique). ICP filters (power units, states, operation class) apply
- * CLIENT-side after Number() coercion — cheap at 1000-row pages and
- * avoids fighting SODA text-typing; per product direction we ingest
- * slightly broad and let the pipeline disqualify.
+ * TARGET: ESTABLISHED CARRIERS.
+ * We don't target brand-new registrations (paperwork-only, no revenue,
+ * don't buy software). We target established for-hire fleets running
+ * 4–10 trucks that have outgrown spreadsheets: registered 1–15 years
+ * ago, still filing MCS-150s (proves actively operating). The census
+ * has ~28,700 such carriers nationally at default ICP.
  *
- * LATE-ACTIVATION RE-SCAN: brand-new DOTs mostly sit status 'pending'
- * for days-to-weeks before FMCSA flips them active (verified live
- * 2026-07-02: only 179 of the trailing ~40k DOTs were 'A'). Because we
- * filter status_code='A' server-side, a plain frontier cursor would
- * advance past pending carriers and permanently miss them when they
- * activate. So each sync starts RESCAN_WINDOW DOTs below the stored
- * frontier: the A+carrier server filter collapses that window to the
- * few hundred newly-activated rows (≈1 page), and the (org_id,
- * dot_number) unique index absorbs the re-seen ones as duplicates.
- * The stored frontier itself never regresses.
+ * Sync strategy: forward walk on dot_number from 0, pushing date +
+ * fleet-size filters server-side so pages return only qualifying
+ * rows. Cursor persists after every page so a mid-run crash resumes
+ * cleanly. Once cursor >= max-matching-DOT the walk is done —
+ * subsequent runs mostly no-op (an occasional match reappears when an
+ * old carrier files a fresh MCS-150). The (org_id, dot_number) unique
+ * index absorbs re-seen rows as duplicates on any overlap.
  */
 
 import { env } from "./env.js";
@@ -50,12 +46,8 @@ import type {
 
 const BASE_URL = "https://data.transportation.gov/resource/az4n-8mr2.json";
 const PAGE_SIZE = 1000;
-/** How far below the stored frontier each sync re-scans for carriers
- *  that were pending on earlier passes and have since activated.
- *  ~100k DOTs ≈ 6-8 weeks of assignments. */
-const RESCAN_WINDOW = Number(process.env.CRM_FMCSA_RESCAN_WINDOW ?? 100_000);
 /** Pause between pages — polite pacing well under Socrata's anonymous
- *  throttle; with an app token this is still fine at 10 pages/run. */
+ *  throttle; with an app token this is still fine at 30 pages/run. */
 const INTER_PAGE_MS = 1100;
 const BACKOFF_BASE_MS = 1000;
 const BACKOFF_MAX_MS = 15_000;
@@ -82,16 +74,61 @@ function toInt(v: string | undefined): number | undefined {
 
 /** "YYYYMMDD" → "YYYY-MM-DD" (census date format), else undefined. */
 function toIsoDate(v: string | undefined): string | undefined {
-  if (!v || !/^\d{8}$/.test(v)) return undefined;
+  if (!v || !/^\d{8}/.test(v)) return undefined;
   return `${v.slice(0, 4)}-${v.slice(4, 6)}-${v.slice(6, 8)}`;
 }
 
+/** Date `N` years ago as census YYYYMMDD text. */
+function yearsAgoYmd(years: number): string {
+  const d = new Date();
+  d.setFullYear(d.getFullYear() - years);
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}${m}${day}`;
+}
+function monthsAgoYmd(months: number): string {
+  const d = new Date();
+  d.setUTCMonth(d.getUTCMonth() - months);
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}${m}${day}`;
+}
+
+/** Build the SODA WHERE clause from the ICP settings. Filters that can
+ *  run server-side (dates, numeric power units, active + carrier + states)
+ *  land here; for-hire and radius proxies stay client-side. */
+function buildWhere(icp: CrmIcpFilters, afterDot: number): string {
+  const parts: string[] = [
+    `dot_number::number > ${afterDot}`,
+    `status_code='A'`,
+    `carship like '%C%'`,
+    `power_units::number >= ${icp.powerUnitsMin}`,
+    `power_units::number <= ${icp.powerUnitsMax}`,
+  ];
+  const minAge = icp.establishedYearsMin ?? 1;
+  const maxAge = icp.establishedYearsMax ?? 15;
+  // Established at least N years ago = add_date <= (today - N years).
+  parts.push(`add_date <= '${yearsAgoYmd(minAge)}'`);
+  parts.push(`add_date >= '${yearsAgoYmd(maxAge)}'`);
+  const mcs150Months = icp.mcs150SinceMonths ?? 24;
+  // mcs150_date is 13-char "YYYYMMDD HHMM"; compare to 8-char boundary
+  // — SoQL string compare works because the boundary is shorter and
+  // matches the date prefix.
+  parts.push(`mcs150_date >= '${monthsAgoYmd(mcs150Months)}'`);
+  if (icp.states.length > 0) {
+    const quoted = icp.states.map((s) => `'${s.replace(/'/g, "")}'`).join(",");
+    parts.push(`phy_state in(${quoted})`);
+  }
+  return parts.join(" AND ");
+}
+
 /** Fetch one SODA page with exponential backoff on 429/5xx. */
-async function fetchPage(afterDot: number): Promise<CensusRow[]> {
+async function fetchPage(icp: CrmIcpFilters, afterDot: number): Promise<CensusRow[]> {
   const params = new URLSearchParams({
     $select: SELECT_FIELDS,
-    // status_code A = active; carship containing C = carrier record.
-    $where: `dot_number::number > ${afterDot} AND status_code='A' AND carship like '%C%'`,
+    $where: buildWhere(icp, afterDot),
     $order: "dot_number::number ASC",
     $limit: String(PAGE_SIZE),
   });
@@ -166,12 +203,9 @@ function mapRow(row: CensusRow): CarrierLeadRecord | null {
   };
 }
 
-/** Client-side ICP filter (power units / states / operation class).
- *  Returns 'pass', 'fail', or 'local_fail' (passes ICP but fails the
- *  soft local proxy while localOnly is on). */
+/** Client-side ICP filter (for-hire + operation class + local proxy).
+ *  All numeric/date filters run server-side in buildWhere(). */
 function icpVerdict(r: CarrierLeadRecord, icp: CrmIcpFilters): "pass" | "fail" | "local_fail" {
-  const pu = r.powerUnits ?? 0;
-  if (pu < icp.powerUnitsMin || pu > icp.powerUnitsMax) return "fail";
   // For-hire gate (default on): census classdef is semicolon-joined
   // (e.g. "PRIVATE PROPERTY;AUTHORIZED FOR HIRE"); any for-hire class
   // qualifies. Private-only fleets don't buy dispatch software.
@@ -179,7 +213,6 @@ function icpVerdict(r: CarrierLeadRecord, icp: CrmIcpFilters): "pass" | "fail" |
     const classdef = String(r.raw.classdef ?? "");
     if (!classdef.includes("AUTHORIZED FOR HIRE")) return "fail";
   }
-  if (icp.states.length > 0 && (!r.phyState || !icp.states.includes(r.phyState))) return "fail";
   if (icp.operationClasses.length > 0 &&
       (!r.carrierOperation || !icp.operationClasses.includes(r.carrierOperation as "A" | "B" | "C"))) {
     return "fail";
@@ -188,8 +221,9 @@ function icpVerdict(r: CarrierLeadRecord, icp: CrmIcpFilters): "pass" | "fail" |
   return "pass";
 }
 
-/** Probe the dataset's current max DOT number — used to seed a fresh
- *  cursor so the first sync starts at "now" instead of 4.4M rows ago. */
+/** Probe the dataset's current max DOT number — kept for the internal
+ *  reset endpoint (rewind cursor to 0 → this replaces the old
+ *  "seed at frontier" behavior). */
 export async function probeMaxDotNumber(): Promise<number> {
   const params = new URLSearchParams({
     $select: "dot_number",
@@ -214,16 +248,17 @@ export const fmcsaCensusSource: LeadSource = {
     cursor: LeadSourceCursor,
     opts: { maxPages: number },
   ): Promise<FetchNewCarriersResult> {
-    const frontier = cursor.lastDotNumber ?? 0;
-    // Start below the frontier to catch late activations (see header).
-    let afterDot = Math.max(0, frontier - RESCAN_WINDOW);
+    // Forward walk on dot_number: cursor is the highest DOT we've
+    // fully processed. Starts at 0 for a fresh walk (initial backfill
+    // covers the ~28k matching carriers over a few sync ticks).
+    let afterDot = cursor.lastDotNumber ?? 0;
     const records: CarrierLeadRecord[] = [];
     let fetched = 0;
     let exhausted = false;
 
     for (let page = 0; page < opts.maxPages; page++) {
       if (page > 0) await sleep(INTER_PAGE_MS);
-      const rows = await fetchPage(afterDot);
+      const rows = await fetchPage(icp, afterDot);
       fetched += rows.length;
       for (const row of rows) {
         const mapped = mapRow(row);
@@ -233,21 +268,14 @@ export const fmcsaCensusSource: LeadSource = {
         if (verdict === "local_fail") mapped.failsLocalProxy = true;
         records.push(mapped);
       }
-      // Advance the keyset cursor to the last row of the page even when
-      // every row filtered out — progress must not stall on a stretch
-      // of non-ICP carriers.
+      // Advance cursor to the last row of the page even when every row
+      // filtered out client-side, so a client-filter-heavy stretch
+      // (e.g. lots of private fleets) doesn't stall the walk.
       const lastDot = toInt(rows[rows.length - 1]?.dot_number);
       if (lastDot) afterDot = lastDot;
       if (rows.length < PAGE_SIZE) { exhausted = true; break; }
     }
 
-    // Frontier never regresses: a re-scan pass that only saw rows below
-    // the stored frontier keeps it where it was.
-    return {
-      records,
-      nextCursor: { lastDotNumber: Math.max(afterDot, frontier) },
-      exhausted,
-      fetched,
-    };
+    return { records, nextCursor: { lastDotNumber: afterDot }, exhausted, fetched };
   },
 };
