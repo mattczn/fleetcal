@@ -96,6 +96,13 @@ export const env = {
   resendWebhookSecret:     process.env.RESEND_WEBHOOK_SECRET || undefined,
   /** Public API base URL used to build unsubscribe links. */
   publicApiUrl:            process.env.PUBLIC_API_URL || "https://fleetcalapi-production.up.railway.app",
+  /** Email-verification provider slug. Only 'never_bounce' shipped
+   *  today; the code path exists to swap in ZeroBounce / Kickbox /
+   *  Bouncer without touching route or job code. */
+  emailVerifierProvider:   process.env.EMAIL_VERIFIER_PROVIDER || "never_bounce",
+  /** NeverBounce API key (secret_XXXX). Unset = the verify endpoints
+   *  fail loudly and enrollment falls back to require manual verify. */
+  neverBounceApiKey:       process.env.NEVERBOUNCE_API_KEY || undefined,
 } as const;
 
 export const isProd = env.nodeEnv === "production";

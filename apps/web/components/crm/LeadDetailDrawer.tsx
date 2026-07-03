@@ -328,7 +328,8 @@ export default function LeadDetailDrawer({ leadId, onClose, onLeadUpdated }: Pro
                 {(() => {
                   const blocked = (SEND_BLOCKED_STATUSES as readonly CrmLeadStatus[]).includes(lead.status);
                   const noEmail = !lead.email;
-                  const disabled = blocked || noEmail;
+                  const notVerifiedValid = !!lead.email && lead.emailVerificationStatus !== 'valid';
+                  const disabled = blocked || noEmail || notVerifiedValid;
                   return (
                     <div className="flex flex-col gap-2">
                       {sequences.length === 0 ? (
@@ -370,7 +371,11 @@ export default function LeadDetailDrawer({ leadId, onClose, onLeadUpdated }: Pro
                         <div className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
                           {blocked
                             ? `Enrollment is blocked while the lead is ${STATUS_META[lead.status].label.toLowerCase()}.`
-                            : 'Add an email address above to enroll this lead.'}
+                            : noEmail
+                            ? 'Add an email address above to enroll this lead.'
+                            : lead.emailVerificationStatus == null
+                            ? "Verify this address first — click 'Verify 100' on the leads page. Only 'valid' addresses may be enrolled."
+                            : `Email verification: ${lead.emailVerificationStatus}. Only 'valid' addresses may be enrolled.`}
                         </div>
                       )}
                       {outreachMsg && (

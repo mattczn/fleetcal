@@ -50,6 +50,32 @@ export const SEND_BLOCKED_STATUSES: readonly CrmLeadStatus[] = [
 export const CRM_LEAD_SOURCES = ["fmcsa_census", "manual"] as const;
 export type CrmLeadSource = (typeof CRM_LEAD_SOURCES)[number];
 
+/**
+ * Per-lead email verification verdict. Set by the batch verifier
+ * (NeverBounce today; interface allows swap). `null` = unverified. A
+ * lead's email must be `valid` before the send sweep will materialize
+ * a step for it and before enrollment is allowed — everything else
+ * routes to the call queue instead of cold email.
+ */
+export const CRM_EMAIL_VERIFICATION_STATUSES = [
+  "valid",       // safe to send
+  "invalid",     // hard-bounces if you send
+  "catchall",    // domain accepts everything but delivery uncertain
+  "disposable",  // Guerrilla/tempmail — always treat as invalid
+  "unknown",     // provider couldn't reach the server; retry later
+] as const;
+export type CrmEmailVerificationStatus = (typeof CRM_EMAIL_VERIFICATION_STATUSES)[number];
+
+/** Statuses that mean "do NOT cold-email this lead" (route to call
+ *  queue instead). `catchall` is included by default because the
+ *  bounce-risk is real; a future setting can loosen this per-org. */
+export const NON_SENDABLE_VERIFICATION_STATUSES: readonly CrmEmailVerificationStatus[] = [
+  "invalid",
+  "catchall",
+  "disposable",
+  "unknown",
+];
+
 export const CRM_ACTIVITY_KINDS = [
   "note",
   "status_change",
@@ -112,6 +138,9 @@ export interface CrmLead {
   ownerUserId?: string;
   nextActionAt?: string;
   callAttempts: number;
+  emailVerificationStatus?: CrmEmailVerificationStatus;
+  emailVerifiedAt?: string;
+  emailVerificationProvider?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -304,6 +333,8 @@ export interface CrmListLeadsQuery {
   hasEmail?: boolean;
   /** Filter to "local" leads per the radius-count proxy. */
   local?: boolean;
+  /** 'unverified' | one of CrmEmailVerificationStatus. */
+  verification?: "unverified" | CrmEmailVerificationStatus;
   q?: string;
   limit?: number;
   offset?: number;

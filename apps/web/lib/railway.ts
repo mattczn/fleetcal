@@ -1435,6 +1435,8 @@ class RailwayClient {
         trailerId: number | null;
         trailerName: string | null;
         inspectionDate: string;
+        kind: 'pre_trip' | 'post_trip';
+        cleanlinessFlagged: boolean;
         hasDefects: boolean;
         defectCount: number;
         itemCount: number;
@@ -1459,6 +1461,8 @@ class RailwayClient {
         trailerId: number | null;
         trailer: { name: string | null; trailer_number: string | null } | null;
         inspectionDate: string;
+        kind: 'pre_trip' | 'post_trip';
+        cleanlinessFlagged: boolean;
         items:        Array<{ id: string; section: string; label: string; status: 'pass'|'fail'|'na'; notes?: string }>;
         trailerItems: Array<{ id: string; section: string; label: string; status: 'pass'|'fail'|'na'; notes?: string }>;
         notes: string | null;
@@ -1600,6 +1604,19 @@ class RailwayClient {
    *  enforced). maxPages caps how many census pages one click pulls. */
   crmSync(opts: { maxPages?: number; fromScratch?: boolean } = {}) {
     return this.req<{ result: CrmSyncResult }>('POST', '/v1/crm/sync', opts);
+  }
+  /** Run the next N unverified-email leads for this org through the
+   *  configured verifier (NeverBounce). Any verdict other than 'valid'
+   *  routes the lead to the call queue. crm.manage only. */
+  crmVerifyEmails(opts: { count?: number; leadIds?: string[] } = {}) {
+    return this.req<{
+      result: {
+        attempted: number;
+        byVerdict: Partial<Record<'valid' | 'invalid' | 'catchall' | 'disposable' | 'unknown', number>>;
+        routedToCallQueue: number;
+        aborted?: string;
+      };
+    }>('POST', '/v1/crm/verify-emails', opts);
   }
 
   // ── CRM outreach (Phase 2): sequences, enrollments, outbox ───────────

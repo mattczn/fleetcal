@@ -179,7 +179,7 @@ async function materializeDue(orgId: string, settings: CrmSettings): Promise<num
     // Lead pre-checks (cheap filter; the HARD check re-runs at send time).
     const { data: leadRaw } = await supabase
       .from("crm_leads")
-      .select("id,source,legal_name,dba_name,email,phy_city,phy_state,power_units,status,unsubscribe_token")
+      .select("id,source,legal_name,dba_name,email,phy_city,phy_state,power_units,status,unsubscribe_token,email_verification_status")
       .eq("id", enr.lead_id)
       .eq("org_id", orgId)
       .maybeSingle();
@@ -195,6 +195,19 @@ async function materializeDue(orgId: string, settings: CrmSettings): Promise<num
     }
     if (!lead.email) {
       await stopEnrollment(enr.id, orgId, "stopped", "Sequence stopped: lead has no email address", enr.lead_id);
+      continue;
+    }
+    // Belt-and-braces email-verification guard. Enrollment already
+    // requires 'valid', but a manual DB tweak or a status downgrade
+    // between enrollment and materialization must not slip a bad
+    // address onto the wire. Unverified emails don't fail — the sweep
+    // just defers and picks them up once verification runs.
+    const verificationStatus = (leadRow.email_verification_status as string | null) ?? null;
+    if (verificationStatus !== "valid") {
+      if (verificationStatus == null) {
+        continue; // stay enrolled; will send after batch verification lands 'valid'
+      }
+      await stopEnrollment(enr.id, orgId, "stopped", `Sequence stopped: email verification is ${verificationStatus}`, enr.lead_id);
       continue;
     }
     const { data: suppressed } = await supabase

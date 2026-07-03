@@ -18,14 +18,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Target, Search, X, Loader2, ChevronLeft, ChevronRight, RefreshCw,
-  Mail, MailX, Settings as SettingsIcon, ListOrdered, Inbox,
+  Mail, MailX, Settings as SettingsIcon, ListOrdered, Inbox, ShieldCheck,
 } from 'lucide-react';
 import Link from 'next/link';
 import AppShell from '@/components/nav/AppShell';
 import RequireCap from '@/components/auth/RequireCap';
 import RequireInternalOrg from '@/components/crm/RequireInternalOrg';
 import LeadDetailDrawer from '@/components/crm/LeadDetailDrawer';
-import { STATUS_META, StatusChip, isLocalLead } from '@/components/crm/crmMeta';
+import { STATUS_META, StatusChip, VerificationBadge, isLocalLead } from '@/components/crm/crmMeta';
 import { Th, Td, fmtShortDate, FastTooltip } from '@/components/queue/QueueTablePrimitives';
 import { StyledSelect } from '@/components/ui/StyledSelect';
 import { usePermissions } from '@/lib/usePermissions';
@@ -55,6 +55,7 @@ function CrmPageInner() {
   const [puMin,    setPuMin]    = useState('');
   const [puMax,    setPuMax]    = useState('');
   const [hasEmail, setHasEmail] = useState<'' | 'true' | 'false'>('');
+  const [verification, setVerification] = useState<'' | 'unverified' | 'valid' | 'invalid' | 'catchall' | 'disposable' | 'unknown'>('');
   const [localOnly, setLocalOnly] = useState(false);
   const [search,   setSearch]   = useState('');
   const [page,     setPage]     = useState(0);
@@ -71,7 +72,7 @@ function CrmPageInner() {
   }, [state, search, puMin, puMax]);
 
   // Any filter change resets to page 0.
-  useEffect(() => { setPage(0); }, [status, hasEmail, localOnly, debounced]);
+  useEffect(() => { setPage(0); }, [status, hasEmail, verification, localOnly, debounced]);
 
   // ── Data ────────────────────────────────────────────────────────────
   const [leads,   setLeads]   = useState<CrmLead[]>([]);
@@ -93,6 +94,7 @@ function CrmPageInner() {
         puMin:    debounced.puMin ? Number(debounced.puMin) : undefined,
         puMax:    debounced.puMax ? Number(debounced.puMax) : undefined,
         hasEmail: hasEmail === '' ? undefined : hasEmail === 'true',
+        verification: verification || undefined,
         local:    localOnly || undefined,
         q:        debounced.q || undefined,
         limit:    PAGE_SIZE,
@@ -108,7 +110,7 @@ function CrmPageInner() {
     } finally {
       if (id === fetchId.current) setLoading(false);
     }
-  }, [status, hasEmail, localOnly, debounced, page]);
+  }, [status, hasEmail, verification, localOnly, debounced, page]);
 
   const fetchStats = useCallback(async () => {
     try {
@@ -140,6 +142,30 @@ function CrmPageInner() {
       setSyncResult(e instanceof RailwayError ? `Sync failed (${e.status})` : 'Sync failed.');
     } finally {
       setSyncing(false);
+    }
+  }
+
+  // ── Verify emails (Phase 2.5) ───────────────────────────────────────
+  const [verifying,     setVerifying]     = useState(false);
+  const [verifyResult,  setVerifyResult]  = useState<string | null>(null);
+
+  async function handleVerify(count: number) {
+    if (verifying) return;
+    setVerifying(true); setVerifyResult(null);
+    try {
+      const { result } = await railway.crmVerifyEmails({ count });
+      if (result.aborted) {
+        setVerifyResult(`Aborted: ${result.aborted}`);
+      } else {
+        const bits = Object.entries(result.byVerdict).map(([k, v]) => `${v} ${k}`).join(', ');
+        setVerifyResult(`Verified ${result.attempted} · ${bits || 'no verdicts'}${result.routedToCallQueue ? ` · ${result.routedToCallQueue} → call queue` : ''}`);
+      }
+      void fetchLeads();
+      void fetchStats();
+    } catch (e) {
+      setVerifyResult(e instanceof RailwayError ? `Verify failed (${e.status})` : 'Verify failed.');
+    } finally {
+      setVerifying(false);
     }
   }
 
@@ -210,12 +236,29 @@ function CrmPageInner() {
               </span>
             )}
             {canManage && (
-              <button onClick={() => void handleSync()} disabled={syncing}
-                className="inline-flex items-center gap-1.5 text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors disabled:opacity-60"
-                style={{ background: '#1a73e8', color: '#fff' }}>
-                {syncing ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-                Sync FMCSA
-              </button>
+              <>
+                {verifyResult && (
+                  <span className="text-[12px] font-semibold px-2.5 py-1 rounded-lg"
+                    style={verifyResult.startsWith('Verified')
+                      ? { background: '#e6f4ea', color: '#188038' }
+                      : { background: '#fee2e2', color: '#991b1b' }}>
+                    {verifyResult}
+                  </span>
+                )}
+                <button onClick={() => void handleVerify(100)} disabled={verifying}
+                  title="Verify the next 100 unverified email addresses via NeverBounce. Non-'valid' verdicts route to the call queue."
+                  className="inline-flex items-center gap-1.5 text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors disabled:opacity-60"
+                  style={{ background: 'var(--gc-bg)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border-light)' }}>
+                  {verifying ? <Loader2 size={12} className="animate-spin" /> : <ShieldCheck size={12} />}
+                  Verify 100
+                </button>
+                <button onClick={() => void handleSync()} disabled={syncing}
+                  className="inline-flex items-center gap-1.5 text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors disabled:opacity-60"
+                  style={{ background: '#1a73e8', color: '#fff' }}>
+                  {syncing ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                  Sync FMCSA
+                </button>
+              </>
             )}
           </div>
 
@@ -294,6 +337,18 @@ function CrmPageInner() {
               <option value="">Email: any</option>
               <option value="true">Has email</option>
               <option value="false">No email</option>
+            </StyledSelect>
+            <StyledSelect
+              value={verification}
+              onChange={e => setVerification(e.target.value as typeof verification)}
+              style={{ ...filterInputStyle, borderRadius: 8, padding: '7px 10px', fontSize: 12.5 }}>
+              <option value="">Verify: any</option>
+              <option value="unverified">Unverified</option>
+              <option value="valid">Verified valid</option>
+              <option value="invalid">Invalid</option>
+              <option value="catchall">Catchall</option>
+              <option value="disposable">Disposable</option>
+              <option value="unknown">Unknown</option>
             </StyledSelect>
             <label className="inline-flex items-center gap-1.5 text-[12.5px] font-medium cursor-pointer select-none"
               style={{ color: 'var(--gc-text-2)' }}>
@@ -380,9 +435,12 @@ function CrmPageInner() {
                         </Td>
                         <Td>
                           {l.email ? (
-                            <FastTooltip text={l.email}>
-                              <Mail size={14} style={{ color: '#188038' }} />
-                            </FastTooltip>
+                            <div className="inline-flex items-center gap-1.5">
+                              <FastTooltip text={l.email}>
+                                <Mail size={14} style={{ color: '#188038' }} />
+                              </FastTooltip>
+                              <VerificationBadge status={l.emailVerificationStatus} />
+                            </div>
                           ) : (
                             <FastTooltip text="No email on file">
                               <MailX size={14} style={{ color: 'var(--gc-text-3)', opacity: 0.5 }} />

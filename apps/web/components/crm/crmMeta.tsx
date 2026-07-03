@@ -10,7 +10,9 @@
  * light tint for chip backgrounds.
  */
 
-import type { CrmLead, CrmLeadStatus } from '@fleetcal/types';
+import type { CrmEmailVerificationStatus, CrmLead, CrmLeadStatus } from '@fleetcal/types';
+import { ShieldCheck, ShieldAlert, ShieldOff, HelpCircle } from 'lucide-react';
+import { FastTooltip } from '@/components/queue/QueueTablePrimitives';
 
 export const STATUS_META: Record<CrmLeadStatus, { label: string; tint: string; tintLight: string }> = {
   new:            { label: 'New',            tint: '#455a64', tintLight: '#eceff1' },
@@ -35,6 +37,37 @@ export function StatusChip({ status }: { status: CrmLeadStatus }) {
       {meta.label}
     </span>
   );
+}
+
+/** Small verification badge shown next to a lead's email icon. Only
+ *  `valid` addresses may be enrolled in outreach; everything else
+ *  routes to the call queue by the verifier. Unverified renders as a
+ *  neutral hint so a batch that hasn't been run yet is obvious. */
+export function VerificationBadge({
+  status,
+}: { status?: CrmEmailVerificationStatus | null }) {
+  if (!status) {
+    return (
+      <FastTooltip text="Email not yet verified. Click 'Verify 100' to batch-check.">
+        <HelpCircle size={12} style={{ color: 'var(--gc-text-3)', opacity: 0.6 }} />
+      </FastTooltip>
+    );
+  }
+  if (status === 'valid') {
+    return (
+      <FastTooltip text="Email verified — safe to enroll in outreach.">
+        <ShieldCheck size={12} style={{ color: '#188038' }} />
+      </FastTooltip>
+    );
+  }
+  const map: Record<Exclude<CrmEmailVerificationStatus, 'valid'>, { icon: React.ReactNode; label: string }> = {
+    invalid:    { icon: <ShieldOff   size={12} style={{ color: '#c5221f' }} />, label: 'Invalid — will hard-bounce. Routed to call queue.' },
+    disposable: { icon: <ShieldOff   size={12} style={{ color: '#c5221f' }} />, label: 'Disposable / temporary address. Routed to call queue.' },
+    catchall:   { icon: <ShieldAlert size={12} style={{ color: '#e37400' }} />, label: 'Catchall domain — delivery uncertain. Routed to call queue.' },
+    unknown:    { icon: <ShieldAlert size={12} style={{ color: '#e37400' }} />, label: 'Unknown — provider could not verify. Routed to call queue; can retry.' },
+  };
+  const meta = map[status];
+  return <FastTooltip text={meta.label}>{meta.icon}</FastTooltip>;
 }
 
 /** MCS-150 operation-class labels. A/B/C per the census spec. */

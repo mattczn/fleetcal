@@ -37,6 +37,7 @@ import {
 } from "@fleetcal/types";
 import { supabase } from "../lib/supabase.js";
 import { syncCrmLeadsForOrg } from "../jobs/crmFmcsaSyncSweep.js";
+import { verifyEmailsForOrg } from "../jobs/crmVerifyEmailsBatch.js";
 import {
   requireCapability,
   requireInternalOrg,
@@ -58,7 +59,8 @@ const LEAD_COLS =
   "carrier_operation,interstate_within_100,interstate_beyond_100," +
   "intrastate_within_100,intrastate_beyond_100,hm_ind,mcs150_date," +
   "fmcsa_add_date,status,status_changed_at,owner_user_id,next_action_at," +
-  "call_attempts,created_at,updated_at";
+  "call_attempts,email_verification_status,email_verified_at,email_verification_provider," +
+  "created_at,updated_at";
 
 type LeadRow = Record<string, unknown>;
 type CrmLeadUpdate = Database["public"]["Tables"]["crm_leads"]["Update"];
@@ -92,6 +94,9 @@ function rowToLead(r: LeadRow): CrmLead {
     ownerUserId:     (r.owner_user_id as string | null) ?? undefined,
     nextActionAt:    (r.next_action_at as string | null) ?? undefined,
     callAttempts:    (r.call_attempts as number) ?? 0,
+    emailVerificationStatus:   (r.email_verification_status as CrmLead["emailVerificationStatus"] | null) ?? undefined,
+    emailVerifiedAt:           (r.email_verified_at as string | null) ?? undefined,
+    emailVerificationProvider: (r.email_verification_provider as string | null) ?? undefined,
     createdAt:       r.created_at as string,
     updatedAt:       r.updated_at as string,
   };
@@ -136,6 +141,7 @@ crm.get("/leads", async (c) => {
   const puMax   = url.searchParams.get("puMax");
   const hasEmail = url.searchParams.get("hasEmail");
   const local   = url.searchParams.get("local");
+  const verification = url.searchParams.get("verification"); // 'valid'|'invalid'|'unverified'|null
   const q       = url.searchParams.get("q")?.trim();
   const limit   = Math.min(Number(url.searchParams.get("limit") ?? 50), 200);
   const offset  = Math.max(Number(url.searchParams.get("offset") ?? 0), 0);
@@ -153,6 +159,8 @@ crm.get("/leads", async (c) => {
   if (puMax)  query = query.lte("power_units", Number(puMax));
   if (hasEmail === "true")  query = query.not("email", "is", null);
   if (hasEmail === "false") query = query.is("email", null);
+  if (verification === "unverified") query = query.is("email_verification_status", null);
+  else if (verification) query = query.eq("email_verification_status", verification);
   if (local === "true") {
     // Local proxy: some within-100 drivers, no beyond-100 drivers.
     query = query
@@ -264,7 +272,15 @@ crm.patch("/leads/:id", async (c) => {
   const update: CrmLeadUpdate = {};
   if ("legalName" in body && body.legalName?.trim()) update.legal_name = body.legalName.trim();
   if ("dbaName" in body)    update.dba_name   = body.dbaName?.trim() || null;
-  if ("email" in body)      update.email      = body.email?.trim().toLowerCase() || null;
+  if ("email" in body) {
+    update.email = body.email?.trim().toLowerCase() || null;
+    // Editing the email invalidates any prior verification — the new
+    // address must be re-verified before enrollment can proceed.
+    update.email_verification_status   = null;
+    update.email_verified_at           = null;
+    update.email_verification_provider = null;
+    update.email_verification_raw      = null;
+  }
   if ("phone" in body)      update.phone      = body.phone?.trim() || null;
   if ("cellPhone" in body)  update.cell_phone = body.cellPhone?.trim() || null;
   if ("phyStreet" in body)  update.phy_street = body.phyStreet?.trim() || null;
@@ -613,17 +629,30 @@ crm.post("/leads/:id/enroll", async (c) => {
 
   const { data: leadRaw } = await supabase
     .from("crm_leads")
-    .select("id,status,email")
+    .select("id,status,email,email_verification_status")
     .eq("id", leadId)
     .eq("org_id", orgId)
     .maybeSingle();
-  const lead = leadRaw as { id: string; status: string; email: string | null } | null;
+  const lead = leadRaw as {
+    id: string; status: string; email: string | null;
+    email_verification_status: string | null;
+  } | null;
   if (!lead) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
   if ((SEND_BLOCKED_STATUSES as readonly string[]).includes(lead.status)) {
     return c.json({ error: "lead_blocked", detail: `lead status is ${lead.status}` } satisfies ApiErrorResponse, 409);
   }
   if (!lead.email) {
     return c.json({ error: "lead_has_no_email" } satisfies ApiErrorResponse, 409);
+  }
+  // Verified-`valid`-only enrollment. Cold-mailing an unverified or
+  // known-bad address on a fresh domain is exactly how we lose sender
+  // reputation. Unverified leads go through /crm/verify-emails first;
+  // non-valid verdicts already got routed to the call queue.
+  if (lead.email_verification_status == null) {
+    return c.json({ error: "email_unverified", detail: "Verify this lead's email first (Verify batch)." } satisfies ApiErrorResponse, 409);
+  }
+  if (lead.email_verification_status !== "valid") {
+    return c.json({ error: "email_not_deliverable", detail: `email verification: ${lead.email_verification_status}` } satisfies ApiErrorResponse, 409);
   }
   const { data: seq } = await supabase
     .from("crm_sequences")
@@ -877,6 +906,31 @@ crm.post("/emails/:id/retry", requireCapability("crm.manage"), async (c) => {
     return c.json({ error: "not_retryable" } satisfies ApiErrorResponse, 409);
   }
   return c.json({ ok: true });
+});
+
+// ── Email verification (Phase 2.5) ──────────────────────────────────────
+
+crm.post("/verify-emails", requireCapability("crm.manage"), async (c) => {
+  const orgId = c.get("orgId");
+  const body = await c.req
+    .json<{ count?: number; leadIds?: string[] }>()
+    .catch(() => ({} as { count?: number; leadIds?: string[] }));
+  // Hard-cap at 1000/click to keep API costs bounded even on a runaway
+  // button. Bigger batches: fire the click multiple times.
+  const count = Math.max(1, Math.min(body.count ?? 100, 1000));
+  try {
+    const result = await verifyEmailsForOrg(orgId, {
+      count,
+      leadIds: Array.isArray(body.leadIds) && body.leadIds.length > 0 ? body.leadIds : undefined,
+    });
+    return c.json({ result });
+  } catch (err) {
+    console.error("[POST /v1/crm/verify-emails] failed:", err);
+    return c.json(
+      { error: "verify_failed", detail: err instanceof Error ? err.message : String(err) } satisfies ApiErrorResponse,
+      502,
+    );
+  }
 });
 
 // ── Manual sync trigger ─────────────────────────────────────────────────

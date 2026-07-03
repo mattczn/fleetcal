@@ -243,6 +243,10 @@ export type Database = {
           dba_name: string | null
           dot_number: number | null
           email: string | null
+          email_verification_provider: string | null
+          email_verification_raw: Json | null
+          email_verification_status: string | null
+          email_verified_at: string | null
           fmcsa_add_date: string | null
           hm_ind: boolean | null
           id: string
@@ -277,6 +281,10 @@ export type Database = {
           dba_name?: string | null
           dot_number?: number | null
           email?: string | null
+          email_verification_provider?: string | null
+          email_verification_raw?: Json | null
+          email_verification_status?: string | null
+          email_verified_at?: string | null
           fmcsa_add_date?: string | null
           hm_ind?: boolean | null
           id?: string
@@ -311,6 +319,10 @@ export type Database = {
           dba_name?: string | null
           dot_number?: number | null
           email?: string | null
+          email_verification_provider?: string | null
+          email_verification_raw?: Json | null
+          email_verification_status?: string | null
+          email_verified_at?: string | null
           fmcsa_add_date?: string | null
           hm_ind?: boolean | null
           id?: string
