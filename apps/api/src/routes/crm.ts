@@ -38,6 +38,7 @@ import {
 import { supabase } from "../lib/supabase.js";
 import { syncCrmLeadsForOrg } from "../jobs/crmFmcsaSyncSweep.js";
 import { verifyEmailsForOrg } from "../jobs/crmVerifyEmailsBatch.js";
+import { firstMatchingKeyword } from "../lib/fmcsaCensus.js";
 import {
   requireCapability,
   requireInternalOrg,
@@ -691,6 +692,145 @@ crm.post("/leads/:id/enroll", async (c) => {
   return c.json({ enrollmentId: (data as { id: string }).id }, 201);
 });
 
+/**
+ * Bulk enroll — take a list of lead ids and drop them all into a
+ * sequence in one click. This is the primary "start a batch" surface:
+ * dispatcher filters the leads table to their day's target set, ticks
+ * the checkboxes, picks a sequence, done. Each lead is validated
+ * individually against the same rules as the single-enroll path
+ * (verified valid, not blocked, has email, not already-active) and
+ * failures are reported per-lead in the response — the endpoint never
+ * fails all-or-nothing.
+ */
+crm.post("/leads/bulk-enroll", async (c) => {
+  const orgId = c.get("orgId");
+  const userId = c.get("userId");
+  const body = await c.req.json<{ leadIds?: string[]; sequenceId?: string }>();
+  if (!body.sequenceId) {
+    return c.json({ error: "validation_failed", errors: ["sequenceId required"] } satisfies ApiErrorResponse, 400);
+  }
+  if (!Array.isArray(body.leadIds) || body.leadIds.length === 0) {
+    return c.json({ error: "validation_failed", errors: ["leadIds required"] } satisfies ApiErrorResponse, 400);
+  }
+  if (body.leadIds.length > 500) {
+    return c.json({ error: "validation_failed", errors: ["max 500 leads per bulk enrollment"] } satisfies ApiErrorResponse, 400);
+  }
+
+  const { data: seq } = await supabase
+    .from("crm_sequences")
+    .select("id")
+    .eq("id", body.sequenceId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (!seq) return c.json({ error: "sequence_not_found" } satisfies ApiErrorResponse, 404);
+
+  const { data: leadRowsRaw } = await supabase
+    .from("crm_leads")
+    .select("id,status,email,email_verification_status")
+    .eq("org_id", orgId)
+    .in("id", body.leadIds);
+  const leadRows = (leadRowsRaw ?? []) as Array<{
+    id: string; status: string; email: string | null; email_verification_status: string | null;
+  }>;
+
+  const eligible: string[] = [];
+  const rejected: Array<{ leadId: string; reason: string }> = [];
+
+  for (const id of body.leadIds) {
+    const lead = leadRows.find((l) => l.id === id);
+    if (!lead) { rejected.push({ leadId: id, reason: "not_found" }); continue; }
+    if ((SEND_BLOCKED_STATUSES as readonly string[]).includes(lead.status)) {
+      rejected.push({ leadId: id, reason: `blocked (${lead.status})` }); continue;
+    }
+    if (!lead.email) { rejected.push({ leadId: id, reason: "no_email" }); continue; }
+    if (lead.email_verification_status == null) {
+      rejected.push({ leadId: id, reason: "email_unverified" }); continue;
+    }
+    if (lead.email_verification_status !== "valid") {
+      rejected.push({ leadId: id, reason: `email_${lead.email_verification_status}` }); continue;
+    }
+    eligible.push(id);
+  }
+
+  if (eligible.length === 0) {
+    return c.json({ enrolled: 0, alreadyEnrolled: 0, rejected });
+  }
+
+  // Insert enrollments in one round-trip. Any row that hits the partial-
+  // unique (org_id, lead_id) WHERE status='active' index is a lead that
+  // already has an active enrollment; we count those separately rather
+  // than failing the whole batch. Supabase returns the inserted rows so
+  // "how many actually landed" is exact.
+  const now = new Date().toISOString();
+  const inserts = eligible.map((leadId) => ({
+    org_id: orgId,
+    lead_id: leadId,
+    sequence_id: body.sequenceId!,
+    status: "active" as const,
+    current_step: 0,
+    next_send_at: now,
+  }));
+
+  const { data: insertedRaw, error: insErr } = await supabase
+    .from("crm_enrollments")
+    .insert(inserts)
+    .select("id,lead_id");
+
+  let inserted: Array<{ id: string; lead_id: string }> = [];
+  let alreadyEnrolled = 0;
+  if (insErr) {
+    if (insErr.code === "23505") {
+      // A lead in the batch already had an active enrollment. Fall
+      // back to per-row inserts so the rest of the batch still lands.
+      for (const row of inserts) {
+        const { data: single, error: singleErr } = await supabase
+          .from("crm_enrollments")
+          .insert(row)
+          .select("id,lead_id")
+          .single();
+        if (!singleErr && single) {
+          inserted.push(single as { id: string; lead_id: string });
+        } else if (singleErr?.code === "23505") {
+          alreadyEnrolled++;
+          rejected.push({ leadId: row.lead_id, reason: "already_enrolled" });
+        } else if (singleErr) {
+          rejected.push({ leadId: row.lead_id, reason: `insert_failed: ${singleErr.message}` });
+        }
+      }
+    } else {
+      return c.json(
+        { error: "insert_failed", detail: insErr.message } satisfies ApiErrorResponse,
+        500,
+      );
+    }
+  } else {
+    inserted = (insertedRaw ?? []) as Array<{ id: string; lead_id: string }>;
+  }
+
+  // Activity per lead + status flip to 'queued' for the ones still in
+  // pre-outreach states. Batched to one write each.
+  if (inserted.length > 0) {
+    await supabase.from("crm_activities").insert(
+      inserted.map((e) => ({
+        org_id: orgId,
+        lead_id: e.lead_id,
+        kind: "enrolled" as const,
+        body: null,
+        meta: { sequenceId: body.sequenceId, bulk: true } as never,
+        actor_user_id: userId,
+      })),
+    );
+    await supabase
+      .from("crm_leads")
+      .update({ status: "queued", status_changed_at: new Date().toISOString() })
+      .in("id", inserted.map((e) => e.lead_id))
+      .eq("org_id", orgId)
+      .in("status", ["new", "enriched"]);
+  }
+
+  return c.json({ enrolled: inserted.length, alreadyEnrolled, rejected });
+});
+
 crm.post("/enrollments/:id/:action", async (c) => {
   const orgId = c.get("orgId");
   const userId = c.get("userId");
@@ -931,6 +1071,100 @@ crm.post("/verify-emails", requireCapability("crm.manage"), async (c) => {
       502,
     );
   }
+});
+
+// ── Retroactive ICP cleanup ─────────────────────────────────────────────
+
+/**
+ * Re-apply the current ICP `nameExcludeKeywords` against existing
+ * leads. Any lead whose legal or DBA name matches a keyword and is
+ * still in a pre-outreach status (new / enriched / queued) is flipped
+ * to `disqualified` with a system activity naming the matched
+ * keyword. Never rewinds a lead already in outreach or terminal
+ * states. Body {dryRun: true} returns counts without writing.
+ */
+crm.post("/cleanup-nonicp", requireCapability("crm.manage"), async (c) => {
+  const orgId = c.get("orgId");
+  const body = await c.req.json<{ dryRun?: boolean }>().catch(() => ({} as { dryRun?: boolean }));
+
+  const { data: settingsRow } = await supabase
+    .from("org_settings")
+    .select("crm_settings")
+    .eq("org_id", orgId)
+    .maybeSingle();
+  const settings = resolveCrmSettings(
+    (settingsRow as { crm_settings?: unknown } | null)?.crm_settings,
+  );
+  const keywords = (settings.icp.nameExcludeKeywords ?? [])
+    .map((k) => k.trim())
+    .filter(Boolean);
+  if (keywords.length === 0) {
+    return c.json({ scanned: 0, matched: 0, disqualified: 0, dryRun: !!body.dryRun });
+  }
+
+  // Only consider leads that are still in pre-outreach status. Cast a
+  // net wide enough to include the 15k backlog but not enough to
+  // rewrite leads we're already talking to.
+  const { data: candidatesRaw, error } = await supabase
+    .from("crm_leads")
+    .select("id,legal_name,dba_name,status")
+    .eq("org_id", orgId)
+    .in("status", ["new", "enriched", "queued"]);
+  if (error) {
+    return c.json({ error: "scan_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  }
+  const candidates = (candidatesRaw ?? []) as Array<{
+    id: string; legal_name: string; dba_name: string | null; status: string;
+  }>;
+
+  const matches: Array<{ id: string; matchedKeyword: string }> = [];
+  for (const lead of candidates) {
+    const kw = firstMatchingKeyword(lead.legal_name, lead.dba_name, keywords);
+    if (kw) matches.push({ id: lead.id, matchedKeyword: kw });
+  }
+
+  if (body.dryRun) {
+    return c.json({ scanned: candidates.length, matched: matches.length, disqualified: 0, dryRun: true });
+  }
+
+  if (matches.length === 0) {
+    return c.json({ scanned: candidates.length, matched: 0, disqualified: 0, dryRun: false });
+  }
+
+  const now = new Date().toISOString();
+  const matchIds = matches.map((m) => m.id);
+  const { data: updatedRaw, error: updErr } = await supabase
+    .from("crm_leads")
+    .update({ status: "disqualified", status_changed_at: now })
+    .in("id", matchIds)
+    .eq("org_id", orgId)
+    .in("status", ["new", "enriched", "queued"])
+    .select("id");
+  if (updErr) {
+    return c.json({ error: "update_failed", detail: updErr.message } satisfies ApiErrorResponse, 500);
+  }
+  const updatedSet = new Set(((updatedRaw ?? []) as Array<{ id: string }>).map((r) => r.id));
+  const actuallyMoved = matches.filter((m) => updatedSet.has(m.id));
+
+  if (actuallyMoved.length > 0) {
+    await supabase.from("crm_activities").insert(
+      actuallyMoved.map((m) => ({
+        org_id: orgId,
+        lead_id: m.id,
+        kind: "status_change" as const,
+        body: `Non-ICP industry (${m.matchedKeyword}) → disqualified`,
+        meta: { matchedKeyword: m.matchedKeyword, cleanup: true } as never,
+        actor_user_id: null,
+      })),
+    );
+  }
+
+  return c.json({
+    scanned: candidates.length,
+    matched: matches.length,
+    disqualified: actuallyMoved.length,
+    dryRun: false,
+  });
 });
 
 // ── Manual sync trigger ─────────────────────────────────────────────────

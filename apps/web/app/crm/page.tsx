@@ -74,6 +74,19 @@ function CrmPageInner() {
   // Any filter change resets to page 0.
   useEffect(() => { setPage(0); }, [status, hasEmail, verification, localOnly, debounced]);
 
+  // ── Bulk selection ──────────────────────────────────────────────────
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Any filter change clears the selection — otherwise we'd carry ids
+  // that are no longer visible into the next batch.
+  useEffect(() => { setSelected(new Set()); }, [status, hasEmail, verification, localOnly, debounced, page]);
+  function toggleSelected(id: string) {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
   // ── Data ────────────────────────────────────────────────────────────
   const [leads,   setLeads]   = useState<CrmLead[]>([]);
   const [total,   setTotal]   = useState(0);
@@ -166,6 +179,62 @@ function CrmPageInner() {
       setVerifyResult(e instanceof RailwayError ? `Verify failed (${e.status})` : 'Verify failed.');
     } finally {
       setVerifying(false);
+    }
+  }
+
+  // ── Bulk actions on the current selection ──────────────────────────
+  const [sequences, setSequences] = useState<Array<{ id: string; name: string; isActive: boolean }>>([]);
+  useEffect(() => {
+    void (async () => {
+      try {
+        const { sequences: s } = await railway.crmListSequences();
+        setSequences(s.filter(seq => seq.isActive).map(seq => ({ id: seq.id, name: seq.name, isActive: seq.isActive })));
+      } catch { /* silent — sequences UI is separate */ }
+    })();
+  }, []);
+
+  async function verifySelected() {
+    if (selected.size === 0 || verifying) return;
+    setVerifying(true); setVerifyResult(null);
+    try {
+      const ids = Array.from(selected).slice(0, 1000);
+      const { result } = await railway.crmVerifyEmails({ leadIds: ids, count: ids.length });
+      if (result.aborted) {
+        setVerifyResult(`Aborted: ${result.aborted}`);
+      } else {
+        const bits = Object.entries(result.byVerdict).map(([k, v]) => `${v} ${k}`).join(', ');
+        setVerifyResult(`Verified ${result.attempted} · ${bits || 'no verdicts'}${result.routedToCallQueue ? ` · ${result.routedToCallQueue} → call queue` : ''}`);
+      }
+      void fetchLeads(); void fetchStats();
+    } catch (e) {
+      setVerifyResult(e instanceof RailwayError ? `Verify failed (${e.status})` : 'Verify failed.');
+    } finally {
+      setVerifying(false);
+    }
+  }
+
+  const [enrolling, setEnrolling] = useState(false);
+  const [enrollMsg, setEnrollMsg] = useState<string | null>(null);
+  const [enrollSeqId, setEnrollSeqId] = useState('');
+  async function enrollSelected() {
+    if (!enrollSeqId || selected.size === 0 || enrolling) return;
+    setEnrolling(true); setEnrollMsg(null);
+    try {
+      const ids = Array.from(selected);
+      const r = await railway.crmBulkEnroll(ids, enrollSeqId);
+      const rejectedReasons: Record<string, number> = {};
+      for (const rj of r.rejected) rejectedReasons[rj.reason] = (rejectedReasons[rj.reason] ?? 0) + 1;
+      const rejBits = Object.entries(rejectedReasons).map(([k, v]) => `${v} ${k}`).join(', ');
+      setEnrollMsg(
+        `Enrolled ${r.enrolled}` +
+        (r.alreadyEnrolled ? ` · ${r.alreadyEnrolled} already enrolled` : '') +
+        (rejBits ? ` · rejected: ${rejBits}` : '')
+      );
+      if (r.enrolled > 0) { setSelected(new Set()); void fetchLeads(); void fetchStats(); }
+    } catch (e) {
+      setEnrollMsg(e instanceof RailwayError ? `Enroll failed (${e.status})` : 'Enroll failed.');
+    } finally {
+      setEnrolling(false);
     }
   }
 
@@ -366,6 +435,48 @@ function CrmPageInner() {
             </button>
           </div>
 
+          {/* Bulk-selection action bar */}
+          {canManage && selected.size > 0 && (
+            <div className="rounded-xl px-4 py-3 flex items-center gap-3 flex-wrap"
+              style={{ background: '#e8f0fe', border: '1px solid #1a73e8' }}>
+              <span className="text-[13px] font-semibold" style={{ color: '#1a73e8' }}>
+                {selected.size} selected
+              </span>
+              <button onClick={() => setSelected(new Set())}
+                className="text-[12px] font-medium px-2 py-1 rounded-lg"
+                style={{ color: 'var(--gc-text-2)' }}>
+                Clear
+              </button>
+              <div className="flex-1" />
+              {enrollMsg && (
+                <span className="text-[12px] font-semibold"
+                  style={{ color: enrollMsg.startsWith('Enrolled') ? '#188038' : '#c5221f' }}>
+                  {enrollMsg}
+                </span>
+              )}
+              <button onClick={() => void verifySelected()} disabled={verifying}
+                title="Run just the selected leads through NeverBounce"
+                className="inline-flex items-center gap-1.5 text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors disabled:opacity-60"
+                style={{ background: '#fff', color: '#1a73e8', border: '1px solid #1a73e8' }}>
+                {verifying ? <Loader2 size={12} className="animate-spin" /> : <ShieldCheck size={12} />}
+                Verify {selected.size} selected
+              </button>
+              <StyledSelect value={enrollSeqId}
+                onChange={e => setEnrollSeqId(e.target.value)}
+                style={{ ...filterInputStyle, borderRadius: 8, padding: '7px 10px', fontSize: 12.5 }}>
+                <option value="">Enroll in a sequence…</option>
+                {sequences.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </StyledSelect>
+              <button onClick={() => void enrollSelected()}
+                disabled={!enrollSeqId || enrolling}
+                className="inline-flex items-center gap-1.5 text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50"
+                style={{ background: '#1a73e8', color: '#fff' }}>
+                {enrolling ? <Loader2 size={12} className="animate-spin" /> : null}
+                Enroll {selected.size} selected
+              </button>
+            </div>
+          )}
+
           {/* Table */}
           {error ? (
             <div className="rounded-xl p-4 text-sm" style={{ background: '#fee2e2', color: '#991b1b', border: '1px solid #fecaca' }}>
@@ -378,6 +489,24 @@ function CrmPageInner() {
                 <table className="w-full text-[13px]" style={{ borderCollapse: 'collapse' }}>
                   <thead className="sticky top-0" style={{ background: 'var(--gc-surface)', zIndex: 2, boxShadow: '0 1px 0 var(--gc-border-light)' }}>
                     <tr>
+                      <Th>
+                        {canManage && (
+                          <input type="checkbox"
+                            title="Select every lead on this page"
+                            checked={leads.length > 0 && leads.every(l => selected.has(l.id))}
+                            onChange={e => {
+                              const checked = e.target.checked;
+                              setSelected(prev => {
+                                const next = new Set(prev);
+                                for (const l of leads) {
+                                  if (checked) next.add(l.id); else next.delete(l.id);
+                                }
+                                return next;
+                              });
+                            }}
+                            style={{ accentColor: '#1a73e8' }} />
+                        )}
+                      </Th>
                       <Th>Carrier</Th>
                       <Th>DOT#</Th>
                       <Th>City / State</Th>
@@ -392,13 +521,13 @@ function CrmPageInner() {
                   <tbody>
                     {loading && leads.length === 0 ? (
                       <tr>
-                        <td colSpan={9} className="py-16 text-center" style={{ color: 'var(--gc-text-3)' }}>
+                        <td colSpan={10} className="py-16 text-center" style={{ color: 'var(--gc-text-3)' }}>
                           <Loader2 size={18} className="animate-spin inline" />
                         </td>
                       </tr>
                     ) : leads.length === 0 ? (
                       <tr>
-                        <td colSpan={9} className="py-16 text-center text-[13px]" style={{ color: 'var(--gc-text-3)' }}>
+                        <td colSpan={10} className="py-16 text-center text-[13px]" style={{ color: 'var(--gc-text-3)' }}>
                           No leads match the current filters.
                         </td>
                       </tr>
@@ -406,7 +535,19 @@ function CrmPageInner() {
                       <tr key={l.id}
                         onClick={() => setOpenLeadId(l.id)}
                         className="cursor-pointer transition-colors hover:bg-[var(--gc-hover)]"
-                        style={{ borderTop: '1px solid var(--gc-border-light)' }}>
+                        style={{
+                          borderTop: '1px solid var(--gc-border-light)',
+                          background: selected.has(l.id) ? 'var(--gc-hover)' : undefined,
+                        }}>
+                        <Td>
+                          {canManage && (
+                            <input type="checkbox"
+                              checked={selected.has(l.id)}
+                              onClick={e => e.stopPropagation()}
+                              onChange={() => toggleSelected(l.id)}
+                              style={{ accentColor: '#1a73e8' }} />
+                          )}
+                        </Td>
                         <Td>
                           <div className="font-semibold truncate max-w-[280px]" style={{ color: 'var(--gc-text-1)' }}>
                             {l.legalName}

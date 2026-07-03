@@ -1618,6 +1618,27 @@ class RailwayClient {
       };
     }>('POST', '/v1/crm/verify-emails', opts);
   }
+  /** Retroactively disqualify existing leads whose name matches the
+   *  current icp.nameExcludeKeywords (towing / aviation / etc.). Only
+   *  moves pre-outreach leads; never rewinds one we're already talking
+   *  to. dryRun returns counts without writing. crm.manage only. */
+  crmCleanupNonIcp(dryRun = false) {
+    return this.req<{
+      scanned: number;
+      matched: number;
+      disqualified: number;
+      dryRun: boolean;
+    }>('POST', '/v1/crm/cleanup-nonicp', { dryRun });
+  }
+  /** Enroll many leads into a sequence in one round-trip. Server
+   *  validates each individually and returns per-lead rejects. */
+  crmBulkEnroll(leadIds: string[], sequenceId: string) {
+    return this.req<{
+      enrolled: number;
+      alreadyEnrolled: number;
+      rejected: Array<{ leadId: string; reason: string }>;
+    }>('POST', '/v1/crm/leads/bulk-enroll', { leadIds, sequenceId });
+  }
 
   // ── CRM outreach (Phase 2): sequences, enrollments, outbox ───────────
   crmListSequences() {

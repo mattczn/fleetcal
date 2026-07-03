@@ -184,6 +184,16 @@ export interface CrmIcpFilters {
    *  months (proves the carrier is actively operating, not a zombie
    *  DOT with a paperwork trail). Default 24. */
   mcs150SinceMonths?: number;
+  /**
+   * Substrings (case-insensitive) that disqualify a lead when found in
+   * its legal_name or dba_name. Filters out non-target-buyer verticals
+   * that hold FMCSA authority but don't buy dispatch software — towing,
+   * aviation, construction, pumping, limo, repair, landscaping,
+   * dumpsters. Enforced both at ingest time (fmcsaCensus.icpVerdict)
+   * and via a re-run cleanup endpoint (POST /v1/crm/cleanup-nonicp)
+   * that reclassifies matching leads already in the DB.
+   */
+  nameExcludeKeywords?: string[];
 }
 
 export interface CrmSettings {
@@ -224,6 +234,16 @@ export const CRM_SETTINGS_DEFAULTS: CrmSettings = {
     establishedYearsMin: 1,
     establishedYearsMax: 15,
     mcs150SinceMonths: 24,
+    nameExcludeKeywords: [
+      "TOWING", "TOW ",
+      "AVIATION", "AIRPORT", "AIRLINE",
+      "CONSTRUCTION",
+      "PUMPING", "PUMP SERVICE",
+      "LIMO", "LIMOUSINE",
+      "REPAIR", "MECHANIC", "GARAGE",
+      "LANDSCAPING", "LANDSCAPE", "LAWN CARE", "TREE SERVICE",
+      "DUMPSTER", "WASTE MANAGEMENT", "GARBAGE", "JUNK REMOVAL", "ROLL OFF", "ROLL-OFF",
+    ],
   },
   dailySendCap: 25,
   sendWindow: { startHour: 9, endHour: 17, timezone: "America/Denver", weekdaysOnly: true },

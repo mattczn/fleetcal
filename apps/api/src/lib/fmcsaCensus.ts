@@ -203,8 +203,9 @@ function mapRow(row: CensusRow): CarrierLeadRecord | null {
   };
 }
 
-/** Client-side ICP filter (for-hire + operation class + local proxy).
- *  All numeric/date filters run server-side in buildWhere(). */
+/** Client-side ICP filter (for-hire + operation class + local proxy +
+ *  industry keyword blacklist). Numeric/date filters run server-side
+ *  in buildWhere(). */
 function icpVerdict(r: CarrierLeadRecord, icp: CrmIcpFilters): "pass" | "fail" | "local_fail" {
   // For-hire gate (default on): census classdef is semicolon-joined
   // (e.g. "PRIVATE PROPERTY;AUTHORIZED FOR HIRE"); any for-hire class
@@ -217,8 +218,40 @@ function icpVerdict(r: CarrierLeadRecord, icp: CrmIcpFilters): "pass" | "fail" |
       (!r.carrierOperation || !icp.operationClasses.includes(r.carrierOperation as "A" | "B" | "C"))) {
     return "fail";
   }
+  // Industry keyword blacklist. Towing / aviation / landscaping / etc.
+  // hold FMCSA authority but aren't dispatch-software buyers.
+  if (icp.nameExcludeKeywords && icp.nameExcludeKeywords.length > 0) {
+    if (leadMatchesExcludeKeywords(r.legalName, r.dbaName, icp.nameExcludeKeywords)) {
+      return "fail";
+    }
+  }
   if (icp.localOnly && !passesLocalProxy(r)) return "local_fail";
   return "pass";
+}
+
+/** Case-insensitive substring match against legal_name + dba_name.
+ *  Exported for reuse by the cleanup endpoint. */
+export function leadMatchesExcludeKeywords(
+  legalName: string | null | undefined,
+  dbaName: string | null | undefined,
+  keywords: string[],
+): boolean {
+  return firstMatchingKeyword(legalName, dbaName, keywords) != null;
+}
+
+/** Returns the first keyword that matches the lead's name, or null. */
+export function firstMatchingKeyword(
+  legalName: string | null | undefined,
+  dbaName: string | null | undefined,
+  keywords: string[],
+): string | null {
+  const haystack = `${(legalName ?? "").toUpperCase()} ${(dbaName ?? "").toUpperCase()}`;
+  for (const kw of keywords) {
+    const needle = kw.trim().toUpperCase();
+    if (needle.length === 0) continue;
+    if (haystack.includes(needle)) return kw.trim();
+  }
+  return null;
 }
 
 /** Probe the dataset's current max DOT number — kept for the internal

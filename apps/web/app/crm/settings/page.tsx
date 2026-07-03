@@ -58,6 +58,9 @@ function CrmSettingsPageInner() {
   const [mcs150Months, setMcs150Months] = useState('');
   const [rescanning, setRescanning] = useState(false);
   const [rescanMsg, setRescanMsg] = useState<string | null>(null);
+  const [excludeKeywords, setExcludeKeywords] = useState('');
+  const [cleaningUp, setCleaningUp] = useState(false);
+  const [cleanupMsg, setCleanupMsg] = useState<string | null>(null);
 
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
@@ -88,6 +91,7 @@ function CrmSettingsPageInner() {
         setOpClasses(new Set(s.icp.operationClasses));
         setLocalOnly(s.icp.localOnly);
         setForHireOnly(s.icp.forHireOnly !== false);
+        setExcludeKeywords((s.icp.nameExcludeKeywords ?? []).join(', '));
         setAgeMin(String(s.icp.establishedYearsMin ?? 1));
         setAgeMax(String(s.icp.establishedYearsMax ?? 15));
         setMcs150Months(String(s.icp.mcs150SinceMonths ?? 24));
@@ -145,6 +149,8 @@ function CrmSettingsPageInner() {
           operationClasses: classes,
           localOnly,
           forHireOnly,
+          nameExcludeKeywords: excludeKeywords
+            .split(',').map(k => k.trim()).filter(Boolean),
           establishedYearsMin: Math.max(0, Number(ageMin) || 1),
           establishedYearsMax: Math.max(1, Number(ageMax) || 15),
           mcs150SinceMonths:   Math.max(1, Number(mcs150Months) || 24),
@@ -331,6 +337,51 @@ function CrmSettingsPageInner() {
                   <div className="text-[11px] mt-1" style={{ color: 'var(--gc-text-3)' }}>
                     Drops private fleets (Nestle, landscapers). Recommended on — private fleets don't
                     buy dispatch software.
+                  </div>
+                </div>
+              </div>
+
+              {/* Industry name-keyword blacklist */}
+              <div className="flex items-start gap-3">
+                <label className="text-[12.5px] font-semibold w-36 shrink-0 pt-1.5" style={{ color: 'var(--gc-text-2)' }}>
+                  Exclude keywords
+                </label>
+                <div className="flex-1 min-w-0">
+                  <textarea rows={3} value={excludeKeywords} disabled={!canManage}
+                    onChange={e => setExcludeKeywords(e.target.value)}
+                    placeholder="TOWING, AVIATION, CONSTRUCTION, LANDSCAPING, DUMPSTER, LIMO, REPAIR, PUMPING"
+                    className="w-full rounded-lg px-2.5 py-1.5 text-[13px] outline-none resize-y disabled:opacity-60"
+                    style={inputStyle} />
+                  <div className="text-[11px] mt-1" style={{ color: 'var(--gc-text-3)' }}>
+                    Comma-separated. Case-insensitive substring match against legal + DBA name. Applied
+                    at sync AND retroactively via the button below. Any lead whose name contains any of
+                    these gets ingested as (or moved to) <strong>disqualified</strong> — never dropped
+                    outright, so you can spot-check if a filter's too aggressive.
+                  </div>
+                  <div className="flex items-center gap-3 mt-2 flex-wrap">
+                    <button
+                      onClick={async () => {
+                        if (!canManage || cleaningUp) return;
+                        if (!confirm('Scan existing leads and move any whose name matches your keyword list to Disqualified? Only leads in New/Enriched/Queued get touched — never anything already in outreach.')) return;
+                        setCleaningUp(true); setCleanupMsg(null);
+                        try {
+                          const r = await railway.crmCleanupNonIcp(false);
+                          setCleanupMsg(`Scanned ${r.scanned}, matched ${r.matched}, disqualified ${r.disqualified}.`);
+                        } catch (e) {
+                          setCleanupMsg(e instanceof RailwayError ? `Cleanup failed (${e.status})` : 'Cleanup failed.');
+                        } finally { setCleaningUp(false); }
+                      }}
+                      disabled={!canManage || cleaningUp}
+                      className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-opacity disabled:opacity-50"
+                      style={{ background: 'var(--gc-bg)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border-light)' }}>
+                      {cleaningUp ? 'Reclassifying…' : 'Reclassify existing leads →'}
+                    </button>
+                    {cleanupMsg && (
+                      <span className="text-[12px] font-semibold"
+                        style={{ color: cleanupMsg.startsWith('Scanned') ? '#188038' : '#c5221f' }}>
+                        {cleanupMsg}
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
