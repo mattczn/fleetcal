@@ -1483,6 +1483,9 @@ class RailwayClient {
       };
     }>('GET', `/v1/inspection-reports/${id}`);
   }
+  deleteInspectionReport(id: string) {
+    return this.req<{ ok: true }>('DELETE', `/v1/inspection-reports/${id}`);
+  }
 
   // ── Maintenance reports ───────────────────────────────────────────────
   listMaintenanceReports(query: ListMaintenanceReportsQuery = {}) {

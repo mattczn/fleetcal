@@ -26,7 +26,7 @@ import {
   Package, Wrench, ClipboardCheck, Fuel as FuelIcon,
   Camera, Loader2, MapPin, X, Clock, User, Truck, FileText, ExternalLink, Check, Trash2,
   ChevronLeft, ChevronRight, ChevronDown, CalendarDays, List as ListIcon, AlertCircle, CheckCircle2,
-  Calendar, Plus, Info, History as HistoryIcon, Sun, Moon, Flag,
+  Calendar, Plus, Info, History as HistoryIcon, Sun, Moon, Flag, EyeOff,
 } from 'lucide-react';
 import { isInternalOrg } from '@/lib/internalOrg';
 import Tooltip from '@/components/ui/Tooltip';
@@ -210,6 +210,8 @@ function EquipmentPageInner() {
   const retryFixtures = useCallback(() => setFixturesReloadKey(k => k + 1), []);
 
   const [panel, setPanel] = useState<PanelData | null>(null);
+  // Bumped after a panel delete/ignore so the affected tab remounts + refetches.
+  const [mutationTick, setMutationTick] = useState(0);
 
   // Resolver maps for the row tables + detail panels. Everywhere we
   // would otherwise render "Driver #30" / "Asset #37" we now look up
@@ -357,6 +359,7 @@ function EquipmentPageInner() {
         <div className="mx-auto w-full px-6 py-5" style={{ maxWidth: 1400 }}>
         {tab === 'maintenance' && (
           <MaintenanceTabContent
+            key={`maint-${mutationTick}`}
             drivers={drivers}
             assets={assets}
             trailers={trailers}
@@ -369,6 +372,7 @@ function EquipmentPageInner() {
         )}
         {tab === 'inspections' && (
           <InspectionsTabContent
+            key={`insp-${mutationTick}`}
             drivers={drivers}
             assets={assets}
             trailers={trailers}
@@ -410,6 +414,7 @@ function EquipmentPageInner() {
           trailerLabelById={trailerLabelById}
           sideMedia={sideMedia}
           onFuelMutation={bumpFuelData}
+          onMutated={() => setMutationTick(t => t + 1)}
           onClose={() => { setPanel(null); setSideMedia(null); }}
           onOpenMedia={(list) => setSideMedia(list)}
           onCloseSideMedia={() => setSideMedia(null)}
@@ -5647,7 +5652,7 @@ function StatusPill({ status }: { status: string }) {
 
 function DetailPanel({
   panel, drivers, assets, trailers, driverNameById, assetLabelById, trailerLabelById,
-  sideMedia, onFuelMutation, onClose, onOpenMedia, onCloseSideMedia,
+  sideMedia, onFuelMutation, onMutated, onClose, onOpenMedia, onCloseSideMedia,
 }: {
   panel: PanelData;
   drivers: Driver[];
@@ -5661,11 +5666,42 @@ function DetailPanel({
    *  the FuelTabContent to refetch so the table behind the modal
    *  reflects the new state without a page reload. */
   onFuelMutation: () => void;
+  /** Called after a delete/ignore so the inspections / maintenance list
+   *  behind the modal refreshes. */
+  onMutated: () => void;
   onClose: () => void;
   onOpenMedia: (list: MediaList) => void;
   onCloseSideMedia: () => void;
 }) {
   const overlayRef = useRef<HTMLDivElement>(null);
+  const [busy, setBusy] = useState(false);
+  async function handleDeleteInspection() {
+    if (panel.kind !== 'inspection' || busy) return;
+    if (!window.confirm('Delete this inspection report? This permanently removes it and its photos.')) return;
+    setBusy(true);
+    try {
+      await railway.deleteInspectionReport(panel.id);
+      onMutated();
+      onClose();
+    } catch (e) {
+      console.error('[equipment] delete inspection failed:', e);
+      alert('Could not delete the inspection. Please try again.');
+      setBusy(false);
+    }
+  }
+  async function handleIgnoreReport() {
+    if (panel.kind !== 'maintenance' || busy) return;
+    setBusy(true);
+    try {
+      await railway.updateMaintenanceReport(panel.id, { status: 'dismissed' });
+      onMutated();
+      onClose();
+    } catch (e) {
+      console.error('[equipment] ignore report failed:', e);
+      alert('Could not ignore the report. Please try again.');
+      setBusy(false);
+    }
+  }
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -5727,6 +5763,24 @@ function DetailPanel({
           <div className="flex-1 min-w-0">
             <div className="text-[14px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>{meta.title}</div>
           </div>
+          {panel.kind === 'inspection' && (
+            <button onClick={handleDeleteInspection} disabled={busy} title="Delete inspection"
+              className="px-2 py-1 rounded-lg transition-colors shrink-0 flex items-center gap-1.5 text-[12px] font-semibold"
+              style={{ color: '#dc2626', border: '1px solid #fecaca' }}
+              onMouseEnter={e => { e.currentTarget.style.background = '#fef2f2'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
+              <Trash2 size={13} /> Delete
+            </button>
+          )}
+          {panel.kind === 'maintenance' && (panel.report.status === 'open' || panel.report.status === 'reviewed') && (
+            <button onClick={handleIgnoreReport} disabled={busy} title="Ignore this report"
+              className="px-2 py-1 rounded-lg transition-colors shrink-0 flex items-center gap-1.5 text-[12px] font-semibold"
+              style={{ color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}
+              onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
+              <EyeOff size={13} /> Ignore
+            </button>
+          )}
           <button
             onClick={onClose}
             className="p-1.5 rounded-full transition-colors shrink-0"
@@ -6071,8 +6125,13 @@ function InspectionDetail({
   // one trailer; we group per-equipment so the dispatcher can audit
   // "fix everything on Big Red" vs "fix everything on Trailer 5567"
   // without re-reading the item list.
-  const truckDefects   = data.items.filter(i => i.status === 'fail');
-  const trailerDefects = data.trailerItems.filter(i => i.status === 'fail');
+  // Cleanliness is its own category (a "received dirty" report / left-dirty
+  // flag), NOT a mechanical defect — keep it out of the DEFECTS section + count.
+  const truckDefects   = data.items.filter(i => i.status === 'fail' && i.id !== 'cleanliness');
+  const trailerDefects = data.trailerItems.filter(i => i.status === 'fail' && i.id !== 'cleanliness');
+  const cleanlinessFailed = data.cleanlinessFlagged
+    || [...data.items, ...data.trailerItems].some(i => i.id === 'cleanliness' && i.status === 'fail');
+  const cleanlinessPhotos = data.photos.filter(p => p.itemId === 'cleanliness');
   const totalDefects   = truckDefects.length + trailerDefects.length;
   const totalItems     = data.items.length + data.trailerItems.length;
   const passCount      = totalItems - totalDefects;
@@ -6102,6 +6161,14 @@ function InspectionDetail({
         photos: itemPhotos.map(p => ({ id: p.id, signedUrl: p.signedUrl, caption: p.caption ?? def.label })),
       });
     }
+  }
+  // Cleanliness photo is its own section (not a per-defect one) so it still
+  // shows in MEDIA even though cleanliness isn't a defect.
+  if (cleanlinessPhotos.length > 0) {
+    mediaSections.push({
+      label: `${truckLabel} · Cab cleanliness`,
+      photos: cleanlinessPhotos.map(p => ({ id: p.id, signedUrl: p.signedUrl, caption: p.caption ?? 'Cab & interior' })),
+    });
   }
   const truckGeneral   = data.photos.filter(p => p.itemId == null && p.target === 'truck');
   const trailerGeneral = data.photos.filter(p => p.itemId == null && p.target === 'trailer');
@@ -6194,6 +6261,15 @@ function InspectionDetail({
         )}
         {data.trailer && trailerDefects.length > 0 && (
           <EquipmentDefectsSection equipmentLabel={trailerLabel} defects={trailerDefects} />
+        )}
+        {cleanlinessFailed && (
+          <div className="rounded-xl px-4 py-3 flex items-center gap-2 mt-3"
+            style={{ background: '#fffbeb', border: '1px solid #f59e0b' }}>
+            <Flag size={14} style={{ color: '#b45309' }} />
+            <span className="text-[13px] font-semibold" style={{ color: '#b45309' }}>
+              Cab reported not clean{data.kind === 'pre_trip' ? ' — received dirty' : ''}
+            </span>
+          </div>
         )}
         {totalDefects === 0 && <AllPassedBadge passCount={passCount} />}
       </div>
