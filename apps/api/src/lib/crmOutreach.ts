@@ -100,21 +100,24 @@ export async function sendOutreachEmail(args: OutreachSendArgs): Promise<Outreac
   if (configError) throw new Error(configError);
 
   const unsub = unsubscribeUrl(args.unsubToken);
-  // Compact 3-line footer, auto-appended to every outreach send:
+  // Signature+CAN-SPAM footer, auto-appended to every outreach send:
   //
-  //   [body]
+  //   [body ending "— Matt"]
+  //   FleetCal · fleetcal.app        ← attached to signature
   //
-  //   —
-  //   FleetCal · fleetcal.app
-  //   Systematica LLC · 123 Main St · Ogden, UT 84401
-  //   Unsubscribe: https://fleetcal.app/unsubscribe/…
+  //   —                              ← compliance footer starts
+  //   {physicalAddressFooter one-line}
+  //   Unsubscribe: {url}
   //
-  // The brand+website line gives the curious recipient a way to check
-  // out the product without needing a link in the CTA (which would
-  // pattern-match "marketing template" for spam filters). Address
-  // collapses onto one line with " · " separators so multi-line
-  // settings entries stay legible. Unsubscribe line is suppressed
-  // when the user already included {{unsubscribe_url}} somewhere in
+  // The brand+website line lands one \n below the body (no blank line)
+  // so it reads as PART of how the sender is signing off — human,
+  // personal — rather than as a marketing-footer element competing
+  // with the legal address for attention. Recipient who's curious has
+  // a natural way to check out the product without needing a link in
+  // the CTA (which would pattern-match "marketing template" to spam
+  // filters). Address collapses onto one line with " · " separators
+  // so multi-line settings entries stay legible. Unsubscribe line is
+  // suppressed when the user already included {{unsubscribe_url}} in
   // their template body — no duplicate link.
   const websiteHost = (() => {
     try { return new URL(env.publicWebUrl).host; }
@@ -126,7 +129,8 @@ export async function sendOutreachEmail(args: OutreachSendArgs): Promise<Outreac
     .filter(Boolean)
     .join(" · ");
   let body = args.body.trimEnd();
-  const footerLines = ["—", `FleetCal · ${websiteHost}`, addressOneLine];
+  body += `\nFleetCal · ${websiteHost}`;
+  const footerLines = ["—", addressOneLine];
   if (!body.includes(unsub)) footerLines.push(`Unsubscribe: ${unsub}`);
   body += `\n\n${footerLines.join("\n")}`;
 
