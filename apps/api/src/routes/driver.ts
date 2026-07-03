@@ -2617,13 +2617,22 @@ driver.get("/equipment/:kind/:id/history", async (c) => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const sb = supabase as any;
 
-  // 1) Recent 5 driver events on this equipment (who drove it, when).
+  // 1) Recent drivers who have ACTUALLY driven this equipment: events that
+  //    have already started (start <= now — excludes future/scheduled trips)
+  //    and have a named driver (an unassigned event isn't a driver). Newest
+  //    first, capped at 5.
+  const nowIso = new Date().toISOString();
   const { data: evRows } = await sb
     .from("events")
     .select("id, driver_name, start, end, status, title, load:loads(load_num, internal_load_id)")
     .eq("org_id", orgId).eq(col, id).is("deleted_at", null)
+    .not("driver_name", "is", null)
+    .lte("start", nowIso)
     .order("start", { ascending: false }).limit(5);
-  const recentEvents = ((evRows ?? []) as Array<Record<string, unknown>>).map((e) => {
+  const recentEvents = ((evRows ?? []) as Array<Record<string, unknown>>)
+    // Defensive: drop blank driver names the `is null` filter can't catch.
+    .filter((e) => typeof e.driver_name === "string" && e.driver_name.trim() !== "")
+    .map((e) => {
     const l = Array.isArray(e.load) ? (e.load[0] ?? null) : (e.load ?? null);
     return {
       id: e.id, driverName: (e.driver_name as string | null) ?? null,
