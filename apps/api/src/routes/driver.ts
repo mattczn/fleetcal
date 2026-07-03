@@ -2686,12 +2686,19 @@ driver.get("/equipment/:kind/:id/history", async (c) => {
   const recentInspectionDefects = inspections.map((i) => {
     const all = [...((i.items as Array<{ id: string; label: string; section: string; status: string; notes?: string }>) ?? []),
                  ...((i.trailer_items as Array<{ id: string; label: string; section: string; status: string; notes?: string }>) ?? [])];
-    const failed = all.filter((it) => it.status === "fail").map((it) => ({ id: it.id, label: it.label, section: it.section, notes: it.notes ?? null }));
+    // Cleanliness is its own category (surfaced by cleanliness_flagged + the
+    // last-cleanliness-photo), NOT a mechanical inspection defect — exclude it.
+    const failed = all.filter((it) => it.status === "fail" && it.id !== "cleanliness")
+      .map((it) => ({ id: it.id, label: it.label, section: it.section, notes: it.notes ?? null }));
     return {
       id: i.id, kind: i.kind, date: i.inspection_date, signedBy: i.signed_by,
-      cleanlinessFlagged: !!i.cleanliness_flagged, failedItems: failed, photos: inspPhotos.get(i.id as string) ?? [],
+      cleanlinessFlagged: !!i.cleanliness_flagged, failedItems: failed,
+      // Cleanliness photos belong to the left-dirty surface, not the defect card.
+      photos: (inspPhotos.get(i.id as string) ?? []).filter((p) => p.itemId !== "cleanliness"),
     };
-  });
+  // Drop inspections whose only "defect" was cleanliness — they're not
+  // mechanical defects and belong to the left-dirty surface instead.
+  }).filter((d) => d.failedItems.length > 0);
 
   // 4) Last post-trip cleanliness photo (the condition it was left in).
   let lastCleanlinessPhoto: { signedUrl?: string; uploadedAt: string; date: string; signedBy: string } | null = null;
@@ -3037,7 +3044,10 @@ driver.post("/inspections", async (c) => {
   }
 
   const allItems = [...(body.items ?? []), ...(body.trailerItems ?? [])];
-  const hasDefects = allItems.some(i => i.status === "fail");
+  // Cleanliness is its own category (tracked via cleanliness_flagged), not a
+  // mechanical defect — a dirty cab alone must NOT mark the inspection as
+  // having defects (which would flag it red in the grid + defect lists).
+  const hasDefects = allItems.some(i => i.id !== "cleanliness" && i.status === "fail");
   const kind = body.kind === "post_trip" ? "post_trip" : "pre_trip";
   // Denormalized cleanliness flag — set when the "cleanliness" checklist item
   // (Condition section) is failed. Keep this id in sync with the driver app's
