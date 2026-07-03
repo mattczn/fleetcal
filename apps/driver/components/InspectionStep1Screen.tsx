@@ -42,8 +42,15 @@ interface Props {
   driverName:  string;
   onClose:     () => void;
   /** Advance to Step 2 with the chosen equipment + the truck's open work
-   *  orders (threaded into Step 3 so the driver sees what's already open). */
-  onStart:     (sel: { assetId: number; trailerId: number | null; knownDamage: EquipmentHistory["knownDamage"] }) => void;
+   *  orders (threaded into Step 3 so the driver sees what's already open)
+   *  + a lookup of checklist items failed in a recent inspection (so Step 2
+   *  can flag them for the driver to re-check). */
+  onStart:     (sel: {
+    assetId: number;
+    trailerId: number | null;
+    knownDamage: EquipmentHistory["knownDamage"];
+    recentlyFailed: Record<string, { date: string; notes?: string | null }>;
+  }) => void;
 }
 
 export default function InspectionStep1Screen({ kind, driverName, onClose, onStart }: Props) {
@@ -90,6 +97,21 @@ export default function InspectionStep1Screen({ kind, driverName, onClose, onSta
     enabled:  assetId != null,
   });
   const notAvailable = isError && /404|not found/i.test(String((error as Error)?.message ?? ""));
+
+  // Checklist items failed in a recent inspection (last 30 days) on this
+  // truck → threaded to Step 2 so each affected row shows a caution.
+  // recentInspectionDefects is newest-first, so the first time we see an
+  // item id wins (its most recent failing inspection).
+  const recentlyFailed = useMemo(() => {
+    const out: Record<string, { date: string; notes?: string | null }> = {};
+    for (const insp of history?.recentInspectionDefects ?? []) {
+      for (const fi of insp.failedItems) {
+        if (out[fi.id]) continue;
+        out[fi.id] = { date: insp.date, notes: fi.notes };
+      }
+    }
+    return out;
+  }, [history]);
 
   const canStart = assetId != null;
 
@@ -152,7 +174,7 @@ export default function InspectionStep1Screen({ kind, driverName, onClose, onSta
         <TouchableOpacity
           onPress={() => {
             if (assetId == null) return;
-            onStart({ assetId, trailerId, knownDamage: history?.knownDamage ?? [] });
+            onStart({ assetId, trailerId, knownDamage: history?.knownDamage ?? [], recentlyFailed });
           }}
           disabled={!canStart}
           style={{

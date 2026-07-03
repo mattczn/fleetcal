@@ -118,6 +118,9 @@ export default function LoadsScreen() {
     assetId:     number | null;
     trailerId:   number | null;
     knownDamage: EquipmentHistory["knownDamage"];
+    // Checklist items failed in a recent inspection on the chosen truck
+    // (from Step 1) → Step 2 flags the matching rows for re-check.
+    recentlyFailed: Record<string, { date: string; notes?: string | null }>;
   };
   const [flow, setFlow] = useState<InspectionFlow | null>(null);
 
@@ -130,6 +133,7 @@ export default function LoadsScreen() {
       assetId:     null,
       trailerId:   null,
       knownDamage: [],
+      recentlyFailed: {},
     });
   };
   const closeInspection    = () => setFlow(null);
@@ -336,8 +340,8 @@ export default function LoadsScreen() {
                 kind={flow.kind}
                 driverName={driver?.name ?? "Driver"}
                 onClose={closeInspection}
-                onStart={({ assetId, trailerId, knownDamage }) =>
-                  setFlow(f => (f ? { ...f, step: 2, assetId, trailerId, knownDamage } : f))
+                onStart={({ assetId, trailerId, knownDamage, recentlyFailed }) =>
+                  setFlow(f => (f ? { ...f, step: 2, assetId, trailerId, knownDamage, recentlyFailed } : f))
                 }
               />
             ) : flow ? (
@@ -351,6 +355,10 @@ export default function LoadsScreen() {
                 initialTrailerId={truckHistory ? flow.trailerId : undefined}
                 presetEquipment={truckHistory}
                 knownDamage={flow.knownDamage}
+                // Cautions on rows failed in a recent inspection — only
+                // meaningful in the Truck-History flow (the plain flow has
+                // no history, so it's an empty map there).
+                recentlyFailed={truckHistory ? flow.recentlyFailed : undefined}
                 onClose={closeInspection}
                 onSubmitted={finishInspection}
               />

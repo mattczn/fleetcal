@@ -207,13 +207,18 @@ interface Props {
    *  Step 1 so Step 3 (report defects) can show what's already reported
    *  before the driver creates a duplicate. */
   knownDamage?:   KnownDamage;
+  /** Checklist items failed in a recent inspection (last 30 days) on the
+   *  chosen truck — keyed by checklist item id → the most recent failing
+   *  inspection's date + notes. Threaded from Step 1 (Truck-History flow);
+   *  absent in the plain flow. Matching rows show a subtle amber caution. */
+  recentlyFailed?: Record<string, { date: string; notes?: string | null }>;
   /** Driver's display name — used as the digital signature. */
   driverName:     string;
   onClose:        () => void;
   onSubmitted:    () => void;
 }
 
-export default function InspectionFormScreen({ initialAssetId, initialTrailerId, presetEquipment = false, kind = "pre_trip", knownDamage, driverName, onClose, onSubmitted }: Props) {
+export default function InspectionFormScreen({ initialAssetId, initialTrailerId, presetEquipment = false, kind = "pre_trip", knownDamage, recentlyFailed, driverName, onClose, onSubmitted }: Props) {
   const { C, SHADOW, ACCENT } = useTheme();
   // ── Equipment selection ───────────────────────────────────────────
   const [assets,        setAssets]        = useState<AssetOption[]>([]);
@@ -744,6 +749,7 @@ export default function InspectionFormScreen({ initialAssetId, initialTrailerId,
             onAddGeneralPhoto={() => addPhotoFor("truck", null)}
             photos={photos.filter(p => p.target === "truck")}
             onRemovePhoto={removePhoto}
+            recentlyFailed={recentlyFailed}
             // Plain flow only: post-trip cleanliness photo strip stays
             // inline on the checklist row. The Truck-History flow moves
             // this to CleanlinessCard, so suppress it there.
@@ -765,6 +771,7 @@ export default function InspectionFormScreen({ initialAssetId, initialTrailerId,
             onAddGeneralPhoto={() => addPhotoFor("trailer", null)}
             photos={photos.filter(p => p.target === "trailer")}
             onRemovePhoto={removePhoto}
+            recentlyFailed={recentlyFailed}
           />
         )}
 
@@ -1148,7 +1155,7 @@ function CleanlinessCard({
 }
 
 function ChecklistBlock({
-  title, target, sections, items, setStatus, setItemNotes, onInputFocus, onAddPhoto, onAddGeneralPhoto, photos, onRemovePhoto, photoAlwaysItemId = null,
+  title, target, sections, items, setStatus, setItemNotes, onInputFocus, onAddPhoto, onAddGeneralPhoto, photos, onRemovePhoto, photoAlwaysItemId = null, recentlyFailed,
 }: {
   title: string;
   target: PhotoTarget;
@@ -1166,6 +1173,9 @@ function ChecklistBlock({
    *  pass/fail — the plain (non-Truck-History) flow's post-trip
    *  cleanliness shot. The Truck-History flow uses CleanlinessCard. */
   photoAlwaysItemId?: string | null;
+  /** Checklist items failed in a recent inspection on this equipment,
+   *  keyed by item id. Matching rows show a small amber "review" caution. */
+  recentlyFailed?: Record<string, { date: string; notes?: string | null }>;
 }) {
   const { C, SHADOW, ACCENT } = useTheme();
   // Photos with no itemId are the "general" ones for this piece of
@@ -1189,6 +1199,9 @@ function ChecklistBlock({
             // its photo strip even on PASS and flags amber until attached.
             const isRequiredPhoto = photoAlwaysItemId === item.id;
             const requiredMissing = isRequiredPhoto && !isFail && itemPhotos.length === 0;
+            // Failed on this truck in a recent inspection → nudge the driver
+            // to re-check the row (subtle amber note, not blocking).
+            const priorFail = recentlyFailed?.[item.id];
             return (
               <View
                 key={item.id}
@@ -1207,6 +1220,14 @@ function ChecklistBlock({
                   <StatusButton label="Fail" active={state?.status === "fail"} color={C.red} onPress={() => setStatus(item.id, "fail")} />
                   <StatusButton label="N/A"  active={state?.status === "na"}   color={C.t3} onPress={() => setStatus(item.id, "na")} />
                 </View>
+                {priorFail && (
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 6 }}>
+                    <AlertTriangle size={13} color={C.amberInk} />
+                    <Text style={[txt(600), { fontSize: 12, color: C.amberInk, flex: 1 }]}>
+                      Flagged in a recent inspection ({fmtShortDate(priorFail.date)}) — review
+                    </Text>
+                  </View>
+                )}
                 {isRequiredPhoto && !isFail && (
                   <View style={{ marginTop: 10 }}>
                     <Text style={[txt(600), { fontSize: 12, color: requiredMissing ? C.amberInk : C.t3, marginBottom: 8 }]}>
@@ -1493,6 +1514,14 @@ function truckLabel(name: string, unit: string | null | undefined): string {
 function trailerLabel(name: string, trailerNumber: string | null | undefined): string {
   if (trailerNumber) return `Trailer #${trailerNumber}`;
   return `Trailer ${name}`;
+}
+
+/** Short "Jul 7" style date for the recent-inspection caution. Falls back
+ *  to the raw string if it doesn't parse. */
+function fmtShortDate(iso: string): string {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return iso;
+  return d.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
 function groupBySection(items: ChecklistItem[]): { name: string; items: ChecklistItem[] }[] {
