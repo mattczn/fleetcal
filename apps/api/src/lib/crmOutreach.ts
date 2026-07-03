@@ -100,24 +100,33 @@ export async function sendOutreachEmail(args: OutreachSendArgs): Promise<Outreac
   if (configError) throw new Error(configError);
 
   const unsub = unsubscribeUrl(args.unsubToken);
-  // Compact 2-line CAN-SPAM footer. Address collapses onto one line
-  // with "·" separators regardless of how the org wrote it in settings
-  // (multi-line entries stay legible), and the unsubscribe line is
-  // suppressed when the user already put {{unsubscribe_url}} somewhere
-  // in their template body — no duplicate link.
+  // Compact 3-line footer, auto-appended to every outreach send:
   //
   //   [body]
   //
   //   —
+  //   FleetCal · fleetcal.app
   //   Systematica LLC · 123 Main St · Ogden, UT 84401
   //   Unsubscribe: https://fleetcal.app/unsubscribe/…
+  //
+  // The brand+website line gives the curious recipient a way to check
+  // out the product without needing a link in the CTA (which would
+  // pattern-match "marketing template" for spam filters). Address
+  // collapses onto one line with " · " separators so multi-line
+  // settings entries stay legible. Unsubscribe line is suppressed
+  // when the user already included {{unsubscribe_url}} somewhere in
+  // their template body — no duplicate link.
+  const websiteHost = (() => {
+    try { return new URL(env.publicWebUrl).host; }
+    catch { return "fleetcal.app"; }
+  })();
   const addressOneLine = args.settings.physicalAddressFooter
     .split("\n")
     .map((l) => l.trim())
     .filter(Boolean)
     .join(" · ");
   let body = args.body.trimEnd();
-  const footerLines = ["—", addressOneLine];
+  const footerLines = ["—", `FleetCal · ${websiteHost}`, addressOneLine];
   if (!body.includes(unsub)) footerLines.push(`Unsubscribe: ${unsub}`);
   body += `\n\n${footerLines.join("\n")}`;
 
