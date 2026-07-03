@@ -339,6 +339,16 @@ export interface CrmEmail {
   resendMessageId?: string;
   error?: string;
   createdAt: string;
+  /** Opens from the Resend tracking pixel (email.opened webhook).
+   *  Apple Mail Privacy Protection over-reports ~30-40%; treat as
+   *  directional, not exact. openCount is the total including
+   *  duplicate opens; firstOpenedAt / lastOpenedAt bracket them. */
+  openCount?: number;
+  firstOpenedAt?: string;
+  lastOpenedAt?: string;
+  clickCount?: number;
+  firstClickedAt?: string;
+  lastClickedAt?: string;
   /** Joined for outbox display. */
   leadName?: string;
 }

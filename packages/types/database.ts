@@ -146,11 +146,17 @@ export type Database = {
           approved_at: string | null
           approved_by: string | null
           body: string
+          click_count: number
           created_at: string
           enrollment_id: string | null
           error: string | null
+          first_clicked_at: string | null
+          first_opened_at: string | null
           id: string
+          last_clicked_at: string | null
+          last_opened_at: string | null
           lead_id: string
+          open_count: number
           org_id: string
           resend_message_id: string | null
           sent_at: string | null
@@ -164,11 +170,17 @@ export type Database = {
           approved_at?: string | null
           approved_by?: string | null
           body: string
+          click_count?: number
           created_at?: string
           enrollment_id?: string | null
           error?: string | null
+          first_clicked_at?: string | null
+          first_opened_at?: string | null
           id?: string
+          last_clicked_at?: string | null
+          last_opened_at?: string | null
           lead_id: string
+          open_count?: number
           org_id: string
           resend_message_id?: string | null
           sent_at?: string | null
@@ -182,11 +194,17 @@ export type Database = {
           approved_at?: string | null
           approved_by?: string | null
           body?: string
+          click_count?: number
           created_at?: string
           enrollment_id?: string | null
           error?: string | null
+          first_clicked_at?: string | null
+          first_opened_at?: string | null
           id?: string
+          last_clicked_at?: string | null
+          last_opened_at?: string | null
           lead_id?: string
+          open_count?: number
           org_id?: string
           resend_message_id?: string | null
           sent_at?: string | null

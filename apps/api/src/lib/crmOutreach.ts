@@ -135,12 +135,24 @@ export async function sendOutreachEmail(args: OutreachSendArgs): Promise<Outreac
   body += `\n\n${footerLines.join("\n")}`;
 
   const fromName = args.settings.fromName?.trim() || env.outreachFromName;
+  // Send BOTH text and HTML. Recipients on plain-text-preferring
+  // clients still see the clean text version we've been sending; HTML
+  // clients render the HTML, into which Resend's open-tracking (per-
+  // domain toggle in the Resend Dashboard) auto-injects a 1x1 pixel.
+  // We can't get opens without HTML, so this is the minimum change.
+  //
+  // HTML wrapper is intentionally minimal — `pre-wrap` preserves
+  // exact line breaks from the plain-text body so the HTML looks
+  // identical to text (no marketing-template artifacts to trigger
+  // spam heuristics), and URLs are auto-linked so the unsubscribe
+  // still works in HTML clients.
   const { data, error } = await client().emails.send({
     from: `${fromName} <${env.outreachFromEmail}>`,
     to: [args.to],
     replyTo: args.settings.replyTo?.trim() || env.outreachReplyTo || env.outreachFromEmail!,
     subject: args.subject,
     text: body,
+    html: plainToTrackableHtml(body),
     headers: {
       "List-Unsubscribe": `<${unsub}>`,
       "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
@@ -150,4 +162,39 @@ export async function sendOutreachEmail(args: OutreachSendArgs): Promise<Outreac
     throw new Error(`Resend send failed: ${error?.message ?? "no message id returned"}`);
   }
   return { messageId: data.id };
+}
+
+/**
+ * Wrap plain-text outreach body as minimal HTML that renders exactly
+ * like the text version to the recipient while giving Resend a place
+ * to inject its open-tracking pixel. `white-space: pre-wrap` is the
+ * whole trick — it preserves every `\n` from the plain text so the
+ * HTML client sees the same paragraph structure, and we don't need
+ * any real HTML markup (no <p>, no <br>) that could pattern-match to
+ * marketing templates.
+ *
+ * URLs (specifically the unsubscribe link) get wrapped in <a> so
+ * HTML-only clients can still click them. Everything else stays as-is.
+ */
+function plainToTrackableHtml(plain: string): string {
+  const esc = (s: string) =>
+    s.replace(/&/g, "&amp;")
+     .replace(/</g, "&lt;")
+     .replace(/>/g, "&gt;")
+     .replace(/"/g, "&quot;")
+     .replace(/'/g, "&#39;");
+  // Escape first, THEN linkify. Reversed order would escape our own
+  // <a> tags. The URL regex is intentionally simple — outreach bodies
+  // don't contain hostile markup, they come from templates + merge
+  // vars we control.
+  const escaped = esc(plain);
+  const linked = escaped.replace(
+    /(https?:\/\/[^\s<]+)/g,
+    (url) => `<a href="${url}" style="color:#1a73e8;text-decoration:underline">${url}</a>`,
+  );
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>` +
+    `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;` +
+    `font-size:14px;line-height:1.5;color:#202124;white-space:pre-wrap;max-width:640px;">` +
+    linked +
+    `</div></body></html>`;
 }

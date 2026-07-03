@@ -1171,7 +1171,9 @@ crm.post("/leads/:id/mark-replied", async (c) => {
 
 const EMAIL_COLS =
   "id,lead_id,enrollment_id,step_id,to_email,subject,body,status," +
-  "approved_by,approved_at,sent_at,resend_message_id,error,created_at";
+  "approved_by,approved_at,sent_at,resend_message_id,error,created_at," +
+  "open_count,first_opened_at,last_opened_at," +
+  "click_count,first_clicked_at,last_clicked_at";
 
 function rowToEmail(r: Record<string, unknown>, leadName?: string): CrmEmail {
   return {
@@ -1189,6 +1191,12 @@ function rowToEmail(r: Record<string, unknown>, leadName?: string): CrmEmail {
     resendMessageId: (r.resend_message_id as string | null) ?? undefined,
     error:           (r.error as string | null) ?? undefined,
     createdAt:       r.created_at as string,
+    openCount:       (r.open_count as number | null) ?? undefined,
+    firstOpenedAt:   (r.first_opened_at as string | null) ?? undefined,
+    lastOpenedAt:    (r.last_opened_at as string | null) ?? undefined,
+    clickCount:      (r.click_count as number | null) ?? undefined,
+    firstClickedAt:  (r.first_clicked_at as string | null) ?? undefined,
+    lastClickedAt:   (r.last_clicked_at as string | null) ?? undefined,
     leadName,
   };
 }

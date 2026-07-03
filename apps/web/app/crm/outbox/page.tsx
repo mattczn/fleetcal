@@ -17,7 +17,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
   Target, ArrowLeft, Loader2, RefreshCw, CheckCheck, RotateCcw, XCircle,
-  ChevronDown, ChevronRight,
+  ChevronDown, ChevronRight, Eye, EyeOff,
 } from 'lucide-react';
 import AppShell from '@/components/nav/AppShell';
 import RequireCap from '@/components/auth/RequireCap';
@@ -151,8 +151,9 @@ function CrmOutboxPageInner() {
   const showCancel = tab === 'pending_approval' || tab === 'approved';
   const showRetry  = tab === 'failed' && canManage;
   const showError  = tab === 'failed' || tab === 'bounced' || tab === 'suppressed' || tab === 'cancelled';
+  const showOpens  = tab === 'sent';
   const dateLabel  = tab === 'sent' || tab === 'bounced' ? 'Sent' : 'Created';
-  const colCount   = 4 + (showError ? 1 : 0) + (showCancel || showRetry ? 1 : 0);
+  const colCount   = 4 + (showError ? 1 : 0) + (showOpens ? 1 : 0) + (showCancel || showRetry ? 1 : 0);
 
   return (
     <AppShell title="CRM outbox" icon={Target} noPageScroll>
@@ -246,6 +247,7 @@ function CrmOutboxPageInner() {
                     <Th>To</Th>
                     <Th>Subject</Th>
                     {showError && <Th>Error</Th>}
+                    {showOpens && <Th>Opens</Th>}
                     <Th>{dateLabel}</Th>
                     {(showCancel || showRetry) && <Th align="right">Actions</Th>}
                   </tr>
@@ -298,6 +300,11 @@ function CrmOutboxPageInner() {
                                 style={{ color: '#c5221f' }}>
                                 {em.error ?? '—'}
                               </span>
+                            </Td>
+                          )}
+                          {showOpens && (
+                            <Td>
+                              <OpenIndicator email={em} />
                             </Td>
                           )}
                           <Td>
@@ -373,4 +380,47 @@ function CrmOutboxPageInner() {
       </div>
     </AppShell>
   );
+}
+
+/**
+ * Show open activity for a sent email — count of opens + relative time
+ * since the last one. Two important caveats surface in the tooltip:
+ *  - Apple Mail Privacy Protection pre-loads tracking pixels silently
+ *    on device open, so counts over-report ~30-40%. Treat as
+ *    directional.
+ *  - No pixel = no open registered (mail clients that block images,
+ *    corporate filters, plain-text-preferring clients). Sends without
+ *    an open indicator here haven't necessarily gone unread.
+ * Neither breaks the signal — repeat opens, quick opens, or opens
+ * followed by a click are real interest markers.
+ */
+function OpenIndicator({ email }: { email: CrmEmail }) {
+  const count = email.openCount ?? 0;
+  if (count === 0) {
+    return (
+      <span title="No opens tracked yet. Recipient hasn't loaded the tracking pixel — could be unread, could be a mail client blocking images."
+        className="inline-flex items-center gap-1 text-[11.5px]"
+        style={{ color: 'var(--gc-text-3)' }}>
+        <EyeOff size={12} /> —
+      </span>
+    );
+  }
+  const last = email.lastOpenedAt ? new Date(email.lastOpenedAt) : null;
+  const rel = last ? fmtRelTime(last) : '';
+  return (
+    <span title={`${count} open${count === 1 ? '' : 's'}${email.firstOpenedAt ? ` · first ${fmtRelTime(new Date(email.firstOpenedAt))}` : ''}${rel ? ` · last ${rel}` : ''}. Apple Mail Privacy Protection can over-report ~30-40%.`}
+      className="inline-flex items-center gap-1 text-[11.5px] font-semibold"
+      style={{ color: '#188038' }}>
+      <Eye size={12} /> {count}{rel && <span className="font-normal" style={{ color: 'var(--gc-text-3)' }}>· {rel}</span>}
+    </span>
+  );
+}
+
+function fmtRelTime(d: Date): string {
+  const s = Math.floor((Date.now() - d.getTime()) / 1000);
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60); if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60); if (h < 24) return `${h}h ago`;
+  const days = Math.floor(h / 24); if (days < 30) return `${days}d ago`;
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }

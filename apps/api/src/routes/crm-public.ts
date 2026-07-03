@@ -157,49 +157,87 @@ crmPublic.post("/resend-webhook", async (c) => {
     return c.json({ error: "bad_payload" }, 400);
   }
 
-  // Only bounce/complaint move the needle; ack everything else.
-  const kind = event.type === "email.bounced" ? "bounce"
-             : event.type === "email.complained" ? "complaint"
-             : null;
   const messageId = event.data?.email_id;
-  if (!kind || !messageId) return c.json({ ok: true });
+  if (!messageId) return c.json({ ok: true });
 
   const { data: emailRaw } = await supabase
     .from("crm_emails")
-    .select("id,org_id,lead_id,to_email")
+    .select("id,org_id,lead_id,to_email,open_count,click_count")
     .eq("resend_message_id", messageId)
     .maybeSingle();
-  const email = emailRaw as { id: string; org_id: string; lead_id: string; to_email: string } | null;
+  const email = emailRaw as {
+    id: string; org_id: string; lead_id: string; to_email: string;
+    open_count: number | null; click_count: number | null;
+  } | null;
   // Unknown message id (e.g. an invoice email's event) → ack, ignore.
   if (!email) return c.json({ ok: true });
 
-  await supabase
-    .from("crm_emails")
-    .update({ status: "bounced", error: event.type })
-    .eq("id", email.id);
-  const { error: suppErr } = await supabase.from("crm_suppressions").insert({
-    org_id: email.org_id,
-    email: email.to_email.toLowerCase(),
-    reason: kind,
-    lead_id: email.lead_id,
-  });
-  if (suppErr && suppErr.code !== "23505") {
-    console.error("[crm-public/resend-webhook] suppression insert failed:", suppErr.message);
+  // Bounce / complaint → suppress + stop enrollments (unchanged).
+  const suppressKind = event.type === "email.bounced" ? "bounce"
+                     : event.type === "email.complained" ? "complaint"
+                     : null;
+  if (suppressKind) {
+    await supabase
+      .from("crm_emails")
+      .update({ status: "bounced", error: event.type })
+      .eq("id", email.id);
+    const { error: suppErr } = await supabase.from("crm_suppressions").insert({
+      org_id: email.org_id,
+      email: email.to_email.toLowerCase(),
+      reason: suppressKind,
+      lead_id: email.lead_id,
+    });
+    if (suppErr && suppErr.code !== "23505") {
+      console.error("[crm-public/resend-webhook] suppression insert failed:", suppErr.message);
+    }
+    await supabase
+      .from("crm_enrollments")
+      .update({ status: "stopped", next_send_at: null })
+      .eq("org_id", email.org_id)
+      .eq("lead_id", email.lead_id)
+      .in("status", ["active", "paused"]);
+    await supabase.from("crm_activities").insert({
+      org_id: email.org_id,
+      lead_id: email.lead_id,
+      kind: "email_bounced",
+      body: `${event.type} (${email.to_email})`,
+      meta: { emailId: email.id },
+      actor_user_id: null,
+    });
+    return c.json({ ok: true });
   }
-  await supabase
-    .from("crm_enrollments")
-    .update({ status: "stopped", next_send_at: null })
-    .eq("org_id", email.org_id)
-    .eq("lead_id", email.lead_id)
-    .in("status", ["active", "paused"]);
-  await supabase.from("crm_activities").insert({
-    org_id: email.org_id,
-    lead_id: email.lead_id,
-    kind: "email_bounced",
-    body: `${event.type} (${email.to_email})`,
-    meta: { emailId: email.id },
-    actor_user_id: null,
-  });
+
+  // Open / click → increment counters + timestamps. NOTE: Apple Mail
+  // Privacy Protection pre-loads tracking pixels silently on device
+  // open, so open counts over-report ~30-40%. Treat as directional.
+  // We deliberately DO NOT change lead status on opens — plenty of
+  // opens are noise (auto-forwarders, MPP), replies are the ground
+  // truth.
+  const nowIso = new Date().toISOString();
+  if (event.type === "email.opened") {
+    const openCount = (email.open_count ?? 0) + 1;
+    await supabase
+      .from("crm_emails")
+      .update({
+        open_count: openCount,
+        first_opened_at: email.open_count && email.open_count > 0 ? undefined : nowIso,
+        last_opened_at: nowIso,
+      })
+      .eq("id", email.id);
+    return c.json({ ok: true });
+  }
+  if (event.type === "email.clicked") {
+    const clickCount = (email.click_count ?? 0) + 1;
+    await supabase
+      .from("crm_emails")
+      .update({
+        click_count: clickCount,
+        first_clicked_at: email.click_count && email.click_count > 0 ? undefined : nowIso,
+        last_clicked_at: nowIso,
+      })
+      .eq("id", email.id);
+    return c.json({ ok: true });
+  }
 
   return c.json({ ok: true });
 });
