@@ -334,6 +334,11 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
   const [acIdx, setAcIdx] = useState<number | null>(null); // which stop is showing suggestions
   const acTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const justSelected = useRef(false);
+  // One Places session token per address-editing session — threaded through
+  // every autocomplete request and the final place-details call so Google
+  // bills it as a single Autocomplete Session SKU. Reset after each select.
+  const placesToken = useRef<string | null>(null);
+  const getPlacesToken = () => (placesToken.current ??= crypto.randomUUID());
 
   const fetchSuggestions = useCallback((idx: number, input: string) => {
     if (acTimer.current) clearTimeout(acTimer.current);
@@ -350,7 +355,7 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
     setAcIdx(idx);
     acTimer.current = setTimeout(async () => {
       try {
-        const res = await fetch(`/api/places?input=${encodeURIComponent(input)}`);
+        const res = await fetch(`/api/places?input=${encodeURIComponent(input)}&sessiontoken=${getPlacesToken()}`);
         const data = await res.json() as { suggestions: { place_id: string; description: string }[] };
         setSuggestions(data.suggestions ?? []);
         setAcIdx(idx);
@@ -376,7 +381,7 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
     justSelected.current = true;
     setSuggestions([]); setAcIdx(null);
     try {
-      const res  = await fetch(`/api/places?place_id=${encodeURIComponent(s.place_id)}`);
+      const res  = await fetch(`/api/places?place_id=${encodeURIComponent(s.place_id)}&sessiontoken=${getPlacesToken()}`);
       const data = await res.json() as { result: { lat: number; lng: number; timezone?: string; address?: string } | null };
       if (data.result) {
         onChange(stopsRef.current.map((stop, i) => i === idx ? { ...stop, address: data.result!.address ?? s.description, lat: data.result!.lat, lng: data.result!.lng, timezone: data.result!.timezone, geocodeStatus: 'success' } : stop));
@@ -385,6 +390,9 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
       }
     } catch {
       onChange(stopsRef.current.map((stop, i) => i === idx ? { ...stop, address: s.description, geocodeStatus: 'failed' } : stop));
+    } finally {
+      // Session complete — next address edit starts a fresh token.
+      placesToken.current = null;
     }
   }
 

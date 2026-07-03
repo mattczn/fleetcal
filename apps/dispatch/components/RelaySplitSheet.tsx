@@ -108,6 +108,13 @@ export function RelaySplitSheet({
   const [showSuggestions, setShow]      = useState(false);
   const [autocompleteSeq, setAcSeq]     = useState(0);
   const justPickedRef                   = useRef(false);
+  // One Places session token per address-editing session — threaded through
+  // every autocomplete request and the final place-details call so Google
+  // bills it as a single Autocomplete Session SKU. Reset after each pick.
+  // (RN runtimes don't reliably expose crypto.randomUUID, so build a local id.)
+  const placesTokenRef                  = useRef<string | null>(null);
+  const getPlacesToken = () =>
+    (placesTokenRef.current ??= `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`);
 
   // Facility-name autocomplete (saved locations only)
   const [showFacility, setShowFacility] = useState(false);
@@ -198,7 +205,7 @@ export function RelaySplitSheet({
     const seq = autocompleteSeq + 1;
     setAcSeq(seq);
     const t = setTimeout(async () => {
-      const results = await placesAutocomplete(getToken, q);
+      const results = await placesAutocomplete(getToken, q, getPlacesToken());
       setAcSeq((cur) => {
         if (cur !== seq) return cur;
         setPlaceResults(results);
@@ -219,7 +226,9 @@ export function RelaySplitSheet({
     justPickedRef.current = true;
     setShow(false);
     setPlaceResults([]);
-    const details = await placeDetails(getToken, p.placeId);
+    const details = await placeDetails(getToken, p.placeId, getPlacesToken());
+    // Session complete — next address edit starts a fresh token.
+    placesTokenRef.current = null;
     if (!details) { setAddress(p.description); return; }
     setAddress(details.address);
     setLat(details.lat);

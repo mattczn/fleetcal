@@ -205,6 +205,12 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
   // enough to warrant a quick "are you sure" guard.
   const [revertConfirmOpen, setRevertConfirmOpen] = useState(false);
 
+  // The interactive route map is a billable Google Dynamic Maps load,
+  // so it stays behind a "Show route" toggle instead of mounting on
+  // every page open. Local state is fine — once shown it can stay
+  // mounted for this page view.
+  const [showRouteMap, setShowRouteMap] = useState(false);
+
   // Editable draft. Only fields the user has touched land here — we
   // overlay it on top of the canonical fetched load when rendering,
   // and turn it into a PATCH payload on save. Cleared after a
@@ -696,18 +702,35 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
               pane on the left is shorter than usual. */}
           <div className="rounded-xl flex flex-col overflow-hidden"
             style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', minHeight: 480 }}>
-            {primaryLeg.stops.length > 0 ? (
+            {primaryLeg.stops.length === 0 ? (
+              <div className="flex-1 flex flex-col items-center justify-center text-center px-6 py-12"
+                style={{ color: 'var(--gc-text-3)' }}>
+                <MapPin size={28} className="opacity-50 mb-2" />
+                <div className="text-[13px] font-semibold mb-1">No stops yet</div>
+                <div className="text-[12px]">Add pickup / delivery stops to see the route.</div>
+              </div>
+            ) : showRouteMap ? (
               <RouteMapPanel
                 stops={primaryLeg.stops}
                 motiveVehicleId={primaryLeg.motiveVehicleId}
                 embedded
               />
             ) : (
+              // Placeholder occupies the same footprint as the map so
+              // layout doesn't jump when the user reveals it. The map
+              // itself is a billable Google Dynamic Maps load, so we
+              // only instantiate it once the dispatcher asks.
               <div className="flex-1 flex flex-col items-center justify-center text-center px-6 py-12"
                 style={{ color: 'var(--gc-text-3)' }}>
                 <MapPin size={28} className="opacity-50 mb-2" />
-                <div className="text-[13px] font-semibold mb-1">No stops yet</div>
-                <div className="text-[12px]">Add pickup / delivery stops to see the route.</div>
+                <div className="text-[13px] font-semibold mb-3">Route map</div>
+                <button
+                  onClick={() => setShowRouteMap(true)}
+                  className="text-[12px] font-semibold px-3 py-1.5 rounded-lg inline-flex items-center gap-1.5 transition-colors"
+                  style={{ background: LOAD_ACCENT, color: '#fff' }}>
+                  <MapPin size={12} />
+                  Show route
+                </button>
               </div>
             )}
           </div>

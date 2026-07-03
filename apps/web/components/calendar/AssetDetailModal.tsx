@@ -137,6 +137,40 @@ function makeDotMarker(color: string, label: string): HTMLDivElement {
   return el;
 }
 
+/**
+ * Module-level cache of routed results, keyed on the lane's coordinates.
+ * The map re-runs its paint on every movement selection, and each
+ * `DirectionsService.route()` is a billable Directions request. A lane's road
+ * geometry doesn't change with the selection, so we cache the resolved
+ * DirectionsResult and re-feed it to the renderer instead of re-billing when
+ * the same lane is viewed again. Bounded to avoid unbounded session growth.
+ */
+const assetRouteResultCache = new Map<string, google.maps.DirectionsResult>();
+const ASSET_ROUTE_CACHE_MAX = 500;
+
+function assetRouteCacheKey(
+  start: google.maps.LatLngLiteral,
+  end: google.maps.LatLngLiteral,
+  waypoints: google.maps.DirectionsWaypoint[],
+): string {
+  const r = (n: number) => n.toFixed(5);
+  const wp = waypoints
+    .map((w) => {
+      const l = w.location as google.maps.LatLngLiteral;
+      return `${r(l.lat)},${r(l.lng)}`;
+    })
+    .join(';');
+  return `${r(start.lat)},${r(start.lng)}|${wp}|${r(end.lat)},${r(end.lng)}`;
+}
+
+function rememberAssetRoute(key: string, result: google.maps.DirectionsResult): void {
+  if (assetRouteResultCache.size >= ASSET_ROUTE_CACHE_MAX) {
+    const oldest = assetRouteResultCache.keys().next().value;
+    if (oldest !== undefined) assetRouteResultCache.delete(oldest);
+  }
+  assetRouteResultCache.set(key, result);
+}
+
 export default function AssetDetailModal({ asset, location, onClose, initialMotivePeriodId }: Props) {
   // Gate the Timeline link on the org's performance module so orgs
   // without the module don't see a chip that leads to a 403.
@@ -376,11 +410,20 @@ export default function AssetDetailModal({ asset, location, onClose, initialMoti
             preserveViewport: false,
           });
           directionsRef.current = directionsRenderer;
+          // Reuse the cached routed result for this lane when we've already
+          // fetched it — re-viewing the same movement redraws without a new
+          // billable Directions request.
+          const routeKey = assetRouteCacheKey(startPos, endPos, waypoints);
+          const cachedResult = assetRouteResultCache.get(routeKey);
+          if (cachedResult) {
+            directionsRenderer.setDirections(cachedResult);
+          } else {
           directionsService.route(
             { origin: startPos, destination: endPos, waypoints, travelMode: google.maps.TravelMode.DRIVING, optimizeWaypoints: false },
             (result, status) => {
               if (cancelled) return;
               if (status === google.maps.DirectionsStatus.OK && result) {
+                rememberAssetRoute(routeKey, result);
                 directionsRenderer.setDirections(result);
               } else {
                 // Fallback: dashed straight polyline through all points.
@@ -402,6 +445,7 @@ export default function AssetDetailModal({ asset, location, onClose, initialMoti
               }
             },
           );
+          }
         } else if (startPos || endPos) {
           map.setCenter((startPos ?? endPos)!);
           map.setZoom(13);

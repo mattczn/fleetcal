@@ -189,6 +189,41 @@ function makeDot(color: string, label: string | null = null): HTMLElement {
   return el;
 }
 
+/**
+ * Module-level cache of routed paths, keyed on the lane's coordinates.
+ * Each `DirectionsService.route()` is a billable Directions request, and the
+ * paint effect re-runs on every selection/highlight change — so without this,
+ * clicking around the timeline re-bills the identical origin→destination route
+ * on every click. A lane's road geometry doesn't depend on the selection, so we
+ * cache the resolved path and reuse it for the life of the page. Bounded to
+ * avoid unbounded growth across a long session.
+ */
+const timelineRoutePathCache = new Map<string, google.maps.LatLngLiteral[]>();
+const ROUTE_CACHE_MAX = 500;
+
+function routeCacheKey(
+  start: google.maps.LatLngLiteral,
+  end: google.maps.LatLngLiteral,
+  waypoints: google.maps.DirectionsWaypoint[],
+): string {
+  const r = (n: number) => n.toFixed(5);
+  const wp = waypoints
+    .map((w) => {
+      const l = w.location as google.maps.LatLngLiteral;
+      return `${r(l.lat)},${r(l.lng)}`;
+    })
+    .join(';');
+  return `${r(start.lat)},${r(start.lng)}|${wp}|${r(end.lat)},${r(end.lng)}`;
+}
+
+function rememberRoutePath(key: string, path: google.maps.LatLngLiteral[]): void {
+  if (timelineRoutePathCache.size >= ROUTE_CACHE_MAX) {
+    const oldest = timelineRoutePathCache.keys().next().value;
+    if (oldest !== undefined) timelineRoutePathCache.delete(oldest);
+  }
+  timelineRoutePathCache.set(key, path);
+}
+
 export default function TimelineMap({
   clusters, linkByMovementId, eventLookup, tz,
   selection, assetColor, height,
@@ -322,29 +357,43 @@ export default function TimelineMap({
       // for loaded, dashed for deadhead). DirectionsRenderer can't
       // dash, so we ignore it and use the result's overview_path.
       if (start && end) {
-        const ds = new g.maps.DirectionsService();
-        ds.route(
-          {
-            origin: start, destination: end, waypoints,
-            travelMode: g.maps.TravelMode.DRIVING,
-            optimizeWaypoints: false,
-          },
-          (result, status) => {
-            let path: google.maps.LatLngLiteral[];
-            if (status === g.maps.DirectionsStatus.OK && result?.routes?.[0]) {
-              // Road-accurate path from the routing result.
-              path = result.routes[0].overview_path.map((p) => ({ lat: p.lat(), lng: p.lng() }));
-            } else {
-              // Routing failed — straight line through waypoints.
-              path = [start, ...waypoints.map((w) => w.location as google.maps.LatLngLiteral), end];
-            }
-            const line = new g.maps.Polyline({
-              ...polylineOptionsForRole(role, assetColor, path),
-              map,
-            });
-            overlaysRef.current.push(line);
-          },
-        );
+        const drawPath = (path: google.maps.LatLngLiteral[]) => {
+          const line = new g.maps.Polyline({
+            ...polylineOptionsForRole(role, assetColor, path),
+            map,
+          });
+          overlaysRef.current.push(line);
+        };
+
+        // Reuse the cached road geometry for this lane when we've already
+        // routed it — a re-selection redraws without a new Directions call.
+        const cacheKey = routeCacheKey(start, end, waypoints);
+        const cachedPath = timelineRoutePathCache.get(cacheKey);
+        if (cachedPath) {
+          drawPath(cachedPath);
+        } else {
+          const ds = new g.maps.DirectionsService();
+          ds.route(
+            {
+              origin: start, destination: end, waypoints,
+              travelMode: g.maps.TravelMode.DRIVING,
+              optimizeWaypoints: false,
+            },
+            (result, status) => {
+              let path: google.maps.LatLngLiteral[];
+              if (status === g.maps.DirectionsStatus.OK && result?.routes?.[0]) {
+                // Road-accurate path from the routing result.
+                path = result.routes[0].overview_path.map((p) => ({ lat: p.lat(), lng: p.lng() }));
+                rememberRoutePath(cacheKey, path);
+              } else {
+                // Routing failed — straight line through waypoints. Not cached
+                // so a later attempt can still get the real road geometry.
+                path = [start, ...waypoints.map((w) => w.location as google.maps.LatLngLiteral), end];
+              }
+              drawPath(path);
+            },
+          );
+        }
       }
     });
 

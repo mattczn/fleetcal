@@ -213,17 +213,30 @@ export default function TrailerFleetMapPanel({ onClose }: Props) {
     return { active, idle, noGps };
   }, [trailers, events, locations, calendarTimezone, query]);
 
-  // ── Initialize map + plot pins ────────────────────────────────────────
-  // Pins are plotted from groups (so search filtering hides pins too
-  // — the map shows exactly what the sidebar shows).
+  // ── Construct the map ONCE ────────────────────────────────────────────
+  // The google.maps.Map is a billable Dynamic Maps load, so it must be
+  // built exactly once for the lifetime of this panel. The `mapReady`
+  // flag flips after construction so the marker effect below can start
+  // plotting pins onto the existing instance. The initial center/zoom
+  // and one-time fit-bounds are done here from a ref snapshot of the
+  // current groups so we don't re-center on every poll.
+  const [mapReady, setMapReady] = useState(false);
+  const didInitialFitRef = useRef(false);
+  // Latest groups, read (not depended on) by the construction effect so
+  // the initial center/fit reflects whatever pins exist at first paint
+  // without pulling `groups` into the deps.
+  const groupsRef = useRef(groups);
+  groupsRef.current = groups;
+
   useEffect(() => {
     if (!mapContainer.current) return;
+    if (mapRef.current) return;  // never re-instantiate
     let cancelled = false;
 
     loadGoogleMaps().then(google => {
-      if (cancelled || !mapContainer.current) return;
+      if (cancelled || !mapContainer.current || mapRef.current) return;
 
-      const allPinned = [...groups.active, ...groups.idle];
+      const allPinned = [...groupsRef.current.active, ...groupsRef.current.idle];
       const initialCenter = allPinned.length > 0
         ? { lat: allPinned[0].loc.lat, lng: allPinned[0].loc.lon }
         : { lat: 39.5, lng: -98.35 };
@@ -237,31 +250,7 @@ export default function TrailerFleetMapPanel({ onClose }: Props) {
         gestureHandling: 'greedy',
       });
       mapRef.current = map;
-
-      const bounds = new google.maps.LatLngBounds();
-      for (const entry of allPinned) {
-        const color = STATUS_PIN_COLOR[entry.usage.status];
-        const lastSeen = formatLastSeen(entry.loc.locatedAt);
-        // Label content prefers the trailer number (what dispatchers
-        // actually call them) and falls back to the display name.
-        const labelText = entry.trailer.trailerNumber
-          ? `#${entry.trailer.trailerNumber}`
-          : entry.trailer.name;
-        const { wrapper, labelEl } = makePinElement(color, labelText);
-        const marker = new google.maps.marker.AdvancedMarkerElement({
-          map,
-          position: { lat: entry.loc.lat, lng: entry.loc.lon },
-          content: wrapper,
-          // Hover title gives the dispatcher a quick read without
-          // clicking through to the sidebar.
-          title: lastSeen ? `${entry.trailer.name} · ${lastSeen}` : entry.trailer.name,
-        });
-        marker.addListener('click', () => setSelectedTrailerId(entry.trailer.id));
-        markersRef.current.set(String(entry.trailer.id), marker);
-        labelsRef.current.set(String(entry.trailer.id), labelEl);
-        bounds.extend({ lat: entry.loc.lat, lng: entry.loc.lon });
-      }
-      if (allPinned.length > 1) map.fitBounds(bounds, 60);
+      setMapReady(true);
     });
 
     return () => {
@@ -271,8 +260,82 @@ export default function TrailerFleetMapPanel({ onClose }: Props) {
       labelsRef.current.clear();
       mapRef.current = null;
     };
+    // Construct once — never tear down / rebuild on poll-driven count
+    // changes (that would spawn a fresh billable Dynamic Maps load).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groups.active.length, groups.idle.length]);
+  }, []);
+
+  // ── Plot / diff pins on the existing map ──────────────────────────────
+  // Runs whenever `groups` change (search filtering, poll updates). It
+  // adds new markers, removes stale ones, and updates the position /
+  // color / title of survivors — all on the map instance built above,
+  // so the poll interval never re-instantiates the map. Pins are
+  // plotted from groups (so search filtering hides pins too — the map
+  // shows exactly what the sidebar shows).
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return;
+    void loadGoogleMaps().then(google => {
+      const map = mapRef.current;
+      if (!map) return;
+
+      const allPinned = [...groups.active, ...groups.idle];
+      const seen = new Set<string>();
+      const bounds = new google.maps.LatLngBounds();
+
+      for (const entry of allPinned) {
+        const key = String(entry.trailer.id);
+        seen.add(key);
+        const color = STATUS_PIN_COLOR[entry.usage.status];
+        const lastSeen = formatLastSeen(entry.loc.locatedAt);
+        // Label content prefers the trailer number (what dispatchers
+        // actually call them) and falls back to the display name.
+        const labelText = entry.trailer.trailerNumber
+          ? `#${entry.trailer.trailerNumber}`
+          : entry.trailer.name;
+        const position = { lat: entry.loc.lat, lng: entry.loc.lon };
+        const title = lastSeen ? `${entry.trailer.name} · ${lastSeen}` : entry.trailer.name;
+
+        const existing = markersRef.current.get(key);
+        if (existing) {
+          // Update the survivor in place — moving the pin and refreshing
+          // its hover title without recreating the AdvancedMarkerElement.
+          existing.position = position;
+          existing.title = title;
+        } else {
+          const { wrapper, labelEl } = makePinElement(color, labelText);
+          const marker = new google.maps.marker.AdvancedMarkerElement({
+            map,
+            position,
+            content: wrapper,
+            // Hover title gives the dispatcher a quick read without
+            // clicking through to the sidebar.
+            title,
+          });
+          marker.addListener('click', () => setSelectedTrailerId(entry.trailer.id));
+          markersRef.current.set(key, marker);
+          labelsRef.current.set(key, labelEl);
+        }
+        bounds.extend(position);
+      }
+
+      // Remove markers whose trailers dropped out of the pinned set.
+      for (const [key, marker] of markersRef.current) {
+        if (!seen.has(key)) {
+          marker.map = null;
+          markersRef.current.delete(key);
+          labelsRef.current.delete(key);
+        }
+      }
+
+      // Fit the map to all pins exactly once, on the first plot with
+      // data. After that, poll updates mutate pins without forcibly
+      // re-centering (matching prior UX where the view stayed put).
+      if (!didInitialFitRef.current && allPinned.length > 0) {
+        didInitialFitRef.current = true;
+        if (allPinned.length > 1) map.fitBounds(bounds, 60);
+      }
+    });
+  }, [mapReady, groups]);
 
   // ── Selection effect ──────────────────────────────────────────────────
   // Three things happen when a trailer becomes selected (whether the

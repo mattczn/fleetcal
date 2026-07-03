@@ -553,12 +553,16 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
   const [billingAddressSuggestions, setBillingAddressSuggestions] = useState<{ place_id: string; description: string }[]>([]);
   const billingAcTimer    = useRef<ReturnType<typeof setTimeout> | null>(null);
   const billingJustPicked = useRef(false);
+  // One Places session token per address-editing session — threaded through
+  // autocomplete + the final place-details call, then reset after select.
+  const billingPlacesToken = useRef<string | null>(null);
+  const getBillingPlacesToken = () => (billingPlacesToken.current ??= crypto.randomUUID());
   const fetchBillingAddressSuggestions = (input: string) => {
     if (billingAcTimer.current) clearTimeout(billingAcTimer.current);
     if (!input.trim() || input.length < 4) { setBillingAddressSuggestions([]); return; }
     billingAcTimer.current = setTimeout(async () => {
       try {
-        const res  = await fetch(`/api/places?input=${encodeURIComponent(input)}`);
+        const res  = await fetch(`/api/places?input=${encodeURIComponent(input)}&sessiontoken=${getBillingPlacesToken()}`);
         const data = await res.json() as { suggestions: { place_id: string; description: string }[] };
         setBillingAddressSuggestions(data.suggestions ?? []);
       } catch { setBillingAddressSuggestions([]); }
@@ -569,10 +573,13 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
     setBillingAddressSuggestions([]);
     setBillingAddress(s.description);
     try {
-      const res  = await fetch(`/api/places?place_id=${encodeURIComponent(s.place_id)}`);
+      const res  = await fetch(`/api/places?place_id=${encodeURIComponent(s.place_id)}&sessiontoken=${getBillingPlacesToken()}`);
       const data = await res.json() as { result: { address?: string } | null };
       if (data.result?.address) setBillingAddress(data.result.address);
-    } catch { /* keep the description fallback */ }
+    } catch { /* keep the description fallback */ } finally {
+      // Session complete — next address edit starts a fresh token.
+      billingPlacesToken.current = null;
+    }
   };
   // "Refresh from latest rate con" button — kicks off a server-side
   // re-parse of this customer's most recent rate confirmation and

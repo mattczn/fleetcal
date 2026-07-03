@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
+import { find as tzFind } from 'geo-tz';
 
 const KEY = process.env.GOOGLE_MAPS_API_KEY ?? '';
 
@@ -31,11 +32,13 @@ export async function GET(req: NextRequest) {
 
   const input    = req.nextUrl.searchParams.get('input');
   const place_id = req.nextUrl.searchParams.get('place_id');
+  const token    = req.nextUrl.searchParams.get('sessiontoken');
+  const tokenParam = token ? `&sessiontoken=${encodeURIComponent(token)}` : '';
 
   // Return place details (lat/lng + timezone) for a selected suggestion
   if (place_id) {
     const res  = await fetch(
-      `https://maps.googleapis.com/maps/api/place/details/json?place_id=${place_id}&fields=geometry,formatted_address&key=${KEY}`,
+      `https://maps.googleapis.com/maps/api/place/details/json?place_id=${place_id}&fields=geometry,formatted_address&key=${KEY}${tokenParam}`,
       { cache: 'no-store' },
     );
     const data = await res.json() as {
@@ -48,16 +51,10 @@ export async function GET(req: NextRequest) {
     }
     const { lat, lng } = data.result.geometry.location;
 
-    // Google Time Zone API — returns IANA timezone id (e.g. "America/Denver")
-    let timezone: string | undefined;
-    try {
-      const tzRes  = await fetch(
-        `https://maps.googleapis.com/maps/api/timezone/json?location=${lat},${lng}&timestamp=${Math.floor(Date.now() / 1000)}&key=${KEY}`,
-        { cache: 'no-store' },
-      );
-      const tzData = await tzRes.json() as { status?: string; timeZoneId?: string };
-      if (tzData.status === 'OK') timezone = tzData.timeZoneId;
-    } catch { /* best-effort */ }
+    // Derive the IANA timezone id (e.g. "America/Denver") locally from the
+    // lat/lng — same geo-tz approach as lib/geocode.ts — instead of paying
+    // for a separate Google Time Zone API call.
+    const timezone = tzFind(lat, lng)[0] ?? undefined;
 
     return NextResponse.json({ result: { lat, lng, timezone, address: data.result.formatted_address } });
   }
@@ -65,7 +62,7 @@ export async function GET(req: NextRequest) {
   // Return autocomplete suggestions
   if (!input?.trim()) return NextResponse.json({ suggestions: [] });
   const res  = await fetch(
-    `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(input)}&types=address&components=country:us|country:ca|country:mx&key=${KEY}`,
+    `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(input)}&types=address&components=country:us|country:ca|country:mx&key=${KEY}${tokenParam}`,
     { cache: 'no-store' },
   );
   const data = await res.json() as {

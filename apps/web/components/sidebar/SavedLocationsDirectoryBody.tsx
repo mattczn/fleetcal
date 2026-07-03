@@ -256,13 +256,17 @@ function LocationDetailPanel({ location, canDelete, onSaveNew, onCancelNew, onUp
   const [confirmDelete, setConfirmDelete] = useState(false);
   const acTimer    = useRef<ReturnType<typeof setTimeout> | null>(null);
   const justPicked = useRef(false);
+  // One Places session token per address-editing session — threaded through
+  // autocomplete + the final place-details call, then reset after select.
+  const placesToken = useRef<string | null>(null);
+  const getPlacesToken = () => (placesToken.current ??= crypto.randomUUID());
 
   function fetchSuggestions(input: string) {
     if (acTimer.current) clearTimeout(acTimer.current);
     if (!input.trim() || input.length < 4) { setSuggestions([]); return; }
     acTimer.current = setTimeout(async () => {
       try {
-        const res  = await fetch(`/api/places?input=${encodeURIComponent(input)}`);
+        const res  = await fetch(`/api/places?input=${encodeURIComponent(input)}&sessiontoken=${getPlacesToken()}`);
         const data = await res.json() as { suggestions: AcSuggestion[] };
         setSuggestions(data.suggestions ?? []);
       } catch { setSuggestions([]); }
@@ -274,7 +278,7 @@ function LocationDetailPanel({ location, canDelete, onSaveNew, onCancelNew, onUp
     setSuggestions([]);
     setAddress(s.description);
     try {
-      const res  = await fetch(`/api/places?place_id=${encodeURIComponent(s.place_id)}`);
+      const res  = await fetch(`/api/places?place_id=${encodeURIComponent(s.place_id)}&sessiontoken=${getPlacesToken()}`);
       const data = await res.json() as { result: { lat: number; lng: number; timezone?: string; address?: string } | null };
       if (data.result) {
         const newAddress = data.result.address ?? s.description;
@@ -294,7 +298,10 @@ function LocationDetailPanel({ location, canDelete, onSaveNew, onCancelNew, onUp
           });
         }
       }
-    } catch { /* ignore */ }
+    } catch { /* ignore */ } finally {
+      // Session complete — next address edit starts a fresh token.
+      placesToken.current = null;
+    }
   }
 
   const canSaveNew = name.trim() && geocoded;

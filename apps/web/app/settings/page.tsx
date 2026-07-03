@@ -3949,6 +3949,10 @@ function LocationForm({
   const [suggestions, setSuggestions] = useState<AcSuggestion[]>([]);
   const acTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const justPicked = useRef(false);
+  // One Places session token per address-editing session — threaded through
+  // autocomplete + the final place-details call, then reset after select.
+  const placesToken = useRef<string | null>(null);
+  const getPlacesToken = () => (placesToken.current ??= crypto.randomUUID());
 
   const inp: React.CSSProperties = {
     border: '1px solid var(--gc-border)', borderRadius: 8, padding: '8px 12px',
@@ -3961,7 +3965,7 @@ function LocationForm({
     if (!input.trim() || input.length < 4) { setSuggestions([]); return; }
     acTimer.current = setTimeout(async () => {
       try {
-        const res = await fetch(`/api/places?input=${encodeURIComponent(input)}`);
+        const res = await fetch(`/api/places?input=${encodeURIComponent(input)}&sessiontoken=${getPlacesToken()}`);
         const data = await res.json() as { suggestions: AcSuggestion[] };
         setSuggestions(data.suggestions ?? []);
       } catch { setSuggestions([]); }
@@ -3973,7 +3977,7 @@ function LocationForm({
     setSuggestions([]);
     setAddress(s.description);
     try {
-      const res  = await fetch(`/api/places?place_id=${encodeURIComponent(s.place_id)}`);
+      const res  = await fetch(`/api/places?place_id=${encodeURIComponent(s.place_id)}&sessiontoken=${getPlacesToken()}`);
       const data = await res.json() as { result: { lat: number; lng: number; timezone?: string; address?: string } | null };
       if (data.result) {
         setAddress(data.result.address ?? s.description);
@@ -3982,7 +3986,10 @@ function LocationForm({
         setTimezone(data.result.timezone);
         setGeocoded(true);
       }
-    } catch { /* ignore */ }
+    } catch { /* ignore */ } finally {
+      // Session complete — next address edit starts a fresh token.
+      placesToken.current = null;
+    }
   }
 
   const canSave = name.trim() && geocoded;

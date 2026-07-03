@@ -329,12 +329,14 @@ export interface PlaceDetails {
 export async function placesAutocomplete(
   getToken: () => Promise<string | null>,
   input: string,
+  sessiontoken?: string,
 ): Promise<PlaceSuggestion[]> {
   const baseUrl = (await import("./env")).env.dispatchApiUrl;
   if (!baseUrl || !input.trim()) return [];
   try {
     const token = await getToken();
-    const res = await fetch(`${baseUrl}/api/places?input=${encodeURIComponent(input)}`, {
+    const tokenParam = sessiontoken ? `&sessiontoken=${encodeURIComponent(sessiontoken)}` : "";
+    const res = await fetch(`${baseUrl}/api/places?input=${encodeURIComponent(input)}${tokenParam}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
     if (!res.ok) return [];
@@ -350,12 +352,14 @@ export async function placesAutocomplete(
 export async function placeDetails(
   getToken: () => Promise<string | null>,
   placeId: string,
+  sessiontoken?: string,
 ): Promise<PlaceDetails | null> {
   const baseUrl = (await import("./env")).env.dispatchApiUrl;
   if (!baseUrl) return null;
   try {
     const token = await getToken();
-    const res = await fetch(`${baseUrl}/api/places?place_id=${encodeURIComponent(placeId)}`, {
+    const tokenParam = sessiontoken ? `&sessiontoken=${encodeURIComponent(sessiontoken)}` : "";
+    const res = await fetch(`${baseUrl}/api/places?place_id=${encodeURIComponent(placeId)}${tokenParam}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
     if (!res.ok) return null;
