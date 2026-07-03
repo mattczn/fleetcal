@@ -79,16 +79,21 @@ function doneToday(inspections: TodayInspectionSummary[], kind: "pre_trip" | "po
 }
 
 function TwoHalfCard({ inspections, onStart }: { inspections: TodayInspectionSummary[]; onStart: (kind: "pre_trip" | "post_trip") => void }) {
+  const { C } = useTheme();
   const preDone  = doneToday(inspections, "pre_trip");
   const postDone = doneToday(inspections, "post_trip");
+  // Single clean outer border on the container + one divider between the halves.
+  // (Per-half borders would double up in the middle and get square-clipped by
+  // the rounded overflow-hidden container — the "weird outline".)
   return (
-    <View style={[cardBase, { padding: 0, borderWidth: 0, overflow: "hidden", flexDirection: "row" }]}>
+    <View style={[cardBase, { padding: 0, borderColor: C.border, overflow: "hidden", flexDirection: "row" }]}>
       <HalfCard
         kind="pre_trip"
         title="Pre-Trip"
         subtitle="Inspection"
         Icon={Sun}
         done={preDone}
+        divider
         onPress={() => onStart("pre_trip")}
       />
       <HalfCard
@@ -104,7 +109,7 @@ function TwoHalfCard({ inspections, onStart }: { inspections: TodayInspectionSum
 }
 
 function HalfCard({
-  title, subtitle, Icon, done, onPress,
+  title, subtitle, Icon, done, onPress, divider,
 }: {
   kind: "pre_trip" | "post_trip";
   title: string;
@@ -112,17 +117,19 @@ function HalfCard({
   Icon: React.ComponentType<{ size?: number; color?: string }>;
   done: boolean;
   onPress: () => void;
+  /** Draw the single divider on this half's right edge (left half only). */
+  divider?: boolean;
 }) {
   const { C } = useTheme();
   const bg     = done ? C.greenBg  : C.redBg;
-  const border = done ? C.green    : C.red;
   const ink    = done ? C.greenInk : C.redInk;
   return (
     <TouchableOpacity
       onPress={onPress}
       activeOpacity={0.85}
       style={{
-        flex: 1, backgroundColor: bg, borderWidth: 1, borderColor: border,
+        flex: 1, backgroundColor: bg,
+        borderRightWidth: divider ? 1 : 0, borderRightColor: C.border,
         padding: 14, minHeight: 96, justifyContent: "space-between",
       }}
     >
