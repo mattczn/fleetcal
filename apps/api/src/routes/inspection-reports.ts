@@ -286,4 +286,44 @@ inspectionReports.get("/:id", async (c) => {
   });
 });
 
+// ── DELETE /v1/inspection-reports/:id — remove an inspection + its photos ──
+// The inspection_photos rows cascade on report delete (ON DELETE CASCADE), but
+// the Supabase Storage objects are separate and won't — so remove those first.
+inspectionReports.delete("/:id", requireCapability("maintenance.edit"), async (c) => {
+  const orgId = c.get("orgId");
+  const id    = c.req.param("id");
+
+  // Confirm it's this org's report before touching anything.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: row } = await (supabase as any)
+    .from("inspection_reports")
+    .select("id")
+    .eq("id", id).eq("org_id", orgId)
+    .maybeSingle();
+  if (!row) return c.json({ error: "not_found" }, 404);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: photoRows } = await (supabase as any)
+    .from("inspection_photos")
+    .select("storage_path")
+    .eq("report_id", id);
+  const paths = ((photoRows ?? []) as Array<{ storage_path: string }>).map(p => p.storage_path);
+  if (paths.length > 0) {
+    const { error: rmErr } = await supabase.storage.from(INSPECTION_PHOTO_BUCKET).remove(paths);
+    // Non-fatal: a lingering blob is better than blocking the delete.
+    if (rmErr) console.error("[DELETE inspection] storage remove failed:", rmErr.message);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { error: delErr } = await (supabase as any)
+    .from("inspection_reports")
+    .delete()
+    .eq("id", id).eq("org_id", orgId);
+  if (delErr) {
+    console.error("[DELETE /v1/inspection-reports/:id] failed:", delErr);
+    return c.json({ error: "delete_failed", detail: delErr.message }, 500);
+  }
+  return c.json({ ok: true });
+});
+
 export default inspectionReports;
