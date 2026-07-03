@@ -35,6 +35,8 @@ interface DbInspectionRow {
   asset_id:          number | null;
   trailer_id:        number | null;
   inspection_date:   string;
+  kind:              "pre_trip" | "post_trip";
+  cleanliness_flagged: boolean;
   items:             InspectionItem[];
   trailer_items:     InspectionItem[] | null;
   notes:             string | null;
@@ -74,6 +76,8 @@ interface ListInspectionRow {
   trailerId:        number | null;
   trailerName:      string | null;
   inspectionDate:   string;
+  kind:             "pre_trip" | "post_trip";
+  cleanlinessFlagged: boolean;
   hasDefects:       boolean;
   defectCount:      number;
   itemCount:        number;
@@ -121,7 +125,8 @@ inspectionReports.get("/", async (c) => {
   let q: any = (supabase as any)
     .from("inspection_reports")
     .select(`
-      id, driver_id, asset_id, trailer_id, inspection_date, items, trailer_items,
+      id, driver_id, asset_id, trailer_id, inspection_date, kind, cleanliness_flagged,
+      items, trailer_items,
       has_defects, signed_by, submitted_at, duration_seconds,
       driver:drivers(name),
       asset:assets(name, unit),
@@ -180,6 +185,8 @@ inspectionReports.get("/", async (c) => {
       trailerId:       r.trailer_id,
       trailerName:     trailer ? `${trailer.name ?? ""}${trailer.trailer_number ? ` #${trailer.trailer_number}` : ""}`.trim() : null,
       inspectionDate:  r.inspection_date,
+      kind:            r.kind ?? "pre_trip",
+      cleanlinessFlagged: r.cleanliness_flagged ?? false,
       hasDefects:      r.has_defects,
       defectCount:     defects,
       itemCount:       items.length,
@@ -207,7 +214,8 @@ inspectionReports.get("/:id", async (c) => {
   const { data, error } = await (supabase as any)
     .from("inspection_reports")
     .select(`
-      id, driver_id, asset_id, trailer_id, inspection_date, items, trailer_items,
+      id, driver_id, asset_id, trailer_id, inspection_date, kind, cleanliness_flagged,
+      items, trailer_items,
       notes, has_defects, signed_by, submitted_at,
       duration_seconds, location_lat, location_lon,
       driver:drivers(name, phone),
@@ -262,6 +270,8 @@ inspectionReports.get("/:id", async (c) => {
       trailerId:       data.trailer_id,
       trailer:         data.trailer,
       inspectionDate:  data.inspection_date,
+      kind:            data.kind ?? "pre_trip",
+      cleanlinessFlagged: data.cleanliness_flagged ?? false,
       items:           data.items ?? [],
       trailerItems:    data.trailer_items ?? [],
       notes:           data.notes,

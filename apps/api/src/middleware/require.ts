@@ -216,8 +216,9 @@ export const requireInternalOrg: MiddlewareHandler<{ Variables: AuthVariables }>
 
 /**
  * Org allowlist gate for the Truck History module (equipment history,
- * post-trip inspections, inspection-sourced maintenance reports). Checks
- * the caller's org against env TRUCK_HISTORY_ORG_IDS. Curzon-only today.
+ * post-trip inspections, inspection-sourced maintenance reports). Reuses the
+ * CRM internal-org allowlist (CRM_INTERNAL_ORG_IDS) — it's the same Curzon-only
+ * set, so we don't carry a second env var for the same orgs.
  *
  * Like requireInternalOrg, returns **404** (not 403) on denial so the
  * routes stay invisible to non-allowlisted orgs. Mount first in the group.
@@ -225,7 +226,7 @@ export const requireInternalOrg: MiddlewareHandler<{ Variables: AuthVariables }>
 export const requireTruckHistoryOrg: MiddlewareHandler<{ Variables: AuthVariables }> =
   async (c, next) => {
     const orgId = c.get("orgId");
-    if (!orgId || !env.truckHistoryOrgIds.includes(orgId)) {
+    if (!orgId || !env.crmInternalOrgIds.includes(orgId)) {
       return c.json({ error: "not_found" }, 404);
     }
     await next();
@@ -235,10 +236,10 @@ export const requireTruckHistoryOrg: MiddlewareHandler<{ Variables: AuthVariable
  * True when the caller's org may use the Truck History module. Non-throwing
  * variant of requireTruckHistoryOrg for endpoints that expose the flag to
  * clients (e.g. /v1/driver/org-settings → truckHistoryEnabled) rather than
- * gating access.
+ * gating access. Reuses the CRM internal-org allowlist.
  */
 export function isTruckHistoryOrg(orgId: string | null | undefined): boolean {
-  return !!orgId && env.truckHistoryOrgIds.includes(orgId);
+  return !!orgId && env.crmInternalOrgIds.includes(orgId);
 }
 
 /**

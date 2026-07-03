@@ -255,6 +255,9 @@ export const railway = {
         /** Org module flags (MVP defaults merged server-side). Gates the
          *  Report tab / inspections / compliance per org. */
         modules:           import("@fleetcal/types").OrgModuleFlags | null;
+        /** Curzon-only Truck History module — gates "View truck history" +
+         *  "Post-Trip Inspection" surfaces. */
+        truckHistoryEnabled?: boolean;
       };
     }>("GET", "/v1/driver/org-settings");
   },
@@ -317,6 +320,11 @@ export const railway = {
     latitude?:   number;
     longitude?:  number;
     state?:      string;
+    /** Set when this report is spawned from a failed inspection item
+     *  (step 3 of the pre/post-trip flow). */
+    source?:             "inspection";
+    inspectionReportId?: string;
+    inspectionItemId?:   string;
   }) {
     return req<{ report: import("@fleetcal/types").MaintenanceReport }>(
       "POST",
@@ -367,6 +375,8 @@ export const railway = {
   submitInspection(body: {
     assetId?:         number | null;
     trailerId?:       number | null;
+    /** Pre-trip (default) or post-trip end-of-shift condition pass. */
+    kind?:            "pre_trip" | "post_trip";
     items:            InspectionItemPayload[];
     trailerItems?:    InspectionItemPayload[];
     notes?:           string;
@@ -375,8 +385,16 @@ export const railway = {
     locationLat?:     number | null;
     locationLon?:     number | null;
   }) {
-    return req<{ inspection: { id: string; submitted_at: string; has_defects: boolean } }>(
+    return req<{ inspection: { id: string; submitted_at: string; has_defects: boolean; kind?: string } }>(
       "POST", "/v1/driver/inspections", body,
+    );
+  },
+  /** Truck History module (Curzon-only). Aggregated history for one truck
+   *  or trailer: recent driver events, known damage, recent inspection
+   *  defects, and the last cleanliness photo. 404s when the module is off. */
+  getEquipmentHistory(kind: "asset" | "trailer", id: number) {
+    return req<EquipmentHistory>(
+      "GET", `/v1/driver/equipment/${kind}/${id}/history`,
     );
   },
   /** Upload one photo against an existing inspection. Pass `itemId`
@@ -405,6 +423,35 @@ export interface InspectionItemPayload {
   label:   string;
   status:  "pass" | "fail" | "na";
   notes?:  string;
+}
+
+export interface EquipmentPhoto {
+  id:         string;
+  fileName?:  string;
+  caption?:   string | null;
+  itemId?:    string | null;
+  uploadedAt: string;
+  signedUrl?: string;
+}
+
+export interface EquipmentHistory {
+  recentEvents: Array<{
+    id: string; driverName: string | null; start: string; end: string;
+    status: string; title: string; loadNum: string | null; internalLoadId: number | null;
+  }>;
+  knownDamage: Array<{
+    source: "action_item" | "report"; id: string; title: string | null;
+    description: string | null; priority: string | null; status: string;
+    outOfService: boolean; reportedAt: string; fromInspection: boolean;
+    photos: EquipmentPhoto[];
+  }>;
+  recentInspectionDefects: Array<{
+    id: string; kind: string; date: string; signedBy: string;
+    cleanlinessFlagged: boolean;
+    failedItems: Array<{ id: string; label: string; section: string; notes: string | null }>;
+    photos: EquipmentPhoto[];
+  }>;
+  lastCleanlinessPhoto: { signedUrl?: string; uploadedAt: string; date: string; signedBy: string } | null;
 }
 
 export interface TodayInspectionSummary {

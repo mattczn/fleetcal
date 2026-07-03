@@ -48,7 +48,7 @@ type TabIdx = 0 | 1 | 2;
 export default function LoadsScreen() {
   const insets = useSafeAreaInsets();
   const { C, SHADOW, ACCENT, isDark, toggle } = useTheme();
-  const { reporting } = useModules();
+  const { reporting, truckHistory } = useModules();
   const session = useDriverSession();
   const driver  = session.status === "matched" ? session.driver : null;
   useLoadsRealtime(driver?.driverId, driver?.orgId);
@@ -101,7 +101,9 @@ export default function LoadsScreen() {
     staleTime: 60_000,
   });
   const todaysInspections = inspectionData?.inspections ?? [];
-  const [inspectionFormOpen, setInspectionFormOpen] = useState(false);
+  // null = form closed. Otherwise holds the kind the form opened for
+  // (pre-trip default, or post-trip from the Truck History surface).
+  const [inspectionForm, setInspectionForm] = useState<null | "pre_trip" | "post_trip">(null);
 
   // Time-based bucketing — string-compare naive YYYY-MM-DDTHH:mm
   // timestamps against ±6h / ±24h offsets from now.
@@ -263,7 +265,8 @@ export default function LoadsScreen() {
                 <InspectionCard
                   loading={inspectionLoading}
                   inspections={todaysInspections}
-                  onStart={() => setInspectionFormOpen(true)}
+                  truckHistoryEnabled={truckHistory}
+                  onStart={(kind) => setInspectionForm(kind ?? "pre_trip")}
                 />
               ) : null}
               renderItem={({ item }) => (
@@ -289,18 +292,19 @@ export default function LoadsScreen() {
           native root OUTSIDE expo-router's SafeAreaProvider, so we re-inject
           one here for correct insets. */}
       <Modal
-        visible={inspectionFormOpen}
+        visible={inspectionForm !== null}
         animationType="slide"
         presentationStyle="fullScreen"
-        onRequestClose={() => setInspectionFormOpen(false)}
+        onRequestClose={() => setInspectionForm(null)}
       >
         <SafeAreaProvider>
           <SafeAreaView style={{ flex: 1, backgroundColor: C.surface }} edges={["top"]}>
             <InspectionFormScreen
+              kind={inspectionForm ?? "pre_trip"}
               driverName={driver?.name ?? "Driver"}
-              onClose={() => setInspectionFormOpen(false)}
+              onClose={() => setInspectionForm(null)}
               onSubmitted={() => {
-                setInspectionFormOpen(false);
+                setInspectionForm(null);
                 void refetchInspections();
               }}
             />

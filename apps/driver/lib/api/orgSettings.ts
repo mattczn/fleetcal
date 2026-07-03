@@ -22,20 +22,28 @@ export interface OrgSettings {
    *  before the first fetch — `isModuleEnabled` treats null as all-on, so
    *  nothing flashes hidden while loading. */
   modules: OrgModuleFlags | null;
+  /** Curzon-only Truck History module. Gates "View truck history" +
+   *  the "Post-Trip Inspection" surfaces. Defaults false — unlike the
+   *  module flags this is opt-IN, so it stays hidden until the server
+   *  confirms it's on. */
+  truckHistoryEnabled: boolean;
 }
 
 const DEFAULTS: OrgSettings = {
-  showDriverPay:     false,
-  timezone:          null,
+  showDriverPay:       false,
+  timezone:            null,
   // Default mirrors the server when settings haven't been fetched yet.
-  driverUploadKinds: ["pod", "bol", "scale", "lumper", "receipt", "driver_sheet", "relay_handoff", "other"],
-  modules:           null,
+  driverUploadKinds:   ["pod", "bol", "scale", "lumper", "receipt", "driver_sheet", "relay_handoff", "other"],
+  modules:             null,
+  truckHistoryEnabled: false,
 };
 
 export async function fetchOrgSettings(_orgId: string): Promise<OrgSettings> {
   try {
     const { settings } = await railway.getOrgSettings();
-    return settings;
+    // truckHistoryEnabled is optional on the wire — default to false so
+    // the gate stays closed for orgs that don't send it.
+    return { ...settings, truckHistoryEnabled: settings.truckHistoryEnabled ?? false };
   } catch (err) {
     console.error("fetchOrgSettings:", err);
     return DEFAULTS;

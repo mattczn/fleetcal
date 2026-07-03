@@ -10,8 +10,9 @@ import {
   TextInput,
   Dimensions,
   InteractionManager,
+  Modal,
 } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useSafeAreaInsets, SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -53,6 +54,8 @@ import { RelayHandoffPhotos, promptRelayHandoffUpload } from "@/components/Relay
 import { TrailerPickerSheet } from "@/components/TrailerPickerSheet";
 import { RouteMap, type RouteMapHandle } from "@/components/RouteMap";
 import { AssignedTruckCard } from "@/components/AssignedTruckCard";
+import TruckHistoryScreen from "@/components/TruckHistoryScreen";
+import { useModules } from "@/lib/useModules";
 import { Toast } from "@/components/Toast";
 import { DocumentsView } from "@/components/DocumentsView";
 import { ExpandableInstructions } from "@/components/ExpandableInstructions";
@@ -833,6 +836,10 @@ export default function LoadDetailScreen() {
   const [startTripPending,      setStartTripPending]     = useState(false);
   const [toastMessage,          setToastMessage]         = useState<string | null>(null);
   const [tab,                   setTab]                  = useState<0 | 1 | 2>(0);
+  // Curzon-only Truck History module — gates the "View truck history"
+  // button on the assigned-truck card and drives its full-screen modal.
+  const { truckHistory } = useModules();
+  const [truckHistoryOpen,      setTruckHistoryOpen]     = useState(false);
   // Bumped whenever a relay handoff photo is uploaded from anywhere on
   // this screen — passed to the gallery so it re-fetches.
   const [relayPhotosReloadKey,  setRelayPhotosReloadKey] = useState(0);
@@ -1293,6 +1300,27 @@ export default function LoadDetailScreen() {
           />
         )}
 
+        {/* View truck history — Curzon-only Truck History module. Opens a
+            full-screen modal with the assigned truck's (and, if present,
+            the trailer's) recent drivers, known damage, inspection
+            defects and last cleanliness photo. */}
+        {truckHistory && load.assetId != null && load.eventKind !== "non_revenue" && (
+          <TouchableOpacity
+            onPress={() => setTruckHistoryOpen(true)}
+            activeOpacity={0.85}
+            style={{
+              flexDirection: "row", alignItems: "center", gap: 8,
+              paddingVertical: 12, paddingHorizontal: 14, marginBottom: 14,
+              borderRadius: 12, borderWidth: 1, borderColor: C.border,
+              backgroundColor: C.surface, ...SHADOW.card,
+            }}
+          >
+            <Truck size={16} color={ACCENT} strokeWidth={2.4} />
+            <Text style={[txt(700), { flex: 1, fontSize: 14, color: C.t1 }]}>View truck history</Text>
+            <Info size={16} color={C.t4} />
+          </TouchableOpacity>
+        )}
+
         {/* Route map — deferred so cold mount doesn't compete with the
             stop-card render. Same fixed height (220px) for the
             placeholder so nothing jumps when the WebView swaps in. */}
@@ -1714,6 +1742,30 @@ export default function LoadDetailScreen() {
           } : undefined}
         />
       ) : null}
+
+      {/* Truck History — full-screen modal (Curzon-only module). Rendered
+          into its own native root outside expo-router's SafeAreaProvider,
+          so we re-inject one for correct insets. */}
+      {truckHistory && load.assetId != null && (
+        <Modal
+          visible={truckHistoryOpen}
+          animationType="slide"
+          presentationStyle="fullScreen"
+          onRequestClose={() => setTruckHistoryOpen(false)}
+        >
+          <SafeAreaProvider>
+            <SafeAreaView style={{ flex: 1, backgroundColor: C.surface }} edges={["top"]}>
+              <TruckHistoryScreen
+                asset={{ kind: "asset", id: load.assetId, label: load.assetName ?? "Truck" }}
+                trailer={load.trailerId != null
+                  ? { kind: "trailer", id: load.trailerId, label: load.trailerName ?? load.trailerNum ?? "Trailer" }
+                  : null}
+                onClose={() => setTruckHistoryOpen(false)}
+              />
+            </SafeAreaView>
+          </SafeAreaProvider>
+        </Modal>
+      )}
 
       <Toast message={toastMessage} />
     </View>

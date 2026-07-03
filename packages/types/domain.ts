@@ -1405,6 +1405,13 @@ export interface MaintenanceReport {
   /** Set when ops converts the report into an action item. */
   actionItemId?:  string;
 
+  /** 'driver' for a standalone report; 'inspection' when spawned from a
+   *  failed inspection item (step 3 of the pre/post-trip flow). */
+  source:         'driver' | 'inspection';
+  /** When source='inspection', the originating inspection + checklist item. */
+  inspectionReportId?: string;
+  inspectionItemId?:   string;
+
   submittedBy:    string;
   createdAt:      string;
 

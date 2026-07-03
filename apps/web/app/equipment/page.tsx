@@ -21,12 +21,14 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { createPortal } from 'react-dom';
+import { useOrganization } from '@clerk/nextjs';
 import {
   Package, Wrench, ClipboardCheck, Fuel as FuelIcon,
   Camera, Loader2, MapPin, X, Clock, User, Truck, FileText, ExternalLink, Check, Trash2,
   ChevronLeft, ChevronRight, ChevronDown, CalendarDays, List as ListIcon, AlertCircle, CheckCircle2,
-  Calendar, Plus, Info,
+  Calendar, Plus, Info, History as HistoryIcon,
 } from 'lucide-react';
+import { isInternalOrg } from '@/lib/internalOrg';
 import Tooltip from '@/components/ui/Tooltip';
 import { railway } from '@/lib/railway';
 import AppShell from '@/components/nav/AppShell';
@@ -62,6 +64,8 @@ type InspectionRow = {
   trailerId: number | null;
   trailerName: string | null;
   inspectionDate: string;
+  kind: 'pre_trip' | 'post_trip';
+  cleanlinessFlagged: boolean;
   hasDefects: boolean;
   defectCount: number;
   itemCount: number;
@@ -70,7 +74,7 @@ type InspectionRow = {
   submittedAt: string;
 };
 
-type Tab = 'maintenance' | 'inspections' | 'fuel';
+type Tab = 'maintenance' | 'inspections' | 'fuel' | 'history';
 
 // MediaList — every photo for the currently-open report, grouped by
 // source (defect item, general, etc.) so the side-panel can show
@@ -121,9 +125,16 @@ export default function EquipmentPage() {
 
 function EquipmentPageInner() {
   const searchParams = useSearchParams();
+  // Internal-org gate for the Curzon-only "Truck History" module — same
+  // idiom as the CRM nav. isInternalOrg(undefined) is false during Clerk
+  // hydration, so customer orgs never see even a flicker of the tab.
+  const { organization } = useOrganization();
+  const showHistory = isInternalOrg(organization?.id);
   const initialTab = (() => {
     const t = searchParams?.get('tab');
-    return t === 'fuel' || t === 'maintenance' || t === 'inspections' ? t : 'maintenance';
+    if (t === 'fuel' || t === 'maintenance' || t === 'inspections') return t;
+    if (t === 'history' && showHistory) return t;
+    return 'maintenance';
   })();
   const [tab, setTab] = useState<Tab>(initialTab);
   // Keep tab state in sync with the URL on subsequent navigations.
@@ -136,8 +147,10 @@ function EquipmentPageInner() {
     const t = searchParams?.get('tab');
     if (t === 'fuel' || t === 'maintenance' || t === 'inspections') {
       setTab(t);
+    } else if (t === 'history' && showHistory) {
+      setTab('history');
     }
-  }, [searchParams]);
+  }, [searchParams, showHistory]);
 
   // Page-level filters retired — OpsTable owns its own filter chips
   // now (search + select dropdowns scoped to each tab's data). The
@@ -251,9 +264,10 @@ function EquipmentPageInner() {
         id: inspId, driverId: 0, driverName: '',
         assetId: null, assetName: null,
         trailerId: null, trailerName: null,
-        inspectionDate: '', hasDefects: false,
+        inspectionDate: '', kind: 'pre_trip', cleanlinessFlagged: false,
+        hasDefects: false,
         defectCount: 0, itemCount: 0, photoCount: 0,
-        durationSeconds: null, submittedAt: '', signedBy: '',
+        durationSeconds: null, submittedAt: '',
       } as InspectionRow,
     });
     const next = new URLSearchParams(searchParams?.toString() ?? '');
@@ -322,6 +336,9 @@ function EquipmentPageInner() {
             <TabButton active={tab === 'maintenance'} onClick={() => setTab('maintenance')} icon={<Wrench size={15} />}         label="Maintenance" />
             <TabButton active={tab === 'inspections'} onClick={() => setTab('inspections')} icon={<ClipboardCheck size={15} />} label="Inspections" />
             <TabButton active={tab === 'fuel'}        onClick={() => setTab('fuel')}        icon={<FuelIcon size={15} />}       label="Fuel" />
+            {showHistory && (
+              <TabButton active={tab === 'history'} onClick={() => setTab('history')} icon={<HistoryIcon size={15} />} label="History" />
+            )}
           </div>
         </div>
       </div>
@@ -363,6 +380,14 @@ function EquipmentPageInner() {
             panel={panel}
             setPanel={setPanel}
             reloadVersion={fuelDataVersion}
+          />
+        )}
+        {tab === 'history' && showHistory && (
+          <TruckHistoryTabContent
+            assets={assets}
+            trailers={trailers}
+            onOpenReport={(r) => setPanel({ kind: 'maintenance', id: r.id, report: r })}
+            onOpenInspection={(r) => setPanel({ kind: 'inspection', id: r.id, row: r })}
           />
         )}
         </div>
@@ -2774,8 +2799,11 @@ function WorkOrderModal({
             <div
               className="rounded-lg px-3 py-2.5"
               style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border-light)' }}>
-              <div className="text-[11px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>
-                From driver report
+              <div className="flex items-center gap-1.5 mb-1">
+                <div className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
+                  From driver report
+                </div>
+                {fromReport.source === 'inspection' && <OpsPill color="purple">From inspection</OpsPill>}
               </div>
               <div className="text-[13px]" style={{ color: 'var(--gc-text-2)' }}>
                 {fromReport.assetId ? (assetLabelById.get(fromReport.assetId) ?? `Asset #${fromReport.assetId}`)
@@ -3500,7 +3528,12 @@ function MaintenanceList({
     { key: '_equipmentLabel', header: 'Equipment', sortable: true,
       render: r => r._equipmentLabel },
     { key: 'description', header: 'Description', width: '2fr',
-      render: r => <span>{r.description.length > 90 ? r.description.slice(0, 90) + '…' : r.description}</span> },
+      render: r => (
+        <span className="inline-flex items-center gap-1.5">
+          {r.source === 'inspection' && <OpsPill color="purple">From inspection</OpsPill>}
+          <span>{r.description.length > 90 ? r.description.slice(0, 90) + '…' : r.description}</span>
+        </span>
+      ) },
     { key: 'status', header: 'Status', width: 110, sortable: true,
       sortValue: r => r.status,
       render: r => {
@@ -4207,6 +4240,16 @@ function InspectionsList({
     { key: 'equipment', header: 'Equipment',
       sortValue: r => equipmentLabel(r.assetName, r.trailerName),
       render: r => equipmentLabel(r.assetName, r.trailerName) },
+    { key: 'kind', header: 'Type', width: 160, sortable: true,
+      sortValue: r => r.kind,
+      render: r => (
+        <span className="inline-flex items-center gap-1">
+          <OpsPill color={r.kind === 'post_trip' ? 'purple' : 'blue'}>
+            {r.kind === 'post_trip' ? 'Post-trip' : 'Pre-trip'}
+          </OpsPill>
+          {r.cleanlinessFlagged && <OpsPill color="amber">Dirty</OpsPill>}
+        </span>
+      ) },
     { key: 'items', header: 'Items', width: 160,
       render: r => r.hasDefects
         ? <OpsPill color="red">{r.defectCount} defect{r.defectCount === 1 ? '' : 's'}</OpsPill>
@@ -4231,12 +4274,21 @@ function InspectionsList({
     { kind: 'select', key: 'equipment', label: 'Equipment',
       options: buildEquipmentOptions(assets, trailers),
       predicate: (r, v) => matchesEquipment(v, r.assetId ?? undefined, r.trailerId ?? undefined) },
+    { kind: 'select', key: 'tripType', label: 'Trip',
+      options: [
+        { value: 'pre_trip',  label: 'Pre-trip' },
+        { value: 'post_trip', label: 'Post-trip' },
+      ],
+      predicate: (r, v) => r.kind === v },
     { kind: 'select', key: 'defects',   label: 'Show',
       options: [
         { value: 'with_defects', label: 'With defects' },
         { value: 'all_clear',    label: 'All clear' },
+        { value: 'dirty',        label: 'Flagged dirty' },
       ],
-      predicate: (r, v) => v === 'with_defects' ? r.hasDefects : !r.hasDefects },
+      predicate: (r, v) => v === 'with_defects' ? r.hasDefects
+                         : v === 'dirty'        ? r.cleanlinessFlagged
+                         : !r.hasDefects },
   ];
 
   return (
@@ -4253,6 +4305,345 @@ function InspectionsList({
       density="comfortable"
       countLabel="inspection"
     />
+  );
+}
+
+// ─── Truck History (Curzon-only) ──────────────────────────────────────
+//
+// Per-equipment "what's wrong with this truck + who's been in it" view.
+// Gated to internal orgs by the caller (the History tab only renders for
+// isInternalOrg). Composes the EXISTING per-asset list endpoints — no new
+// aggregate endpoint:
+//   (a) Known damage    = open action items + open maintenance reports
+//                         (?assetId, status filtered), with photos.
+//   (b) Recent defects  = inspection-reports ?assetId&defectsOnly over the
+//                         last ~30 days, with pre/post + cleanliness badges.
+//   (c) Recent drivers  = derived from the per-asset timeline events
+//                         (getAssetTimeline), which already attributes each
+//                         load leg to a driver. Trucks only — trailers have
+//                         no timeline, so the section is hidden for them.
+
+type HistoryEquip = { key: string; kind: 'asset' | 'trailer'; id: number; label: string };
+
+function TruckHistoryTabContent({
+  assets, trailers, onOpenReport, onOpenInspection,
+}: {
+  assets: Asset[];
+  trailers: Array<{ id: number; name: string; trailerNumber?: string; category: string }>;
+  onOpenReport: (r: MaintenanceReport) => void;
+  onOpenInspection: (r: InspectionRow) => void;
+}) {
+  // Equipment picker — mirrors the org-wide equipFilter encoding used by
+  // the other tabs ("asset:<id>" / "trailer:<id>") so the option list is
+  // built by the same helper.
+  const options = useMemo<HistoryEquip[]>(() => {
+    const out: HistoryEquip[] = [];
+    for (const o of buildEquipmentOptions(assets, trailers)) {
+      const [prefix, idRaw] = o.value.split(':');
+      out.push({
+        key: o.value,
+        kind: prefix === 'asset' ? 'asset' : 'trailer',
+        id: Number(idRaw),
+        label: o.label,
+      });
+    }
+    return out;
+  }, [assets, trailers]);
+
+  const [selectedKey, setSelectedKey] = useState<string>('');
+  const selected = options.find(o => o.key === selectedKey) ?? null;
+
+  return (
+    <div className="flex flex-col gap-5">
+      {/* Equipment picker */}
+      <div className="flex items-center gap-3">
+        <label className="text-[12px] font-semibold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
+          Equipment
+        </label>
+        <div style={{ minWidth: 280 }}>
+          <StyledSelect
+            value={selectedKey}
+            onChange={e => setSelectedKey(e.target.value)}
+            style={{
+              width: '100%',
+              padding: '7px 12px',
+              borderRadius: 8,
+              border: '1px solid var(--gc-border)',
+              background: 'var(--gc-surface)',
+              color: 'var(--gc-text-1)',
+              fontSize: 13,
+              fontWeight: 600,
+            }}>
+            <option value="">Select a truck or trailer…</option>
+            {options.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
+          </StyledSelect>
+        </div>
+      </div>
+
+      {!selected ? (
+        <div className="rounded-lg text-[13px] py-10 px-4 text-center"
+          style={{ background: 'var(--gc-bg)', border: '1px dashed var(--gc-border-light)', color: 'var(--gc-text-3)' }}>
+          Pick a truck or trailer above to see its open damage, recent inspection defects, and recent drivers.
+        </div>
+      ) : (
+        <TruckHistoryBody
+          key={selected.key}
+          equip={selected}
+          onOpenReport={onOpenReport}
+          onOpenInspection={onOpenInspection}
+        />
+      )}
+    </div>
+  );
+}
+
+function TruckHistoryBody({
+  equip, onOpenReport, onOpenInspection,
+}: {
+  equip: HistoryEquip;
+  onOpenReport: (r: MaintenanceReport) => void;
+  onOpenInspection: (r: InspectionRow) => void;
+}) {
+  const isAsset = equip.kind === 'asset';
+  const assetIdArg   = isAsset ? equip.id : undefined;
+  const trailerIdArg = isAsset ? undefined : equip.id;
+
+  const [actionItems, setActionItems] = useState<MaintenanceActionItem[]>([]);
+  const [reports, setReports]         = useState<MaintenanceReport[]>([]);
+  const [defects, setDefects]         = useState<InspectionRow[]>([]);
+  const [drivers, setDrivers]         = useState<Array<{ driverId: number | null; name: string; lastSeen: string }>>([]);
+  const [loading, setLoading]         = useState(true);
+  const [error, setError]             = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+
+    // Last ~30 days for the recent-defects + recent-drivers windows.
+    const now = new Date();
+    const from30 = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const fromIso = from30.toISOString();
+    const toIso   = now.toISOString();
+
+    // Recent drivers only exists for trucks (timeline is asset-keyed).
+    // Timeline compares its window bounds against event start/end
+    // timestamps, so pass full ISO (not date-only) to include today.
+    const timelineP = isAsset
+      ? railway.getAssetTimeline(equip.id, fromIso, toIso).catch(() => null)
+      : Promise.resolve(null);
+
+    Promise.allSettled([
+      railway.listMaintenanceActionItems({ assetId: assetIdArg, trailerId: trailerIdArg, limit: 200 }),
+      railway.listMaintenanceReports({ assetId: assetIdArg, trailerId: trailerIdArg, status: 'open', limit: 200 }),
+      railway.listInspectionReports({ assetId: assetIdArg, trailerId: trailerIdArg, defectsOnly: true, from: fromIso, to: toIso, limit: 200 }),
+      timelineP,
+    ]).then(([ai, rep, insp, tl]) => {
+      if (cancelled) return;
+      const fails: string[] = [];
+
+      if (ai.status === 'fulfilled') {
+        // Known damage = still-open work (open / in_progress). Done items
+        // are historical, not current damage.
+        setActionItems(ai.value.actionItems.filter(a => a.status === 'open' || a.status === 'in_progress'));
+      } else { fails.push('work orders'); }
+
+      if (rep.status === 'fulfilled') {
+        setReports(rep.value.reports);
+      } else { fails.push('reports'); }
+
+      if (insp.status === 'fulfilled') {
+        setDefects(insp.value.inspections);
+      } else { fails.push('inspections'); }
+
+      // Recent drivers — dedupe timeline legs by driver, keep most-recent.
+      if (tl.status === 'fulfilled' && tl.value) {
+        const byDriver = new Map<string, { driverId: number | null; name: string; lastSeen: string }>();
+        for (const ev of tl.value.events) {
+          const name = ev.driverName?.trim();
+          if (!name) continue;
+          const prev = byDriver.get(name);
+          if (!prev || ev.start > prev.lastSeen) {
+            byDriver.set(name, { driverId: null, name, lastSeen: ev.start });
+          }
+        }
+        setDrivers([...byDriver.values()].sort((a, b) => b.lastSeen.localeCompare(a.lastSeen)));
+      } else {
+        setDrivers([]);
+      }
+
+      if (fails.length) setError(`Failed to load ${fails.join(', ')}.`);
+    }).finally(() => { if (!cancelled) setLoading(false); });
+
+    return () => { cancelled = true; };
+  }, [equip.id, isAsset, assetIdArg, trailerIdArg]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 text-[13px] py-10 justify-center" style={{ color: 'var(--gc-text-3)' }}>
+        <Loader2 size={16} className="animate-spin" /> Loading history…
+      </div>
+    );
+  }
+
+  const damageCount = actionItems.length + reports.length;
+
+  return (
+    <div className="flex flex-col gap-6">
+      {error && (
+        <div className="rounded-lg text-[12.5px] py-2.5 px-3" style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b' }}>
+          {error}
+        </div>
+      )}
+
+      {/* (a) Known damage */}
+      <TruckHistorySection
+        icon={<AlertCircle size={15} />}
+        title="Known damage"
+        count={damageCount}
+        emptyLabel="No open work orders or reports for this equipment.">
+        {actionItems.map(a => (
+          <div key={`ai-${a.id}`} className="rounded-lg px-3.5 py-3"
+            style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border-light)' }}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <OpsPill color="blue">Work order</OpsPill>
+                  <OpsPill color={a.status === 'in_progress' ? 'amber' : 'gray'}>
+                    {a.status === 'in_progress' ? 'In progress' : 'Open'}
+                  </OpsPill>
+                  {a.outOfService && <OpsPill color="red">Out of service</OpsPill>}
+                </div>
+                <div className="text-[13.5px] font-semibold mt-1.5" style={{ color: 'var(--gc-text-1)' }}>{a.title}</div>
+                {a.description && (
+                  <div className="text-[12.5px] mt-0.5" style={{ color: 'var(--gc-text-2)' }}>{a.description}</div>
+                )}
+              </div>
+            </div>
+            <HistoryPhotoStrip photos={(a.photos ?? []).map(p => ({ id: p.id, signedUrl: p.signedUrl ?? null }))} />
+          </div>
+        ))}
+        {reports.map(r => (
+          <button key={`rep-${r.id}`} type="button" onClick={() => onOpenReport(r)}
+            className="text-left rounded-lg px-3.5 py-3 transition-colors"
+            style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border-light)', cursor: 'pointer' }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--gc-blue-light)'; }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--gc-border-light)'; }}>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <OpsPill color="amber">Driver report</OpsPill>
+              {r.source === 'inspection' && <OpsPill color="purple">From inspection</OpsPill>}
+            </div>
+            <div className="text-[13px] mt-1.5" style={{ color: 'var(--gc-text-1)' }}>
+              {r.description.length > 140 ? r.description.slice(0, 140) + '…' : r.description}
+            </div>
+            <div className="text-[11.5px] mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
+              {new Date(r.reportedAt).toLocaleDateString()}
+            </div>
+            <HistoryPhotoStrip photos={(r.photos ?? []).map(p => ({ id: p.id, signedUrl: p.signedUrl ?? null }))} />
+          </button>
+        ))}
+      </TruckHistorySection>
+
+      {/* (b) Recent inspection defects */}
+      <TruckHistorySection
+        icon={<ClipboardCheck size={15} />}
+        title="Recent inspection defects"
+        subtitle="Last 30 days"
+        count={defects.length}
+        emptyLabel="No inspection defects reported in the last 30 days.">
+        {defects.map(d => (
+          <button key={`insp-${d.id}`} type="button" onClick={() => onOpenInspection(d)}
+            className="text-left rounded-lg px-3.5 py-3 transition-colors"
+            style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border-light)', cursor: 'pointer' }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--gc-blue-light)'; }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--gc-border-light)'; }}>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <OpsPill color={d.kind === 'post_trip' ? 'purple' : 'blue'}>
+                {d.kind === 'post_trip' ? 'Post-trip' : 'Pre-trip'}
+              </OpsPill>
+              {d.cleanlinessFlagged && <OpsPill color="amber">Dirty</OpsPill>}
+              <OpsPill color="red">{d.defectCount} defect{d.defectCount === 1 ? '' : 's'}</OpsPill>
+              {d.photoCount > 0 && <OpsPill color="gray">{d.photoCount} photo{d.photoCount === 1 ? '' : 's'}</OpsPill>}
+            </div>
+            <div className="text-[12.5px] mt-1" style={{ color: 'var(--gc-text-2)' }}>
+              {d.driverName} · {new Date(d.submittedAt).toLocaleDateString()}
+            </div>
+          </button>
+        ))}
+      </TruckHistorySection>
+
+      {/* (c) Recent drivers — trucks only */}
+      {isAsset && (
+        <TruckHistorySection
+          icon={<User size={15} />}
+          title="Recent drivers"
+          subtitle="Last 30 days"
+          count={drivers.length}
+          emptyLabel="No driver activity recorded in the last 30 days.">
+          {drivers.map(dr => (
+            <div key={`dr-${dr.name}`} className="rounded-lg px-3.5 py-2.5 flex items-center justify-between"
+              style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border-light)' }}>
+              <span className="text-[13px] font-medium" style={{ color: 'var(--gc-text-1)' }}>{dr.name}</span>
+              <span className="text-[11.5px]" style={{ color: 'var(--gc-text-3)' }}>
+                Last: {new Date(dr.lastSeen).toLocaleDateString()}
+              </span>
+            </div>
+          ))}
+        </TruckHistorySection>
+      )}
+    </div>
+  );
+}
+
+function TruckHistorySection({
+  icon, title, subtitle, count, emptyLabel, children,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  subtitle?: string;
+  count: number;
+  emptyLabel: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <section>
+      <div className="flex items-center gap-2 mb-2.5">
+        <span style={{ color: 'var(--gc-text-2)' }}>{icon}</span>
+        <h3 className="text-[13px] font-bold uppercase tracking-wider" style={{ color: 'var(--gc-text-2)' }}>{title}</h3>
+        {subtitle && <span className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>· {subtitle}</span>}
+        <OpsPill color={count > 0 ? 'blue' : 'gray'}>{count}</OpsPill>
+      </div>
+      {count === 0 ? (
+        <div className="rounded-lg text-[12.5px] py-4 px-4 text-center"
+          style={{ background: 'var(--gc-bg)', border: '1px dashed var(--gc-border-light)', color: 'var(--gc-text-3)' }}>
+          {emptyLabel}
+        </div>
+      ) : (
+        <div className="flex flex-col gap-2">{children}</div>
+      )}
+    </section>
+  );
+}
+
+/** Compact thumbnail strip for a card's photos. Opens each full-res in
+ *  a new tab (matches the report-inherited photo idiom in the WO modal).
+ *  Renders nothing when there are no signed URLs. */
+function HistoryPhotoStrip({ photos }: { photos: Array<{ id: string; signedUrl: string | null }> }) {
+  const usable = photos.filter(p => p.signedUrl);
+  if (usable.length === 0) return null;
+  return (
+    <div className="flex gap-2 mt-2.5 flex-wrap">
+      {usable.map(p => (
+        <a key={p.id} href={p.signedUrl!} target="_blank" rel="noreferrer noopener"
+          title="Open full image"
+          className="overflow-hidden rounded-md"
+          style={{ width: 72, height: 72, border: '1px solid var(--gc-border-light)', display: 'block' }}
+          onClick={e => e.stopPropagation()}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={p.signedUrl!} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+        </a>
+      ))}
+    </div>
   );
 }
 

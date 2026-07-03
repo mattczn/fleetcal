@@ -23,6 +23,7 @@ import {
 
 import { supabase } from "../lib/supabase.js";
 import { ensureEventRouteCached } from "../lib/routeGeometry.js";
+import { isTruckHistoryOrg } from "../middleware/require.js";
 import { driverAuth, type DriverAuthVariables } from "../middleware/driverAuth.js";
 import { convertIfHeicAtUpload as convertIfHeic, HEIC_DECODE_FAILED } from "../lib/heicToJpeg.js";
 
@@ -798,7 +799,10 @@ driver.get("/org-settings", async (c) => {
   const storedModules = row?.modules ?? null;
   const hasModules = storedModules !== null && Object.keys(storedModules).length > 0;
   const modules: OrgModuleFlags = hasModules ? { ...MVP_LAUNCH_DEFAULTS, ...storedModules } : { ...MVP_LAUNCH_DEFAULTS };
-  return c.json({ settings: { showDriverPay, timezone, driverUploadKinds, modules } });
+  // Curzon-only Truck History module — gates the "View truck history" +
+  // "Post-Trip Inspection" surfaces in the driver app.
+  const truckHistoryEnabled = isTruckHistoryOrg(orgId);
+  return c.json({ settings: { showDriverPay, timezone, driverUploadKinds, modules, truckHistoryEnabled } });
 });
 
 // POD + BOL are operationally required for trucking workflows — proof
@@ -2355,6 +2359,26 @@ driver.post("/maintenance-reports", async (c) => {
     if (!row) return c.json({ error: "trailer_not_found" }, 404);
   }
 
+  // Step-3 of the inspection flow files reports for failed items, tagged
+  // source='inspection' and linked back to the originating inspection + item
+  // so the known-damage view can dedupe and the web queue can badge them.
+  const fromInspection = body.source === 'inspection';
+  const inspectionReportId = fromInspection && typeof body.inspectionReportId === 'string'
+    ? body.inspectionReportId : null;
+  const inspectionItemId = fromInspection && typeof body.inspectionItemId === 'string'
+    ? body.inspectionItemId : null;
+  // Verify the linked inspection is this driver's, in this org — don't let a
+  // client forge a link to someone else's report.
+  if (inspectionReportId) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: insp } = await (supabase as any)
+      .from("inspection_reports")
+      .select("id")
+      .eq("id", inspectionReportId).eq("org_id", orgId).eq("driver_id", driverId)
+      .maybeSingle();
+    if (!insp) return c.json({ error: "inspection_not_found" }, 404);
+  }
+
   const insertRow = {
     org_id:       orgId,
     driver_id:    driverId,
@@ -2367,6 +2391,9 @@ driver.post("/maintenance-reports", async (c) => {
     state:        typeof body.state     === 'string' && body.state.trim()
                     ? body.state.trim().toUpperCase() : null,
     submitted_by: `driver:${driverId}`,
+    source:               fromInspection ? 'inspection' : 'driver',
+    inspection_report_id: inspectionReportId,
+    inspection_item_id:   inspectionItemId,
   };
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -2515,6 +2542,169 @@ driver.get("/maintenance-reports/history", async (c) => {
       photos: photosByReport.get(r.id) ?? [],
     })),
   });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// Truck History module (Curzon-only, gated by TRUCK_HISTORY_ORG_IDS).
+//   GET /v1/driver/equipment/:kind/:id/history
+// Aggregates, for one truck or trailer: recent driver events (who drove it),
+// known damage (open action items + un-converted open reports, with photos),
+// recent inspection defects (last 30d + failed-item photos), and the last
+// post-trip cleanliness photo. Read-only; everything comes from tables the
+// org already writes to.
+// ─────────────────────────────────────────────────────────────────────────
+
+type PhotoOut = { id: string; fileName?: string; caption?: string | null; itemId?: string | null; uploadedAt: string; signedUrl?: string };
+
+async function signPathsMap(bucket: string): Promise<(paths: string[]) => Promise<Map<string, string>>> {
+  return async (paths: string[]) => {
+    const map = new Map<string, string>();
+    if (paths.length === 0) return map;
+    const { data } = await supabase.storage.from(bucket).createSignedUrls(paths, 60 * 60);
+    for (const s of (data ?? []) as Array<{ path: string; signedUrl: string }>) map.set(s.path, s.signedUrl);
+    return map;
+  };
+}
+
+async function fetchActionItemPhotosMapDriver(ids: string[]): Promise<Map<string, PhotoOut[]>> {
+  const out = new Map<string, PhotoOut[]>();
+  if (ids.length === 0) return out;
+  const { data } = await supabase
+    .from("maintenance_action_item_photos")
+    .select("id, action_item_id, storage_path, file_name, uploaded_at")
+    .in("action_item_id", ids)
+    .order("uploaded_at", { ascending: true });
+  const rows = (data ?? []) as Array<{ id: string; action_item_id: string; storage_path: string; file_name: string; uploaded_at: string }>;
+  const urlByPath = await (await signPathsMap(MAINT_PHOTO_BUCKET_DRIVER))(rows.map(r => r.storage_path));
+  for (const r of rows) {
+    const arr = out.get(r.action_item_id) ?? [];
+    arr.push({ id: r.id, fileName: r.file_name, uploadedAt: r.uploaded_at, signedUrl: urlByPath.get(r.storage_path) });
+    out.set(r.action_item_id, arr);
+  }
+  return out;
+}
+
+async function fetchInspectionPhotosMap(ids: string[]): Promise<Map<string, PhotoOut[]>> {
+  const out = new Map<string, PhotoOut[]>();
+  if (ids.length === 0) return out;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data } = await (supabase as any)
+    .from("inspection_photos")
+    .select("id, report_id, item_id, caption, storage_path, uploaded_at")
+    .in("report_id", ids)
+    .order("uploaded_at", { ascending: true });
+  const rows = (data ?? []) as Array<{ id: string; report_id: string; item_id: string | null; caption: string | null; storage_path: string; uploaded_at: string }>;
+  const urlByPath = await (await signPathsMap("inspection-photos"))(rows.map(r => r.storage_path));
+  for (const r of rows) {
+    const arr = out.get(r.report_id) ?? [];
+    arr.push({ id: r.id, itemId: r.item_id ?? null, caption: r.caption ?? null, uploadedAt: r.uploaded_at, signedUrl: urlByPath.get(r.storage_path) });
+    out.set(r.report_id, arr);
+  }
+  return out;
+}
+
+driver.get("/equipment/:kind/:id/history", async (c) => {
+  const orgId = c.get("orgId");
+  if (!isTruckHistoryOrg(orgId)) return c.json({ error: "not_found" }, 404);
+  const kind = c.req.param("kind");
+  const id   = Number(c.req.param("id"));
+  if ((kind !== "asset" && kind !== "trailer") || !Number.isFinite(id)) {
+    return c.json({ error: "validation_failed", errors: ["kind must be asset|trailer and id numeric"] }, 400);
+  }
+  const col = kind === "asset" ? "asset_id" : "trailer_id";
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sb = supabase as any;
+
+  // 1) Recent 5 driver events on this equipment (who drove it, when).
+  const { data: evRows } = await sb
+    .from("events")
+    .select("id, driver_name, start, end, status, title, load:loads(load_num, internal_load_id)")
+    .eq("org_id", orgId).eq(col, id).is("deleted_at", null)
+    .order("start", { ascending: false }).limit(5);
+  const recentEvents = ((evRows ?? []) as Array<Record<string, unknown>>).map((e) => {
+    const l = Array.isArray(e.load) ? (e.load[0] ?? null) : (e.load ?? null);
+    return {
+      id: e.id, driverName: (e.driver_name as string | null) ?? null,
+      start: e.start, end: e.end, status: e.status, title: e.title,
+      loadNum: (l as { load_num?: string } | null)?.load_num ?? null,
+      internalLoadId: (l as { internal_load_id?: number } | null)?.internal_load_id ?? null,
+    };
+  });
+
+  // 2) Known damage: open action items (ops-confirmed) + un-converted open
+  //    reports (pending). Deduped — a report with an action item is
+  //    represented by that action item, so we only pull action_item_id IS NULL.
+  const [aiRes, repRes] = await Promise.all([
+    sb.from("maintenance_action_items")
+      .select("id, title, description, priority, status, out_of_service, created_at")
+      .eq("org_id", orgId).eq(col, id).in("status", ["open", "in_progress"])
+      .order("created_at", { ascending: false }),
+    sb.from("maintenance_reports")
+      .select("id, description, status, reported_at, source, inspection_item_id")
+      .eq("org_id", orgId).eq(col, id).is("action_item_id", null).in("status", ["open", "reviewed"])
+      .order("reported_at", { ascending: false }),
+  ]);
+  const actionItems = (aiRes.data ?? []) as Array<Record<string, unknown>>;
+  const pendingReports = (repRes.data ?? []) as Array<Record<string, unknown>>;
+  const [aiPhotos, repPhotos] = await Promise.all([
+    fetchActionItemPhotosMapDriver(actionItems.map((a) => a.id as string)),
+    fetchMaintReportPhotosMap(pendingReports.map((r) => r.id as string)),
+  ]);
+  const knownDamage = [
+    ...actionItems.map((a) => ({
+      source: "action_item" as const, id: a.id, title: a.title, description: (a.description as string | null) ?? null,
+      priority: a.priority, status: a.status, outOfService: !!a.out_of_service,
+      reportedAt: a.created_at, fromInspection: false, photos: aiPhotos.get(a.id as string) ?? [],
+    })),
+    ...pendingReports.map((r) => ({
+      source: "report" as const, id: r.id, title: null, description: r.description,
+      priority: null, status: r.status, outOfService: false,
+      reportedAt: r.reported_at, fromInspection: r.source === "inspection", photos: repPhotos.get(r.id as string) ?? [],
+    })),
+  ];
+
+  // 3) Recent inspection defects (last 30 days) + failed-item photos.
+  const { data: inspRows } = await sb
+    .from("inspection_reports")
+    .select("id, kind, inspection_date, signed_by, items, trailer_items, cleanliness_flagged")
+    .eq("org_id", orgId).eq(col, id).eq("has_defects", true)
+    .gte("inspection_date", thirtyDaysAgo)
+    .order("inspection_date", { ascending: false }).limit(30);
+  const inspections = (inspRows ?? []) as Array<Record<string, unknown>>;
+  const inspPhotos = await fetchInspectionPhotosMap(inspections.map((i) => i.id as string));
+  const recentInspectionDefects = inspections.map((i) => {
+    const all = [...((i.items as Array<{ id: string; label: string; section: string; status: string; notes?: string }>) ?? []),
+                 ...((i.trailer_items as Array<{ id: string; label: string; section: string; status: string; notes?: string }>) ?? [])];
+    const failed = all.filter((it) => it.status === "fail").map((it) => ({ id: it.id, label: it.label, section: it.section, notes: it.notes ?? null }));
+    return {
+      id: i.id, kind: i.kind, date: i.inspection_date, signedBy: i.signed_by,
+      cleanlinessFlagged: !!i.cleanliness_flagged, failedItems: failed, photos: inspPhotos.get(i.id as string) ?? [],
+    };
+  });
+
+  // 4) Last post-trip cleanliness photo (the condition it was left in).
+  let lastCleanlinessPhoto: { signedUrl?: string; uploadedAt: string; date: string; signedBy: string } | null = null;
+  const { data: lastPost } = await sb
+    .from("inspection_reports")
+    .select("id, inspection_date, signed_by")
+    .eq("org_id", orgId).eq(col, id).eq("kind", "post_trip")
+    .order("inspection_date", { ascending: false }).order("submitted_at", { ascending: false })
+    .limit(1).maybeSingle();
+  if (lastPost) {
+    const { data: cp } = await sb
+      .from("inspection_photos")
+      .select("id, storage_path, uploaded_at")
+      .eq("report_id", lastPost.id).eq("item_id", "cleanliness")
+      .order("uploaded_at", { ascending: false }).limit(1).maybeSingle();
+    if (cp) {
+      const urlByPath = await (await signPathsMap("inspection-photos"))([cp.storage_path]);
+      lastCleanlinessPhoto = { signedUrl: urlByPath.get(cp.storage_path), uploadedAt: cp.uploaded_at, date: lastPost.inspection_date, signedBy: lastPost.signed_by };
+    }
+  }
+
+  return c.json({ recentEvents, knownDamage, recentInspectionDefects, lastCleanlinessPhoto });
 });
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -2798,6 +2988,9 @@ interface InspectionItem {
 interface InspectionBody {
   assetId?:        number | null;
   trailerId?:      number | null;
+  /** Pre-trip (default, and what every existing single daily DVIR was) or
+   *  post-trip. Post-trip is the end-of-shift condition/cleanliness pass. */
+  kind?:           "pre_trip" | "post_trip";
   items:           InspectionItem[];
   trailerItems?:   InspectionItem[];
   notes?:          string;
@@ -2836,6 +3029,11 @@ driver.post("/inspections", async (c) => {
 
   const allItems = [...(body.items ?? []), ...(body.trailerItems ?? [])];
   const hasDefects = allItems.some(i => i.status === "fail");
+  const kind = body.kind === "post_trip" ? "post_trip" : "pre_trip";
+  // Denormalized cleanliness flag — set when the "cleanliness" checklist item
+  // (Condition section) is failed. Keep this id in sync with the driver app's
+  // CLEANLINESS_ITEM_ID in InspectionFormScreen.
+  const cleanlinessFlagged = allItems.some(i => i.id === "cleanliness" && i.status === "fail");
 
   // Driver-name fallback for the signature — most clients should pass
   // it explicitly, but if not, derive from the drivers row.
@@ -2880,17 +3078,19 @@ driver.post("/inspections", async (c) => {
       driver_id:        driverId,
       asset_id:         body.assetId    ?? null,
       trailer_id:       body.trailerId  ?? null,
+      kind,
       inspection_date:  today,
       items:            body.items,
       trailer_items:    body.trailerItems ?? null,
       notes:            body.notes ?? null,
       has_defects:      hasDefects,
+      cleanliness_flagged: cleanlinessFlagged,
       signed_by:        signedBy,
       duration_seconds: dur,
       location_lat:     lat,
       location_lon:     lon,
     })
-    .select("id, submitted_at, has_defects")
+    .select("id, submitted_at, has_defects, kind")
     .maybeSingle();
   if (error) {
     console.error("[POST /v1/driver/inspections] failed:", error);

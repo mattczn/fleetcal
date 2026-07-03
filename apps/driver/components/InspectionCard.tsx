@@ -17,7 +17,7 @@
  */
 import React from "react";
 import { View, Text, TouchableOpacity, ActivityIndicator } from "react-native";
-import { Check, ClipboardCheck, Plus, AlertTriangle, AlertCircle } from "lucide-react-native";
+import { Check, ClipboardCheck, Plus, AlertTriangle, AlertCircle, Moon } from "lucide-react-native";
 import type { TodayInspectionSummary } from "@/lib/railway";
 import { useTheme } from "@/lib/ThemeProvider";
 
@@ -32,10 +32,15 @@ const txt = (weight: 500 | 600 | 700 | 800) => ({
 interface Props {
   loading:      boolean;
   inspections:  TodayInspectionSummary[];
-  onStart:      () => void;
+  /** Opens the inspection form for the given kind. Defaults to pre-trip
+   *  when called with no argument (the Start / Run-another buttons). */
+  onStart:      (kind?: "pre_trip" | "post_trip") => void;
+  /** Curzon-only Truck History module — when on, surfaces the extra
+   *  "Post-Trip Inspection" button. */
+  truckHistoryEnabled?: boolean;
 }
 
-export default function InspectionCard({ loading, inspections, onStart }: Props) {
+export default function InspectionCard({ loading, inspections, onStart, truckHistoryEnabled = false }: Props) {
   const { C, SHADOW, ACCENT } = useTheme();
   if (loading) {
     return (
@@ -53,33 +58,36 @@ export default function InspectionCard({ loading, inspections, onStart }: Props)
   // ── State A: nothing today → red prompt ──────────────────────────
   if (completed === 0) {
     return (
-      <TouchableOpacity onPress={onStart} activeOpacity={0.85} style={[cardBase, {
+      <View style={[cardBase, {
         backgroundColor: C.redBg,
         borderColor: C.red,
       }]}>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-          <View style={{
-            width: 36, height: 36, borderRadius: 18,
-            backgroundColor: C.red, alignItems: "center", justifyContent: "center",
-          }}>
-            <AlertTriangle size={18} color="white" />
+        <TouchableOpacity onPress={() => onStart("pre_trip")} activeOpacity={0.85}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+            <View style={{
+              width: 36, height: 36, borderRadius: 18,
+              backgroundColor: C.red, alignItems: "center", justifyContent: "center",
+            }}>
+              <AlertTriangle size={18} color="white" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[txt(700), { fontSize: 16, color: C.redInk }]}>
+                Complete today&apos;s inspection
+              </Text>
+              <Text style={[txt(500), { fontSize: 13, color: C.redInk, marginTop: 2 }]}>
+                Required before your first run.
+              </Text>
+            </View>
+            <View style={{
+              paddingHorizontal: 14, paddingVertical: 9, borderRadius: 999,
+              backgroundColor: C.red,
+            }}>
+              <Text style={[txt(700), { color: "white", fontSize: 13 }]}>Start</Text>
+            </View>
           </View>
-          <View style={{ flex: 1 }}>
-            <Text style={[txt(700), { fontSize: 16, color: C.redInk }]}>
-              Complete today&apos;s inspection
-            </Text>
-            <Text style={[txt(500), { fontSize: 13, color: C.redInk, marginTop: 2 }]}>
-              Required before your first run.
-            </Text>
-          </View>
-          <View style={{
-            paddingHorizontal: 14, paddingVertical: 9, borderRadius: 999,
-            backgroundColor: C.red,
-          }}>
-            <Text style={[txt(700), { color: "white", fontSize: 13 }]}>Start</Text>
-          </View>
-        </View>
-      </TouchableOpacity>
+        </TouchableOpacity>
+        {truckHistoryEnabled && <PostTripButton onPress={() => onStart("post_trip")} />}
+      </View>
     );
   }
 
@@ -120,16 +128,19 @@ export default function InspectionCard({ loading, inspections, onStart }: Props)
           )}
         </View>
       </View>
-      <TouchableOpacity onPress={onStart} style={{
-        flexDirection: "row", alignItems: "center", gap: 6, alignSelf: "flex-start",
-        marginTop: 10, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999,
-        backgroundColor: C.surface, borderWidth: 1, borderColor: C.green,
-      }}>
-        <Plus size={12} color={C.greenInk} />
-        <Text style={[txt(700), { fontSize: 12, color: C.greenInk }]}>
-          Run another inspection
-        </Text>
-      </TouchableOpacity>
+      <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
+        <TouchableOpacity onPress={() => onStart("pre_trip")} style={{
+          flexDirection: "row", alignItems: "center", gap: 6,
+          paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999,
+          backgroundColor: C.surface, borderWidth: 1, borderColor: C.green,
+        }}>
+          <Plus size={12} color={C.greenInk} />
+          <Text style={[txt(700), { fontSize: 12, color: C.greenInk }]}>
+            Run another inspection
+          </Text>
+        </TouchableOpacity>
+        {truckHistoryEnabled && <PostTripButton compact onPress={() => onStart("post_trip")} />}
+      </View>
       {/* If multiple, list each compactly below */}
       {completed > 1 && (
         <View style={{ marginTop: 10, gap: 4 }}>
@@ -146,6 +157,29 @@ export default function InspectionCard({ loading, inspections, onStart }: Props)
       )}
     </View>
   );
+}
+
+// Post-Trip Inspection button — only surfaced when the Truck History
+// module is on. In State A (red prompt) it sits below the start row
+// with a divider; in State B (green summary) it's compact and inline
+// next to "Run another inspection".
+function PostTripButton({ onPress, compact }: { onPress: () => void; compact?: boolean }) {
+  const { C } = useTheme();
+  const btn = (
+    <TouchableOpacity onPress={onPress} style={{
+      flexDirection: "row", alignItems: "center", gap: 6,
+      paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999,
+      backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
+      alignSelf: "flex-start",
+    }}>
+      <Moon size={12} color={C.t2} />
+      <Text style={[txt(700), { fontSize: 12, color: C.t2 }]}>
+        Post-Trip Inspection
+      </Text>
+    </TouchableOpacity>
+  );
+  if (compact) return btn;
+  return <View style={{ marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: C.red }}>{btn}</View>;
 }
 
 // marginTop sits flush against the tab bar (which already has its own

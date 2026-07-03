@@ -42,9 +42,17 @@ export function useModules() {
   // the full reporting bundle unlocks.
   const reporting = enabled("fuel") || enabled("maintenance");
 
+  // Curzon-only Truck History module. Not a standard module flag — it's a
+  // dedicated opt-in setting (org_settings.truckHistoryEnabled) surfaced by
+  // GET /v1/driver/org-settings. Gates the "View truck history" button on
+  // load detail and the "Post-Trip Inspection" surfaces. Defaults false
+  // until settings load, so nothing flashes for orgs without it.
+  const truckHistory = data?.truckHistoryEnabled ?? false;
+
   return {
     enabled,
     reporting,
+    truckHistory,
     fuel:        enabled("fuel"),
     maintenance: enabled("maintenance"),
   };

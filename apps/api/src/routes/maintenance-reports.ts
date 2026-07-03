@@ -48,6 +48,9 @@ export interface MaintenanceReportRow {
   action_item_id: string | null;
   submitted_by:   string;
   created_at:     string;
+  source:               string;
+  inspection_report_id: string | null;
+  inspection_item_id:   string | null;
 }
 
 export interface MaintenanceReportPhotoRow {
@@ -110,6 +113,9 @@ export function rowToReport(r: MaintenanceReportRow, photos?: MaintenanceReportP
     actionItemId:  r.action_item_id ?? undefined,
     submittedBy:   r.submitted_by,
     createdAt:     r.created_at,
+    source:            (r.source as MaintenanceReport["source"]) ?? "driver",
+    inspectionReportId: r.inspection_report_id ?? undefined,
+    inspectionItemId:   r.inspection_item_id ?? undefined,
     photos:        photos,
   };
 }
@@ -167,7 +173,8 @@ export function rowToActionItem(
 
 export const REPORT_COLS =
   "id,org_id,driver_id,asset_id,trailer_id,description,reported_at," +
-  "latitude,longitude,state,status,action_item_id,submitted_by,created_at";
+  "latitude,longitude,state,status,action_item_id,submitted_by,created_at," +
+  "source,inspection_report_id,inspection_item_id";
 
 export const ACTION_ITEM_COLS =
   "id,org_id,asset_id,trailer_id,title,description,category,priority,status," +

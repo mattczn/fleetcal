@@ -73,13 +73,6 @@ export const env = {
    *  of an allowlisted org who has the crm.* capabilities. */
   crmInternalUserIds:      (process.env.CRM_INTERNAL_USER_IDS ?? "")
                              .split(",").map((s) => s.trim()).filter(Boolean),
-  /** Comma-separated Clerk org ids allowed to use the Truck History
-   *  module (equipment history + post-trip inspections + inspection-
-   *  sourced maintenance reports). Curzon-only today. Unset = module
-   *  disabled everywhere; requireTruckHistoryOrg 404s and the driver
-   *  org-settings flag reports false. */
-  truckHistoryOrgIds:      (process.env.TRUCK_HISTORY_ORG_IDS ?? "")
-                             .split(",").map((s) => s.trim()).filter(Boolean),
   /** Optional Socrata app token for the FMCSA census pulls
    *  (data.transportation.gov). Works without one, but anonymous
    *  requests get throttled harder. */

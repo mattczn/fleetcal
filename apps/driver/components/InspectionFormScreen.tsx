@@ -26,7 +26,7 @@ import {
 } from "react-native";
 import {
   Truck, Container, ChevronDown, Check, X, ArrowLeft, AlertTriangle,
-  Camera, Plus, Trash2, Search,
+  Camera, Plus, Trash2, Search, Wrench,
 } from "lucide-react-native";
 import * as ImagePicker from "expo-image-picker";
 import * as Location from "expo-location";
@@ -115,6 +115,11 @@ const TRUCK_CHECKLIST: ChecklistItem[] = [
   // Safety equipment — §396.11 required: emergency equipment
   { id: "emergency_equip",  section: "Safety equipment",      label: "Emergency Equipment (fire extinguisher, triangles, fuses)" },
 
+  // Condition — the Truck History module keys the cleanliness photo off
+  // this exact item id ("cleanliness"). On a post-trip inspection the
+  // driver must attach a cab/interior photo here before submit.
+  { id: "cleanliness",      section: "Condition",             label: "Cab & interior clean" },
+
   // Catch-all so a driver can flag anything the list missed
   { id: "other",            section: "Other",                 label: "Other" },
 ];
@@ -139,6 +144,17 @@ const TRAILER_CHECKLIST: ChecklistItem[] = [
 
 type ItemStatus = "pass" | "fail" | "na";
 interface ItemState { status: ItemStatus; notes?: string }
+
+/** A failed checklist row handed to step 3 (maintenance reports). */
+interface FailedItem {
+  id:     string;
+  label:  string;
+  target: PhotoTarget;
+  notes?: string;
+  /** First photo the driver attached to this row, carried over to the
+   *  maintenance report. null when they didn't take one. */
+  photo:  PendingPhoto | null;
+}
 
 /** Default-everything-to-pass map. Built once per checklist so the
  *  initial render of 59 items doesn't need 59 effects to populate. */
@@ -171,13 +187,17 @@ interface Props {
    *  assigned truck if known; null triggers a server lookup via
    *  /v1/driver/suggested-asset. */
   initialAssetId?: number | null;
+  /** Pre-trip (start of shift, default) vs post-trip (end of shift).
+   *  Post-trip additionally requires a cleanliness photo — see the
+   *  submit gate below. */
+  kind?:          "pre_trip" | "post_trip";
   /** Driver's display name — used as the digital signature. */
   driverName:     string;
   onClose:        () => void;
   onSubmitted:    () => void;
 }
 
-export default function InspectionFormScreen({ initialAssetId, driverName, onClose, onSubmitted }: Props) {
+export default function InspectionFormScreen({ initialAssetId, kind = "pre_trip", driverName, onClose, onSubmitted }: Props) {
   const { C, SHADOW, ACCENT } = useTheme();
   // ── Equipment selection ───────────────────────────────────────────
   const [assets,        setAssets]        = useState<AssetOption[]>([]);
@@ -197,6 +217,16 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
   const [notes,       setNotes]       = useState("");
   const [photos,      setPhotos]      = useState<PendingPhoto[]>([]);
   const [submitting,  setSubmitting]  = useState(false);
+
+  // ── Step 3: maintenance reports for failed items ──────────────────
+  // After a successful inspection submit, if any item failed we hand off
+  // to an inline loop (MaintenanceStep) that walks the driver through
+  // spinning up a maintenance report per defect. `maintStep` holds the
+  // saved inspection id + the failed items to loop; null = not in step 3.
+  const [maintStep, setMaintStep] = useState<{
+    inspectionId: string;
+    items: FailedItem[];
+  } | null>(null);
 
   // ── Compliance signals — captured at mount, sent at submit.
   // openedAtRef is a ref (not state) so re-renders don't reset the
@@ -387,6 +417,24 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
     const truckItems   = assetId ? buildItems(TRUCK_CHECKLIST)   : [];
     const trailerItems = includeTrailer && trailerId ? buildItems(TRAILER_CHECKLIST) : [];
 
+    // Collect the failed rows for step 3 (maintenance reports). Each one
+    // remembers whether it's a truck- or trailer-side defect (so the
+    // report targets the right equipment) and the first photo the driver
+    // attached (carried over to the maintenance report).
+    const buildFailedItems = (): FailedItem[] => {
+      const out: FailedItem[] = [];
+      const collect = (defs: ChecklistItem[], target: PhotoTarget) => {
+        for (const d of defs) {
+          if (items[d.id]?.status !== "fail") continue;
+          const photo = photos.find(p => p.itemId === d.id) ?? null;
+          out.push({ id: d.id, label: d.label, target, notes: items[d.id]?.notes, photo });
+        }
+      };
+      if (assetId) collect(TRUCK_CHECKLIST, "truck");
+      if (includeTrailer && trailerId) collect(TRAILER_CHECKLIST, "trailer");
+      return out;
+    };
+
     // Wall-clock duration from form open to submit. Server clamps to
     // [0, 24h] in case of weird system clocks.
     const durationSeconds = Math.max(0, Math.round((Date.now() - openedAtRef.current) / 1000));
@@ -406,6 +454,7 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
       const { inspection } = await railway.submitInspection({
         assetId,
         trailerId:       includeTrailer ? trailerId : null,
+        kind,
         items:           truckItems,
         trailerItems:    trailerItems.length > 0 ? trailerItems : undefined,
         notes:           notes.trim() || undefined,
@@ -418,7 +467,9 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
       // Upload photos sequentially against the new inspection. A
       // failure surfaces a notice but doesn't roll back the report —
       // the inspection itself is still valid, the driver just lost
-      // some attachments.
+      // some attachments. The cleanliness photo carries itemId
+      // "cleanliness" here (it's a per-item photo on the cleanliness
+      // row) so the server's "last cleanliness photo" query finds it.
       const photoFailures: string[] = [];
       for (const ph of photos) {
         try {
@@ -439,14 +490,23 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
           `Inspection saved, but ${photoFailures.length} photo${photoFailures.length === 1 ? "" : "s"} failed to upload.`);
       }
 
-      onSubmitted();
+      // Step 3 — if the driver flagged any defects, offer to spin up a
+      // maintenance report per failed item before we close. We know the
+      // asset/trailer from the inspection and carry over any photo the
+      // driver already took for that row. If nothing failed, close now.
+      const failed = buildFailedItems();
+      if (failed.length > 0) {
+        setMaintStep({ inspectionId: inspection.id, items: failed });
+      } else {
+        onSubmitted();
+      }
     } catch (e) {
       console.error("[InspectionForm] submit failed:", e);
       Alert.alert("Submit failed", e instanceof Error ? e.message : "Please try again.");
     } finally {
       setSubmitting(false);
     }
-  }, [assetId, trailerId, includeTrailer, items, notes, driverName, photos, onSubmitted]);
+  }, [assetId, trailerId, includeTrailer, kind, items, notes, driverName, photos, onSubmitted]);
 
   const failCount = useMemo(
     () => Object.values(items).filter(s => s.status === "fail").length,
@@ -457,9 +517,25 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
   // actually firing the submit. Validation lives here (not in
   // performSubmit) so the alert is only ever shown for an inspection
   // that's actually going to go through.
+  // Post-trip inspections require a cleanliness photo — the Truck History
+  // module needs a cab/interior shot at end of shift. Keyed on the
+  // "cleanliness" checklist row so the photo uploads with itemId
+  // "cleanliness" (see performSubmit).
+  const hasCleanlinessPhoto = useMemo(
+    () => photos.some(p => p.itemId === "cleanliness"),
+    [photos],
+  );
+
   const handleSubmit = useCallback(() => {
     if (!assetId && !(includeTrailer && trailerId)) {
       Alert.alert("Pick equipment", "Select a truck (and optionally a trailer) to inspect.");
+      return;
+    }
+    if (kind === "post_trip" && !hasCleanlinessPhoto) {
+      Alert.alert(
+        "Cleanliness photo required",
+        "Post-trip inspections need a photo of the cab & interior. Tap Fail or add a photo on the “Cab & interior clean” item under Condition.",
+      );
       return;
     }
     const truckPart   = assetId && selectedAsset ? truckLabel(selectedAsset.name, selectedAsset.unit) : "";
@@ -477,7 +553,7 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
       ],
       { cancelable: true },
     );
-  }, [assetId, trailerId, includeTrailer, selectedAsset, selectedTrailer, failCount, performSubmit]);
+  }, [assetId, trailerId, includeTrailer, kind, hasCleanlinessPhoto, selectedAsset, selectedTrailer, failCount, performSubmit]);
 
   return (
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
@@ -486,7 +562,9 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
         <TouchableOpacity onPress={onClose} style={{ padding: 6, marginLeft: -6 }}>
           <ArrowLeft size={22} color={C.t1} />
         </TouchableOpacity>
-        <Text style={[txt(700), { fontSize: 17, color: C.t1 }]}>Daily inspection</Text>
+        <Text style={[txt(700), { fontSize: 17, color: C.t1 }]}>
+          {kind === "post_trip" ? "Post-Trip Inspection" : "Pre-Trip Inspection"}
+        </Text>
         <View style={{ flex: 1 }} />
         <Text style={[txt(500), { fontSize: 12, color: C.t3 }]}>{driverName}</Text>
       </View>
@@ -576,6 +654,11 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
             onAddGeneralPhoto={() => addPhotoFor("truck", null)}
             photos={photos.filter(p => p.target === "truck")}
             onRemovePhoto={removePhoto}
+            // Post-trip: the cleanliness row always shows a photo strip
+            // (even when it's a PASS) and is marked required, so the
+            // driver attaches the cab/interior shot without having to
+            // fail the item.
+            photoAlwaysItemId={kind === "post_trip" ? "cleanliness" : null}
           />
         )}
 
@@ -662,14 +745,166 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
         />
       )}
 
+      {/* Step 3 — maintenance reports for failed items. Full-screen
+          overlay that loops the defects; when the driver finishes (or
+          skips all), it closes the whole form via onSubmitted. */}
+      {maintStep && (
+        <MaintenanceStep
+          inspectionId={maintStep.inspectionId}
+          items={maintStep.items}
+          assetId={assetId}
+          trailerId={includeTrailer ? trailerId : null}
+          onDone={() => { setMaintStep(null); onSubmitted(); }}
+        />
+      )}
+
     </KeyboardAvoidingView>
   );
 }
 
 // ─── Subcomponents ────────────────────────────────────────────────────
 
+/**
+ * MaintenanceStep — step 3 of the pre/post-trip flow. After the
+ * inspection is saved, if any items failed we walk the driver through
+ * one lightweight card per defect: a pre-filled, editable description and
+ * a Create / Skip choice. "Create report" fires
+ * railway.submitMaintenanceReport (source:"inspection", tying it back to
+ * the inspection + item) and, if the driver took a photo for that row,
+ * uploads it to the new report. This is deliberately inline — NOT the
+ * persistent MaintenanceFormScreen — so the driver stays in one flow.
+ */
+function MaintenanceStep({
+  inspectionId, items, assetId, trailerId, onDone,
+}: {
+  inspectionId: string;
+  items:        FailedItem[];
+  assetId:      number | null;
+  trailerId:    number | null;
+  onDone:       () => void;
+}) {
+  const { C, ACCENT } = useTheme();
+  const [idx, setIdx]           = useState(0);
+  const [desc, setDesc]         = useState("");
+  const [busy, setBusy]         = useState(false);
+
+  const current = items[idx] ?? null;
+
+  // Reset the editable description each time we advance to a new defect.
+  useEffect(() => {
+    if (current) setDesc(`${current.label} failed inspection`);
+  }, [idx, current]);
+
+  const advance = useCallback(() => {
+    if (idx + 1 >= items.length) onDone();
+    else setIdx(i => i + 1);
+  }, [idx, items.length, onDone]);
+
+  const createReport = useCallback(async () => {
+    if (!current || busy) return;
+    setBusy(true);
+    try {
+      // Target the truck for truck-side defects, the trailer for
+      // trailer-side ones — determined by the failed item's `target`.
+      const target = current.target === "trailer"
+        ? { trailerId: trailerId ?? undefined }
+        : { assetId:   assetId   ?? undefined };
+      const { report } = await railway.submitMaintenanceReport({
+        ...target,
+        description:        desc.trim() || `${current.label} failed inspection`,
+        source:             "inspection",
+        inspectionReportId: inspectionId,
+        inspectionItemId:   current.id,
+      });
+      // Carry over the inspection photo for this row, if any.
+      if (current.photo) {
+        try {
+          const form = new FormData();
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          form.append("file", { uri: current.photo.uri, name: current.photo.fileName, type: current.photo.mimeType } as any);
+          await railway.uploadMaintenancePhoto(report.id, form);
+        } catch (err) {
+          console.warn("[inspection] maintenance photo upload failed:", err);
+        }
+      }
+      advance();
+    } catch (e) {
+      console.error("[MaintenanceStep] create failed:", e);
+      Alert.alert("Couldn't create report", e instanceof Error ? e.message : "Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  }, [current, busy, desc, assetId, trailerId, inspectionId, advance]);
+
+  if (!current) return null;
+
+  return (
+    <View style={{ position: "absolute", inset: 0, backgroundColor: C.bg }}>
+      {/* Header */}
+      <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 12, gap: 10, borderBottomWidth: 1, borderBottomColor: C.border, backgroundColor: C.surface }}>
+        <View style={{ width: 30, height: 30, borderRadius: 15, backgroundColor: C.red, alignItems: "center", justifyContent: "center" }}>
+          <Wrench size={16} color="white" />
+        </View>
+        <Text style={[txt(700), { fontSize: 17, color: C.t1, flex: 1 }]}>Report defects</Text>
+        <Text style={[txt(500), { fontSize: 12, color: C.t3 }]}>{idx + 1} of {items.length}</Text>
+      </View>
+
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 14 }} keyboardShouldPersistTaps="handled">
+        <View style={{ backgroundColor: C.surface, borderRadius: 12, padding: 16, borderWidth: 1, borderColor: C.border }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 12 }}>
+            <AlertTriangle size={16} color={C.red} />
+            <Text style={[txt(700), { flex: 1, fontSize: 16, color: C.t1 }]}>
+              Create a maintenance report for {current.label}?
+            </Text>
+          </View>
+
+          {current.photo && (
+            <View style={{ marginBottom: 12 }}>
+              <Image source={{ uri: current.photo.uri }} style={{ width: 96, height: 96, borderRadius: 10 }} resizeMode="cover" />
+              <Text style={[txt(500), { fontSize: 11, color: C.t4, marginTop: 4 }]}>Photo from inspection will be attached.</Text>
+            </View>
+          )}
+
+          <Text style={[txt(700), { fontSize: 12, color: C.t3, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }]}>
+            Description
+          </Text>
+          <TextInput
+            value={desc}
+            onChangeText={setDesc}
+            placeholder="Describe the issue…"
+            placeholderTextColor={C.t4}
+            multiline
+            style={[txt(500), {
+              fontSize: 15, color: C.t1, minHeight: 80,
+              borderWidth: 1, borderColor: C.border, borderRadius: 8, padding: 12,
+              textAlignVertical: "top",
+            }]}
+          />
+
+          <View style={{ flexDirection: "row", gap: 10, marginTop: 16 }}>
+            <TouchableOpacity
+              onPress={advance}
+              disabled={busy}
+              style={{ flex: 1, paddingVertical: 14, borderRadius: 10, alignItems: "center", borderWidth: 1, borderColor: C.border, backgroundColor: C.surface }}
+            >
+              <Text style={[txt(700), { fontSize: 15, color: C.t2 }]}>Skip</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => void createReport()}
+              disabled={busy}
+              style={{ flex: 1, paddingVertical: 14, borderRadius: 10, alignItems: "center", backgroundColor: ACCENT, opacity: busy ? 0.6 : 1 }}
+            >
+              {busy ? <ActivityIndicator color="white" /> : <Text style={[txt(700), { fontSize: 15, color: "white" }]}>Create report</Text>}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
 function ChecklistBlock({
-  title, target, sections, items, setStatus, setItemNotes, onInputFocus, onAddPhoto, onAddGeneralPhoto, photos, onRemovePhoto,
+  title, target, sections, items, setStatus, setItemNotes, onInputFocus, onAddPhoto, onAddGeneralPhoto, photos, onRemovePhoto, photoAlwaysItemId = null,
 }: {
   title: string;
   target: PhotoTarget;
@@ -683,6 +918,9 @@ function ChecklistBlock({
   onAddGeneralPhoto:  ()                          => void;
   photos:             PendingPhoto[];
   onRemovePhoto:      (key: string)               => void;
+  /** Item id that always shows a (required) photo strip regardless of
+   *  pass/fail — used for the post-trip cleanliness shot. */
+  photoAlwaysItemId?: string | null;
 }) {
   const { C, SHADOW, ACCENT } = useTheme();
   // Photos with no itemId are the "general" ones for this piece of
@@ -702,6 +940,11 @@ function ChecklistBlock({
             const state = items[item.id];
             const isFail = state?.status === "fail";
             const itemPhotos = photos.filter(p => p.itemId === item.id);
+            // A required photo row (post-trip cleanliness) shows its
+            // photo strip even on PASS, and flags red until a photo is
+            // attached — the driver must have at least one to submit.
+            const isRequiredPhoto = photoAlwaysItemId === item.id;
+            const requiredMissing = isRequiredPhoto && !isFail && itemPhotos.length === 0;
             return (
               <View
                 key={item.id}
@@ -710,8 +953,8 @@ function ChecklistBlock({
                   paddingVertical: 10, paddingHorizontal: 10,
                   borderRadius: 10,
                   backgroundColor: isFail ? C.redBg : "transparent",
-                  borderWidth: isFail ? 1 : 0,
-                  borderColor: isFail ? C.red : "transparent",
+                  borderWidth: isFail || requiredMissing ? 1 : 0,
+                  borderColor: isFail ? C.red : requiredMissing ? C.amberInk : "transparent",
                 }}
               >
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 8, minHeight: 38 }}>
@@ -720,6 +963,34 @@ function ChecklistBlock({
                   <StatusButton label="Fail" active={state?.status === "fail"} color={C.red} onPress={() => setStatus(item.id, "fail")} />
                   <StatusButton label="N/A"  active={state?.status === "na"}   color={C.t3} onPress={() => setStatus(item.id, "na")} />
                 </View>
+                {/* Required photo strip (post-trip cleanliness) — shown on
+                    PASS/NA so the driver can attach without failing. When
+                    the item is failed the standard fail block below takes
+                    over (it already renders a photo strip). */}
+                {isRequiredPhoto && !isFail && (
+                  <View style={{ marginTop: 10 }}>
+                    <Text style={[txt(600), { fontSize: 12, color: requiredMissing ? C.amberInk : C.t3, marginBottom: 8 }]}>
+                      {requiredMissing ? "Photo required — add a cab & interior shot" : "Cleanliness photo attached"}
+                    </Text>
+                    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+                      {itemPhotos.map(ph => (
+                        <PhotoThumb key={ph.key} uri={ph.uri} onRemove={() => onRemovePhoto(ph.key)} />
+                      ))}
+                      <TouchableOpacity
+                        onPress={() => onAddPhoto(item.id)}
+                        style={{
+                          width: 64, height: 64, borderRadius: 10,
+                          borderWidth: 1.5, borderColor: requiredMissing ? C.amberInk : C.border, borderStyle: "dashed",
+                          backgroundColor: C.surface,
+                          alignItems: "center", justifyContent: "center", gap: 2,
+                        }}
+                      >
+                        <Camera size={18} color={requiredMissing ? C.amberInk : C.t3} />
+                        <Text style={[txt(700), { fontSize: 9, color: requiredMissing ? C.amberInk : C.t3 }]}>PHOTO</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                )}
                 {isFail && (
                   <View style={{ marginTop: 10 }}>
                     <TextInput
