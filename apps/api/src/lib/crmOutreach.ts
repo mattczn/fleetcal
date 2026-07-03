@@ -100,11 +100,26 @@ export async function sendOutreachEmail(args: OutreachSendArgs): Promise<Outreac
   if (configError) throw new Error(configError);
 
   const unsub = unsubscribeUrl(args.unsubToken);
+  // Compact 2-line CAN-SPAM footer. Address collapses onto one line
+  // with "·" separators regardless of how the org wrote it in settings
+  // (multi-line entries stay legible), and the unsubscribe line is
+  // suppressed when the user already put {{unsubscribe_url}} somewhere
+  // in their template body — no duplicate link.
+  //
+  //   [body]
+  //
+  //   —
+  //   Systematica LLC · 123 Main St · Ogden, UT 84401
+  //   Unsubscribe: https://fleetcal.app/unsubscribe/…
+  const addressOneLine = args.settings.physicalAddressFooter
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .join(" · ");
   let body = args.body.trimEnd();
-  if (!body.includes(unsub)) {
-    body += `\n\nIf you'd rather not hear from us, unsubscribe here: ${unsub}`;
-  }
-  body += `\n\n${args.settings.physicalAddressFooter.trim()}`;
+  const footerLines = ["—", addressOneLine];
+  if (!body.includes(unsub)) footerLines.push(`Unsubscribe: ${unsub}`);
+  body += `\n\n${footerLines.join("\n")}`;
 
   const fromName = args.settings.fromName?.trim() || env.outreachFromName;
   const { data, error } = await client().emails.send({
