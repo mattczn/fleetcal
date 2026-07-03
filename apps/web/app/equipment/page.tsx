@@ -26,7 +26,7 @@ import {
   Package, Wrench, ClipboardCheck, Fuel as FuelIcon,
   Camera, Loader2, MapPin, X, Clock, User, Truck, FileText, ExternalLink, Check, Trash2,
   ChevronLeft, ChevronRight, ChevronDown, CalendarDays, List as ListIcon, AlertCircle, CheckCircle2,
-  Calendar, Plus, Info, History as HistoryIcon,
+  Calendar, Plus, Info, History as HistoryIcon, Sun, Moon, Flag,
 } from 'lucide-react';
 import { isInternalOrg } from '@/lib/internalOrg';
 import Tooltip from '@/components/ui/Tooltip';
@@ -72,6 +72,7 @@ type InspectionRow = {
   photoCount: number;
   durationSeconds: number | null;
   submittedAt: string;
+  signedBy: string;
 };
 
 type Tab = 'maintenance' | 'inspections' | 'fuel' | 'history';
@@ -100,7 +101,7 @@ type MediaList = {
 //   • driver-only: transaction null, report set
 //   • matched:     both set
 type PanelData = {
-  kind: 'maintenance' | 'inspection' | 'fuel';
+  kind: 'maintenance' | 'inspection' | 'fuel' | 'dirty';
   id: string;
   // ID used to fetch the full detail (for inspections — the list
   // doesn't carry the per-item checklist). Maintenance + Fuel already
@@ -109,6 +110,10 @@ type PanelData = {
   | { kind: 'maintenance'; report: MaintenanceReport }
   | { kind: 'fuel';        transaction: FuelTransaction | null; report: FuelReport | null }
   | { kind: 'inspection';  row: InspectionRow }
+  // 'dirty' — a post-trip inspection flagged for uncleanliness. Opens
+  // the "Left dirty" review panel (reported vs. baseline cleanliness
+  // photo + recent drivers). `row` is the flagged post-trip inspection.
+  | { kind: 'dirty';       row: InspectionRow }
 );
 
 // ─── Page ─────────────────────────────────────────────────────────────
@@ -368,7 +373,8 @@ function EquipmentPageInner() {
             assets={assets}
             trailers={trailers}
             onOpen={(r) => setPanel({ kind: 'inspection', id: r.id, row: r })}
-            openId={panel?.kind === 'inspection' ? panel.id : null}
+            onOpenDirty={(r) => setPanel({ kind: 'dirty', id: r.id, row: r })}
+            openId={panel?.kind === 'inspection' || panel?.kind === 'dirty' ? panel.id : null}
           />
         )}
         {tab === 'fuel' && (
@@ -3622,12 +3628,13 @@ function MaintenanceList({
  * today?" which is naturally a coverage grid.
  */
 function InspectionsTabContent({
-  drivers, assets, trailers, onOpen, openId,
+  drivers, assets, trailers, onOpen, onOpenDirty, openId,
 }: {
   drivers: Driver[];
   assets: Asset[];
   trailers: Array<{ id: number; name: string; trailerNumber?: string; category: string }>;
   onOpen: (r: InspectionRow) => void;
+  onOpenDirty: (r: InspectionRow) => void;
   openId: string | null;
 }) {
   const [view, setView] = useState<'calendar' | 'list'>('calendar');
@@ -3665,6 +3672,7 @@ function InspectionsTabContent({
           <InspectionsCalendar
             assets={assets}
             onOpen={onOpen}
+            onOpenDirty={onOpenDirty}
             openId={openId}
           />
         )}
@@ -3674,6 +3682,7 @@ function InspectionsTabContent({
             assets={assets}
             trailers={trailers}
             onOpen={onOpen}
+            onOpenDirty={onOpenDirty}
             openId={openId}
           />
         )}
@@ -3756,10 +3765,11 @@ const DAY_LABELS = ['Sat', 'Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri'] as const;
  * fetches when the visible week changes.
  */
 function InspectionsCalendar({
-  assets, onOpen, openId,
+  assets, onOpen, onOpenDirty, openId,
 }: {
   assets: Asset[];
   onOpen: (r: InspectionRow) => void;
+  onOpenDirty: (r: InspectionRow) => void;
   openId: string | null;
 }) {
   // Org's chosen calendar timezone. Drives ALL day-bucketing — we
@@ -3861,16 +3871,35 @@ function InspectionsCalendar({
     return `${fmt(days[0])} — ${fmt(days[6], true)}`;
   }, [days]);
 
-  // Aggregate status for one bucket of inspections on a given day.
-  function aggregateStatus(list: InspectionRow[] | undefined): 'none' | 'clear' | 'defect' {
+  // Per-kind status for one bucket of inspections on a given day. Each
+  // day cell now shows a Pre + Post marker side by side, so we resolve
+  // status per kind rather than collapsing the whole day.
+  //   none   → that kind wasn't done that day
+  //   clear  → that kind ran with no defects
+  //   defect → that kind ran and logged at least one defect
+  function kindStatus(list: InspectionRow[] | undefined, kind: 'pre_trip' | 'post_trip'): 'none' | 'clear' | 'defect' {
     if (!list || list.length === 0) return 'none';
-    return list.some(r => r.hasDefects) ? 'defect' : 'clear';
+    const forKind = list.filter(r => r.kind === kind);
+    if (forKind.length === 0) return 'none';
+    return forKind.some(r => r.hasDefects) ? 'defect' : 'clear';
   }
 
-  function handleCellClick(assetId: number, dayKey: string, list: InspectionRow[]) {
-    if (list.length === 0) return;
-    if (list.length === 1) {
-      onOpen(list[0]);
+  // The flagged post-trip inspection for a day, if any post-trip
+  // submission was marked "left dirty". Newest wins (list is already
+  // sorted newest-first). Drives the amber corner flag on the cell.
+  function flaggedDirty(list: InspectionRow[] | undefined): InspectionRow | null {
+    if (!list) return null;
+    return list.find(r => r.kind === 'post_trip' && r.cleanlinessFlagged) ?? null;
+  }
+
+  // Open the inspection for a specific kind on a day, preferring the
+  // newest submission of that kind. Falls through to the multi-pick
+  // popover only when the kind is ambiguous (2+ submissions of it).
+  function handleMarkerClick(assetId: number, dayKey: string, list: InspectionRow[], kind: 'pre_trip' | 'post_trip') {
+    const forKind = list.filter(r => r.kind === kind);
+    if (forKind.length === 0) return;
+    if (forKind.length === 1) {
+      onOpen(forKind[0]);
       setOpenCellKey(null);
       return;
     }
@@ -3915,12 +3944,24 @@ function InspectionsCalendar({
         </div>
         <div className="ml-auto flex items-center gap-3 text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
           <div className="flex items-center gap-1">
-            <span className="inline-block w-2 h-2 rounded-full" style={{ background: '#16a34a' }} />
-            All clear
+            <Sun size={12} style={{ color: 'var(--gc-text-3)' }} />
+            Pre
           </div>
           <div className="flex items-center gap-1">
-            <span className="inline-block w-2 h-2 rounded-full" style={{ background: '#dc2626' }} />
+            <Moon size={12} style={{ color: 'var(--gc-text-3)' }} />
+            Post
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="inline-block w-2 h-2 rounded-full" style={{ background: '#1e8e3e' }} />
+            Clear
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="inline-block w-2 h-2 rounded-full" style={{ background: '#d93025' }} />
             Defect
+          </div>
+          <div className="flex items-center gap-1">
+            <Flag size={12} style={{ color: '#f59e0b' }} fill="#f59e0b" />
+            Left dirty
           </div>
           {loading && <Loader2 size={11} className="animate-spin" />}
         </div>
@@ -3994,9 +4035,11 @@ function InspectionsCalendar({
                     </div>
                   </td>
                   {days.map(d => {
-                    const dayKey = ymdKey(d);
-                    const list   = byAssetDay.get(`${a.id}|${dayKey}`) ?? [];
-                    const status = aggregateStatus(list);
+                    const dayKey    = ymdKey(d);
+                    const list      = byAssetDay.get(`${a.id}|${dayKey}`) ?? [];
+                    const preStatus  = kindStatus(list, 'pre_trip');
+                    const postStatus = kindStatus(list, 'post_trip');
+                    const dirty     = flaggedDirty(list);
                     const isOpenHere = openCellKey === `${a.id}|${dayKey}`;
                     const isToday    = dayKey === todayKey;
                     const isSelected = list.some(r => r.id === openId);
@@ -4009,14 +4052,19 @@ function InspectionsCalendar({
                           position: 'relative',
                         }}>
                         <CalendarCell
-                          status={status}
-                          count={list.length}
+                          preStatus={preStatus}
+                          postStatus={postStatus}
+                          dirty={!!dirty}
                           selected={isSelected}
-                          onClick={() => handleCellClick(a.id, dayKey, list)}
+                          onPreClick={() => handleMarkerClick(a.id, dayKey, list, 'pre_trip')}
+                          onPostClick={() => handleMarkerClick(a.id, dayKey, list, 'post_trip')}
+                          onDirtyClick={() => { if (dirty) { onOpenDirty(dirty); setOpenCellKey(null); } }}
                         />
                         {/* Multi-inspection picker popover. Anchored
                             to the cell via absolute positioning so it
-                            doesn't reflow the grid. */}
+                            doesn't reflow the grid. Shows every
+                            submission that day; the marker click routes
+                            here only when a single kind is ambiguous. */}
                         {isOpenHere && list.length > 1 && (
                           <InspectionPickerPopover
                             list={list}
@@ -4037,92 +4085,110 @@ function InspectionsCalendar({
   );
 }
 
-/** One cell in the inspections grid. Status drives a filled chip:
- *  - clear  → light-green chip with bold green check (Google-y),
- *             tinted #34a853-family
- *  - defect → light-red chip with bold red alert, tinted #ea4335-family
- *  - none   → quiet em-dash so empty days fade into the background
+/** One cell in the inspections grid. Each day now shows TWO markers
+ *  side by side — Pre (Sun) and Post (Moon) — each colored by that
+ *  kind's status for the day:
+ *   - clear  → green marker (that kind ran, no defects)
+ *   - defect → red marker   (that kind ran, defect logged)
+ *   - none   → faint gray marker (that kind not done that day)
+ *  When both are clear the cell reads "all green" at a glance; a
+ *  single red marker calls out exactly which trip failed.
  *
- *  Counts > 1 render as a small circular badge in the top-right corner
- *  of the chip — same visual idiom as iOS app-icon badges. Pure-
- *  presentational; click routing lives in the parent. */
-function CalendarCell({
-  status, count, selected, onClick,
+ *  If the day's post-trip was flagged "left dirty", an amber corner
+ *  flag overlays the cell — clicking it opens the dirty review panel
+ *  instead of the underlying inspection. Pure-presentational otherwise;
+ *  click routing lives in the parent. */
+function KindMarker({
+  status, icon, label, onClick,
 }: {
   status: 'none' | 'clear' | 'defect';
-  count: number;
-  selected: boolean;
+  icon: React.ReactNode;
+  label: string;
   onClick: () => void;
 }) {
   const interactive = status !== 'none';
-
-  // Google palette — chip background is the light tint, icon + badge
-  // are the saturated production color. Saturation reads loud at a
-  // distance which is the whole point of the coverage grid.
+  // Chip tint + icon color per status. Gray = "not done".
   const palette = status === 'clear'
-    ? { chipBg: '#e6f4ea', icon: '#1e8e3e', badgeBg: '#1e8e3e' }
+    ? { chipBg: '#e6f4ea', icon: '#1e8e3e' }
     : status === 'defect'
-    ? { chipBg: '#fce8e6', icon: '#d93025', badgeBg: '#d93025' }
-    : null;
+    ? { chipBg: '#fce8e6', icon: '#d93025' }
+    : { chipBg: 'transparent', icon: 'var(--gc-text-3)' };
 
   return (
     <button
       type="button"
-      onClick={onClick}
+      onClick={e => { e.stopPropagation(); if (interactive) onClick(); }}
       disabled={!interactive}
-      className="flex items-center justify-center w-full h-full transition-colors"
+      className="relative flex items-center justify-center transition-colors"
+      style={{
+        width:        30,
+        height:       30,
+        borderRadius: 9,
+        background:   palette.chipBg,
+        border:       status === 'none' ? '1px dashed var(--gc-border-light)' : 'none',
+        boxShadow:    status === 'none' ? undefined : '0 1px 2px rgba(0,0,0,0.06)',
+        opacity:      status === 'none' ? 0.55 : 1,
+        cursor:       interactive ? 'pointer' : 'default',
+      }}
+      title={
+        `${label}: ` + (
+          status === 'none'  ? 'not done'
+        : status === 'clear' ? 'all clear'
+        :                      'defect logged'
+        )
+      }>
+      <span style={{ color: palette.icon, display: 'flex' }}>{icon}</span>
+    </button>
+  );
+}
+
+function CalendarCell({
+  preStatus, postStatus, dirty, selected, onPreClick, onPostClick, onDirtyClick,
+}: {
+  preStatus:  'none' | 'clear' | 'defect';
+  postStatus: 'none' | 'clear' | 'defect';
+  dirty: boolean;
+  selected: boolean;
+  onPreClick: () => void;
+  onPostClick: () => void;
+  onDirtyClick: () => void;
+}) {
+  const anyInspection = preStatus !== 'none' || postStatus !== 'none';
+
+  return (
+    <div
+      className="relative flex items-center justify-center gap-1.5 w-full h-full"
       style={{
         minHeight: 60,
         padding:   '8px 6px',
-        cursor:    interactive ? 'pointer' : 'default',
         background: selected ? 'var(--gc-blue-light)' : 'transparent',
-        border: 'none',
         outline: selected ? '2px solid var(--gc-blue)' : undefined,
         outlineOffset: selected ? '-2px' : undefined,
-      }}
-      onMouseEnter={e => { if (interactive && !selected) e.currentTarget.style.background = 'var(--gc-hover)'; }}
-      onMouseLeave={e => { if (!selected) e.currentTarget.style.background = 'transparent'; }}
-      title={
-        status === 'none'   ? 'No inspection'
-      : status === 'clear'  ? (count > 1 ? `${count} inspections — all clear` : 'All clear')
-      :                       (count > 1 ? `${count} inspections — defects logged` : 'Defects logged')
-      }>
-      {status === 'none' ? (
-        <span className="text-[18px]" style={{ color: 'var(--gc-text-3)', opacity: 0.5 }}>—</span>
-      ) : (
-        <div
-          className="relative flex items-center justify-center"
-          style={{
-            width:        40,
-            height:       40,
-            borderRadius: 12,
-            background:   palette!.chipBg,
-            boxShadow:    '0 1px 2px rgba(0,0,0,0.06)',
-          }}>
-          {status === 'clear'
-            ? <CheckCircle2 size={22} color={palette!.icon} strokeWidth={2.5} />
-            : <AlertCircle  size={22} color={palette!.icon} strokeWidth={2.5} />}
-          {count > 1 && (
-            <span
-              className="absolute flex items-center justify-center text-[10px] font-extrabold"
+      }}>
+      {anyInspection ? (
+        <>
+          <KindMarker status={preStatus}  icon={<Sun  size={16} strokeWidth={2.5} />} label="Pre-trip"  onClick={onPreClick} />
+          <KindMarker status={postStatus} icon={<Moon size={16} strokeWidth={2.5} />} label="Post-trip" onClick={onPostClick} />
+          {dirty && (
+            <button
+              type="button"
+              onClick={e => { e.stopPropagation(); onDirtyClick(); }}
+              title="Left dirty — review"
+              className="absolute flex items-center justify-center"
               style={{
-                top:        -4,
-                right:      -6,
-                minWidth:   18,
-                height:     18,
-                padding:    '0 4px',
-                borderRadius: 9,
-                background: palette!.badgeBg,
-                color:      '#fff',
-                border:     '2px solid var(--gc-surface)',
-                boxShadow:  '0 1px 2px rgba(0,0,0,0.18)',
+                top: 2, right: 2, width: 18, height: 18,
+                borderRadius: 6, background: '#fef3c7',
+                border: '1px solid #fcd34d', cursor: 'pointer',
+                boxShadow: '0 1px 2px rgba(0,0,0,0.12)',
               }}>
-              {count}
-            </span>
+              <Flag size={11} style={{ color: '#d97706' }} fill="#f59e0b" />
+            </button>
           )}
-        </div>
+        </>
+      ) : (
+        <span className="text-[18px]" style={{ color: 'var(--gc-text-3)', opacity: 0.5 }}>—</span>
       )}
-    </button>
+    </div>
   );
 }
 
@@ -4213,12 +4279,13 @@ function InspectionPickerPopover({
 }
 
 function InspectionsList({
-  drivers, assets, trailers, onOpen, openId,
+  drivers, assets, trailers, onOpen, onOpenDirty, openId,
 }: {
   drivers: Driver[];
   assets: Asset[];
   trailers: Array<{ id: number; name: string; trailerNumber?: string; category: string }>;
   onOpen: (r: InspectionRow) => void;
+  onOpenDirty: (r: InspectionRow) => void;
   openId: string | null;
 }) {
   const [rows, setRows] = useState<InspectionRow[]>([]);
@@ -4247,7 +4314,23 @@ function InspectionsList({
           <OpsPill color={r.kind === 'post_trip' ? 'purple' : 'blue'}>
             {r.kind === 'post_trip' ? 'Post-trip' : 'Pre-trip'}
           </OpsPill>
-          {r.cleanlinessFlagged && <OpsPill color="amber">Dirty</OpsPill>}
+          {r.cleanlinessFlagged && (
+            // Clickable amber "Left dirty" badge — opens the dirty
+            // review panel (reported vs. baseline photo + recent
+            // drivers). stopPropagation so it doesn't also fire the
+            // row's onOpen (which would open the plain inspection).
+            <button
+              type="button"
+              onClick={e => { e.stopPropagation(); onOpenDirty(r); }}
+              className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold transition-colors"
+              style={{ background: '#fef3c7', color: '#b45309', border: '1px solid #fcd34d', cursor: 'pointer' }}
+              onMouseEnter={e => { e.currentTarget.style.background = '#fde68a'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = '#fef3c7'; }}
+              title="Left dirty — review">
+              <Flag size={10} style={{ color: '#d97706' }} fill="#f59e0b" />
+              Dirty
+            </button>
+          )}
         </span>
       ) },
     { key: 'items', header: 'Items', width: 160,
@@ -4333,50 +4416,81 @@ function TruckHistoryTabContent({
   onOpenReport: (r: MaintenanceReport) => void;
   onOpenInspection: (r: InspectionRow) => void;
 }) {
-  // Equipment picker — mirrors the org-wide equipFilter encoding used by
-  // the other tabs ("asset:<id>" / "trailer:<id>") so the option list is
-  // built by the same helper.
-  const options = useMemo<HistoryEquip[]>(() => {
-    const out: HistoryEquip[] = [];
+  // Equipment picker — split into two separate dropdowns (Trucks vs.
+  // Trailers) so neither list gets unwieldy on a big fleet. Both still
+  // encode as "asset:<id>" / "trailer:<id>" via buildEquipmentOptions,
+  // then get partitioned by prefix. Picking one clears the other since
+  // history is per single piece of equipment.
+  const { truckOptions, trailerOptions } = useMemo(() => {
+    const trucks:   HistoryEquip[] = [];
+    const trls:     HistoryEquip[] = [];
     for (const o of buildEquipmentOptions(assets, trailers)) {
       const [prefix, idRaw] = o.value.split(':');
-      out.push({
+      const entry: HistoryEquip = {
         key: o.value,
         kind: prefix === 'asset' ? 'asset' : 'trailer',
         id: Number(idRaw),
         label: o.label,
-      });
+      };
+      (prefix === 'asset' ? trucks : trls).push(entry);
     }
-    return out;
+    return { truckOptions: trucks, trailerOptions: trls };
   }, [assets, trailers]);
 
   const [selectedKey, setSelectedKey] = useState<string>('');
-  const selected = options.find(o => o.key === selectedKey) ?? null;
+  const selected =
+    truckOptions.find(o => o.key === selectedKey)
+    ?? trailerOptions.find(o => o.key === selectedKey)
+    ?? null;
+
+  const selectStyle: React.CSSProperties = {
+    width: '100%',
+    padding: '7px 12px',
+    borderRadius: 8,
+    border: '1px solid var(--gc-border)',
+    background: 'var(--gc-surface)',
+    color: 'var(--gc-text-1)',
+    fontSize: 13,
+    fontWeight: 600,
+  };
+
+  // A truck pick clears any trailer selection and vice-versa: passing
+  // '' back up resets the value, and `selected` resolves against both
+  // lists so whichever dropdown holds the current key stays shown.
+  const truckValue   = selected?.kind === 'asset'   ? selectedKey : '';
+  const trailerValue = selected?.kind === 'trailer' ? selectedKey : '';
 
   return (
     <div className="flex flex-col gap-5">
-      {/* Equipment picker */}
-      <div className="flex items-center gap-3">
-        <label className="text-[12px] font-semibold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
-          Equipment
-        </label>
-        <div style={{ minWidth: 280 }}>
-          <StyledSelect
-            value={selectedKey}
-            onChange={e => setSelectedKey(e.target.value)}
-            style={{
-              width: '100%',
-              padding: '7px 12px',
-              borderRadius: 8,
-              border: '1px solid var(--gc-border)',
-              background: 'var(--gc-surface)',
-              color: 'var(--gc-text-1)',
-              fontSize: 13,
-              fontWeight: 600,
-            }}>
-            <option value="">Select a truck or trailer…</option>
-            {options.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
-          </StyledSelect>
+      {/* Equipment picker — separate Truck + Trailer dropdowns. */}
+      <div className="flex items-end gap-4 flex-wrap">
+        <div className="flex flex-col gap-1.5">
+          <label className="text-[12px] font-semibold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
+            Truck
+          </label>
+          <div style={{ minWidth: 240 }}>
+            <StyledSelect
+              value={truckValue}
+              onChange={e => setSelectedKey(e.target.value)}
+              style={selectStyle}>
+              <option value="">Select a truck…</option>
+              {truckOptions.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
+            </StyledSelect>
+          </div>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <label className="text-[12px] font-semibold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
+            Trailer
+          </label>
+          <div style={{ minWidth: 240 }}>
+            <StyledSelect
+              value={trailerValue}
+              onChange={e => setSelectedKey(e.target.value)}
+              style={selectStyle}>
+              <option value="">Select a trailer…</option>
+              {trailerOptions.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
+            </StyledSelect>
+          </div>
         </div>
       </div>
 
@@ -5570,6 +5684,8 @@ function DetailPanel({
     ? { color: '#f59e0b', title: 'Maintenance report' }
     : panel.kind === 'inspection'
     ? { color: '#1a73e8', title: 'Inspection report' }
+    : panel.kind === 'dirty'
+    ? { color: '#f59e0b', title: 'Left dirty — cleanliness review' }
     : (() => {
         const hasTx     = !!panel.transaction;
         const hasReport = !!panel.report;
@@ -5635,6 +5751,7 @@ function DetailPanel({
             onConverted={onClose}
           />}
           {panel.kind === 'inspection'  && <InspectionDetail  id={panel.id} onOpenMedia={onOpenMedia} />}
+          {panel.kind === 'dirty'       && <DirtyDetail       row={panel.row} onOpenMedia={onOpenMedia} />}
           {panel.kind === 'fuel'        && <FuelDetail
             transaction={panel.transaction}
             report={panel.report}
@@ -6164,6 +6281,239 @@ function InspectionDetail({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/** "Left dirty" review panel — opened from the amber flag on a
+ *  post-trip inspection whose cleanlinessFlagged is true. Composes
+ *  three existing endpoints (no new aggregate route):
+ *
+ *   1. Reported photo(s): getInspectionReport(flaggedId) → photos whose
+ *      itemId === 'cleanliness'. This is what the driver actually
+ *      submitted when flagging the truck dirty.
+ *   2. Baseline photo: the most recent OTHER post_trip inspection for
+ *      the same asset (listInspectionReports({ assetId }) → newest
+ *      post_trip that isn't the flagged one) → getInspectionReport →
+ *      its 'cleanliness' photo. Shows how the truck normally looks.
+ *   3. Recent drivers: getAssetTimeline over the last 30 days, deduped
+ *      by driver name most-recent-first — same logic the History tab
+ *      uses.
+ *
+ *  Photos are clickable → onOpenMedia opens the shared lightbox.
+ *  Trailers have no timeline, but cleanliness flags only come off
+ *  post-trip truck inspections, so assetId is always present here. */
+function DirtyDetail({
+  row, onOpenMedia,
+}: {
+  row: InspectionRow;
+  onOpenMedia: (list: MediaList) => void;
+}) {
+  type CleanPhoto = { id: string; signedUrl: string | null; caption: string | null };
+  const [reportedPhotos, setReportedPhotos] = useState<CleanPhoto[]>([]);
+  const [baseline, setBaseline] = useState<{ photo: CleanPhoto; date: string } | null>(null);
+  const [drivers, setDrivers] = useState<Array<{ name: string; lastSeen: string }>>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+
+    const assetId = row.assetId;
+    const now = new Date();
+    const from30 = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const fromIso = from30.toISOString();
+    const toIso   = now.toISOString();
+
+    // (1) reported cleanliness photos come straight off the flagged report.
+    const reportedP = railway.getInspectionReport(row.id);
+
+    // (2) baseline = most recent OTHER post_trip inspection on this asset.
+    //     Pull a small page (newest-first from the API), skip the
+    //     flagged one, take the first post_trip, then fetch its detail
+    //     to reach the cleanliness photo.
+    const baselineP = assetId == null
+      ? Promise.resolve<{ photo: CleanPhoto; date: string } | null>(null)
+      : railway.listInspectionReports({ assetId, limit: 50 }).then(async list => {
+          const candidate = list.inspections
+            .filter(i => i.kind === 'post_trip' && i.id !== row.id)
+            .sort((a, b) => b.submittedAt.localeCompare(a.submittedAt))[0];
+          if (!candidate) return null;
+          const detail = await railway.getInspectionReport(candidate.id);
+          const photo = detail.inspection.photos.find(p => p.itemId === 'cleanliness');
+          if (!photo) return null;
+          return {
+            photo: { id: photo.id, signedUrl: photo.signedUrl, caption: photo.caption },
+            date: candidate.submittedAt,
+          };
+        });
+
+    // (3) recent drivers — timeline dedup, mirrors TruckHistoryBody.
+    const timelineP = assetId == null
+      ? Promise.resolve(null)
+      : railway.getAssetTimeline(assetId, fromIso, toIso).catch(() => null);
+
+    Promise.allSettled([reportedP, baselineP, timelineP]).then(([rep, base, tl]) => {
+      if (cancelled) return;
+      const fails: string[] = [];
+
+      if (rep.status === 'fulfilled') {
+        setReportedPhotos(
+          rep.value.inspection.photos
+            .filter(p => p.itemId === 'cleanliness')
+            .map(p => ({ id: p.id, signedUrl: p.signedUrl, caption: p.caption })),
+        );
+      } else { fails.push('reported photo'); }
+
+      if (base.status === 'fulfilled') setBaseline(base.value);
+      else                             fails.push('baseline photo');
+
+      if (tl.status === 'fulfilled' && tl.value) {
+        const byDriver = new Map<string, { name: string; lastSeen: string }>();
+        for (const ev of tl.value.events) {
+          const name = ev.driverName?.trim();
+          if (!name) continue;
+          const prev = byDriver.get(name);
+          if (!prev || ev.start > prev.lastSeen) byDriver.set(name, { name, lastSeen: ev.start });
+        }
+        setDrivers([...byDriver.values()].sort((a, b) => b.lastSeen.localeCompare(a.lastSeen)));
+      } else {
+        setDrivers([]);
+      }
+
+      if (fails.length) setError(`Failed to load ${fails.join(', ')}.`);
+    }).finally(() => { if (!cancelled) setLoading(false); });
+
+    return () => { cancelled = true; };
+  }, [row.id, row.assetId]);
+
+  const truckName = row.assetName ?? '—';
+  const flaggedDate = new Date(row.submittedAt);
+
+  // Combined lightbox item list: reported photos first, then baseline.
+  const lightboxItems: MediaList['items'] = [
+    ...reportedPhotos.map(p => ({ id: p.id, signedUrl: p.signedUrl, caption: p.caption, section: 'Reported uncleanliness' })),
+    ...(baseline ? [{ id: baseline.photo.id, signedUrl: baseline.photo.signedUrl, caption: baseline.photo.caption, section: 'Most recent (baseline)' }] : []),
+  ];
+  const baselineIndex = reportedPhotos.length;
+
+  return (
+    <div className="flex-1 overflow-y-auto" style={{ background: 'var(--gc-bg)' }}>
+      {/* Header — truck, flagged date, who signed it. */}
+      <div className="px-6 pt-5 pb-5" style={{ background: 'var(--gc-surface)', borderBottom: '1px solid var(--gc-border-light)' }}>
+        <div className="inline-flex items-center gap-2 rounded-full" style={{ background: '#fef3c7', padding: '6px 14px 6px 8px' }}>
+          <div className="rounded-full flex items-center justify-center" style={{ width: 24, height: 24, background: '#f59e0b' }}>
+            <Flag size={13} color="#fff" strokeWidth={2.5} fill="#fff" />
+          </div>
+          <span className="text-[15px] font-extrabold" style={{ color: '#92400e' }}>Left dirty</span>
+        </div>
+        <div className="mt-3 flex items-center gap-2 text-[14px] flex-wrap" style={{ color: 'var(--gc-text-2)' }}>
+          <Truck size={14} style={{ color: 'var(--gc-text-3)' }} />
+          <span className="font-semibold" style={{ color: 'var(--gc-text-1)' }}>Truck {truckName}</span>
+          <span style={{ color: 'var(--gc-text-3)' }}>·</span>
+          <span>{flaggedDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}</span>
+          <span style={{ color: 'var(--gc-text-3)' }}>·</span>
+          <User size={14} style={{ color: 'var(--gc-text-3)' }} />
+          <span className="font-semibold" style={{ color: 'var(--gc-text-1)' }}>{row.signedBy}</span>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="flex items-center gap-2 text-[13px] py-12 justify-center" style={{ color: 'var(--gc-text-3)' }}>
+          <Loader2 size={16} className="animate-spin" /> Loading cleanliness review…
+        </div>
+      ) : (
+        <div className="px-6 py-5 flex flex-col gap-6">
+          {error && (
+            <div className="rounded-lg text-[12.5px] py-2.5 px-3" style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b' }}>
+              {error}
+            </div>
+          )}
+
+          {/* Reported vs. baseline photos, side by side. */}
+          <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }}>
+            <DirtyPhotoCard
+              title="Reported uncleanliness"
+              subtitle={`Flagged ${flaggedDate.toLocaleDateString()}`}
+              accent="#f59e0b"
+              photo={reportedPhotos[0] ?? null}
+              onClick={reportedPhotos[0]?.signedUrl ? () => onOpenMedia({ initialIndex: 0, items: lightboxItems }) : undefined}
+              emptyLabel="No cleanliness photo on the flagged report."
+            />
+            <DirtyPhotoCard
+              title="Most recent (baseline)"
+              subtitle={baseline ? new Date(baseline.date).toLocaleDateString() : undefined}
+              accent="#1e8e3e"
+              photo={baseline?.photo ?? null}
+              onClick={baseline?.photo.signedUrl ? () => onOpenMedia({ initialIndex: baselineIndex, items: lightboxItems }) : undefined}
+              emptyLabel="No earlier post-trip cleanliness photo found."
+            />
+          </div>
+
+          {/* Recent drivers. */}
+          <section>
+            <SectionHeader>Recent drivers · last 30 days</SectionHeader>
+            {drivers.length === 0 ? (
+              <div className="rounded-lg text-[12.5px] py-4 px-4 text-center"
+                style={{ background: 'var(--gc-surface)', border: '1px dashed var(--gc-border-light)', color: 'var(--gc-text-3)' }}>
+                No driver activity recorded in the last 30 days.
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {drivers.map(dr => (
+                  <div key={dr.name} className="rounded-lg px-3.5 py-2.5 flex items-center justify-between"
+                    style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border-light)' }}>
+                    <span className="text-[13px] font-medium" style={{ color: 'var(--gc-text-1)' }}>{dr.name}</span>
+                    <span className="text-[11.5px]" style={{ color: 'var(--gc-text-3)' }}>
+                      Last: {new Date(dr.lastSeen).toLocaleDateString()}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** One photo card in the dirty-review panel. Clickable when a signed
+ *  URL is present — enlarges via the shared lightbox. Falls back to a
+ *  quiet empty state otherwise. */
+function DirtyPhotoCard({
+  title, subtitle, accent, photo, onClick, emptyLabel,
+}: {
+  title: string;
+  subtitle?: string;
+  accent: string;
+  photo: { id: string; signedUrl: string | null; caption: string | null } | null;
+  onClick?: () => void;
+  emptyLabel: string;
+}) {
+  return (
+    <div className="rounded-xl overflow-hidden" style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border-light)' }}>
+      <div className="px-3.5 py-2.5" style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
+        <div className="flex items-center gap-1.5">
+          <span className="inline-block w-2 h-2 rounded-full" style={{ background: accent }} />
+          <span className="text-[12px] font-bold uppercase tracking-wider" style={{ color: 'var(--gc-text-2)' }}>{title}</span>
+        </div>
+        {subtitle && <div className="text-[11px] mt-0.5" style={{ color: 'var(--gc-text-3)' }}>{subtitle}</div>}
+      </div>
+      {photo?.signedUrl ? (
+        <button type="button" onClick={onClick} title="Click to enlarge"
+          className="block w-full" style={{ cursor: 'pointer', background: 'var(--gc-bg)', border: 'none', padding: 0 }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={photo.signedUrl} alt={photo.caption ?? ''} style={{ width: '100%', height: 220, objectFit: 'cover', display: 'block' }} />
+        </button>
+      ) : (
+        <div className="flex items-center justify-center text-[12px] px-4 text-center"
+          style={{ height: 220, background: 'var(--gc-bg)', color: 'var(--gc-text-3)' }}>
+          {emptyLabel}
+        </div>
+      )}
     </div>
   );
 }
