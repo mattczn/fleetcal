@@ -2700,23 +2700,34 @@ driver.get("/equipment/:kind/:id/history", async (c) => {
   // mechanical defects and belong to the left-dirty surface instead.
   }).filter((d) => d.failedItems.length > 0);
 
-  // 4) Last post-trip cleanliness photo (the condition it was left in).
+  // 4) Most recent cab cleanliness photo across ANY inspection kind (pre or
+  //    post). It's a photo of the cab's condition regardless of when taken, and
+  //    it must SURVIVE a later inspection that had no photo (clean cab) — so we
+  //    look photo-first over the recent inspections rather than at a single
+  //    latest report.
   let lastCleanlinessPhoto: { signedUrl?: string; uploadedAt: string; date: string; signedBy: string } | null = null;
-  const { data: lastPost } = await sb
+  const { data: recentInsp } = await sb
     .from("inspection_reports")
     .select("id, inspection_date, signed_by")
-    .eq("org_id", orgId).eq(col, id).eq("kind", "post_trip")
+    .eq("org_id", orgId).eq(col, id)
     .order("inspection_date", { ascending: false }).order("submitted_at", { ascending: false })
-    .limit(1).maybeSingle();
-  if (lastPost) {
-    const { data: cp } = await sb
+    .limit(30);
+  const cleanInspRows = (recentInsp ?? []) as Array<{ id: string; inspection_date: string; signed_by: string }>;
+  if (cleanInspRows.length) {
+    const inspById = new Map(cleanInspRows.map((r) => [r.id, r]));
+    const { data: cps } = await sb
       .from("inspection_photos")
-      .select("id, storage_path, uploaded_at")
-      .eq("report_id", lastPost.id).eq("item_id", "cleanliness")
-      .order("uploaded_at", { ascending: false }).limit(1).maybeSingle();
+      .select("report_id, storage_path, uploaded_at")
+      .in("report_id", cleanInspRows.map((r) => r.id)).eq("item_id", "cleanliness")
+      .order("uploaded_at", { ascending: false }).limit(1);
+    const cp = ((cps ?? []) as Array<{ report_id: string; storage_path: string; uploaded_at: string }>)[0];
     if (cp) {
+      const insp = inspById.get(cp.report_id);
       const urlByPath = await (await signPathsMap("inspection-photos"))([cp.storage_path]);
-      lastCleanlinessPhoto = { signedUrl: urlByPath.get(cp.storage_path), uploadedAt: cp.uploaded_at, date: lastPost.inspection_date, signedBy: lastPost.signed_by };
+      lastCleanlinessPhoto = {
+        signedUrl: urlByPath.get(cp.storage_path), uploadedAt: cp.uploaded_at,
+        date: insp?.inspection_date ?? cp.uploaded_at.slice(0, 10), signedBy: insp?.signed_by ?? "",
+      };
     }
   }
 
