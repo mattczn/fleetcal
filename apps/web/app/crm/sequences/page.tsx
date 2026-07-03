@@ -52,6 +52,11 @@ function renderSample(tpl: string): string {
  *  values don't fight the cursor (cf. /crm/settings number inputs). */
 interface EditStep {
   key:             number;
+  /** Server ID — undefined for freshly-added rows until the next Save.
+   *  Present-vs-absent gates the "Send test" button (only saved steps
+   *  can be test-sent, otherwise we'd be sending the server's stale
+   *  version of what's in the editor). */
+  id?:             string;
   waitDays:        string;
   subjectTemplate: string;
   bodyTemplate:    string;
@@ -91,6 +96,23 @@ function CrmSequencesPageInner() {
   const [saving,     setSaving]     = useState(false);
   const [saveMsg,    setSaveMsg]    = useState<string | null>(null);
 
+  // ── Test-send state ─────────────────────────────────────────────────
+  // Recipient persists per-browser so a second test doesn't require
+  // retyping the address. localStorage key is namespaced under the
+  // page so it doesn't collide with anything else.
+  const [testEmail,    setTestEmail]    = useState('');
+  const [testSending,  setTestSending]  = useState(false);
+  const [testMsg,      setTestMsg]      = useState<string | null>(null);
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem('crm-sequences-test-email');
+      if (saved) setTestEmail(saved);
+    } catch { /* ignore */ }
+  }, []);
+  useEffect(() => {
+    try { window.localStorage.setItem('crm-sequences-test-email', testEmail); } catch { /* ignore */ }
+  }, [testEmail]);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -120,6 +142,7 @@ function CrmSequencesPageInner() {
     if (!selected) { setSteps([]); setDirty(false); return; }
     setSteps(selected.steps.map(s => ({
       key:             nextKey++,
+      id:              s.id,
       waitDays:        String(s.waitDays),
       subjectTemplate: s.subjectTemplate,
       bodyTemplate:    s.bodyTemplate,
@@ -235,6 +258,33 @@ function CrmSequencesPageInner() {
   }
 
   const previewStep = steps[Math.min(previewIdx, steps.length - 1)] ?? null;
+
+  /** Send the currently previewed step to the test recipient. Requires
+   *  the sequence to be saved (each step needs a server id) and clean
+   *  (otherwise the recipient sees the last-saved copy, not the
+   *  in-editor copy, which is confusing). */
+  async function handleSendTest() {
+    if (!selected || !previewStep?.id || testSending) return;
+    const to = testEmail.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+      setTestMsg('Enter a valid recipient email.'); return;
+    }
+    setTestSending(true); setTestMsg(null);
+    try {
+      const r = await railway.crmSendTestStep(selected.id, previewStep.id, { to });
+      setTestMsg(`Sent step ${r.stepOrder} to ${r.sentTo}. Check your inbox.`);
+    } catch (e) {
+      if (e instanceof RailwayError) {
+        const d = e.detail as { detail?: string; error?: string } | null;
+        const msg = d?.detail || d?.error || e.message;
+        setTestMsg(`Send failed (${e.status}): ${msg}`);
+      } else {
+        setTestMsg('Send failed.');
+      }
+    } finally {
+      setTestSending(false);
+    }
+  }
 
   const inputStyle: React.CSSProperties = {
     background: 'var(--gc-bg)',
@@ -524,6 +574,58 @@ function CrmSequencesPageInner() {
                     An unsubscribe link and the CAN-SPAM physical-address footer are auto-appended
                     at send time (configure the footer in CRM settings).
                   </div>
+                  {canManage && (
+                    <div className="px-4 py-3 flex flex-col gap-2"
+                      style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
+                      <div className="text-[11.5px] font-bold" style={{ color: 'var(--gc-text-2)' }}>
+                        Test send
+                      </div>
+                      <input
+                        type="email"
+                        value={testEmail}
+                        onChange={e => setTestEmail(e.target.value)}
+                        placeholder="matt@fleetcalendar.app"
+                        className="rounded-lg px-2.5 py-1.5 text-[12.5px] outline-none"
+                        style={inputStyle} />
+                      <button
+                        onClick={() => void handleSendTest()}
+                        disabled={
+                          testSending ||
+                          !previewStep ||
+                          !previewStep.id ||
+                          dirty ||
+                          !testEmail.trim()
+                        }
+                        title={
+                          !previewStep
+                            ? 'Add a step to test.'
+                            : !previewStep.id
+                              ? 'Save the sequence first — new steps have no server id yet.'
+                              : dirty
+                                ? 'Save your changes first — the test would send the last-saved copy, not what you see in the editor.'
+                                : ''
+                        }
+                        className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-opacity disabled:opacity-50"
+                        style={{ background: '#1a73e8', color: '#fff' }}>
+                        {testSending
+                          ? 'Sending…'
+                          : previewStep
+                            ? `Send step ${Math.min(previewIdx, steps.length - 1) + 1} to my inbox`
+                            : 'Send test'}
+                      </button>
+                      {testMsg && (
+                        <div className="text-[11.5px] font-semibold"
+                          style={{ color: testMsg.startsWith('Sent') ? '#188038' : '#c5221f' }}>
+                          {testMsg}
+                        </div>
+                      )}
+                      <div className="text-[10.5px]" style={{ color: 'var(--gc-text-3)' }}>
+                        Real send via Resend from your outreach domain. Subject prefixed
+                        <code className="mx-0.5 px-1 rounded" style={{ background: 'var(--gc-border-light)' }}>[TEST]</code>.
+                        No outbox row, no daily-cap impact.
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             )}

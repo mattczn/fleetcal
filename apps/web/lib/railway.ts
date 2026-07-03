@@ -1630,6 +1630,20 @@ class RailwayClient {
       dryRun: boolean;
     }>('POST', '/v1/crm/cleanup-nonicp', { dryRun });
   }
+  /** Render a sequence step against a sample lead and email it via
+   *  the outreach path to a specified inbox. No outbox row, no daily-
+   *  cap impact — pure smoke test of the copy + configuration. Same
+   *  CAN-SPAM/outreach-domain guards as real sends. crm.manage only. */
+  crmSendTestStep(sequenceId: string, stepId: string, opts: {
+    to: string;
+    sample?: { legalName?: string; dbaName?: string; phyCity?: string; phyState?: string; powerUnits?: number };
+  }) {
+    return this.req<{ messageId: string; sentTo: string; stepOrder: number }>(
+      'POST',
+      `/v1/crm/sequences/${sequenceId}/steps/${stepId}/test-send`,
+      opts,
+    );
+  }
   /** Enroll many leads into a sequence in one round-trip. Server
    *  validates each individually and returns per-lead rejects. */
   crmBulkEnroll(leadIds: string[], sequenceId: string) {

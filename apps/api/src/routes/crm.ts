@@ -39,6 +39,7 @@ import { supabase } from "../lib/supabase.js";
 import { syncCrmLeadsForOrg } from "../jobs/crmFmcsaSyncSweep.js";
 import { verifyEmailsForOrg } from "../jobs/crmVerifyEmailsBatch.js";
 import { firstMatchingKeyword } from "../lib/fmcsaCensus.js";
+import { outreachConfigError, renderForLead, sendOutreachEmail } from "../lib/crmOutreach.js";
 import {
   requireCapability,
   requireInternalOrg,
@@ -610,6 +611,111 @@ crm.put("/sequences/:id/steps", requireCapability("crm.manage"), async (c) => {
     .order("step_order", { ascending: true });
   return c.json({ steps: ((stepRaw ?? []) as Record<string, unknown>[]).map(rowToStep) });
 });
+
+/**
+ * Test-send: render this step against a sample lead and send it via
+ * the outreach path to a specified inbox — no outbox entry, no
+ * crm_emails row, no activity log, no daily-cap impact. Subject is
+ * prefixed with `[TEST]` and the unsubscribe token is a throwaway
+ * UUID (the public unsubscribe page still renders cleanly against a
+ * missing lead — no state is mutated).
+ *
+ * Same CAN-SPAM + outreach-domain guardrails as real sends: refuses
+ * when OUTREACH_FROM_EMAIL is unset or the physical-address footer is
+ * empty. If a test send fails these checks, the real send would too —
+ * cheap way to debug configuration before enrolling anyone.
+ */
+crm.post(
+  "/sequences/:id/steps/:stepId/test-send",
+  requireCapability("crm.manage"),
+  async (c) => {
+    const orgId = c.get("orgId");
+    const seqId = c.req.param("id");
+    const stepId = c.req.param("stepId");
+    type TestSendBody = {
+      to?: string;
+      sample?: { legalName?: string; dbaName?: string; phyCity?: string; phyState?: string; powerUnits?: number };
+    };
+    const body = await c.req.json<TestSendBody>().catch<TestSendBody>(() => ({}));
+
+    const to = body.to?.trim().toLowerCase();
+    if (!to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+      return c.json({ error: "validation_failed", errors: ["to email required"] } satisfies ApiErrorResponse, 400);
+    }
+
+    const { data: stepRaw } = await supabase
+      .from("crm_sequence_steps")
+      .select("id,step_order,subject_template,body_template")
+      .eq("id", stepId)
+      .eq("sequence_id", seqId)
+      .eq("org_id", orgId)
+      .maybeSingle();
+    const step = stepRaw as {
+      id: string; step_order: number; subject_template: string; body_template: string;
+    } | null;
+    if (!step) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+
+    const { data: settingsRow } = await supabase
+      .from("org_settings")
+      .select("crm_settings")
+      .eq("org_id", orgId)
+      .maybeSingle();
+    const settings = resolveCrmSettings(
+      (settingsRow as { crm_settings?: unknown } | null)?.crm_settings,
+    );
+
+    const configError = outreachConfigError(settings);
+    if (configError) {
+      return c.json(
+        { error: "outreach_not_configured", detail: configError } satisfies ApiErrorResponse,
+        400,
+      );
+    }
+
+    // Sample lead — canonical defaults so a first test click "just
+    // works" without configuration. Override via `sample` in the body.
+    const sample: CrmLead = {
+      id: "test",
+      source: "manual",
+      legalName: body.sample?.legalName ?? "Acme Trucking Co",
+      dbaName:   body.sample?.dbaName ?? undefined,
+      email:     to,
+      phyCity:   body.sample?.phyCity  ?? "Ogden",
+      phyState:  body.sample?.phyState ?? "UT",
+      powerUnits: body.sample?.powerUnits ?? 6,
+      status: "enriched",
+      statusChangedAt: "",
+      callAttempts: 0,
+      createdAt: "",
+      updatedAt: "",
+    };
+
+    // Throwaway unsubscribe token — the public endpoint renders a
+    // benign "you're unsubscribed" page against an unknown token
+    // without mutating anything, so a curious click during testing is
+    // harmless.
+    const { randomUUID } = await import("node:crypto");
+    const testToken = randomUUID();
+    const subject = `[TEST] ${renderForLead(step.subject_template, sample, testToken)}`;
+    const rendered = renderForLead(step.body_template, sample, testToken);
+
+    try {
+      const { messageId } = await sendOutreachEmail({
+        to,
+        subject,
+        body: rendered,
+        unsubToken: testToken,
+        settings,
+      });
+      return c.json({ messageId, sentTo: to, stepOrder: step.step_order });
+    } catch (err) {
+      return c.json(
+        { error: "send_failed", detail: err instanceof Error ? err.message : String(err) } satisfies ApiErrorResponse,
+        502,
+      );
+    }
+  },
+);
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyHonoContext = any;
