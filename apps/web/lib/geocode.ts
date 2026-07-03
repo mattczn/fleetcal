@@ -4,6 +4,19 @@ import { find as tzFind } from 'geo-tz';
 const MAPBOX_TOKEN  = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? '';
 const GOOGLE_KEY    = process.env.GOOGLE_MAPS_API_KEY ?? '';
 
+/**
+ * Best-effort IANA timezone from lat/lng. geo-tz can THROW at runtime (its
+ * data files don't reliably bundle into a serverless function on Vercel), and
+ * the callers below run tzFind *inside* their return — so an unguarded throw
+ * discards the whole geocode result (valid coordinates included) via the
+ * surrounding catch/fall-through, which then wipes the stop's coordinates in
+ * the UI. Timezone is optional; coordinates are essential — never let one take
+ * the other down. Returns undefined on any failure.
+ */
+function safeTz(lat: number, lng: number): string | undefined {
+  try { return tzFind(lat, lng)[0] ?? undefined; } catch { return undefined; }
+}
+
 export interface GeoResult {
   lat:       number;
   lng:       number;
@@ -69,7 +82,7 @@ export async function geocodeAddress(address: string): Promise<GeoResult | null>
           return {
             lat: loc.lat, lng: loc.lng,
             city, state,
-            timezone: tzFind(loc.lat, loc.lng)[0] ?? undefined,
+            timezone: safeTz(loc.lat, loc.lng),
           };
         }
       }
@@ -87,7 +100,7 @@ export async function geocodeAddress(address: string): Promise<GeoResult | null>
         const center = json.features?.[0]?.center;
         if (center) {
           const [lng, lat] = center;
-          return { lat, lng, timezone: tzFind(lat, lng)[0] ?? undefined };
+          return { lat, lng, timezone: safeTz(lat, lng) };
         }
       }
     } catch { /* fall through */ }
@@ -103,7 +116,7 @@ export async function geocodeAddress(address: string): Promise<GeoResult | null>
       if (json[0]) {
         const lat = parseFloat(json[0].lat);
         const lng = parseFloat(json[0].lon);
-        return { lat, lng, timezone: tzFind(lat, lng)[0] ?? undefined };
+        return { lat, lng, timezone: safeTz(lat, lng) };
       }
     }
   } catch { /* all failed */ }
@@ -121,21 +134,21 @@ export async function reverseGeocode(lat: number, lng: number): Promise<GeoResul
   if (typeof lat !== "number" || typeof lng !== "number") return null;
   if (!GOOGLE_KEY) {
     // Fall back to just timezone — better than nothing.
-    return { lat, lng, timezone: tzFind(lat, lng)[0] ?? undefined };
+    return { lat, lng, timezone: safeTz(lat, lng) };
   }
   try {
     const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${GOOGLE_KEY}`;
     const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
-    if (!res.ok) return { lat, lng, timezone: tzFind(lat, lng)[0] ?? undefined };
+    if (!res.ok) return { lat, lng, timezone: safeTz(lat, lng) };
     const json = await res.json() as {
       status:  string;
       results: { address_components: GoogleAddressComponent[] }[];
     };
     const components = json.results?.[0]?.address_components;
     const { city, state } = extractCityState(components);
-    return { lat, lng, city, state, timezone: tzFind(lat, lng)[0] ?? undefined };
+    return { lat, lng, city, state, timezone: safeTz(lat, lng) };
   } catch {
-    return { lat, lng, timezone: tzFind(lat, lng)[0] ?? undefined };
+    return { lat, lng, timezone: safeTz(lat, lng) };
   }
 }
 

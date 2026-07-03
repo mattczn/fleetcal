@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
-import { find as tzFind } from 'geo-tz';
 
 const KEY = process.env.GOOGLE_MAPS_API_KEY ?? '';
 
@@ -51,10 +50,23 @@ export async function GET(req: NextRequest) {
     }
     const { lat, lng } = data.result.geometry.location;
 
-    // Derive the IANA timezone id (e.g. "America/Denver") locally from the
-    // lat/lng — same geo-tz approach as lib/geocode.ts — instead of paying
-    // for a separate Google Time Zone API call.
-    const timezone = tzFind(lat, lng)[0] ?? undefined;
+    // Google Time Zone API — returns the IANA timezone id (e.g. "America/Denver").
+    //
+    // NOTE: we briefly swapped this for local geo-tz to drop the Time Zone API
+    // SKU, but geo-tz's data files don't reliably bundle into this Vercel
+    // serverless function, so it returned NO timezone in prod. An empty
+    // timezone then triggers a re-geocode in StopsSection (the `!stop.timezone`
+    // condition) that wipes the just-set coordinates. The Time Zone API is a
+    // plain fetch with no bundling problem, so it's the reliable choice here.
+    let timezone: string | undefined;
+    try {
+      const tzRes  = await fetch(
+        `https://maps.googleapis.com/maps/api/timezone/json?location=${lat},${lng}&timestamp=${Math.floor(Date.now() / 1000)}&key=${KEY}`,
+        { cache: 'no-store' },
+      );
+      const tzData = await tzRes.json() as { status?: string; timeZoneId?: string };
+      if (tzData.status === 'OK') timezone = tzData.timeZoneId;
+    } catch { /* best-effort — coordinates are what matter */ }
 
     return NextResponse.json({ result: { lat, lng, timezone, address: data.result.formatted_address } });
   }
