@@ -479,6 +479,9 @@ export default function InspectionFormScreen({ initialAssetId, initialTrailerId,
       const out: FailedItem[] = [];
       const collect = (defs: ChecklistItem[], target: PhotoTarget) => {
         for (const d of defs) {
+          // Cleanliness is a condition/accountability signal, not a mechanical
+          // defect — a dirty cab shouldn't prompt a maintenance work order.
+          if (d.id === "cleanliness") continue;
           if (items[d.id]?.status !== "fail") continue;
           const photo = photos.find(p => p.itemId === d.id) ?? null;
           out.push({ id: d.id, label: d.label, target, notes: items[d.id]?.notes, photo });
