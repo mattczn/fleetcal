@@ -87,8 +87,15 @@ export const env = {
   /** Svix signing secret for the Resend webhook (bounce/complaint
    *  ingestion at /v1/crm-public/resend-webhook). Unset = webhook 503s. */
   resendWebhookSecret:     process.env.RESEND_WEBHOOK_SECRET || undefined,
-  /** Public API base URL used to build unsubscribe links. */
+  /** Public API base URL used by CRM email templates only when the
+   *  web-side unsubscribe route isn't configured (fallback path). */
   publicApiUrl:            process.env.PUBLIC_API_URL || "https://fleetcalapi-production.up.railway.app",
+  /** Public WEB URL used to build user-visible unsubscribe links.
+   *  Must be a domain the CRM outreach recipient trusts — Railway
+   *  subdomains in a cold email screams "bulk mailer" and tanks
+   *  deliverability. The Next.js /unsubscribe/[token] route proxies
+   *  to the Railway API. */
+  publicWebUrl:            process.env.PUBLIC_WEB_URL || "https://fleetcal.app",
   /** Email-verification provider slug. Only 'never_bounce' shipped
    *  today; the code path exists to swap in ZeroBounce / Kickbox /
    *  Bouncer without touching route or job code. */

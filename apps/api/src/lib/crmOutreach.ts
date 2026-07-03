@@ -45,8 +45,15 @@ export function outreachConfigError(settings: CrmSettings): string | null {
   return null;
 }
 
+/**
+ * User-visible unsubscribe URL — points at the WEB domain (fleetcal.app
+ * by default), not the Railway subdomain, because a
+ * `*.up.railway.app` link in cold email hurts deliverability and looks
+ * untrustworthy to recipients. The Next.js /unsubscribe/[token] route
+ * proxies to the API's /v1/crm-public/unsubscribe/:token endpoint.
+ */
 export function unsubscribeUrl(token: string): string {
-  return `${env.publicApiUrl}/v1/crm-public/unsubscribe/${token}`;
+  return `${env.publicWebUrl}/unsubscribe/${token}`;
 }
 
 /** {{merge_var}} substitution. Unknown vars render as '' (never leak

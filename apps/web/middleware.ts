@@ -56,6 +56,12 @@ const isPublicRoute = createRouteMatcher([
   '/terms(.*)',
   '/sms-consent(.*)',
   '/api/sms/opt-in',
+  // CRM outreach unsubscribe — token IS auth, no Clerk session.
+  // Recipient landing here from a cold email must NOT bounce through
+  // /sign-in; they'd never sign in and would leave the address on the
+  // sending list. Route handler at apps/web/app/unsubscribe/[token]
+  // proxies to the Railway API's crm-public endpoint.
+  '/unsubscribe(.*)',
 ])
 
 const protectedMiddleware = clerkMiddleware(async (auth, request) => {
