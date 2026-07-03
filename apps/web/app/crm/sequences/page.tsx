@@ -239,7 +239,7 @@ function CrmSequencesPageInner() {
     setSaving(true);
     setSaveMsg(null);
     try {
-      const { steps: savedSteps } = await railway.crmReplaceSteps(
+      const { steps: savedSteps, rerendered } = await railway.crmReplaceSteps(
         selected.id,
         steps.map(s => ({
           waitDays:        Number(s.waitDays),
@@ -249,7 +249,11 @@ function CrmSequencesPageInner() {
       );
       setSequences(prev => prev.map(s => (s.id === selected.id ? { ...s, steps: savedSteps } : s)));
       setDirty(false);
-      setSaveMsg('Saved.');
+      setSaveMsg(
+        rerendered.updated > 0
+          ? `Saved. Refreshed ${rerendered.updated} pending outbox email${rerendered.updated === 1 ? '' : 's'} with the new copy.`
+          : 'Saved.',
+      );
     } catch (e) {
       setSaveMsg(e instanceof RailwayError ? `Save failed (${e.status})` : 'Save failed.');
     } finally {
@@ -423,7 +427,7 @@ function CrmSequencesPageInner() {
                     <div className="flex-1" />
                     {saveMsg && (
                       <span className="text-[12px] font-semibold"
-                        style={{ color: saveMsg === 'Saved.' ? '#188038' : '#c5221f' }}>
+                        style={{ color: saveMsg?.startsWith('Saved') ? '#188038' : '#c5221f' }}>
                         {saveMsg}
                       </span>
                     )}

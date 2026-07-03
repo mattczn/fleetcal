@@ -609,8 +609,140 @@ crm.put("/sequences/:id/steps", requireCapability("crm.manage"), async (c) => {
     .eq("org_id", orgId)
     .eq("sequence_id", id)
     .order("step_order", { ascending: true });
-  return c.json({ steps: ((stepRaw ?? []) as Record<string, unknown>[]).map(rowToStep) });
+
+  // Re-render pending_approval outbox rows for this sequence so the
+  // edit propagates without the user having to cancel-and-remterialize
+  // by hand. Approved / sent emails are never touched — silently
+  // undoing an approval decision would be worse than the stale copy.
+  // Non-fatal on error: user can still cancel + rematerialize manually.
+  let rerendered = { updated: 0, skipped: 0 };
+  try {
+    rerendered = await rerenderPendingForSequence(orgId, id);
+  } catch (err) {
+    console.error(`[PUT /crm/sequences/${id}/steps] rerender failed:`, err);
+  }
+
+  return c.json({
+    steps: ((stepRaw ?? []) as Record<string, unknown>[]).map(rowToStep),
+    rerendered,
+  });
 });
+
+/**
+ * Re-render pending_approval outbox emails for a sequence whose
+ * templates just changed. Each enrollment's current_step is the step
+ * position of its outstanding pending email — we look that up in the
+ * NEW step list, render the new subject/body against the lead, and
+ * update the outbox row (also fixing step_id, which went NULL when
+ * the old step got deleted).
+ *
+ * Skips (leaves the row untouched) when the enrollment's current_step
+ * no longer corresponds to any step in the new sequence — usually
+ * because the user deleted or reordered middle steps, in which case
+ * the safer behavior is to leave the old rendered copy pending and
+ * let the user decide what to do.
+ */
+async function rerenderPendingForSequence(
+  orgId: string,
+  sequenceId: string,
+): Promise<{ updated: number; skipped: number }> {
+  // New step list, keyed by step_order.
+  const { data: stepsRaw } = await supabase
+    .from("crm_sequence_steps")
+    .select("id,step_order,subject_template,body_template")
+    .eq("org_id", orgId)
+    .eq("sequence_id", sequenceId);
+  const stepByOrder = new Map<number, {
+    id: string; step_order: number; subject_template: string; body_template: string;
+  }>();
+  for (const s of ((stepsRaw ?? []) as Array<{
+    id: string; step_order: number; subject_template: string; body_template: string;
+  }>)) {
+    stepByOrder.set(s.step_order, s);
+  }
+
+  // Enrollments in this sequence (any status — a paused enrollment's
+  // pending row still deserves the new copy for when it resumes).
+  const { data: enrRaw } = await supabase
+    .from("crm_enrollments")
+    .select("id,lead_id,current_step")
+    .eq("org_id", orgId)
+    .eq("sequence_id", sequenceId);
+  const enrollments = (enrRaw ?? []) as Array<{
+    id: string; lead_id: string; current_step: number;
+  }>;
+  if (enrollments.length === 0) return { updated: 0, skipped: 0 };
+  const enrById = new Map(enrollments.map((e) => [e.id, e]));
+
+  // Pending emails for those enrollments.
+  const { data: pendingRaw } = await supabase
+    .from("crm_emails")
+    .select("id,lead_id,enrollment_id")
+    .eq("org_id", orgId)
+    .eq("status", "pending_approval")
+    .in("enrollment_id", enrollments.map((e) => e.id));
+  const pendings = (pendingRaw ?? []) as Array<{
+    id: string; lead_id: string; enrollment_id: string;
+  }>;
+  if (pendings.length === 0) return { updated: 0, skipped: 0 };
+
+  // Load the leads once, mapped by id.
+  const leadIds = [...new Set(pendings.map((p) => p.lead_id))];
+  const { data: leadRowsRaw } = await supabase
+    .from("crm_leads")
+    .select("id,source,legal_name,dba_name,email,phy_city,phy_state,power_units,status,unsubscribe_token")
+    .eq("org_id", orgId)
+    .in("id", leadIds);
+  const leadsById = new Map(
+    ((leadRowsRaw ?? []) as Array<Record<string, unknown>>).map(
+      (l) => [l.id as string, l],
+    ),
+  );
+
+  let updated = 0;
+  let skipped = 0;
+  for (const p of pendings) {
+    const enr = enrById.get(p.enrollment_id);
+    if (!enr) { skipped++; continue; }
+    const step = stepByOrder.get(enr.current_step);
+    if (!step) { skipped++; continue; }
+    const leadRow = leadsById.get(p.lead_id);
+    if (!leadRow) { skipped++; continue; }
+
+    const lead: CrmLead = {
+      id:              leadRow.id as string,
+      source:          (leadRow.source as CrmLead["source"]) ?? "manual",
+      legalName:       leadRow.legal_name as string,
+      dbaName:         (leadRow.dba_name  as string | null) ?? undefined,
+      email:           (leadRow.email     as string | null) ?? undefined,
+      phyCity:         (leadRow.phy_city  as string | null) ?? undefined,
+      phyState:        (leadRow.phy_state as string | null) ?? undefined,
+      powerUnits:      (leadRow.power_units as number | null) ?? undefined,
+      status:          leadRow.status as CrmLeadStatus,
+      statusChangedAt: "",
+      callAttempts:    0,
+      createdAt:       "",
+      updatedAt:       "",
+    };
+    const unsubToken = leadRow.unsubscribe_token as string;
+    const subject = renderForLead(step.subject_template, lead, unsubToken);
+    const body    = renderForLead(step.body_template,    lead, unsubToken);
+
+    // Conditional update guards against a human clicking Approve during
+    // the re-render race — we only overwrite while status is still
+    // pending_approval; a row that flipped to approved keeps its copy.
+    const { data: updData } = await supabase
+      .from("crm_emails")
+      .update({ subject, body, step_id: step.id })
+      .eq("id", p.id)
+      .eq("org_id", orgId)
+      .eq("status", "pending_approval")
+      .select("id");
+    if (updData && updData.length > 0) updated++;
+    else skipped++;
+  }
+  return { updated, skipped };
+}
 
 /**
  * Test-send: render this step against a sample lead and send it via

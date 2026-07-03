@@ -1670,7 +1670,13 @@ class RailwayClient {
     id: string,
     steps: Array<Pick<CrmSequenceStep, 'waitDays' | 'subjectTemplate' | 'bodyTemplate'>>,
   ) {
-    return this.req<{ steps: CrmSequenceStep[] }>('PUT', `/v1/crm/sequences/${id}/steps`, { steps });
+    return this.req<{
+      steps: CrmSequenceStep[];
+      /** Pending outbox emails whose templates got refreshed by the
+       *  save. Not the same as approved / sent — those keep their
+       *  original rendered copy so approval intent isn't undone. */
+      rerendered: { updated: number; skipped: number };
+    }>('PUT', `/v1/crm/sequences/${id}/steps`, { steps });
   }
   /** 409 detail.error: already_enrolled | lead_blocked | lead_has_no_email. */
   crmEnroll(leadId: string, sequenceId: string) {
