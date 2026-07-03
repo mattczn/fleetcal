@@ -795,6 +795,12 @@ crm.post("/leads/:id/enroll", async (c) => {
     .eq("id", leadId)
     .eq("org_id", orgId)
     .in("status", ["new", "enriched"]);
+  // Kick the send sweep so materialization lands within seconds — the
+  // 10-min tick is the backstop. Fire-and-forget: user gets a snappy
+  // outbox even when the DB writes lag. Same pattern as approve-batch.
+  void import("../jobs/crmSendSweep.js").then(({ runCrmSendSweep }) =>
+    runCrmSendSweep().catch((err) => console.error("[enroll] inline sweep failed:", err)),
+  );
   return c.json({ enrollmentId: (data as { id: string }).id }, 201);
 });
 
@@ -932,6 +938,14 @@ crm.post("/leads/bulk-enroll", async (c) => {
       .in("id", inserted.map((e) => e.lead_id))
       .eq("org_id", orgId)
       .in("status", ["new", "enriched"]);
+    // Kick the send sweep so materialization lands within seconds
+    // instead of waiting up to 10 min for the next scheduled tick.
+    // Same fire-and-forget pattern as approve-batch. The sweep is
+    // idempotent — a concurrent scheduled tick would double-process
+    // safely thanks to the (enrollment_id, step_id) unique index.
+    void import("../jobs/crmSendSweep.js").then(({ runCrmSendSweep }) =>
+      runCrmSendSweep().catch((err) => console.error("[bulk-enroll] inline sweep failed:", err)),
+    );
   }
 
   return c.json({ enrolled: inserted.length, alreadyEnrolled, rejected });
