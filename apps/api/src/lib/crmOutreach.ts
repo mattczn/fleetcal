@@ -152,7 +152,14 @@ export async function sendOutreachEmail(args: OutreachSendArgs): Promise<Outreac
     replyTo: args.settings.replyTo?.trim() || env.outreachReplyTo || env.outreachFromEmail!,
     subject: args.subject,
     text: body,
-    html: plainToTrackableHtml(body),
+    // Auto-link the "fleetcal.app" mention in the signature line with
+    // UTM params so Vercel Analytics can attribute cold-outreach clicks
+    // as their own traffic source. Plain-text clients still see the
+    // bare "fleetcal.app" and rely on their own auto-linkifier.
+    html: plainToTrackableHtml(body, {
+      linkifyBareHost: websiteHost,
+      utm: { utm_source: "outreach", utm_medium: "email" },
+    }),
     headers: {
       "List-Unsubscribe": `<${unsub}>`,
       "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
@@ -162,6 +169,19 @@ export async function sendOutreachEmail(args: OutreachSendArgs): Promise<Outreac
     throw new Error(`Resend send failed: ${error?.message ?? "no message id returned"}`);
   }
   return { messageId: data.id };
+}
+
+interface PlainToHtmlOpts {
+  /** Bare hostname (e.g. "fleetcal.app") to auto-link when it appears
+   *  in the body unaccompanied by an http/https prefix — specifically
+   *  targets the auto-appended signature line "FleetCal · {host}" so
+   *  HTML clients get a real clickable link. Plain-text clients still
+   *  see the bare host and rely on their own auto-linkification. */
+  linkifyBareHost?: string;
+  /** Merged into the linkified bare-host anchor as a query string, so
+   *  clicks are attributable in web analytics
+   *  (e.g. utm_source=outreach, utm_medium=email). */
+  utm?: Record<string, string>;
 }
 
 /**
@@ -174,9 +194,13 @@ export async function sendOutreachEmail(args: OutreachSendArgs): Promise<Outreac
  * marketing templates.
  *
  * URLs (specifically the unsubscribe link) get wrapped in <a> so
- * HTML-only clients can still click them. Everything else stays as-is.
+ * HTML-only clients can still click them. Additionally, when
+ * `opts.linkifyBareHost` is provided, bare occurrences of that
+ * hostname (the "fleetcal.app" in the auto-appended signature line)
+ * are linkified with UTM params so cold-outreach clicks are
+ * attributable in Vercel Analytics.
  */
-function plainToTrackableHtml(plain: string): string {
+function plainToTrackableHtml(plain: string, opts: PlainToHtmlOpts = {}): string {
   const esc = (s: string) =>
     s.replace(/&/g, "&amp;")
      .replace(/</g, "&lt;")
@@ -188,10 +212,32 @@ function plainToTrackableHtml(plain: string): string {
   // don't contain hostile markup, they come from templates + merge
   // vars we control.
   const escaped = esc(plain);
-  const linked = escaped.replace(
+  const linkStyle = 'style="color:#1a73e8;text-decoration:underline"';
+  let linked = escaped.replace(
     /(https?:\/\/[^\s<]+)/g,
-    (url) => `<a href="${url}" style="color:#1a73e8;text-decoration:underline">${url}</a>`,
+    (url) => `<a href="${url}" ${linkStyle}>${url}</a>`,
   );
+
+  if (opts.linkifyBareHost) {
+    const host = opts.linkifyBareHost;
+    const hostEsc = host.replace(/\./g, "\\.");
+    // Match a standalone occurrence of the host — NOT preceded or
+    // followed by `.` / `/` / word char, which excludes matches inside
+    // already-linked full URLs (https://fleetcal.app/…) and
+    // sub-hostnames (links.fleetcal.app). Uses negative lookbehind +
+    // lookahead — supported in Node 18+ / all modern browsers.
+    const bareRegex = new RegExp(`(?<![./\\w])${hostEsc}(?![./\\w])`, "g");
+    const params = Object.entries(opts.utm ?? {})
+      .filter(([, v]) => v !== "")
+      .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+      .join("&");
+    const query = params ? `?${params}` : "";
+    linked = linked.replace(
+      bareRegex,
+      `<a href="https://${host}/${query}" ${linkStyle}>${host}</a>`,
+    );
+  }
+
   return `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>` +
     `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;` +
     `font-size:14px;line-height:1.5;color:#202124;white-space:pre-wrap;max-width:640px;">` +
