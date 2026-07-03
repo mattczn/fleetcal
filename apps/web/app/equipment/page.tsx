@@ -3885,11 +3885,14 @@ function InspectionsCalendar({
   }
 
   // The flagged post-trip inspection for a day, if any post-trip
-  // submission was marked "left dirty". Newest wins (list is already
-  // sorted newest-first). Drives the amber corner flag on the cell.
+  // reported the cab wasn't clean. In practice this is the PRE-trip
+  // "received dirty" report — the accountability signal that the previous
+  // driver left it dirty (post-trip only carries a self-documenting "I left
+  // it clean" photo and never marks the cleanliness item failed). Newest
+  // wins (list is already newest-first). Drives the amber corner flag.
   function flaggedDirty(list: InspectionRow[] | undefined): InspectionRow | null {
     if (!list) return null;
-    return list.find(r => r.kind === 'post_trip' && r.cleanlinessFlagged) ?? null;
+    return list.find(r => r.cleanlinessFlagged) ?? null;
   }
 
   // Open the inspection for a specific kind on a day, preferring the
