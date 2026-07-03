@@ -26,12 +26,16 @@ import {
 } from "react-native";
 import {
   Truck, Container, ChevronDown, Check, X, ArrowLeft, AlertTriangle,
-  Camera, Plus, Trash2, Search, Wrench,
+  Camera, Plus, Trash2, Search, Wrench, Sparkles,
 } from "lucide-react-native";
 import * as ImagePicker from "expo-image-picker";
 import * as Location from "expo-location";
-import { railway, type InspectionItemPayload } from "@/lib/railway";
+import { railway, type InspectionItemPayload, type EquipmentHistory } from "@/lib/railway";
 import { useTheme } from "@/lib/ThemeProvider";
+
+/** Open work orders / known damage carried in from Step 1 so Step 3 can
+ *  show the driver what's already reported before they create a report. */
+type KnownDamage = EquipmentHistory["knownDamage"];
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
   fontFamily:
@@ -187,26 +191,40 @@ interface Props {
    *  assigned truck if known; null triggers a server lookup via
    *  /v1/driver/suggested-asset. */
   initialAssetId?: number | null;
+  /** Pre-selected trailer (from Truck-History Step 1). null/undefined =
+   *  no trailer. */
+  initialTrailerId?: number | null;
+  /** When true, the truck + trailer were chosen in Step 1 (the select-
+   *  asset + review-history screen) and are LOCKED here — the internal
+   *  equipment pickers are hidden and the trailer checklist shows iff a
+   *  trailer was passed. */
+  presetEquipment?: boolean;
   /** Pre-trip (start of shift, default) vs post-trip (end of shift).
    *  Post-trip additionally requires a cleanliness photo — see the
    *  submit gate below. */
   kind?:          "pre_trip" | "post_trip";
+  /** Open work orders / known damage on the truck, threaded in from
+   *  Step 1 so Step 3 (report defects) can show what's already reported
+   *  before the driver creates a duplicate. */
+  knownDamage?:   KnownDamage;
   /** Driver's display name — used as the digital signature. */
   driverName:     string;
   onClose:        () => void;
   onSubmitted:    () => void;
 }
 
-export default function InspectionFormScreen({ initialAssetId, kind = "pre_trip", driverName, onClose, onSubmitted }: Props) {
+export default function InspectionFormScreen({ initialAssetId, initialTrailerId, presetEquipment = false, kind = "pre_trip", knownDamage, driverName, onClose, onSubmitted }: Props) {
   const { C, SHADOW, ACCENT } = useTheme();
   // ── Equipment selection ───────────────────────────────────────────
   const [assets,        setAssets]        = useState<AssetOption[]>([]);
   const [trailers,      setTrailers]      = useState<TrailerOption[]>([]);
   const [assetId,       setAssetId]       = useState<number | null>(initialAssetId ?? null);
-  const [trailerId,     setTrailerId]     = useState<number | null>(null);
+  const [trailerId,     setTrailerId]     = useState<number | null>(initialTrailerId ?? null);
   const [pickerOpen,    setPickerOpen]    = useState<"asset" | "trailer" | null>(null);
   const [optsLoading,   setOptsLoading]   = useState(true);
-  const [includeTrailer, setIncludeTrailer] = useState(false);
+  // When Step 1 supplied a trailer, include it; otherwise the driver
+  // opts in via the in-form checkbox (only shown when not preset).
+  const [includeTrailer, setIncludeTrailer] = useState(initialTrailerId != null);
 
   // ── Checklist state — every item defaults to PASS so the driver
   //    only has to touch the ones that actually have a problem.
@@ -217,6 +235,16 @@ export default function InspectionFormScreen({ initialAssetId, kind = "pre_trip"
   const [notes,       setNotes]       = useState("");
   const [photos,      setPhotos]      = useState<PendingPhoto[]>([]);
   const [submitting,  setSubmitting]  = useState(false);
+
+  // ── Cleanliness (standout top card) ───────────────────────────────
+  // Pre-trip asks "Is the cab clean?" — a No sets the `cleanliness`
+  // checklist item to `fail` (so cleanliness_flagged fires server-side)
+  // and offers an optional photo. Post-trip always requires a cab photo.
+  // `cabClean` is the pre-trip Yes/No answer (defaults to Yes/clean); it
+  // is ignored on post-trip. Either way photos on this card upload with
+  // itemId "cleanliness", which the server keys "last cleanliness photo"
+  // off of.
+  const [cabClean, setCabClean] = useState(true);
 
   // ── Step 3: maintenance reports for failed items ──────────────────
   // After a successful inspection submit, if any item failed we hand off
@@ -307,7 +335,15 @@ export default function InspectionFormScreen({ initialAssetId, kind = "pre_trip"
   const selectedAsset   = useMemo(() => assets.find(a => a.id === assetId)         ?? null, [assets, assetId]);
   const selectedTrailer = useMemo(() => trailers.find(t => t.id === trailerId)     ?? null, [trailers, trailerId]);
 
-  const truckSections   = useMemo(() => groupBySection(TRUCK_CHECKLIST),   []);
+  // In the Truck-History flow (presetEquipment) the cleanliness item is
+  // rendered by the standout top card (CleanlinessCard), so it's dropped
+  // from the normal checklist body — but it stays in TRUCK_CHECKLIST for
+  // the submitted payload + failed-item collection. The plain (non-Truck-
+  // History) flow keeps cleanliness as a regular checklist row, unchanged.
+  const truckSections   = useMemo(
+    () => groupBySection(presetEquipment ? TRUCK_CHECKLIST.filter(i => i.id !== "cleanliness") : TRUCK_CHECKLIST),
+    [presetEquipment],
+  );
   const trailerSections = useMemo(() => groupBySection(TRAILER_CHECKLIST), []);
 
   const setStatus = useCallback((id: string, status: ItemStatus) => {
@@ -317,6 +353,19 @@ export default function InspectionFormScreen({ initialAssetId, kind = "pre_trip"
   const setItemNotes = useCallback((id: string, n: string) => {
     setItems(prev => ({ ...prev, [id]: { status: prev[id]?.status ?? "pass", notes: n } }));
   }, []);
+
+  // Truck-History flow only: keep the `cleanliness` checklist item in sync
+  // with the top card so it rides along in the submitted `items` (server
+  // keys cleanliness_flagged off a `fail` status). Pre-trip: No → fail.
+  // Post-trip: stays pass (the required cab photo is the signal there, not
+  // a fail). The plain flow leaves cleanliness as a normal checklist row.
+  useEffect(() => {
+    if (!presetEquipment) return;
+    const status: ItemStatus = kind === "pre_trip" && !cabClean ? "fail" : "pass";
+    setItems(prev => (prev.cleanliness?.status === status
+      ? prev
+      : { ...prev, cleanliness: { status, notes: prev.cleanliness?.notes } }));
+  }, [presetEquipment, kind, cabClean]);
 
   // ── Photos ────────────────────────────────────────────────────────
   // Per-item photo flow: tapping the camera on a Fail row pops the
@@ -534,7 +583,7 @@ export default function InspectionFormScreen({ initialAssetId, kind = "pre_trip"
     if (kind === "post_trip" && !hasCleanlinessPhoto) {
       Alert.alert(
         "Cleanliness photo required",
-        "Post-trip inspections need a photo of the cab & interior. Tap Fail or add a photo on the “Cab & interior clean” item under Condition.",
+        "Post-trip inspections need a photo of the cab & interior. Add it on the Cab cleanliness card at the top.",
       );
       return;
     }
@@ -575,45 +624,86 @@ export default function InspectionFormScreen({ initialAssetId, kind = "pre_trip"
         contentContainerStyle={{ padding: 14, paddingBottom: 100 }}
         keyboardShouldPersistTaps="handled"
       >
-        {/* Equipment pickers */}
-        <View style={{ backgroundColor: C.surface, borderRadius: 12, padding: 14, marginBottom: 14 }}>
-          <Text style={[txt(700), { fontSize: 12, color: C.t3, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 10 }]}>
-            Equipment
-          </Text>
-          <PickerRow
-            icon={<Truck size={16} color={ACCENT} />}
-            label="Truck"
-            value={selectedAsset ? truckLabel(selectedAsset.name, selectedAsset.unit) : "Pick a truck"}
-            onPress={() => setPickerOpen("asset")}
-            disabled={optsLoading}
+        {/* Equipment — when preset (Truck-History flow), the truck +
+            trailer were chosen in Step 1 and are LOCKED; we show a read-
+            only summary instead of the pickers. Otherwise the standard
+            in-form pickers. */}
+        {presetEquipment ? (
+          <View style={{ backgroundColor: C.surface, borderRadius: 12, padding: 14, marginBottom: 14 }}>
+            <Text style={[txt(700), { fontSize: 12, color: C.t3, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 10 }]}>
+              Equipment
+            </Text>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+              <Truck size={16} color={ACCENT} />
+              <Text style={[txt(700), { fontSize: 16, color: C.t1 }]}>
+                {selectedAsset ? truckLabel(selectedAsset.name, selectedAsset.unit) : (optsLoading ? "Loading…" : "Truck")}
+              </Text>
+            </View>
+            {includeTrailer && (
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginTop: 10 }}>
+                <Container size={16} color={ACCENT} />
+                <Text style={[txt(700), { fontSize: 16, color: C.t1 }]}>
+                  {selectedTrailer ? trailerLabel(selectedTrailer.name, selectedTrailer.trailerNumber) : "Trailer"}
+                </Text>
+              </View>
+            )}
+          </View>
+        ) : (
+          <View style={{ backgroundColor: C.surface, borderRadius: 12, padding: 14, marginBottom: 14 }}>
+            <Text style={[txt(700), { fontSize: 12, color: C.t3, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 10 }]}>
+              Equipment
+            </Text>
+            <PickerRow
+              icon={<Truck size={16} color={ACCENT} />}
+              label="Truck"
+              value={selectedAsset ? truckLabel(selectedAsset.name, selectedAsset.unit) : "Pick a truck"}
+              onPress={() => setPickerOpen("asset")}
+              disabled={optsLoading}
+            />
+            <View style={{ height: 10 }} />
+            <TouchableOpacity
+              onPress={() => setIncludeTrailer(t => !t)}
+              style={{ flexDirection: "row", alignItems: "center", paddingVertical: 4 }}
+            >
+              <View style={{
+                width: 18, height: 18, borderRadius: 4, borderWidth: 1.5, borderColor: ACCENT,
+                alignItems: "center", justifyContent: "center",
+                backgroundColor: includeTrailer ? ACCENT : C.surface,
+                marginRight: 8,
+              }}>
+                {includeTrailer && <Check size={12} color="white" />}
+              </View>
+              <Text style={[txt(500), { fontSize: 14, color: C.t2 }]}>Inspecting a trailer too</Text>
+            </TouchableOpacity>
+            {includeTrailer && (
+              <View style={{ marginTop: 8 }}>
+                <PickerRow
+                  icon={<Container size={16} color={ACCENT} />}
+                  label="Trailer"
+                  value={selectedTrailer ? trailerLabel(selectedTrailer.name, selectedTrailer.trailerNumber) : "Pick a trailer"}
+                  onPress={() => setPickerOpen("trailer")}
+                  disabled={optsLoading}
+                />
+              </View>
+            )}
+          </View>
+        )}
+
+        {/* Cleanliness — standout colored card ABOVE the checklist, in the
+            Truck-History flow only. Feeds the same `cleanliness` item into
+            the payload (see the sync effect) and any photo uploads with
+            itemId "cleanliness". The plain flow keeps cleanliness inline in
+            the checklist (with the original post-trip required-photo strip). */}
+        {presetEquipment && (
+          <CleanlinessCard
+            kind={kind}
+            cabClean={cabClean}
+            onSetClean={setCabClean}
+            photos={photos.filter(p => p.itemId === "cleanliness")}
+            onAddPhoto={() => addPhotoFor("truck", "cleanliness")}
+            onRemovePhoto={removePhoto}
           />
-          <View style={{ height: 10 }} />
-          <TouchableOpacity
-            onPress={() => setIncludeTrailer(t => !t)}
-            style={{ flexDirection: "row", alignItems: "center", paddingVertical: 4 }}
-          >
-            <View style={{
-              width: 18, height: 18, borderRadius: 4, borderWidth: 1.5, borderColor: ACCENT,
-              alignItems: "center", justifyContent: "center",
-              backgroundColor: includeTrailer ? ACCENT : C.surface,
-              marginRight: 8,
-            }}>
-              {includeTrailer && <Check size={12} color="white" />}
-            </View>
-            <Text style={[txt(500), { fontSize: 14, color: C.t2 }]}>Inspecting a trailer too</Text>
-          </TouchableOpacity>
-          {includeTrailer && (
-            <View style={{ marginTop: 8 }}>
-              <PickerRow
-                icon={<Container size={16} color={ACCENT} />}
-                label="Trailer"
-                value={selectedTrailer ? trailerLabel(selectedTrailer.name, selectedTrailer.trailerNumber) : "Pick a trailer"}
-                onPress={() => setPickerOpen("trailer")}
-                disabled={optsLoading}
-              />
-            </View>
-          )}
-        </View>
+        )}
 
         {/* Helper banner — "default is pass, only mark failures" */}
         <View style={{
@@ -654,11 +744,10 @@ export default function InspectionFormScreen({ initialAssetId, kind = "pre_trip"
             onAddGeneralPhoto={() => addPhotoFor("truck", null)}
             photos={photos.filter(p => p.target === "truck")}
             onRemovePhoto={removePhoto}
-            // Post-trip: the cleanliness row always shows a photo strip
-            // (even when it's a PASS) and is marked required, so the
-            // driver attaches the cab/interior shot without having to
-            // fail the item.
-            photoAlwaysItemId={kind === "post_trip" ? "cleanliness" : null}
+            // Plain flow only: post-trip cleanliness photo strip stays
+            // inline on the checklist row. The Truck-History flow moves
+            // this to CleanlinessCard, so suppress it there.
+            photoAlwaysItemId={!presetEquipment && kind === "post_trip" ? "cleanliness" : null}
           />
         )}
 
@@ -754,6 +843,7 @@ export default function InspectionFormScreen({ initialAssetId, kind = "pre_trip"
           items={maintStep.items}
           assetId={assetId}
           trailerId={includeTrailer ? trailerId : null}
+          knownDamage={knownDamage}
           onDone={() => { setMaintStep(null); onSubmitted(); }}
         />
       )}
@@ -775,12 +865,16 @@ export default function InspectionFormScreen({ initialAssetId, kind = "pre_trip"
  * persistent MaintenanceFormScreen — so the driver stays in one flow.
  */
 function MaintenanceStep({
-  inspectionId, items, assetId, trailerId, onDone,
+  inspectionId, items, assetId, trailerId, knownDamage, onDone,
 }: {
   inspectionId: string;
   items:        FailedItem[];
   assetId:      number | null;
   trailerId:    number | null;
+  /** Open work orders / known damage on the truck (from Step 1). Shown
+   *  above the defect card so the driver can see what's already reported
+   *  before creating a possible duplicate. */
+  knownDamage?: KnownDamage;
   onDone:       () => void;
 }) {
   const { C, ACCENT } = useTheme();
@@ -789,6 +883,7 @@ function MaintenanceStep({
   const [busy, setBusy]         = useState(false);
 
   const current = items[idx] ?? null;
+  const openDamage = knownDamage ?? [];
 
   // Reset the editable description each time we advance to a new defect.
   useEffect(() => {
@@ -850,6 +945,31 @@ function MaintenanceStep({
       </View>
 
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 14 }} keyboardShouldPersistTaps="handled">
+        {/* Already-open work orders on this truck (from Step 1) — so the
+            driver can see if the defect is already reported before
+            creating a duplicate. */}
+        {openDamage.length > 0 && (
+          <View style={{ backgroundColor: C.amberBg, borderRadius: 12, padding: 14, borderWidth: 1, borderColor: C.amber, marginBottom: 14 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 8 }}>
+              <Wrench size={15} color={C.amberInk} />
+              <Text style={[txt(700), { fontSize: 13, color: C.amberInk, flex: 1 }]}>
+                Already open on this truck ({openDamage.length})
+              </Text>
+            </View>
+            <Text style={[txt(500), { fontSize: 12, color: C.amberInk, marginBottom: 8 }]}>
+              Check these before reporting — it may already be logged.
+            </Text>
+            {openDamage.map((d) => (
+              <View key={`${d.source}-${d.id}`} style={{ flexDirection: "row", alignItems: "flex-start", gap: 6, marginTop: 4 }}>
+                <Text style={[txt(700), { fontSize: 13, color: C.t1, flex: 1 }]}>
+                  {d.title ?? d.description ?? "Damage"}
+                  {d.outOfService ? " · OOS" : ""}
+                </Text>
+              </View>
+            ))}
+          </View>
+        )}
+
         <View style={{ backgroundColor: C.surface, borderRadius: 12, padding: 16, borderWidth: 1, borderColor: C.border }}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 12 }}>
             <AlertTriangle size={16} color={C.red} />
@@ -903,6 +1023,130 @@ function MaintenanceStep({
   );
 }
 
+/**
+ * CleanlinessCard — the standout colored card that sits ABOVE the
+ * checklist and replaces the plain "Cab & interior clean" checklist row.
+ *
+ *   - Pre-trip:  "Is the cab clean?" Yes / No. A No flags the cleanliness
+ *                item as `fail` (via the parent's sync effect) and offers
+ *                an OPTIONAL "how dirty it is" photo.
+ *   - Post-trip: a REQUIRED "Photo of inside the cab" — submit is blocked
+ *                until one is attached (parent's hasCleanlinessPhoto gate).
+ *
+ * Photos added here always carry itemId "cleanliness", which the server
+ * keys the "last cleanliness photo" reference off of.
+ */
+function CleanlinessCard({
+  kind, cabClean, onSetClean, photos, onAddPhoto, onRemovePhoto,
+}: {
+  kind:          "pre_trip" | "post_trip";
+  cabClean:      boolean;
+  onSetClean:    (v: boolean) => void;
+  photos:        PendingPhoto[];
+  onAddPhoto:    () => void;
+  onRemovePhoto: (key: string) => void;
+}) {
+  const { C, ACCENT } = useTheme();
+  const isPost = kind === "post_trip";
+  const photoMissing = isPost && photos.length === 0;
+  // Card tone: post-trip is neutral/blue until the required photo lands;
+  // pre-trip goes red when the driver says the cab is dirty.
+  const dirty = !isPost && !cabClean;
+  const bg     = dirty ? C.redBg : isPost ? C.blueBg : C.greenBg;
+  const border = dirty ? C.red   : isPost ? C.blue   : C.green;
+  const ink    = dirty ? C.redInk : isPost ? C.blueInk : C.greenInk;
+
+  return (
+    <View style={{ backgroundColor: bg, borderColor: border, borderWidth: 1, borderRadius: 12, padding: 16, marginBottom: 14 }}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 4 }}>
+        <Sparkles size={16} color={ink} />
+        <Text style={[txt(800), { fontSize: 15, color: ink }]}>Cab cleanliness</Text>
+      </View>
+
+      {isPost ? (
+        <>
+          <Text style={[txt(500), { fontSize: 13, color: ink, marginBottom: 12 }]}>
+            Photo of inside the cab — required to submit a post-trip inspection.
+          </Text>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+            {photos.map(ph => (
+              <PhotoThumb key={ph.key} uri={ph.uri} onRemove={() => onRemovePhoto(ph.key)} />
+            ))}
+            <TouchableOpacity
+              onPress={onAddPhoto}
+              style={{
+                width: 64, height: 64, borderRadius: 10,
+                borderWidth: 1.5, borderColor: photoMissing ? C.amberInk : border, borderStyle: "dashed",
+                backgroundColor: C.surface,
+                alignItems: "center", justifyContent: "center", gap: 2,
+              }}
+            >
+              <Camera size={18} color={photoMissing ? C.amberInk : ACCENT} />
+              <Text style={[txt(700), { fontSize: 9, color: photoMissing ? C.amberInk : ACCENT }]}>PHOTO</Text>
+            </TouchableOpacity>
+          </View>
+          {photoMissing && (
+            <Text style={[txt(600), { fontSize: 12, color: C.amberInk, marginTop: 8 }]}>
+              Required — add a cab & interior shot.
+            </Text>
+          )}
+        </>
+      ) : (
+        <>
+          <Text style={[txt(600), { fontSize: 14, color: ink, marginBottom: 12 }]}>Is the cab clean?</Text>
+          <View style={{ flexDirection: "row", gap: 10 }}>
+            <TouchableOpacity
+              onPress={() => onSetClean(true)}
+              style={{
+                flex: 1, paddingVertical: 12, borderRadius: 10, alignItems: "center",
+                backgroundColor: cabClean ? C.green : C.surface,
+                borderWidth: 1, borderColor: cabClean ? C.green : C.border,
+              }}
+            >
+              <Text style={[txt(700), { fontSize: 15, color: cabClean ? "white" : C.t2 }]}>Yes</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => onSetClean(false)}
+              style={{
+                flex: 1, paddingVertical: 12, borderRadius: 10, alignItems: "center",
+                backgroundColor: !cabClean ? C.red : C.surface,
+                borderWidth: 1, borderColor: !cabClean ? C.red : C.border,
+              }}
+            >
+              <Text style={[txt(700), { fontSize: 15, color: !cabClean ? "white" : C.t2 }]}>No</Text>
+            </TouchableOpacity>
+          </View>
+          {/* Dirty → optional photo (not required to submit). */}
+          {dirty && (
+            <View style={{ marginTop: 12 }}>
+              <Text style={[txt(600), { fontSize: 12, color: ink, marginBottom: 8 }]}>
+                Add a photo of how dirty it is (optional)
+              </Text>
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+                {photos.map(ph => (
+                  <PhotoThumb key={ph.key} uri={ph.uri} onRemove={() => onRemovePhoto(ph.key)} />
+                ))}
+                <TouchableOpacity
+                  onPress={onAddPhoto}
+                  style={{
+                    width: 64, height: 64, borderRadius: 10,
+                    borderWidth: 1.5, borderColor: border, borderStyle: "dashed",
+                    backgroundColor: C.surface,
+                    alignItems: "center", justifyContent: "center", gap: 2,
+                  }}
+                >
+                  <Camera size={18} color={C.red} />
+                  <Text style={[txt(700), { fontSize: 9, color: C.red }]}>PHOTO</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+        </>
+      )}
+    </View>
+  );
+}
+
 function ChecklistBlock({
   title, target, sections, items, setStatus, setItemNotes, onInputFocus, onAddPhoto, onAddGeneralPhoto, photos, onRemovePhoto, photoAlwaysItemId = null,
 }: {
@@ -919,7 +1163,8 @@ function ChecklistBlock({
   photos:             PendingPhoto[];
   onRemovePhoto:      (key: string)               => void;
   /** Item id that always shows a (required) photo strip regardless of
-   *  pass/fail — used for the post-trip cleanliness shot. */
+   *  pass/fail — the plain (non-Truck-History) flow's post-trip
+   *  cleanliness shot. The Truck-History flow uses CleanlinessCard. */
   photoAlwaysItemId?: string | null;
 }) {
   const { C, SHADOW, ACCENT } = useTheme();
@@ -940,9 +1185,8 @@ function ChecklistBlock({
             const state = items[item.id];
             const isFail = state?.status === "fail";
             const itemPhotos = photos.filter(p => p.itemId === item.id);
-            // A required photo row (post-trip cleanliness) shows its
-            // photo strip even on PASS, and flags red until a photo is
-            // attached — the driver must have at least one to submit.
+            // A required photo row (plain-flow post-trip cleanliness) shows
+            // its photo strip even on PASS and flags amber until attached.
             const isRequiredPhoto = photoAlwaysItemId === item.id;
             const requiredMissing = isRequiredPhoto && !isFail && itemPhotos.length === 0;
             return (
@@ -963,10 +1207,6 @@ function ChecklistBlock({
                   <StatusButton label="Fail" active={state?.status === "fail"} color={C.red} onPress={() => setStatus(item.id, "fail")} />
                   <StatusButton label="N/A"  active={state?.status === "na"}   color={C.t3} onPress={() => setStatus(item.id, "na")} />
                 </View>
-                {/* Required photo strip (post-trip cleanliness) — shown on
-                    PASS/NA so the driver can attach without failing. When
-                    the item is failed the standard fail block below takes
-                    over (it already renders a photo strip). */}
                 {isRequiredPhoto && !isFail && (
                   <View style={{ marginTop: 10 }}>
                     <Text style={[txt(600), { fontSize: 12, color: requiredMissing ? C.amberInk : C.t3, marginBottom: 8 }]}>

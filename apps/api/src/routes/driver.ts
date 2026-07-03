@@ -3209,7 +3209,7 @@ driver.get("/inspections/today", async (c) => {
   const { data, error } = await (supabase as any)
     .from("inspection_reports")
     .select(`
-      id, asset_id, trailer_id, inspection_date, has_defects, submitted_at, signed_by,
+      id, asset_id, trailer_id, kind, inspection_date, has_defects, submitted_at, signed_by,
       asset:assets(name, unit),
       trailer:trailers(name, trailer_number)
     `)

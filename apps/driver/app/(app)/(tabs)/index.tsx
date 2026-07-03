@@ -17,6 +17,8 @@ import { Inbox, AlertTriangle, Moon, Sun } from "lucide-react-native";
 import { SyncStatusPill } from "@/components/SyncStatusPill";
 import InspectionCard from "@/components/InspectionCard";
 import InspectionFormScreen from "@/components/InspectionFormScreen";
+import InspectionStep1Screen from "@/components/InspectionStep1Screen";
+import type { EquipmentHistory } from "@/lib/railway";
 import { fetchLoadsForDriver, fetchLoad } from "@/lib/api/loads";
 import { LoadCard } from "@/components/LoadCard";
 import { EmptyState } from "@/components/EmptyState";
@@ -101,9 +103,37 @@ export default function LoadsScreen() {
     staleTime: 60_000,
   });
   const todaysInspections = inspectionData?.inspections ?? [];
-  // null = form closed. Otherwise holds the kind the form opened for
-  // (pre-trip default, or post-trip from the Truck History surface).
-  const [inspectionForm, setInspectionForm] = useState<null | "pre_trip" | "post_trip">(null);
+
+  // Inspection flow coordinator. null = closed.
+  //   - Truck-History OFF: opens straight to step 2 (the checklist form),
+  //     no preset equipment — the original behavior.
+  //   - Truck-History ON: opens step 1 (select truck + review history),
+  //     then step 2 (checklist, preset to the chosen equipment), then the
+  //     form's built-in step 3 (report defects, showing open work orders).
+  // knownDamage is threaded from step 1 → step 3 so the driver can see
+  // what's already open before creating a duplicate.
+  type InspectionFlow = {
+    kind:        "pre_trip" | "post_trip";
+    step:        1 | 2;
+    assetId:     number | null;
+    trailerId:   number | null;
+    knownDamage: EquipmentHistory["knownDamage"];
+  };
+  const [flow, setFlow] = useState<InspectionFlow | null>(null);
+
+  // Card tap → start the flow. Truck-History opens step 1; otherwise the
+  // form directly (step 2, no preset).
+  const startInspection = (kind: "pre_trip" | "post_trip" = "pre_trip") => {
+    setFlow({
+      kind,
+      step:        truckHistory ? 1 : 2,
+      assetId:     null,
+      trailerId:   null,
+      knownDamage: [],
+    });
+  };
+  const closeInspection    = () => setFlow(null);
+  const finishInspection   = () => { setFlow(null); void refetchInspections(); };
 
   // Time-based bucketing — string-compare naive YYYY-MM-DDTHH:mm
   // timestamps against ±6h / ±24h offsets from now.
@@ -266,7 +296,7 @@ export default function LoadsScreen() {
                   loading={inspectionLoading}
                   inspections={todaysInspections}
                   truckHistoryEnabled={truckHistory}
-                  onStart={(kind) => setInspectionForm(kind ?? "pre_trip")}
+                  onStart={(kind) => startInspection(kind ?? "pre_trip")}
                 />
               ) : null}
               renderItem={({ item }) => (
@@ -288,26 +318,43 @@ export default function LoadsScreen() {
         </ScrollView>
       )}
 
-      {/* Inspection form — full-screen modal. <Modal> renders into its own
+      {/* Inspection flow — full-screen modal. <Modal> renders into its own
           native root OUTSIDE expo-router's SafeAreaProvider, so we re-inject
-          one here for correct insets. */}
+          one here for correct insets. Step 1 (Truck-History only) picks
+          equipment + reviews history; step 2 is the checklist form (which
+          also owns step 3, the defect → work-order loop). */}
       <Modal
-        visible={inspectionForm !== null}
+        visible={flow !== null}
         animationType="slide"
         presentationStyle="fullScreen"
-        onRequestClose={() => setInspectionForm(null)}
+        onRequestClose={closeInspection}
       >
         <SafeAreaProvider>
           <SafeAreaView style={{ flex: 1, backgroundColor: C.surface }} edges={["top"]}>
-            <InspectionFormScreen
-              kind={inspectionForm ?? "pre_trip"}
-              driverName={driver?.name ?? "Driver"}
-              onClose={() => setInspectionForm(null)}
-              onSubmitted={() => {
-                setInspectionForm(null);
-                void refetchInspections();
-              }}
-            />
+            {flow?.step === 1 ? (
+              <InspectionStep1Screen
+                kind={flow.kind}
+                driverName={driver?.name ?? "Driver"}
+                onClose={closeInspection}
+                onStart={({ assetId, trailerId, knownDamage }) =>
+                  setFlow(f => (f ? { ...f, step: 2, assetId, trailerId, knownDamage } : f))
+                }
+              />
+            ) : flow ? (
+              <InspectionFormScreen
+                kind={flow.kind}
+                driverName={driver?.name ?? "Driver"}
+                // Preset + lock equipment only when we came through step 1
+                // (Truck-History). The plain flow leaves these unset so the
+                // form's own pickers + suggested-asset lookup run as before.
+                initialAssetId={truckHistory ? flow.assetId : undefined}
+                initialTrailerId={truckHistory ? flow.trailerId : undefined}
+                presetEquipment={truckHistory}
+                knownDamage={flow.knownDamage}
+                onClose={closeInspection}
+                onSubmitted={finishInspection}
+              />
+            ) : null}
           </SafeAreaView>
         </SafeAreaProvider>
       </Modal>

@@ -458,6 +458,9 @@ export interface TodayInspectionSummary {
   id:               string;
   asset_id:         number | null;
   trailer_id:       number | null;
+  /** 'pre_trip' | 'post_trip' — drives the per-driver-per-day green state
+   *  on each half of the inspection card. Older rows default to 'pre_trip'. */
+  kind:             "pre_trip" | "post_trip";
   inspection_date:  string;
   has_defects:      boolean;
   submitted_at:     string;

@@ -1,23 +1,23 @@
 /**
  * InspectionCard — the daily-inspection prompt at the top of the
- * driver's Active loads tab. Two states only:
+ * driver's Active loads tab.
  *
- *   - RED   (no inspection submitted today)  → "Complete today's inspection"
- *   - GREEN (at least one done today)        → list of completed inspections
- *                                               + "Run another inspection"
+ * Two shapes, chosen by `truckHistoryEnabled`:
  *
- * Defects do NOT shift the card to amber/yellow — done is done, the
- * color is binary. Defect counts surface as plain text below the
- * headline so dispatch still sees them, but the driver isn't punished
- * with a "warning" color for being honest on the form. (Earlier
- * iteration had a three-state design — green / amber / red — and the
- * user explicitly asked for the simpler binary because amber implied
- * "something wrong with this submission" rather than "issues reported
- * on the truck, which is what the form is for.")
+ *   1. Truck-History OFF (default): the original single binary card —
+ *        RED   (no inspection today)  → "Complete today's inspection"
+ *        GREEN (at least one done)     → summary + "Run another inspection"
+ *      Done is done; the color is binary, defects surface as text.
+ *
+ *   2. Truck-History ON (Curzon): TWO equal halves — "Pre-Trip" | "Post-Trip".
+ *      Each half is tappable and launches the 3-step flow with that kind.
+ *      A half turns GREEN once THIS driver has done THAT kind today (per
+ *      driver, per day — computed from todaysInspections() matching the
+ *      kind), and stays tappable so the driver can run another.
  */
 import React from "react";
 import { View, Text, TouchableOpacity, ActivityIndicator } from "react-native";
-import { Check, ClipboardCheck, Plus, AlertTriangle, AlertCircle, Moon } from "lucide-react-native";
+import { Check, ClipboardCheck, Plus, AlertTriangle, AlertCircle, Sun, Moon } from "lucide-react-native";
 import type { TodayInspectionSummary } from "@/lib/railway";
 import { useTheme } from "@/lib/ThemeProvider";
 
@@ -32,16 +32,16 @@ const txt = (weight: 500 | 600 | 700 | 800) => ({
 interface Props {
   loading:      boolean;
   inspections:  TodayInspectionSummary[];
-  /** Opens the inspection form for the given kind. Defaults to pre-trip
+  /** Opens the inspection flow for the given kind. Defaults to pre-trip
    *  when called with no argument (the Start / Run-another buttons). */
   onStart:      (kind?: "pre_trip" | "post_trip") => void;
-  /** Curzon-only Truck History module — when on, surfaces the extra
-   *  "Post-Trip Inspection" button. */
+  /** Curzon-only Truck History module — when on, renders the two-half
+   *  Pre-Trip / Post-Trip card instead of the single binary one. */
   truckHistoryEnabled?: boolean;
 }
 
 export default function InspectionCard({ loading, inspections, onStart, truckHistoryEnabled = false }: Props) {
-  const { C, SHADOW, ACCENT } = useTheme();
+  const { C } = useTheme();
   if (loading) {
     return (
       <View style={[cardBase, { borderColor: C.border }]}>
@@ -53,15 +53,111 @@ export default function InspectionCard({ loading, inspections, onStart, truckHis
     );
   }
 
+  // ── Truck-History ON: two equal halves, each green per-driver-per-day ──
+  if (truckHistoryEnabled) return <TwoHalfCard inspections={inspections} onStart={onStart} />;
+
+  // ── Truck-History OFF: original single binary card ────────────────────
+  return <BinaryCard inspections={inspections} onStart={onStart} />;
+}
+
+// ─── Truck-History: two-half Pre-Trip | Post-Trip card ────────────────
+
+/** Today's date in the driver's local zone, as YYYY-MM-DD, to match a
+ *  summary's inspection_date. Server stamps inspection_date on the row;
+ *  a half is green iff there's a same-kind row dated today. */
+function localToday(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function doneToday(inspections: TodayInspectionSummary[], kind: "pre_trip" | "post_trip"): boolean {
+  const today = localToday();
+  // todaysInspections() is already day-scoped server-side; the date guard
+  // is belt-and-suspenders against a stale cache spanning midnight.
+  return inspections.some(i => i.kind === kind && (!i.inspection_date || i.inspection_date === today));
+}
+
+function TwoHalfCard({ inspections, onStart }: { inspections: TodayInspectionSummary[]; onStart: (kind: "pre_trip" | "post_trip") => void }) {
+  const preDone  = doneToday(inspections, "pre_trip");
+  const postDone = doneToday(inspections, "post_trip");
+  return (
+    <View style={[cardBase, { padding: 0, borderWidth: 0, overflow: "hidden", flexDirection: "row" }]}>
+      <HalfCard
+        kind="pre_trip"
+        title="Pre-Trip"
+        subtitle="Inspection"
+        Icon={Sun}
+        done={preDone}
+        onPress={() => onStart("pre_trip")}
+      />
+      <HalfCard
+        kind="post_trip"
+        title="Post-Trip"
+        subtitle="Inspection"
+        Icon={Moon}
+        done={postDone}
+        onPress={() => onStart("post_trip")}
+      />
+    </View>
+  );
+}
+
+function HalfCard({
+  title, subtitle, Icon, done, onPress,
+}: {
+  kind: "pre_trip" | "post_trip";
+  title: string;
+  subtitle: string;
+  Icon: React.ComponentType<{ size?: number; color?: string }>;
+  done: boolean;
+  onPress: () => void;
+}) {
+  const { C } = useTheme();
+  const bg     = done ? C.greenBg  : C.redBg;
+  const border = done ? C.green    : C.red;
+  const ink    = done ? C.greenInk : C.redInk;
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      activeOpacity={0.85}
+      style={{
+        flex: 1, backgroundColor: bg, borderWidth: 1, borderColor: border,
+        padding: 14, minHeight: 96, justifyContent: "space-between",
+      }}
+    >
+      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+        <View style={{
+          width: 30, height: 30, borderRadius: 15,
+          backgroundColor: done ? C.green : C.red,
+          alignItems: "center", justifyContent: "center",
+        }}>
+          {done ? <Check size={17} color="white" /> : <Icon size={16} color="white" />}
+        </View>
+        {done && (
+          <View style={{ paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999, backgroundColor: C.surface }}>
+            <Text style={[txt(700), { fontSize: 10, color: ink }]}>Done today</Text>
+          </View>
+        )}
+      </View>
+      <View style={{ marginTop: 10 }}>
+        <Text style={[txt(800), { fontSize: 16, color: ink }]}>{title}</Text>
+        <Text style={[txt(500), { fontSize: 12, color: ink, marginTop: 1 }]}>{subtitle}</Text>
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+// ─── Original single binary card (Truck-History OFF) ──────────────────
+
+function BinaryCard({ inspections, onStart }: { inspections: TodayInspectionSummary[]; onStart: (kind?: "pre_trip" | "post_trip") => void }) {
+  const { C } = useTheme();
   const completed = inspections.length;
 
-  // ── State A: nothing today → red prompt ──────────────────────────
+  // State A: nothing today → red prompt.
   if (completed === 0) {
     return (
-      <View style={[cardBase, {
-        backgroundColor: C.redBg,
-        borderColor: C.red,
-      }]}>
+      <View style={[cardBase, { backgroundColor: C.redBg, borderColor: C.red }]}>
         <TouchableOpacity onPress={() => onStart("pre_trip")} activeOpacity={0.85}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
             <View style={{
@@ -86,28 +182,18 @@ export default function InspectionCard({ loading, inspections, onStart, truckHis
             </View>
           </View>
         </TouchableOpacity>
-        {truckHistoryEnabled && <PostTripButton onPress={() => onStart("post_trip")} />}
       </View>
     );
   }
 
-  // ── State B: at least one done → green summary + run another ─────
-  // Always green. Defect count surfaces as text underneath; it doesn't
-  // shift the card color.
-  const defectCount = inspections.reduce(
-    (n, ins) => n + (ins.has_defects ? 1 : 0),
-    0,
-  );
+  // State B: at least one done → green summary + run another. Always green.
+  const defectCount = inspections.reduce((n, ins) => n + (ins.has_defects ? 1 : 0), 0);
   return (
-    <View style={[cardBase, {
-      backgroundColor: C.greenBg,
-      borderColor:     C.green,
-    }]}>
+    <View style={[cardBase, { backgroundColor: C.greenBg, borderColor: C.green }]}>
       <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
         <View style={{
           width: 36, height: 36, borderRadius: 18,
-          backgroundColor: C.green,
-          alignItems: "center", justifyContent: "center",
+          backgroundColor: C.green, alignItems: "center", justifyContent: "center",
         }}>
           <Check size={20} color="white" />
         </View>
@@ -139,9 +225,7 @@ export default function InspectionCard({ loading, inspections, onStart, truckHis
             Run another inspection
           </Text>
         </TouchableOpacity>
-        {truckHistoryEnabled && <PostTripButton compact onPress={() => onStart("post_trip")} />}
       </View>
-      {/* If multiple, list each compactly below */}
       {completed > 1 && (
         <View style={{ marginTop: 10, gap: 4 }}>
           {inspections.map(ins => (
@@ -157,29 +241,6 @@ export default function InspectionCard({ loading, inspections, onStart, truckHis
       )}
     </View>
   );
-}
-
-// Post-Trip Inspection button — only surfaced when the Truck History
-// module is on. In State A (red prompt) it sits below the start row
-// with a divider; in State B (green summary) it's compact and inline
-// next to "Run another inspection".
-function PostTripButton({ onPress, compact }: { onPress: () => void; compact?: boolean }) {
-  const { C } = useTheme();
-  const btn = (
-    <TouchableOpacity onPress={onPress} style={{
-      flexDirection: "row", alignItems: "center", gap: 6,
-      paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999,
-      backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
-      alignSelf: "flex-start",
-    }}>
-      <Moon size={12} color={C.t2} />
-      <Text style={[txt(700), { fontSize: 12, color: C.t2 }]}>
-        Post-Trip Inspection
-      </Text>
-    </TouchableOpacity>
-  );
-  if (compact) return btn;
-  return <View style={{ marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: C.red }}>{btn}</View>;
 }
 
 // marginTop sits flush against the tab bar (which already has its own
