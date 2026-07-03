@@ -13,6 +13,7 @@ import FaqAccordion from '@/components/marketing/FaqAccordion';
 import Reveal from '@/components/marketing/Reveal';
 import HeroVideo from '@/components/marketing/HeroVideo';
 import HeroFeatureNav from '@/components/marketing/HeroFeatureNav';
+import { StoreBadges } from '@/components/marketing/AppStoreBadge';
 import { FLOW } from '@/components/marketing/ProductFlowFooter';
 
 /**
@@ -1555,6 +1556,8 @@ function Footer() {
           <p style={{ fontSize: 14.5, lineHeight: 1.6, color: '#5f6368', marginTop: 18, maxWidth: 260 }}>
             Dispatch to invoice, on one calendar. Built by a carrier, for fleets like yours.
           </p>
+          {/* Get the FleetCal Driver app — live links, App Store + Google Play. */}
+          <StoreBadges size="sm" style={{ marginTop: 20 }} />
         </div>
         {cols.map(([title, links]) => (
           <div key={title}>
