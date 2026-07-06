@@ -1269,6 +1269,33 @@ crm.post("/emails/approve-batch", requireCapability("crm.manage"), async (c) => 
   return c.json({ approved: data?.length ?? 0 });
 });
 
+/**
+ * Manual send-sweep trigger. Runs materialize + send passes on demand
+ * and AWAITS the result so the caller (the outbox Refresh button)
+ * knows exactly how many rows moved. Same code path as the 10-min
+ * cron and the fire-and-forget inline kick — idempotent (dedupe on
+ * (enrollment_id, step_id) unique index; sends claim rows via
+ * conditional update).
+ *
+ * Exists because the fire-and-forget kicks on enroll/approve don't
+ * return anything to the UI, so a lag or transient error leaves the
+ * user staring at an empty pending queue with no way to force
+ * progress. This button IS that force button.
+ */
+crm.post("/send-sweep-now", requireCapability("crm.manage"), async (c) => {
+  try {
+    const { runCrmSendSweep } = await import("../jobs/crmSendSweep.js");
+    const result = await runCrmSendSweep();
+    return c.json({ result });
+  } catch (err) {
+    console.error("[POST /v1/crm/send-sweep-now] failed:", err);
+    return c.json(
+      { error: "sweep_failed", detail: err instanceof Error ? err.message : String(err) } satisfies ApiErrorResponse,
+      502,
+    );
+  }
+});
+
 crm.post("/emails/:id/cancel", async (c) => {
   const orgId = c.get("orgId");
   const id = c.req.param("id");

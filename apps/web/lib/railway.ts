@@ -1649,6 +1649,27 @@ class RailwayClient {
   }
   /** Enroll many leads into a sequence in one round-trip. Server
    *  validates each individually and returns per-lead rejects. */
+  /** Force the send sweep (materialize + send) to run now instead of
+   *  waiting for the 10-min cron. Awaited response summarizes what
+   *  actually happened. crm.manage only. */
+  crmRunSendSweep() {
+    return this.req<{
+      result: {
+        skipped: boolean;
+        reason?: string;
+        orgs?: Array<{
+          orgId: string;
+          materialized: number;
+          sent: number;
+          suppressed: number;
+          failed: number;
+          capRemaining?: number;
+          windowOpen?: boolean;
+          error?: string;
+        }>;
+      };
+    }>('POST', '/v1/crm/send-sweep-now', {});
+  }
   crmBulkEnroll(leadIds: string[], sequenceId: string) {
     return this.req<{
       enrolled: number;

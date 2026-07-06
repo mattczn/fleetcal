@@ -69,6 +69,7 @@ function CrmOutboxPageInner() {
   const [rowBusyId,  setRowBusyId]  = useState<string | null>(null);
   const [approving,  setApproving]  = useState(false);
   const [actionMsg,  setActionMsg]  = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
   const fetchEmails = useCallback(async (status: CrmEmailStatus) => {
     setLoading(true);
@@ -95,6 +96,42 @@ function CrmOutboxPageInner() {
       .then(res => setSettings(res.settings))
       .catch(() => { /* cap display is decorative */ });
   }, []);
+
+  /** Refresh with force-sweep: run the materialize+send sweep on the
+   *  server, then reload the current tab. If the send window is
+   *  closed (weekends, off-hours), Pass B skips sending but Pass A
+   *  still materializes, so due enrollments land in Pending
+   *  immediately. Fallback to a plain re-fetch on any error so the
+   *  button never leaves the user stuck. */
+  async function handleRefresh() {
+    if (refreshing) return;
+    setRefreshing(true);
+    setActionMsg(null);
+    try {
+      if (canManage) {
+        const { result } = await railway.crmRunSendSweep();
+        if (result.skipped) {
+          setActionMsg(`Sweep skipped (${result.reason ?? 'no reason'})`);
+        } else {
+          const org = result.orgs?.[0];
+          if (org) {
+            const bits: string[] = [];
+            if (org.materialized) bits.push(`${org.materialized} newly queued`);
+            if (org.sent)         bits.push(`${org.sent} sent`);
+            if (org.suppressed)   bits.push(`${org.suppressed} suppressed`);
+            if (org.failed)       bits.push(`${org.failed} failed`);
+            if (org.windowOpen === false) bits.push('send window closed — pending will send in-window');
+            setActionMsg(bits.length ? `Swept: ${bits.join(' · ')}` : 'Swept: nothing new was ready');
+          }
+        }
+      }
+    } catch (e) {
+      setActionMsg(e instanceof RailwayError ? `Sweep failed (${e.status}) — refetched only` : 'Sweep failed — refetched only');
+    } finally {
+      await fetchEmails(tab);
+      setRefreshing(false);
+    }
+  }
 
   async function handleApproveAll() {
     if (!canManage || approving || total === 0) return;
@@ -182,10 +219,12 @@ function CrmOutboxPageInner() {
               {actionMsg}
             </span>
           )}
-          <button onClick={() => void fetchEmails(tab)}
-            className="inline-flex items-center gap-1.5 text-[12px] font-medium px-3 py-1.5 rounded-lg transition-colors"
+          <button onClick={() => void handleRefresh()} disabled={refreshing}
+            title={canManage ? 'Runs the send sweep on the server (materialize + send), then reloads. Same code path as the 10-min cron.' : 'Reloads the outbox.'}
+            className="inline-flex items-center gap-1.5 text-[12px] font-medium px-3 py-1.5 rounded-lg transition-colors disabled:opacity-60"
             style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }}>
-            <RefreshCw size={12} /> Refresh
+            {refreshing ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+            {canManage ? 'Run sweep' : 'Refresh'}
           </button>
           {tab === 'pending_approval' && canManage && (
             <button onClick={() => void handleApproveAll()} disabled={approving || total === 0}
