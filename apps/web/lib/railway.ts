@@ -1654,6 +1654,9 @@ class RailwayClient {
       enrolled: number;
       alreadyEnrolled: number;
       rejected: Array<{ leadId: string; reason: string }>;
+      /** Of `enrolled`, how many still need email verification before
+       *  the send sweep will materialize a step for them. */
+      pendingVerification: number;
     }>('POST', '/v1/crm/leads/bulk-enroll', { leadIds, sequenceId });
   }
 

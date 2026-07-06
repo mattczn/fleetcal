@@ -228,6 +228,7 @@ function CrmPageInner() {
       setEnrollMsg(
         `Enrolled ${r.enrolled}` +
         (r.alreadyEnrolled ? ` · ${r.alreadyEnrolled} already enrolled` : '') +
+        (r.pendingVerification ? ` · ${r.pendingVerification} still need verification before sending` : '') +
         (rejBits ? ` · rejected: ${rejBits}` : '')
       );
       if (r.enrolled > 0) { setSelected(new Set()); void fetchLeads(); void fetchStats(); }

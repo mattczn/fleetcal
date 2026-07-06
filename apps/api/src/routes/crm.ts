@@ -883,16 +883,13 @@ crm.post("/leads/:id/enroll", async (c) => {
   if (!lead.email) {
     return c.json({ error: "lead_has_no_email" } satisfies ApiErrorResponse, 409);
   }
-  // Verified-`valid`-only enrollment. Cold-mailing an unverified or
-  // known-bad address on a fresh domain is exactly how we lose sender
-  // reputation. Unverified leads go through /crm/verify-emails first;
-  // non-valid verdicts already got routed to the call queue.
-  if (lead.email_verification_status == null) {
-    return c.json({ error: "email_unverified", detail: "Verify this lead's email first (Verify batch)." } satisfies ApiErrorResponse, 409);
-  }
-  if (lead.email_verification_status !== "valid") {
-    return c.json({ error: "email_not_deliverable", detail: `email verification: ${lead.email_verification_status}` } satisfies ApiErrorResponse, 409);
-  }
+  // Verification is enforced downstream by the send sweep (see
+  // crmSendSweep.ts) which DEFERS materialization for unverified leads
+  // and STOPS the enrollment for non-valid verdicts — no risk of a
+  // stale address hitting the wire. Blocking here would force verify-
+  // before-enroll and get in the way of the natural workflow (build a
+  // batch → enroll it → run verification → outbox fills in as verdicts
+  // land).
   const { data: seq } = await supabase
     .from("crm_sequences")
     .select("id,is_active")
@@ -980,6 +977,11 @@ crm.post("/leads/bulk-enroll", async (c) => {
   const eligible: string[] = [];
   const rejected: Array<{ leadId: string; reason: string }> = [];
 
+  // Track how many enrolled leads still need verification — surfaced
+  // in the response so the UI can nudge the user toward "Verify N
+  // selected". These leads sit in the queue harmlessly; the send
+  // sweep defers materialization until each verdict lands 'valid'.
+  let pendingVerification = 0;
   for (const id of body.leadIds) {
     const lead = leadRows.find((l) => l.id === id);
     if (!lead) { rejected.push({ leadId: id, reason: "not_found" }); continue; }
@@ -987,17 +989,15 @@ crm.post("/leads/bulk-enroll", async (c) => {
       rejected.push({ leadId: id, reason: `blocked (${lead.status})` }); continue;
     }
     if (!lead.email) { rejected.push({ leadId: id, reason: "no_email" }); continue; }
-    if (lead.email_verification_status == null) {
-      rejected.push({ leadId: id, reason: "email_unverified" }); continue;
-    }
-    if (lead.email_verification_status !== "valid") {
-      rejected.push({ leadId: id, reason: `email_${lead.email_verification_status}` }); continue;
-    }
+    // Verification is enforced by the send sweep, not here (see the
+    // matching comment in POST /leads/:id/enroll). Count-and-flag for
+    // the UI nudge instead of rejecting.
+    if (lead.email_verification_status == null) pendingVerification++;
     eligible.push(id);
   }
 
   if (eligible.length === 0) {
-    return c.json({ enrolled: 0, alreadyEnrolled: 0, rejected });
+    return c.json({ enrolled: 0, alreadyEnrolled: 0, rejected, pendingVerification: 0 });
   }
 
   // Insert enrollments in one round-trip. Any row that hits the partial-
@@ -1080,7 +1080,7 @@ crm.post("/leads/bulk-enroll", async (c) => {
     );
   }
 
-  return c.json({ enrolled: inserted.length, alreadyEnrolled, rejected });
+  return c.json({ enrolled: inserted.length, alreadyEnrolled, rejected, pendingVerification });
 });
 
 crm.post("/enrollments/:id/:action", async (c) => {
