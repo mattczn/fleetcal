@@ -952,7 +952,7 @@ export interface ListDriverScoresResponse {
   scores: DriverScore[];
   /** The transparent weights used to compute `score`, echoed so the UI can
    *  show how a number was reached. */
-  weights: { bonusThreshold: number; dirtyPenalty: number };
+  weights: { bonusThreshold: number };
 }
 
 // Query params:

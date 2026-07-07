@@ -6455,10 +6455,10 @@ function ScorecardTabContent() {
       </div>
 
       <p className="text-[12.5px] leading-relaxed" style={{ color: 'var(--gc-text-3)' }}>
-        Completion = inspection days ÷ days on the road (capped 100%). Each cleanliness
-        deduction costs {data?.weights.dirtyPenalty ?? 10} points. A driver is
-        bonus-eligible at {threshold}+ with zero dirty flags. Deductions are the ones
-        you applied from the Inspections tab&rsquo;s &ldquo;left dirty&rdquo; panel.
+        Completion = inspection days ÷ days on the road, capped at 100%. Only one
+        inspection per day is needed — doing either the pre- or post-trip covers that
+        day. A driver is bonus-eligible at {threshold}+. Cab cleanliness is handled
+        separately and does not affect this score.
       </p>
 
       {error && (
@@ -6485,8 +6485,6 @@ function ScorecardTabContent() {
                 <th style={{ ...th, textAlign: 'right' }}>Completion</th>
                 <th style={{ ...th, textAlign: 'right' }}>Pre</th>
                 <th style={{ ...th, textAlign: 'right' }}>Post</th>
-                <th style={{ ...th, textAlign: 'right' }}>Dirty</th>
-                <th style={{ ...th, textAlign: 'right' }}>Deducted</th>
                 <th style={{ ...th, textAlign: 'right' }}>Score</th>
                 <th style={{ ...th, textAlign: 'center' }}>Bonus</th>
               </tr>
@@ -6500,12 +6498,6 @@ function ScorecardTabContent() {
                   <td style={num}>{s.completionPct}%</td>
                   <td style={num}>{s.preTrips}</td>
                   <td style={num}>{s.postTrips}</td>
-                  <td style={{ ...num, color: s.dirtyIncidents > 0 ? '#d93025' : 'var(--gc-text-3)', fontWeight: s.dirtyIncidents > 0 ? 700 : 400 }}>
-                    {s.dirtyIncidents}
-                  </td>
-                  <td style={{ ...num, color: s.deductionTotal > 0 ? '#d93025' : 'var(--gc-text-3)' }}>
-                    {s.deductionTotal > 0 ? `−${money(s.deductionTotal)}` : '—'}
-                  </td>
                   <td style={num}>
                     <span className="inline-flex items-center justify-center rounded-md font-bold"
                       style={{ minWidth: 40, padding: '3px 8px', fontSize: 13, background: scoreBg(s.score), color: scoreColor(s.score) }}>

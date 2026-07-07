@@ -364,10 +364,11 @@ export interface PayrollAdjustment {
   inspectionReportId?: string;
 }
 
-/** One driver's accountability score over a date range — completion of
- *  inspections plus cleanliness. Derived on demand from inspection_reports,
- *  events (active days), and payroll_adjustments (applied deductions); no
- *  stored scoring state. Curzon-only (Truck History gating). */
+/** One driver's inspection score over a date range — how consistently they
+ *  fill in inspections. Derived on demand from inspection_reports + events
+ *  (active days); no stored scoring state. Cleanliness is intentionally NOT
+ *  part of this (handled separately via personal follow-up + deductions).
+ *  Curzon-only (Truck History gating). */
 export interface DriverScore {
   driverId: number;
   driverName: string;
@@ -376,9 +377,7 @@ export interface DriverScore {
   preTrips: number;
   postTrips: number;
   completionPct: number;     // 0–100: inspectionDays / activeDays, capped at 100
-  dirtyIncidents: number;    // cleanliness deductions applied to this driver
-  deductionTotal: number;    // sum of those deduction amounts (absolute $)
-  score: number;             // 0–100 composite
+  score: number;             // 0–100 (= completionPct)
   bonusEligible: boolean;
 }
 

@@ -1,28 +1,26 @@
 /**
- * /v1/driver-scoring — per-driver accountability scorecard (Curzon-only).
+ * /v1/driver-scoring — per-driver inspection scorecard (Curzon-only).
  *
- * Feeds the monthly bonus program + weekly cleanliness deductions. There is
- * NO stored scoring state: every number is derived on demand from data we
- * already capture, so the score can never drift out of sync with the source
- * records.
+ * Scores drivers purely on how consistently they fill in inspections. There
+ * is NO stored scoring state: every number is derived on demand from data we
+ * already capture, so the score can never drift out of sync.
  *
  *   GET /v1/driver-scoring?from=YYYY-MM-DD&to=YYYY-MM-DD
  *
  * Score model (transparent, weights echoed to the client):
  *   completionPct = inspectionDays / activeDays, capped at 100
- *       activeDays     = distinct days the driver had a load event
+ *       activeDays     = distinct days the driver had a load event ("on road")
  *       inspectionDays = distinct days they submitted ≥1 inspection
- *   dirtyIncidents = cleanliness deductions applied to the driver in-range
- *       (payroll_adjustments linked to a flagged inspection — see below)
- *   score = clamp(completionPct − dirtyIncidents × DIRTY_PENALTY, 0, 100)
- *   bonusEligible = score ≥ BONUS_THRESHOLD AND dirtyIncidents === 0
+ *   score = completionPct
+ *   bonusEligible = score ≥ BONUS_THRESHOLD
  *
- * Cleanliness attribution: a "left dirty" flag is filed by the driver who
- * *discovered* it, but the deduction (the "+ Deduction" button on the web
- * dirty panel) is charged to whoever left it dirty — the operator picks the
- * driver, so we count by the deduction's driver_name, not the inspection's
- * driver. We only count deductions whose inspection_report_id points at a
- * cleanliness flag inside the window, so the count tracks real incidents.
+ * Only ONE inspection per day is needed to count that day. Drivers are asked
+ * to do both pre- and post-trip, but a day is "covered" as soon as either is
+ * submitted — inspectionDays counts distinct days, not distinct inspections.
+ *
+ * Cleanliness is intentionally OUT of the score: dirty-cab accountability is
+ * handled separately (personal follow-up + the "+ Deduction" payroll button
+ * on the Equipment dirty panel), so it doesn't touch a driver's score here.
  */
 
 import { Hono } from "hono";
@@ -39,7 +37,6 @@ const scoring = new Hono<{ Variables: AuthVariables }>();
 scoring.use("*", requireTruckHistoryOrg);
 
 // ── Score weights (tune here) ─────────────────────────────────────────────
-const DIRTY_PENALTY   = 10; // points lost per cleanliness deduction
 const BONUS_THRESHOLD = 85; // score needed to be bonus-eligible
 
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
@@ -75,11 +72,7 @@ scoring.get("/", async (c) => {
   const drivers = ((driverRows ?? []) as Array<{ id: number; name: string }>)
     .filter(d => !excluded.idSet.has(d.id));
   const nameById = new Map<number, string>();
-  const idByName = new Map<string, number>();
-  for (const d of drivers) {
-    nameById.set(d.id, d.name);
-    idByName.set((d.name ?? "").trim(), d.id);
-  }
+  for (const d of drivers) nameById.set(d.id, d.name);
 
   // ── (2) inspection reports in-range ─────────────────────────────────────
   // inspection_reports isn't in the generated Database types yet; cast
@@ -87,7 +80,7 @@ scoring.get("/", async (c) => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: inspRows, error: iErr } = await (supabase as any)
     .from("inspection_reports")
-    .select("id,driver_id,kind,inspection_date,cleanliness_flagged")
+    .select("driver_id,kind,inspection_date")
     .eq("org_id", orgId)
     .gte("inspection_date", from)
     .lte("inspection_date", to);
@@ -96,10 +89,8 @@ scoring.get("/", async (c) => {
     return c.json({ error: "fetch_failed", detail: iErr.message } satisfies ApiErrorResponse, 500);
   }
   const inspections = (inspRows ?? []) as Array<{
-    id: string; driver_id: number; kind: string | null;
-    inspection_date: string; cleanliness_flagged: boolean | null;
+    driver_id: number; kind: string | null; inspection_date: string;
   }>;
-  const flaggedIds = inspections.filter(i => i.cleanliness_flagged).map(i => i.id);
 
   // ── (3) load events in-range → active days ──────────────────────────────
   const { data: evRows, error: eErr } = await supabase
@@ -115,28 +106,6 @@ scoring.get("/", async (c) => {
     return c.json({ error: "fetch_failed", detail: eErr.message } satisfies ApiErrorResponse, 500);
   }
   const events = (evRows ?? []) as Array<{ driver_id: number | null; start: string }>;
-
-  // ── (4) cleanliness deductions linked to in-range flags ─────────────────
-  //     Only inspection-linked adjustments count as cleanliness incidents.
-  const dedByDriver = new Map<string, { count: number; total: number }>();
-  if (flaggedIds.length) {
-    const { data: adjRows, error: aErr } = await supabase
-      .from("payroll_adjustments")
-      .select("driver_name,amount,inspection_report_id")
-      .eq("org_id", orgId)
-      .in("inspection_report_id", flaggedIds);
-    if (aErr) {
-      console.error("[GET /v1/driver-scoring] adjustments failed:", aErr);
-      return c.json({ error: "fetch_failed", detail: aErr.message } satisfies ApiErrorResponse, 500);
-    }
-    for (const a of (adjRows ?? []) as Array<{ driver_name: string; amount: number | string }>) {
-      const name = (a.driver_name ?? "").trim();
-      const prev = dedByDriver.get(name) ?? { count: 0, total: 0 };
-      prev.count += 1;
-      prev.total += Math.abs(Number(a.amount) || 0);
-      dedByDriver.set(name, prev);
-    }
-  }
 
   // ── Aggregate per driver ────────────────────────────────────────────────
   type Acc = {
@@ -159,27 +128,21 @@ scoring.get("/", async (c) => {
   for (const insp of inspections) {
     if (insp.driver_id == null) continue;
     const a = ensure(insp.driver_id);
-    a.inspectionDays.add(insp.inspection_date);
+    a.inspectionDays.add(insp.inspection_date); // ≥1 inspection covers the day
     if (insp.kind === "pre_trip") a.preTrips += 1;
     else if (insp.kind === "post_trip") a.postTrips += 1;
   }
 
   const scores: DriverScore[] = [];
-  // Union of drivers that have any activity, inspections, or deductions.
-  const activeIds = new Set<number>(acc.keys());
-  for (const [name] of dedByDriver) { const id = idByName.get(name); if (id != null) activeIds.add(id); }
-
-  for (const driverId of activeIds) {
+  for (const [driverId, a] of acc) {
     const name = nameById.get(driverId);
     if (!name) continue; // owner-op / unknown — skip
-    const a = acc.get(driverId) ?? { activeDays: new Set<string>(), inspectionDays: new Set<string>(), preTrips: 0, postTrips: 0 };
     const activeDays = a.activeDays.size;
     const inspectionDays = a.inspectionDays.size;
     const completionPct = activeDays > 0
       ? clamp(Math.round((inspectionDays / activeDays) * 100), 0, 100)
       : (inspectionDays > 0 ? 100 : 0);
-    const ded = dedByDriver.get(name.trim()) ?? { count: 0, total: 0 };
-    const score = clamp(completionPct - ded.count * DIRTY_PENALTY, 0, 100);
+    const score = completionPct;
     scores.push({
       driverId,
       driverName: name,
@@ -188,10 +151,8 @@ scoring.get("/", async (c) => {
       preTrips: a.preTrips,
       postTrips: a.postTrips,
       completionPct,
-      dirtyIncidents: ded.count,
-      deductionTotal: ded.total,
       score,
-      bonusEligible: score >= BONUS_THRESHOLD && ded.count === 0,
+      bonusEligible: score >= BONUS_THRESHOLD,
     });
   }
 
@@ -199,7 +160,7 @@ scoring.get("/", async (c) => {
 
   const res: ListDriverScoresResponse = {
     from, to, scores,
-    weights: { bonusThreshold: BONUS_THRESHOLD, dirtyPenalty: DIRTY_PENALTY },
+    weights: { bonusThreshold: BONUS_THRESHOLD },
   };
   return c.json(res);
 });
