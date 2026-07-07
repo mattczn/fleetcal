@@ -2487,18 +2487,27 @@ export const useCalendarStore = create<CalendarStore>()(
     finally { set({ eldLocationsLoading: false }); }
   },
 
-  openCreateModal: (defaults, opts) =>
+  // Read-only roles (maintenance) can view the calendar but must not open
+  // the load modal at all — it's an edit surface. Bail on canEditLoads so
+  // no click/drag/deep-link path can surface it.
+  openCreateModal: (defaults, opts) => {
+    if (!get().canEditLoads) return;
     set({
       modalOpen: true, modalMode: 'create', modalEventId: undefined,
       modalDefaults: defaults, modalShowMap: false,
       prefillWorkOrderLinkIds: opts?.prefillWorkOrderLinkIds,
-    }),
+    });
+  },
 
-  openEditModal: (eventId) =>
-    set({ modalOpen: true, modalMode: 'edit', modalEventId: eventId, modalDefaults: undefined, modalShowMap: false, prefillWorkOrderLinkIds: undefined }),
+  openEditModal: (eventId) => {
+    if (!get().canEditLoads) return;
+    set({ modalOpen: true, modalMode: 'edit', modalEventId: eventId, modalDefaults: undefined, modalShowMap: false, prefillWorkOrderLinkIds: undefined });
+  },
 
-  openEditModalWithMap: (eventId) =>
-    set({ modalOpen: true, modalMode: 'edit', modalEventId: eventId, modalDefaults: undefined, modalShowMap: true, prefillWorkOrderLinkIds: undefined }),
+  openEditModalWithMap: (eventId) => {
+    if (!get().canEditLoads) return;
+    set({ modalOpen: true, modalMode: 'edit', modalEventId: eventId, modalDefaults: undefined, modalShowMap: true, prefillWorkOrderLinkIds: undefined });
+  },
 
   closeModal: () =>
     set({ modalOpen: false, modalEventId: undefined, modalDefaults: undefined, modalShowMap: false, modalConflict: null, batchItems: [], batchIndex: 0, batchParseProgress: 0, batchParseTotal: 0, batchMinimized: false, batchCancelRequested: false, prefillWorkOrderLinkIds: undefined }),
