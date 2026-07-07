@@ -19,7 +19,7 @@ import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
 import {
   LogOut, User, FileText, Trash2, X, Share2, Eye, Plus, Calendar as CalendarIcon, ChevronDown,
-  Pencil, Check, Trophy, CheckCircle2,
+  Pencil, Check,
 } from "lucide-react-native";
 import { useQuery } from "@tanstack/react-query";
 import { useModules } from "@/lib/useModules";
@@ -905,22 +905,19 @@ function ScorecardCard() {
   if (data && !data.enabled) return null;
 
   const score     = data?.score ?? 0;
-  const eligible  = data?.bonusEligible ?? false;
-  const threshold = data?.bonusThreshold ?? 85;
   const activeDays     = data?.activeDays ?? 0;
   const inspectionDays = data?.inspectionDays ?? 0;
   const completionPct  = data?.completionPct ?? 0;
-  const missedDays = Math.max(0, activeDays - inspectionDays);
   const noData = activeDays === 0 && inspectionDays === 0;
 
   const monthLabel = new Date(`${data?.to ?? new Date().toISOString().slice(0, 10)}T00:00:00`)
     .toLocaleDateString(undefined, { month: "long", year: "numeric" });
 
-  const tone = eligible
-    ? { fg: C.greenInk, bg: C.greenBg, bar: C.green }
+  const tone = score >= 85
+    ? { fg: C.greenInk, bar: C.green }
     : score >= 60
-      ? { fg: C.amberInk, bg: C.amberBg, bar: C.amber }
-      : { fg: C.redInk, bg: C.redBg, bar: C.red };
+      ? { fg: C.amberInk, bar: C.amber }
+      : { fg: C.redInk, bar: C.red };
 
   return (
     <>
@@ -940,26 +937,11 @@ function ScorecardCard() {
           </View>
         ) : (
           <View style={{ paddingVertical: 6 }}>
-            {/* Score + bonus badge */}
-            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-              <View>
-                <Text style={[txt(500), { fontSize: 12, color: C.t3 }]}>{monthLabel}</Text>
-                <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 4, marginTop: 2 }}>
-                  <Text style={[txt(800), { fontSize: 40, color: tone.fg, letterSpacing: -1 }]}>{score}</Text>
-                  <Text style={[txt(700), { fontSize: 16, color: C.t3, marginBottom: 7 }]}>/100</Text>
-                </View>
-              </View>
-              <View style={{
-                flexDirection: "row", alignItems: "center", gap: 6,
-                paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, backgroundColor: tone.bg,
-              }}>
-                {eligible
-                  ? <CheckCircle2 size={16} color={tone.fg} strokeWidth={2.4} />
-                  : <Trophy size={15} color={tone.fg} strokeWidth={2.2} />}
-                <Text style={[txt(700), { fontSize: 12.5, color: tone.fg }]}>
-                  {eligible ? "Bonus eligible" : "Not yet"}
-                </Text>
-              </View>
+            {/* Score */}
+            <Text style={[txt(500), { fontSize: 12, color: C.t3 }]}>{monthLabel}</Text>
+            <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 4, marginTop: 2 }}>
+              <Text style={[txt(800), { fontSize: 40, color: tone.fg, letterSpacing: -1 }]}>{score}</Text>
+              <Text style={[txt(700), { fontSize: 16, color: C.t3, marginBottom: 7 }]}>/100</Text>
             </View>
 
             {/* Completion bar */}
@@ -973,14 +955,10 @@ function ScorecardCard() {
             {/* How to improve */}
             <View style={{ marginTop: 12, padding: 12, borderRadius: 10, backgroundColor: C.surfaceSunk }}>
               <Text style={[txt(700), { fontSize: 12.5, color: C.t1, marginBottom: 3 }]}>
-                {eligible ? "You're on track" : "How to improve"}
+                {score >= 85 ? "Keep it up" : "How to improve"}
               </Text>
               <Text style={[txt(500), { fontSize: 12.5, color: C.t2, lineHeight: 18 }]}>
-                {eligible
-                  ? `Keep submitting at least one inspection every day you drive to stay above ${threshold}.`
-                  : missedDays > 0
-                    ? `Submit at least one inspection — pre-trip or post-trip — every day you drive. You missed ${missedDays} day${missedDays === 1 ? "" : "s"} this month. Reach ${threshold} to qualify for the bonus.`
-                    : `Submit at least one inspection — pre-trip or post-trip — every day you drive to reach ${threshold} and qualify for the bonus.`}
+                Complete both your pre-trip and post-trip inspections every day you drive, and report any maintenance issues in the app.
               </Text>
             </View>
           </View>
