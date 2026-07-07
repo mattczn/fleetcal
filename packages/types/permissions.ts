@@ -229,17 +229,17 @@ export const ROLE_CAPABILITIES: Record<OrgRole, ReadonlySet<Capability>> = {
   ]),
 
   // Maintenance: equipment-focused. Home turf is the Equipment module
-  // (maintenance reports + inspections + asset history) and Fuel. Sees
-  // assets/trailers/drivers (equipment history references driver names)
-  // and gets a READ-ONLY calendar (loads.view) so they can see the
-  // schedule — but WITHOUT pricing, driver pay, or the rate con, and
-  // without create/edit/delete on loads. No payroll, accounting,
-  // dashboard, closeout, or org settings. Everything here is tunable
-  // per-org in the Role Permissions matrix.
+  // (maintenance reports + inspections + asset history) and Fuel, plus
+  // read access to assets/trailers. Gets a READ-ONLY calendar
+  // (loads.view) to see the schedule — but WITHOUT pricing, driver pay,
+  // or the rate con, and without create/edit/delete on loads. NOT given
+  // drivers.view (that unlocks the Drivers performance page); equipment
+  // history still shows driver names, which come from the server. No
+  // payroll, accounting, dashboard, closeout, or org settings. Everything
+  // here is tunable per-org in the Role Permissions matrix.
   maintenance: new Set<Capability>([
     "loads.view",
     "assets.view", "trailers.view",
-    "drivers.view",
     "maintenance.access", "maintenance.edit",
     "fuel.access", "fuel.edit",
   ]),

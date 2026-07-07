@@ -76,7 +76,7 @@ type NavItem = NavLeaf | NavGroup;
 const PRIMARY_NAV: NavItem[] = [
   { kind: 'leaf', href: '/calendar',    label: 'Calendar',       icon: Calendar,        cap: 'loads.view' },
   { kind: 'leaf', href: '/dashboard',   label: 'Dashboard',      icon: BarChart2,       cap: 'dashboard.access' },
-  { kind: 'leaf', href: '/board',       label: 'Command Center', icon: LayoutDashboard, cap: 'loads.view',        module: 'dispatch_board' },
+  { kind: 'leaf', href: '/board',       label: 'Command Center', icon: LayoutDashboard, cap: 'loads.edit',        module: 'dispatch_board' },
   { kind: 'leaf', href: '/closeout',    label: 'Paperwork',      icon: FileCheck2,      cap: 'closeout.access',   module: 'closeout' },
   { kind: 'leaf', href: '/accounting',  label: 'Billing',        icon: Receipt,         cap: 'accounting.access', module: 'accounting' },
   {
@@ -98,7 +98,11 @@ const PRIMARY_NAV: NavItem[] = [
 ];
 
 const SECONDARY_NAV: NavItem[] = [
-  { kind: 'leaf', href: '/settings',    label: 'Settings',       icon: Settings,        cap: 'loads.view' },
+  // 'loads.edit' rather than 'loads.view': Settings is a dispatcher+ area
+  // (its sub-tabs are cap-gated internally). Gating on loads.edit keeps it
+  // out of the read-only maintenance nav while staying visible to admin +
+  // dispatcher — maintenance is the only role without loads.edit.
+  { kind: 'leaf', href: '/settings',    label: 'Settings',       icon: Settings,        cap: 'loads.edit' },
 ];
 
 const STORAGE_KEY = 'app-sidebar-collapsed';

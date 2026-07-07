@@ -5,6 +5,7 @@ import { useAuth } from '@clerk/nextjs';
 import { fetchOrgData } from '@/lib/db';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { useOnboardingStore } from '@/store/useOnboardingStore';
+import { usePermissions } from '@/lib/usePermissions';
 
 export default function DataLoader() {
   const { orgId } = useAuth();
@@ -21,8 +22,19 @@ export default function DataLoader() {
   const hydrateDocumentTypes = useCalendarStore((s) => s.hydrateDocumentTypes);
   const hydrateInvoiceAutoIncludeKinds = useCalendarStore((s) => s.hydrateInvoiceAutoIncludeKinds);
   const autoExpireTrash      = useCalendarStore((s) => s.autoExpireTrash);
+  const hydrateCanEditLoads  = useCalendarStore((s) => s.hydrateCanEditLoads);
   const { phase, completeOnboarding, setPhase } = useOnboardingStore();
   const loadedId = useRef<string | null>(null);
+
+  // Mirror the current user's loads.edit capability into the calendar
+  // store so its write actions can bail for read-only roles (maintenance).
+  // Stays true while perms hydrate so legit users aren't briefly blocked;
+  // flips to the real value once Clerk + role_overrides resolve.
+  const { can, isLoading: permsLoading } = usePermissions();
+  const canEditLoads = permsLoading ? true : can('loads.edit');
+  useEffect(() => {
+    hydrateCanEditLoads(canEditLoads);
+  }, [canEditLoads, hydrateCanEditLoads]);
 
   useEffect(() => {
     if (!orgId || loadedId.current === orgId) return;

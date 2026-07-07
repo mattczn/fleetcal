@@ -338,6 +338,15 @@ interface CalendarStore extends ModalState {
   roleOverrides: import('@fleetcal/types').RoleOverrides;
   hydrateRoleOverrides: (overrides: import('@fleetcal/types').RoleOverrides | undefined) => void;
 
+  /** False when the current user's role lacks loads.edit (e.g. the
+   *  maintenance role). Every calendar write bails on this so a
+   *  read-only user can't fire — or loop — 403 PATCHes. Defaults true so
+   *  legit users aren't blocked during the brief hydration window;
+   *  DataLoader sets the real value once permissions resolve. The API
+   *  still enforces via requireCapability('loads.edit'). */
+  canEditLoads: boolean;
+  hydrateCanEditLoads: (v: boolean) => void;
+
   /** Per-org module on/off flags. Independent of role capabilities —
    *  a module turned off here is invisible to everyone in the org,
    *  including the owner. Hydrated from /v1/org-settings on app
@@ -699,6 +708,9 @@ export const useCalendarStore = create<CalendarStore>()(
   roleOverrides: {},
   hydrateRoleOverrides: (overrides) =>
     set({ roleOverrides: overrides ?? {} }),
+
+  canEditLoads: true,
+  hydrateCanEditLoads: (v) => set({ canEditLoads: v }),
 
   // Initialize to the MVP-launch defaults instead of `{}` so the first
   // render is already pessimistic — gated nav items + settings panels
@@ -1518,6 +1530,7 @@ export const useCalendarStore = create<CalendarStore>()(
   // ── Events ────────────────────────────────────────────────────────────────
   addEvent: (event, presetId?, options?) => {
     if (get().isDemo) return;
+    if (!get().canEditLoads) return; // read-only roles can't create loads
     const tempId = presetId ?? crypto.randomUUID();
     // Default-status auto-flip: if the caller is creating a revenue
     // event WITH a driver but the status is the bare 'scheduled'
@@ -1659,6 +1672,11 @@ export const useCalendarStore = create<CalendarStore>()(
   },
 
   updateEvent: (id, updates) => {
+    // Read-only roles (e.g. maintenance) may view the calendar but not
+    // write. Bail BEFORE any optimistic mutation or network PATCH so a
+    // stray edit path — a drag, a modal auto-save effect — can't fire or
+    // loop 403s. The API still enforces via requireCapability.
+    if (!get().canEditLoads) return;
     const prevEvent      = get().events.find((e) => e.id === id);
     const prevDriverId   = prevEvent?.driverId;
     const prevConfirmedAt = prevEvent?.confirmedAt;
@@ -1817,6 +1835,7 @@ export const useCalendarStore = create<CalendarStore>()(
 
   cancelEventKeepLoad: (id, auditEntry) => {
     if (get().isDemo) return;
+    if (!get().canEditLoads) return; // read-only roles can't cancel loads
     const ev = get().events.find((e) => e.id === id);
     if (!ev) return;
     markSelfWrite(id);
@@ -1868,6 +1887,7 @@ export const useCalendarStore = create<CalendarStore>()(
 
   removeEvent: (id, auditEntry) => {
     if (get().isDemo) return;
+    if (!get().canEditLoads) return; // read-only roles can't delete loads
     const ev = get().events.find((e) => e.id === id);
     if (!ev) return;
     markSelfWrite(id);

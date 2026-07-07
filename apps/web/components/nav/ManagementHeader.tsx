@@ -20,7 +20,7 @@ const NAV_LINKS: Array<{
   cap: Capability;
   module?: OrgModule;
 }> = [
-  { href: '/board',       label: 'Command Center', icon: LayoutDashboard, cap: 'loads.view' },
+  { href: '/board',       label: 'Command Center', icon: LayoutDashboard, cap: 'loads.edit' },
   { href: '/dashboard',   label: 'Dashboard',      icon: BarChart2,       cap: 'dashboard.access' },
   { href: '/closeout',    label: 'Paperwork',      icon: FileCheck2,      cap: 'closeout.access',    module: 'closeout' },
   { href: '/accounting',  label: 'Billing',        icon: Receipt,         cap: 'accounting.access',  module: 'accounting' },
