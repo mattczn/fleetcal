@@ -738,7 +738,7 @@ function RolePermissionsPanel() {
       }}>
         {/* Header row — white background, bold black labels */}
         <div className="grid items-stretch" style={{
-          gridTemplateColumns: 'minmax(280px, 2fr) repeat(2, 1fr)',
+          gridTemplateColumns: `minmax(280px, 2fr) repeat(${ORG_ROLES.length}, 1fr)`,
           background: '#fff',
           borderBottom: `2px solid ${SETTINGS_COLORS.text}`,
         }}>
@@ -781,7 +781,7 @@ function RolePermissionsPanel() {
             </div>
             {grouped[groupName].map(item => (
               <div key={item.cap} className="grid items-center" style={{
-                gridTemplateColumns: 'minmax(280px, 2fr) repeat(2, 1fr)',
+                gridTemplateColumns: `minmax(280px, 2fr) repeat(${ORG_ROLES.length}, 1fr)`,
                 borderTop: `1px solid ${SETTINGS_COLORS.border}`,
                 background: '#fff',
               }}>

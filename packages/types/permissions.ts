@@ -15,48 +15,55 @@
  *   - Adding a role later is a single matrix edit. Adding a new
  *     destructive action is a single capability addition.
  *
- * Roles map to Clerk's org role slugs. We use exactly TWO roles:
- *   - `org:admin`  — Clerk's built-in admin (also covers org creator)
- *   - `dispatcher` — comes through as Clerk's built-in `org:member`
- *                    (renamed "Dispatcher" in the Clerk dashboard if
- *                    desired; parseClerkRole maps `member → dispatcher`
- *                    either way)
+ * Roles map to Clerk's org role slugs:
+ *   - `org:admin`       — Clerk's built-in admin (also covers org creator)
+ *   - `dispatcher`      — comes through as Clerk's built-in `org:member`
+ *                         (renamed "Dispatcher" in the Clerk dashboard if
+ *                         desired; parseClerkRole maps `member → dispatcher`
+ *                         either way)
+ *   - `org:maintenance` — custom Clerk role (equipment-focused, read-only
+ *                         calendar). Requires a paid Clerk plan; created in
+ *                         the Clerk dashboard with the `org:maintenance` key.
  *
- * Why only 2 roles: Clerk's free tier doesn't allow custom roles in
- * production. We use Clerk's built-ins (admin + member) and treat
- * member as our dispatcher. If we ever upgrade to a paid Clerk plan,
- * additional roles (e.g. maintenance, accountant) get added back here
- * AND created in the Clerk dashboard with matching `org:<slug>` keys.
+ * Adding a role is a single matrix edit here PLUS creating the matching
+ * `org:<slug>` role in the Clerk dashboard. The Role Permissions settings
+ * panel (gated by the `team_roles` module) then lets an admin tune each
+ * role's capabilities per-org via org_settings.role_overrides.
  */
 
 // ── Role taxonomy ────────────────────────────────────────────────────────
 
-export type OrgRole = "admin" | "dispatcher";
+export type OrgRole = "admin" | "dispatcher" | "maintenance";
 
 export const ORG_ROLES: readonly OrgRole[] = [
   "admin",
   "dispatcher",
+  "maintenance",
 ] as const;
 
 /** Display labels (singular). Used in UI dropdowns / badges. */
 export const ORG_ROLE_LABEL: Record<OrgRole, string> = {
-  admin:      "Admin",
-  dispatcher: "Dispatcher",
+  admin:       "Admin",
+  dispatcher:  "Dispatcher",
+  maintenance: "Maintenance",
 };
 
 /** Short description shown next to the label in pickers. */
 export const ORG_ROLE_BLURB: Record<OrgRole, string> = {
-  admin:      "Full operational + billing access. Manages members and settings.",
-  dispatcher: "Day-to-day operations. Creates and edits loads; cannot finalize billing or change org settings.",
+  admin:       "Full operational + billing access. Manages members and settings.",
+  dispatcher:  "Day-to-day operations. Creates and edits loads; cannot finalize billing or change org settings.",
+  maintenance: "Equipment + fuel: maintenance reports, inspections, asset history. Read-only calendar; no pricing, payroll, or org settings.",
 };
 
 /**
  * Ordering — for "at least admin" style comparisons. NOT used for
  * capability checks (those go through the explicit matrix below).
+ * Maintenance is the most limited role, below dispatcher.
  */
 export const ROLE_RANK: Record<OrgRole, number> = {
-  dispatcher: 0,
-  admin:      1,
+  maintenance: 0,
+  dispatcher:  1,
+  admin:       2,
 };
 
 /** True if `role` outranks or equals `min`. */
@@ -220,6 +227,22 @@ export const ROLE_CAPABILITIES: Record<OrgRole, ReadonlySet<Capability>> = {
     "fuel.access", "fuel.edit",
     "reports.access",
   ]),
+
+  // Maintenance: equipment-focused. Home turf is the Equipment module
+  // (maintenance reports + inspections + asset history) and Fuel. Sees
+  // assets/trailers/drivers (equipment history references driver names)
+  // and gets a READ-ONLY calendar (loads.view) so they can see the
+  // schedule — but WITHOUT pricing, driver pay, or the rate con, and
+  // without create/edit/delete on loads. No payroll, accounting,
+  // dashboard, closeout, or org settings. Everything here is tunable
+  // per-org in the Role Permissions matrix.
+  maintenance: new Set<Capability>([
+    "loads.view",
+    "assets.view", "trailers.view",
+    "drivers.view",
+    "maintenance.access", "maintenance.edit",
+    "fuel.access", "fuel.edit",
+  ]),
 };
 
 // ── Check API ────────────────────────────────────────────────────────────
@@ -292,6 +315,7 @@ export interface CapabilityInfo {
 
 export const CAPABILITY_CATALOG: CapabilityInfo[] = [
   // Module access — top-nav visibility.
+  { cap: "loads.view",        label: "Calendar",      group: "Module access", hint: "See the load calendar (read-only for roles without create/edit). Turn off to hide the schedule entirely from a role." },
   { cap: "dashboard.access",  label: "Dashboard",     group: "Module access", hint: "Top-line KPIs, revenue + driver pay totals." },
   { cap: "closeout.access",   label: "Paperwork",     group: "Module access", hint: "POD verification + flag queue." },
   { cap: "accounting.access", label: "Billing",       group: "Module access", hint: "Invoice list, send/void, payment status." },
@@ -373,10 +397,11 @@ export const CAPABILITY_CATALOG: CapabilityInfo[] = [
 export function parseClerkRole(slug: string | null | undefined): OrgRole | undefined {
   if (!slug) return undefined;
   const stripped = slug.startsWith("org:") ? slug.slice(4) : slug;
-  if (stripped === "admin")      return "admin";
-  if (stripped === "creator")    return "admin";  // some Clerk instances use this for the org creator
-  if (stripped === "owner")      return "admin";  // legacy slug from when we had an owner role
-  if (stripped === "dispatcher") return "dispatcher";
-  if (stripped === "member")     return "dispatcher";  // Clerk's built-in member role = our dispatcher
+  if (stripped === "admin")       return "admin";
+  if (stripped === "creator")     return "admin";  // some Clerk instances use this for the org creator
+  if (stripped === "owner")       return "admin";  // legacy slug from when we had an owner role
+  if (stripped === "dispatcher")  return "dispatcher";
+  if (stripped === "member")      return "dispatcher";  // Clerk's built-in member role = our dispatcher
+  if (stripped === "maintenance") return "maintenance"; // custom Clerk role (org:maintenance)
   return undefined;
 }
