@@ -70,6 +70,8 @@ function CrmOutboxPageInner() {
   const [approving,  setApproving]  = useState(false);
   const [actionMsg,  setActionMsg]  = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [capRemaining, setCapRemaining] = useState<number | null>(null);
+  const [windowOpen,   setWindowOpen]   = useState<boolean | null>(null);
 
   const fetchEmails = useCallback(async (status: CrmEmailStatus) => {
     setLoading(true);
@@ -115,13 +117,28 @@ function CrmOutboxPageInner() {
         } else {
           const org = result.orgs?.[0];
           if (org) {
+            if (org.capRemaining != null) setCapRemaining(org.capRemaining);
+            if (org.windowOpen   != null) setWindowOpen(org.windowOpen);
             const bits: string[] = [];
             if (org.materialized) bits.push(`${org.materialized} newly queued`);
             if (org.sent)         bits.push(`${org.sent} sent`);
             if (org.suppressed)   bits.push(`${org.suppressed} suppressed`);
             if (org.failed)       bits.push(`${org.failed} failed`);
-            if (org.windowOpen === false) bits.push('send window closed — pending will send in-window');
-            setActionMsg(bits.length ? `Swept: ${bits.join(' · ')}` : 'Swept: nothing new was ready');
+            if (org.error)        bits.push(`error: ${org.error}`);
+            // Cap-hit case — most common cause of "why aren't my approved
+            // emails sending?" Tell the user directly instead of a generic
+            // "nothing new was ready".
+            const capHit = org.windowOpen === true
+              && (org.capRemaining ?? 0) === 0
+              && (org.sent ?? 0) === 0
+              && (org.materialized ?? 0) === 0;
+            if (capHit) {
+              const cap = settings?.dailySendCap ?? '?';
+              bits.push(`daily cap hit (${cap}/${cap} sent today) — raise it in Settings or wait until midnight ${settings?.sendWindow.timezone ?? ''}`);
+            } else if (org.windowOpen === false) {
+              bits.push('send window closed — approved will send in-window');
+            }
+            setActionMsg(bits.length ? `Swept: ${bits.join(' · ')}` : 'Swept: nothing was ready');
           }
         }
       }
@@ -203,13 +220,33 @@ function CrmOutboxPageInner() {
             style={{ color: 'var(--gc-text-2)', textDecoration: 'none' }}>
             <ArrowLeft size={13} /> Back to leads
           </Link>
-          {settings && (
-            <span className="text-[12px] font-medium px-2.5 py-1 rounded-lg tabular-nums"
-              style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border-light)', color: 'var(--gc-text-2)' }}>
-              Daily cap: {settings.dailySendCap}
-              {settings.autoSend && <span style={{ color: '#e37400' }}> · auto-send ON</span>}
-            </span>
-          )}
+          {settings && (() => {
+            // capRemaining state comes from the last Run sweep response.
+            // Until the first sweep of the session, we can only show the
+            // configured cap — not how much of it has been consumed today.
+            // Cap-hit (0 remaining) gets a red pill so the user can see
+            // at a glance why nothing's sending.
+            const capHit = capRemaining === 0;
+            const used = capRemaining != null ? settings.dailySendCap - capRemaining : null;
+            return (
+              <Link href="/crm/settings"
+                title={capHit
+                  ? `You've sent your full daily cap of ${settings.dailySendCap} today. Approved emails will send after midnight ${settings.sendWindow.timezone}, or raise the cap in Settings.`
+                  : 'Daily send cap. Click to change.'}
+                className="text-[12px] font-medium px-2.5 py-1 rounded-lg tabular-nums transition-colors"
+                style={{
+                  background: capHit ? '#fee2e2' : 'var(--gc-surface)',
+                  border: `1px solid ${capHit ? '#fecaca' : 'var(--gc-border-light)'}`,
+                  color: capHit ? '#991b1b' : 'var(--gc-text-2)',
+                  textDecoration: 'none',
+                }}>
+                {used != null
+                  ? <>Sends today: <strong>{used}</strong>/{settings.dailySendCap}{capHit && ' · CAP HIT'}</>
+                  : <>Daily cap: {settings.dailySendCap}</>}
+                {settings.autoSend && <span style={{ color: '#e37400' }}> · auto-send ON</span>}
+              </Link>
+            );
+          })()}
           <div className="flex-1" />
           {actionMsg && (
             <span className="text-[12px] font-semibold px-2.5 py-1 rounded-lg"
