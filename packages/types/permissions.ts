@@ -302,6 +302,7 @@ export type CapabilityGroup =
   | "Payroll actions"
   | "Maintenance / Fuel"
   | "Sensitive fields"
+  | "Sales (CRM)"
   | "Org admin";
 
 export interface CapabilityInfo {
@@ -323,6 +324,7 @@ export const CAPABILITY_CATALOG: CapabilityInfo[] = [
   { cap: "fuel.access",       label: "Fuel",          group: "Module access" },
   { cap: "maintenance.access", label: "Maintenance",  group: "Module access" },
   { cap: "reports.access",    label: "Reports",       group: "Module access", hint: "LoadsReport + future custom-report endpoints." },
+  { cap: "drivers.view",      label: "Drivers",       group: "Module access", hint: "Per-driver performance scorecards page. Also gates seeing driver names across the app — turning it off hides them in equipment history too." },
 
   // Create / Edit — day-to-day ops. Create and Edit are split per
   // entity so an admin can grant "edit existing" without "add new"
@@ -373,6 +375,13 @@ export const CAPABILITY_CATALOG: CapabilityInfo[] = [
   { cap: "loads.view_driver_pay", label: "View driver pay", group: "Sensitive fields", hint: "Hides the Driver Pay column / field across reports, modals, and exports." },
   { cap: "loads.view_price",      label: "View load price", group: "Sensitive fields", hint: "Hides the load rate / revenue / total across the load modal, cards, dashboard, and reports." },
   { cap: "loads.view_rate_con",   label: "View rate confirmation", group: "Sensitive fields", hint: "Hides the rate confirmation PDF and the View PDF buttons on the load modal." },
+
+  // Sales (CRM) — internal FleetCal sales tooling. Only functions for
+  // internal-allowlisted orgs (module + allowlist gated); shown here so an
+  // internal admin can grant CRM access to a non-admin role without a code
+  // change. No effect for customer orgs.
+  { cap: "crm.access", label: "CRM access", group: "Sales (CRM)", hint: "See + work the CRM: leads, call queue, outbox. No effect for non-internal orgs." },
+  { cap: "crm.manage", label: "Manage CRM sequences + settings", group: "Sales (CRM)" },
 
   // Org admin.
   { cap: "org.settings.edit",  label: "Edit org settings",    group: "Org admin" },

@@ -712,7 +712,7 @@ function RolePermissionsPanel() {
   return (
     <SettingsPanel
       title="Role Permissions"
-      description="Override the default capability set for Dispatchers. Admin always has everything (read-only). Changes apply within ~60s of save."
+      description="Override the default capabilities for each role. Admin always has everything (read-only). Changes apply within ~60s of save."
       maxWidth={1100}
       bare
       actions={
