@@ -1087,13 +1087,12 @@ export const useCalendarStore = create<CalendarStore>()(
     await mergeCustomer(sourceId, targetId);
     set((s) => ({ customers: s.customers.filter(c => c.id !== sourceId) }));
   },
-  addCustomerAlias: async (id, alias) => {
-    const customer = get().customers.find(c => c.id === id);
-    if (!customer || customer.aliases.includes(alias)) return;
-    const newAliases = [...customer.aliases, alias];
-    await updateCustomer(id, { aliases: newAliases });
-    set((s) => ({ customers: s.customers.map(c => c.id === id ? { ...c, aliases: newAliases } : c) }));
-  },
+  // Alternate broker names ("aliases") are disabled. This used to auto-append
+  // the rate-con's extracted broker text onto whatever customer the fuzzy
+  // matcher picked, with no approval: it silently mis-linked loads and created
+  // the stray "aka" name badges. Now a no-op; nothing writes customer aliases.
+  // (EventModal still calls this on a rate-con match; those calls are inert.)
+  addCustomerAlias: async () => {},
   addCustomerContact: async (id, contact) => {
     const customer = get().customers.find(c => c.id === id);
     if (!customer) return;
