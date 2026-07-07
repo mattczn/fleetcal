@@ -16,7 +16,7 @@ import { requireCapability, requireModule } from "../middleware/require.js";
 
 const inspectionReports = new Hono<{ Variables: AuthVariables }>();
 
-inspectionReports.use("*", requireModule("maintenance"), requireCapability("maintenance.access"));
+inspectionReports.use("*", requireModule("maintenance"), requireCapability("inspections.access"));
 
 // ── Row + response shapes ──────────────────────────────────────────────
 

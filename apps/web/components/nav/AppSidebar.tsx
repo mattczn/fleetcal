@@ -88,8 +88,8 @@ const PRIMARY_NAV: NavItem[] = [
     module: 'maintenance',
     children: [
       { kind: 'leaf', href: '/equipment?tab=maintenance', tab: 'maintenance', label: 'Maintenance', icon: Wrench,          cap: 'maintenance.access', module: 'maintenance' },
-      { kind: 'leaf', href: '/equipment?tab=inspections', tab: 'inspections', label: 'Inspections', icon: ClipboardCheck,  cap: 'maintenance.access', module: 'maintenance' },
-      { kind: 'leaf', href: '/equipment?tab=fuel',        tab: 'fuel',        label: 'Fuel',        icon: FuelIcon,        cap: 'maintenance.access', module: 'maintenance' },
+      { kind: 'leaf', href: '/equipment?tab=inspections', tab: 'inspections', label: 'Inspections', icon: ClipboardCheck,  cap: 'inspections.access', module: 'maintenance' },
+      { kind: 'leaf', href: '/equipment?tab=fuel',        tab: 'fuel',        label: 'Fuel',        icon: FuelIcon,        cap: 'fuel.access',        module: 'maintenance' },
     ],
   },
   { kind: 'leaf', href: '/payroll',     label: 'Payroll',        icon: Users,           cap: 'payroll.access',    module: 'payroll' },

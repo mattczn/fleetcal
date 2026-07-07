@@ -29,12 +29,14 @@ import type { ListDriverScoresResponse, DriverScore, ApiErrorResponse } from "@f
 import { supabase } from "../lib/supabase.js";
 import { loadExcludedDrivers } from "../lib/reportExclusions.js";
 import type { AuthVariables } from "../middleware/clerk.js";
-import { requireTruckHistoryOrg } from "../middleware/require.js";
+import { requireTruckHistoryOrg, requireCapability } from "../middleware/require.js";
 
 const scoring = new Hono<{ Variables: AuthVariables }>();
 
-// Curzon-only, same gate as the Truck History module. 404 on denial.
-scoring.use("*", requireTruckHistoryOrg);
+// Curzon-only (404 on denial), AND requires the per-role scorecard.access
+// capability — so a maintenance user in an internal org still can't pull
+// driver scores unless an admin grants it in the Role Permissions matrix.
+scoring.use("*", requireTruckHistoryOrg, requireCapability("scorecard.access"));
 
 // ── Score weights (tune here) ─────────────────────────────────────────────
 const BONUS_THRESHOLD = 85; // score needed to be bonus-eligible

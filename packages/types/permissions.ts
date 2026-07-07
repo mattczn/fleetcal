@@ -157,15 +157,22 @@ export type Capability =
   | "payroll.adjust"
   | "payroll.finalize"
 
-  // Maintenance / fuel — Maintenance role's home turf
+  // Maintenance / fuel — Maintenance role's home turf. Equipment sub-tabs
+  // (Inspections, Fuel) are separately gated so a role can have one without
+  // the other.
   | "maintenance.access"
   | "maintenance.edit"
+  | "inspections.access"
   | "fuel.access"
   | "fuel.edit"
 
-  // Dashboard / reports
+  // Dashboard / reports / scorecard
   | "dashboard.access"
   | "reports.access"
+  // Per-driver inspection scorecard (Equipment → Scorecard tab). Distinct
+  // from the module surfaces so it can be withheld from a role that
+  // otherwise manages equipment (e.g. maintenance shouldn't grade drivers).
+  | "scorecard.access"
 
   // CRM — INTERNAL sales tooling (FMCSA leads, outreach, call queue).
   // Admin-only by default; grant `crm.access` to dispatcher via
@@ -195,9 +202,9 @@ const ALL_CAPS: Capability[] = [
   "closeout.access", "closeout.release", "closeout.flag",
   "accounting.access", "accounting.send_invoice",
   "payroll.access", "payroll.adjust", "payroll.finalize",
-  "maintenance.access", "maintenance.edit",
+  "maintenance.access", "maintenance.edit", "inspections.access",
   "fuel.access", "fuel.edit",
-  "dashboard.access", "reports.access",
+  "dashboard.access", "reports.access", "scorecard.access",
   "crm.access", "crm.manage",
 ];
 
@@ -223,9 +230,9 @@ export const ROLE_CAPABILITIES: Record<OrgRole, ReadonlySet<Capability>> = {
     "savedLocations.create", "savedLocations.edit",
     "dispatchers.create", "dispatchers.edit",
     "closeout.access", "closeout.release", "closeout.flag",
-    "maintenance.access", "maintenance.edit",
+    "maintenance.access", "maintenance.edit", "inspections.access",
     "fuel.access", "fuel.edit",
-    "reports.access",
+    "reports.access", "scorecard.access",
   ]),
 
   // Maintenance: equipment-focused. Home turf is the Equipment module
@@ -241,7 +248,10 @@ export const ROLE_CAPABILITIES: Record<OrgRole, ReadonlySet<Capability>> = {
     "loads.view",
     "assets.view", "trailers.view",
     "maintenance.access", "maintenance.edit",
+    "inspections.access",
     "fuel.access", "fuel.edit",
+    // NOT scorecard.access — maintenance manages equipment but doesn't
+    // grade drivers. Admin can grant it per-org in the matrix.
   ]),
 };
 
@@ -321,8 +331,10 @@ export const CAPABILITY_CATALOG: CapabilityInfo[] = [
   { cap: "closeout.access",   label: "Paperwork",     group: "Module access", hint: "POD verification + flag queue." },
   { cap: "accounting.access", label: "Billing",       group: "Module access", hint: "Invoice list, send/void, payment status." },
   { cap: "payroll.access",    label: "Payroll",       group: "Module access", hint: "Per-driver weekly pay + adjustments." },
-  { cap: "fuel.access",       label: "Fuel",          group: "Module access" },
-  { cap: "maintenance.access", label: "Maintenance",  group: "Module access" },
+  { cap: "maintenance.access", label: "Maintenance",  group: "Module access", hint: "Equipment → Maintenance tab: work orders + defects." },
+  { cap: "inspections.access", label: "Inspections",  group: "Module access", hint: "Equipment → Inspections tab: driver-submitted pre/post-trip inspections." },
+  { cap: "fuel.access",       label: "Fuel",          group: "Module access", hint: "Equipment → Fuel tab: fuel-up reports + card spend." },
+  { cap: "scorecard.access",  label: "Scorecard",     group: "Module access", hint: "Equipment → Scorecard tab: per-driver inspection scores. Off for Maintenance by default." },
   { cap: "reports.access",    label: "Reports",       group: "Module access", hint: "LoadsReport + future custom-report endpoints." },
   { cap: "drivers.view",      label: "Drivers",       group: "Module access", hint: "Per-driver performance scorecards page. Also gates seeing driver names across the app — turning it off hides them in equipment history too." },
 
