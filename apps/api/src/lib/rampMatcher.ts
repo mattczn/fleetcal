@@ -43,7 +43,7 @@ interface AssetForMatch {
 }
 interface TrailerForMatch {
   id: number;
-  unit: string | null;
+  unit: string | null;         // aliased from trailers.trailer_number for a shared matcher shape
   vin: string | null;
   license_plate: string | null;
 }
@@ -76,7 +76,7 @@ export async function loadRampMatchInputs(orgId: string): Promise<RampMatchInput
       .eq("org_id", orgId),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (supabase as any).from("trailers")
-      .select("id, unit, vin, license_plate")
+      .select("id, trailer_number, vin, license_plate")
       .eq("org_id", orgId),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (supabase as any).from("driver_asset_prefs")
@@ -110,9 +110,18 @@ export async function loadRampMatchInputs(orgId: string): Promise<RampMatchInput
       last_name:  driverById.get(p.driver_id!)?.last_name  ?? null,
     }));
 
+  const trailerRows = (trailersRes.data ?? []) as Array<{
+    id: number; trailer_number: string | null;
+    vin: string | null; license_plate: string | null;
+  }>;
   return {
     assets: (assetsRes.data ?? []) as AssetForMatch[],
-    trailers: (trailersRes.data ?? []) as TrailerForMatch[],
+    trailers: trailerRows.map(t => ({
+      id: t.id,
+      unit: t.trailer_number,
+      vin: t.vin,
+      license_plate: t.license_plate,
+    })),
     driverPrefs,
   };
 }
