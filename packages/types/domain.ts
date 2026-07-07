@@ -1434,6 +1434,11 @@ export interface RampTransaction {
   trailerId?:             number;
   assetLinkSource:        RampAssetLinkSource;
 
+  /** Sub-categorization the /expenses page drives. Nullable — the
+   *  canonical set is still being decided; auto-mapping from
+   *  skCategoryName lands in Phase B. */
+  expenseCategory?:       string;
+
   matchStatus:            RampTransactionMatchStatus;
   matchConfidence?:       number;
   matchNotes?:            string;

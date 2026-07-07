@@ -167,6 +167,13 @@ export type Capability =
   | "fuel.access"
   | "fuel.edit"
 
+  // Expenses dashboard — federated view over fuel/payroll/card spend.
+  // Same reader-only stance as dashboard.access: viewing rollups doesn't
+  // grant edit rights on the underlying tables. Reassigning a card
+  // txn to an asset still uses this cap (it's a light categorization
+  // action, not a mutation of the money).
+  | "expenses.access"
+
   // Dashboard / reports / scorecard
   | "dashboard.access"
   | "reports.access"
@@ -205,6 +212,7 @@ const ALL_CAPS: Capability[] = [
   "payroll.access", "payroll.adjust", "payroll.finalize",
   "maintenance.access", "maintenance.edit", "inspections.access",
   "fuel.access", "fuel.edit",
+  "expenses.access",
   "dashboard.access", "reports.access", "scorecard.access",
   "crm.access", "crm.manage",
 ];
@@ -233,6 +241,7 @@ export const ROLE_CAPABILITIES: Record<OrgRole, ReadonlySet<Capability>> = {
     "closeout.access", "closeout.release", "closeout.flag",
     "maintenance.access", "maintenance.edit", "inspections.access",
     "fuel.access", "fuel.edit",
+    "expenses.access",
     "reports.access", "scorecard.access",
   ]),
 
@@ -251,6 +260,7 @@ export const ROLE_CAPABILITIES: Record<OrgRole, ReadonlySet<Capability>> = {
     "maintenance.access", "maintenance.edit",
     "inspections.access",
     "fuel.access", "fuel.edit",
+    "expenses.access",
     // NOT scorecard.access — maintenance manages equipment but doesn't
     // grade drivers. Admin can grant it per-org in the matrix.
   ]),
@@ -335,6 +345,7 @@ export const CAPABILITY_CATALOG: CapabilityInfo[] = [
   { cap: "maintenance.access", label: "Maintenance",  group: "Module access", hint: "Equipment → Maintenance tab: work orders + defects." },
   { cap: "inspections.access", label: "Inspections",  group: "Module access", hint: "Equipment → Inspections tab: driver-submitted pre/post-trip inspections." },
   { cap: "fuel.access",       label: "Fuel",          group: "Module access", hint: "Equipment → Fuel tab: fuel-up reports + card spend." },
+  { cap: "expenses.access",   label: "Expenses",      group: "Module access", hint: "Cross-source expenses dashboard (fuel + payroll + card spend rollups). Also gates the Ramp card-transaction board." },
   { cap: "scorecard.access",  label: "Scorecard",     group: "Module access", hint: "Equipment → Scorecard tab: per-driver inspection scores. Off for Maintenance by default." },
   { cap: "reports.access",    label: "Reports",       group: "Module access", hint: "LoadsReport + future custom-report endpoints." },
   { cap: "drivers.view",      label: "Drivers",       group: "Module access", hint: "Per-driver performance scorecards page. Also gates seeing driver names across the app — turning it off hides them in equipment history too." },

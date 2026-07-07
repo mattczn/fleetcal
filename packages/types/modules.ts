@@ -50,7 +50,9 @@ export type OrgModule =
   | "relay_advanced"     // gates relay handoff photo documentation (basic relay logic stays in StopsSection)
   | "invoicing_advanced" // gates the Advanced section in Settings → Invoicing (custom From-address, remit-to instructions, invoice-number prefix, footer notes, email template overrides). OFF for MVP — defaults work end-to-end. Carriers that want a custom invoice template or a verified domain flip this on per-org.
   // ── Internal-only modules (2026-07-02) ──────────────────────────────
-  | "crm";               // INTERNAL sales tooling (FMCSA lead ingest, outreach, call queue). Never for customer orgs — default-OFF (see DEFAULT_OFF_MODULES) and double-gated by the internal-org allowlist on both API and web.
+  | "crm"                // INTERNAL sales tooling (FMCSA lead ingest, outreach, call queue). Never for customer orgs — default-OFF (see DEFAULT_OFF_MODULES) and double-gated by the internal-org allowlist on both API and web.
+  // ── Cross-source spend surfaces (2026-07-07) ────────────────────────
+  | "expenses";          // /expenses dashboard + Ramp card spend surface. Federated view over fuel_transactions, payroll_records, and ramp_transactions; buckets grow as more sources integrate (equipment depreciation, tolls, insurance).
 
 export const ORG_MODULES: readonly OrgModule[] = [
   "closeout",
@@ -69,6 +71,7 @@ export const ORG_MODULES: readonly OrgModule[] = [
   "relay_advanced",
   "invoicing_advanced",
   "crm",
+  "expenses",
 ] as const;
 
 /** Display labels (singular). Used in Settings → Modules toggles
@@ -90,6 +93,7 @@ export const ORG_MODULE_LABEL: Record<OrgModule, string> = {
   relay_advanced:     "Relay handoff documentation",
   invoicing_advanced: "Advanced invoicing",
   crm:                "Sales CRM (internal)",
+  expenses:           "Expenses dashboard",
 };
 
 /** Short description for the Settings → Modules toggle UI. */
@@ -110,6 +114,7 @@ export const ORG_MODULE_BLURB: Record<OrgModule, string> = {
   relay_advanced:     "Photo upload + handoff documentation for relay-leg pickups (basic relay routing is included in core).",
   invoicing_advanced: "Advanced invoice template tweaks — custom From-address (own verified domain), remit-to block, invoice-number prefix, footer notes, outbound email template overrides. Defaults work end-to-end without this.",
   crm:                "FleetCal-internal sales tooling — FMCSA lead ingest, outreach sequences, call queue. Not a customer feature.",
+  expenses:           "Cross-source expenses dashboard (fuel + payroll + card spend) with per-bucket rollups and the Ramp card-transaction board.",
 };
 
 // ── Check API ─────────────────────────────────────────────────────

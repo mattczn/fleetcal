@@ -74,6 +74,7 @@ import type {
   ListRampTransactionsRequest, ListRampTransactionsResponse,
   MatchRampTransactionRequest, MatchRampTransactionResponse,
   MarkRampNotApplicableResponse, RunRampSyncResponse,
+  ExpensesSummaryResponse, ExpensesActivityResponse,
   ListMaintenanceReportsQuery, ListMaintenanceReportsResponse,
   GetMaintenanceReportResponse,
   UpdateMaintenanceReportRequest, UpdateMaintenanceReportResponse,
@@ -1455,6 +1456,24 @@ class RailwayClient {
 
   runRampSync() {
     return this.req<RunRampSyncResponse>('POST', `/v1/ramp-transactions/sync`);
+  }
+
+  // ── /expenses dashboard ─────────────────────────────────────────────
+  getExpensesSummary(query: { from?: string; to?: string } = {}) {
+    const qs = new URLSearchParams();
+    if (query.from) qs.set('from', query.from);
+    if (query.to)   qs.set('to',   query.to);
+    const s = qs.toString();
+    return this.req<ExpensesSummaryResponse>('GET', `/v1/expenses/summary${s ? `?${s}` : ''}`);
+  }
+
+  getExpensesActivity(query: { from?: string; to?: string; limit?: number } = {}) {
+    const qs = new URLSearchParams();
+    if (query.from)          qs.set('from',  query.from);
+    if (query.to)            qs.set('to',    query.to);
+    if (query.limit != null) qs.set('limit', String(query.limit));
+    const s = qs.toString();
+    return this.req<ExpensesActivityResponse>('GET', `/v1/expenses/activity${s ? `?${s}` : ''}`);
   }
 
   /** Pull fuel transactions from the Mudflap Carriers API for the date

@@ -23,7 +23,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { createPortal } from 'react-dom';
 import { useOrganization } from '@clerk/nextjs';
 import {
-  Package, Wrench, ClipboardCheck, Fuel as FuelIcon, CreditCard,
+  Package, Wrench, ClipboardCheck, Fuel as FuelIcon,
   Camera, Loader2, MapPin, X, Clock, User, Truck, FileText, ExternalLink, Check, Trash2,
   ChevronLeft, ChevronRight, ChevronDown, CalendarDays, List as ListIcon, AlertCircle, CheckCircle2,
   Calendar, Plus, Info, History as HistoryIcon, Sun, Moon, Flag, EyeOff, Trophy,
@@ -48,7 +48,6 @@ import {
 import { PeriodSelector } from '@/components/ui/PeriodSelector';
 import { StyledSelect } from '@/components/ui/StyledSelect';
 import { AssetSelect } from '@/components/calendar/AssetSelect';
-import CardSpendTabContent from './CardSpendTabContent';
 import DatePicker from '@/components/calendar/DatePicker';
 import { LOAD_ACCENT } from '@/lib/loadAccent';
 import { type Period, getPeriodRange, defaultCustomRangeISO } from '@/lib/periodRange';
@@ -78,7 +77,7 @@ type InspectionRow = {
   signedBy: string;
 };
 
-type Tab = 'maintenance' | 'inspections' | 'fuel' | 'cardspend' | 'history' | 'scorecard';
+type Tab = 'maintenance' | 'inspections' | 'fuel' | 'history' | 'scorecard';
 
 // MediaList — every photo for the currently-open report, grouped by
 // source (defect item, general, etc.) so the side-panel can show
@@ -133,6 +132,15 @@ export default function EquipmentPage() {
 
 function EquipmentPageInner() {
   const searchParams = useSearchParams();
+  const legacyRedirectRouter = useRouter();
+  // Legacy deep link: /equipment?tab=cardspend was retired when Card
+  // Spend moved to /expenses/cards. Bounce anything landing here from
+  // an old bookmark before the tab-init logic runs.
+  useEffect(() => {
+    if (searchParams?.get('tab') === 'cardspend') {
+      legacyRedirectRouter.replace('/expenses/cards');
+    }
+  }, [searchParams, legacyRedirectRouter]);
   // Internal-org gate for the Curzon-only "Truck History" module — same
   // idiom as the CRM nav. isInternalOrg(undefined) is false during Clerk
   // hydration, so customer orgs never see even a flicker of the tab.
@@ -147,7 +155,6 @@ function EquipmentPageInner() {
       case 'maintenance': return can('maintenance.access');
       case 'inspections': return can('inspections.access');
       case 'fuel':        return can('fuel.access');
-      case 'cardspend':   return true;
       case 'history':     return showHistory;
       case 'scorecard':   return showHistory && can('scorecard.access');
       default:            return false;
@@ -155,7 +162,7 @@ function EquipmentPageInner() {
   }, [can, showHistory]);
   const initialTab = (() => {
     const t = searchParams?.get('tab');
-    if (t === 'fuel' || t === 'maintenance' || t === 'inspections' || t === 'cardspend') return t;
+    if (t === 'fuel' || t === 'maintenance' || t === 'inspections') return t;
     if ((t === 'history' || t === 'scorecard') && showHistory) return t;
     return 'maintenance';
   })();
@@ -168,7 +175,7 @@ function EquipmentPageInner() {
   // future deep link that switches tabs while the page is mounted.
   useEffect(() => {
     const t = searchParams?.get('tab');
-    if (t === 'fuel' || t === 'maintenance' || t === 'inspections' || t === 'cardspend') {
+    if (t === 'fuel' || t === 'maintenance' || t === 'inspections') {
       setTab(t);
     } else if ((t === 'history' || t === 'scorecard') && showHistory) {
       setTab(t);
@@ -179,7 +186,7 @@ function EquipmentPageInner() {
   // deep-linking ?tab=scorecard), bounce to the first tab they can see.
   useEffect(() => {
     if (permsLoading || tabAllowed(tab)) return;
-    const order: Tab[] = ['maintenance', 'inspections', 'fuel', 'cardspend', 'history', 'scorecard'];
+    const order: Tab[] = ['maintenance', 'inspections', 'fuel', 'history', 'scorecard'];
     const first = order.find(tabAllowed);
     if (first) setTab(first);
   }, [tab, permsLoading, tabAllowed]);
@@ -376,9 +383,6 @@ function EquipmentPageInner() {
             {tabAllowed('fuel') && (
               <TabButton active={tab === 'fuel'}        onClick={() => setTab('fuel')}        icon={<FuelIcon size={15} />}       label="Fuel" />
             )}
-            {tabAllowed('cardspend') && (
-              <TabButton active={tab === 'cardspend'}   onClick={() => setTab('cardspend')}   icon={<CreditCard size={15} />}     label="Card Spend" />
-            )}
             {tabAllowed('history') && (
               <TabButton active={tab === 'history'} onClick={() => setTab('history')} icon={<HistoryIcon size={15} />} label="History" />
             )}
@@ -429,14 +433,6 @@ function EquipmentPageInner() {
             panel={panel}
             setPanel={setPanel}
             reloadVersion={fuelDataVersion}
-          />
-        )}
-        {tab === 'cardspend' && (
-          <CardSpendTabContent
-            assets={assets}
-            trailers={trailers}
-            assetLabelById={assetLabelById}
-            trailerLabelById={trailerLabelById}
           />
         )}
         {tab === 'history' && showHistory && (

@@ -38,6 +38,7 @@ const TX_COLS = [
   "cardholder_ramp_user_id", "cardholder_name", "cardholder_email",
   "card_id", "card_last4",
   "asset_id", "trailer_id", "asset_link_source",
+  "expense_category",
   "match_status", "match_confidence", "match_notes",
   "matched_at", "matched_by",
   "created_at", "updated_at",
@@ -64,6 +65,7 @@ interface RampTransactionRow {
   asset_id:                 number | null;
   trailer_id:               number | null;
   asset_link_source:        string;
+  expense_category:         string | null;
   match_status:             string;
   match_confidence:         number | null;
   match_notes:              string | null;
@@ -95,6 +97,7 @@ function rowToTx(r: RampTransactionRow): RampTransaction {
     assetId:                r.asset_id               ?? undefined,
     trailerId:              r.trailer_id             ?? undefined,
     assetLinkSource:        r.asset_link_source as RampAssetLinkSource,
+    expenseCategory:        r.expense_category ?? undefined,
     matchStatus:            r.match_status as RampTransactionMatchStatus,
     matchConfidence:        r.match_confidence       ?? undefined,
     matchNotes:             r.match_notes            ?? undefined,
@@ -107,7 +110,7 @@ function rowToTx(r: RampTransactionRow): RampTransaction {
 
 const rampTx = new Hono<{ Variables: AuthVariables }>();
 
-rampTx.use("*", requireModule("maintenance"), requireCapability("maintenance.access"));
+rampTx.use("*", requireModule("expenses"), requireCapability("expenses.access"));
 
 // GET /v1/ramp-transactions — filterable list for the board.
 rampTx.get("/", async (c) => {

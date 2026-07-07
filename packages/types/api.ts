@@ -1580,6 +1580,44 @@ export interface RunRampSyncResponse {
   };
 }
 
+// ── /expenses dashboard ─────────────────────────────────────────────────
+
+/** One bucket in the /expenses summary. `total` and `count` are for the
+ *  requested period; `prevTotal` / `prevCount` are for the immediately-
+ *  prior window of equal length (for Δ callouts on the tile). Extra
+ *  bucket-specific signals go in `meta`. */
+export interface ExpenseBucket {
+  key:        'fuel' | 'payroll' | 'cards';
+  label:      string;
+  total:      number;
+  count:      number;
+  prevTotal:  number;
+  prevCount:  number;
+  meta?:      Record<string, number | string | null>;
+}
+
+export interface ExpensesSummaryResponse {
+  period: { from: string; to: string };
+  buckets: ExpenseBucket[];
+}
+
+/** Normalized event for the /expenses "Latest activity" feed. */
+export interface ExpenseEvent {
+  source:      'fuel' | 'payroll' | 'cards';
+  id:          string;
+  at:          string;       // ISO
+  amount:      number;
+  description: string;
+  assetId?:    number;
+  driverName?: string;
+  /** Where this event lives in the app so the row can link deep. */
+  href?:       string;
+}
+
+export interface ExpensesActivityResponse {
+  events: ExpenseEvent[];
+}
+
 // ── /v1/odometer-readings ───────────────────────────────────────────────
 //
 // Source-agnostic odometer storage. Backed by the motive_odometer_readings
