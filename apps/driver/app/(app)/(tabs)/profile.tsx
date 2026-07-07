@@ -19,8 +19,10 @@ import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
 import {
   LogOut, User, FileText, Trash2, X, Share2, Eye, Plus, Calendar as CalendarIcon, ChevronDown,
-  Pencil, Check,
+  Pencil, Check, Trophy, CheckCircle2,
 } from "lucide-react-native";
+import { useQuery } from "@tanstack/react-query";
+import { useModules } from "@/lib/useModules";
 import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
 import DateTimePicker from "@react-native-community/datetimepicker";
@@ -435,6 +437,9 @@ export default function ProfileScreen() {
             </View>
           ) : (
             <>
+              {/* Inspection score — Curzon-only; renders nothing otherwise */}
+              <ScorecardCard />
+
               {/* Appearance — in-app light/dark toggle */}
               <SectionHeader label="Appearance" />
               <Card>
@@ -878,6 +883,110 @@ function Card({ children }: { children: React.ReactNode }) {
     }}>
       {children}
     </View>
+  );
+}
+
+/** Inspection score — the driver's own read-only scorecard, so they can
+ *  monitor it and see how to improve. Curzon-only: gated on the Truck
+ *  History module and the endpoint's `enabled` flag, so it renders nothing
+ *  for orgs without it. Score = share of driving days with ≥1 inspection;
+ *  cleanliness is intentionally not part of it. */
+function ScorecardCard() {
+  const { C } = useTheme();
+  const { truckHistory } = useModules();
+  const { data, isLoading } = useQuery({
+    queryKey: ["driver-scorecard"],
+    queryFn:  () => railway.getScorecard(),
+    enabled:  truckHistory,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  if (!truckHistory) return null;
+  if (data && !data.enabled) return null;
+
+  const score     = data?.score ?? 0;
+  const eligible  = data?.bonusEligible ?? false;
+  const threshold = data?.bonusThreshold ?? 85;
+  const activeDays     = data?.activeDays ?? 0;
+  const inspectionDays = data?.inspectionDays ?? 0;
+  const completionPct  = data?.completionPct ?? 0;
+  const missedDays = Math.max(0, activeDays - inspectionDays);
+  const noData = activeDays === 0 && inspectionDays === 0;
+
+  const monthLabel = new Date(`${data?.to ?? new Date().toISOString().slice(0, 10)}T00:00:00`)
+    .toLocaleDateString(undefined, { month: "long", year: "numeric" });
+
+  const tone = eligible
+    ? { fg: C.greenInk, bg: C.greenBg, bar: C.green }
+    : score >= 60
+      ? { fg: C.amberInk, bg: C.amberBg, bar: C.amber }
+      : { fg: C.redInk, bg: C.redBg, bar: C.red };
+
+  return (
+    <>
+      <SectionHeader label="Inspection score" />
+      <Card>
+        {isLoading && !data ? (
+          <View style={{ paddingVertical: 20, alignItems: "center" }}>
+            <ActivityIndicator />
+          </View>
+        ) : noData ? (
+          <View style={{ paddingVertical: 12 }}>
+            <Text style={[txt(500), { fontSize: 12, color: C.t3 }]}>{monthLabel}</Text>
+            <Text style={[txt(600), { fontSize: 13.5, color: C.t2, marginTop: 6, lineHeight: 19 }]}>
+              No driving days recorded yet this month. Your inspection score appears here once
+              you&rsquo;re back on the road.
+            </Text>
+          </View>
+        ) : (
+          <View style={{ paddingVertical: 6 }}>
+            {/* Score + bonus badge */}
+            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+              <View>
+                <Text style={[txt(500), { fontSize: 12, color: C.t3 }]}>{monthLabel}</Text>
+                <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 4, marginTop: 2 }}>
+                  <Text style={[txt(800), { fontSize: 40, color: tone.fg, letterSpacing: -1 }]}>{score}</Text>
+                  <Text style={[txt(700), { fontSize: 16, color: C.t3, marginBottom: 7 }]}>/100</Text>
+                </View>
+              </View>
+              <View style={{
+                flexDirection: "row", alignItems: "center", gap: 6,
+                paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, backgroundColor: tone.bg,
+              }}>
+                {eligible
+                  ? <CheckCircle2 size={16} color={tone.fg} strokeWidth={2.4} />
+                  : <Trophy size={15} color={tone.fg} strokeWidth={2.2} />}
+                <Text style={[txt(700), { fontSize: 12.5, color: tone.fg }]}>
+                  {eligible ? "Bonus eligible" : "Not yet"}
+                </Text>
+              </View>
+            </View>
+
+            {/* Completion bar */}
+            <View style={{ height: 8, borderRadius: 999, backgroundColor: C.surfaceSunk, marginTop: 14, overflow: "hidden" }}>
+              <View style={{ width: `${completionPct}%`, height: "100%", borderRadius: 999, backgroundColor: tone.bar }} />
+            </View>
+            <Text style={[txt(500), { fontSize: 12.5, color: C.t2, marginTop: 8 }]}>
+              Inspections on {inspectionDays} of {activeDays} driving days ({completionPct}%)
+            </Text>
+
+            {/* How to improve */}
+            <View style={{ marginTop: 12, padding: 12, borderRadius: 10, backgroundColor: C.surfaceSunk }}>
+              <Text style={[txt(700), { fontSize: 12.5, color: C.t1, marginBottom: 3 }]}>
+                {eligible ? "You're on track" : "How to improve"}
+              </Text>
+              <Text style={[txt(500), { fontSize: 12.5, color: C.t2, lineHeight: 18 }]}>
+                {eligible
+                  ? `Keep submitting at least one inspection every day you drive to stay above ${threshold}.`
+                  : missedDays > 0
+                    ? `Submit at least one inspection — pre-trip or post-trip — every day you drive. You missed ${missedDays} day${missedDays === 1 ? "" : "s"} this month. Reach ${threshold} to qualify for the bonus.`
+                    : `Submit at least one inspection — pre-trip or post-trip — every day you drive to reach ${threshold} and qualify for the bonus.`}
+              </Text>
+            </View>
+          </View>
+        )}
+      </Card>
+    </>
   );
 }
 

@@ -19,6 +19,7 @@ import {
   type OrgModuleFlags,
   MVP_LAUNCH_DEFAULTS,
   isModuleEnabled,
+  type DriverScorecardResponse,
 } from "@fleetcal/types";
 
 import { supabase } from "../lib/supabase.js";
@@ -803,6 +804,83 @@ driver.get("/org-settings", async (c) => {
   // "Post-Trip Inspection" surfaces in the driver app.
   const truckHistoryEnabled = isTruckHistoryOrg(orgId);
   return c.json({ settings: { showDriverPay, timezone, driverUploadKinds, modules, truckHistoryEnabled } });
+});
+
+// GET /v1/driver/scorecard — the signed-in driver's own inspection score for
+// the month to date. Same completion math as the dispatcher /v1/driver-scoring
+// (inspection days ÷ on-road days, ≥1 inspection covers a day), scoped to this
+// driver. Cleanliness is intentionally NOT part of the score. Gated to the
+// Truck History module — other orgs get enabled:false and render nothing.
+const SCORECARD_BONUS_THRESHOLD = 85; // keep in sync with driver-scoring.ts
+driver.get("/scorecard", async (c) => {
+  const driverId = c.get("driverId");
+  const orgId    = c.get("orgId");
+
+  const now = new Date();
+  const to   = now.toISOString().slice(0, 10);
+  const from = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString().slice(0, 10);
+
+  if (!isTruckHistoryOrg(orgId)) {
+    const off: DriverScorecardResponse = {
+      enabled: false, from, to,
+      activeDays: 0, inspectionDays: 0, preTrips: 0, postTrips: 0,
+      completionPct: 0, score: 0, bonusEligible: false, bonusThreshold: SCORECARD_BONUS_THRESHOLD,
+    };
+    return c.json(off);
+  }
+
+  const fromTs = `${from}T00:00:00.000Z`;
+  const toTs   = `${to}T23:59:59.999Z`;
+
+  const [inspRes, evRes] = await Promise.all([
+    sbAny
+      .from("inspection_reports")
+      .select("kind,inspection_date")
+      .eq("org_id", orgId)
+      .eq("driver_id", driverId)
+      .gte("inspection_date", from)
+      .lte("inspection_date", to),
+    supabase
+      .from("events")
+      .select("start")
+      .eq("org_id", orgId)
+      .eq("driver_id", driverId)
+      .gte("start", fromTs)
+      .lte("start", toTs)
+      .limit(2000),
+  ]);
+  if (inspRes.error || evRes.error) {
+    console.error("[GET /v1/driver/scorecard] failed:", inspRes.error ?? evRes.error);
+    return c.json({ error: "fetch_failed" }, 500);
+  }
+
+  const inspections = (inspRes.data ?? []) as Array<{ kind: string | null; inspection_date: string }>;
+  const events      = (evRes.data ?? []) as Array<{ start: string }>;
+
+  const activeDaySet = new Set<string>();
+  for (const ev of events) activeDaySet.add(ev.start.slice(0, 10));
+  const inspectionDaySet = new Set<string>();
+  let preTrips = 0, postTrips = 0;
+  for (const insp of inspections) {
+    inspectionDaySet.add(insp.inspection_date); // ≥1 inspection covers the day
+    if (insp.kind === "pre_trip") preTrips++;
+    else if (insp.kind === "post_trip") postTrips++;
+  }
+  const activeDays = activeDaySet.size;
+  const inspectionDays = inspectionDaySet.size;
+  const completionPct = activeDays > 0
+    ? Math.max(0, Math.min(100, Math.round((inspectionDays / activeDays) * 100)))
+    : (inspectionDays > 0 ? 100 : 0);
+  const score = completionPct;
+
+  const res: DriverScorecardResponse = {
+    enabled: true, from, to,
+    activeDays, inspectionDays, preTrips, postTrips,
+    completionPct, score,
+    bonusEligible: score >= SCORECARD_BONUS_THRESHOLD,
+    bonusThreshold: SCORECARD_BONUS_THRESHOLD,
+  };
+  return c.json(res);
 });
 
 // POD + BOL are operationally required for trucking workflows — proof

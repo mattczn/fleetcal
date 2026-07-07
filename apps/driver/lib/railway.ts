@@ -261,6 +261,9 @@ export const railway = {
       };
     }>("GET", "/v1/driver/org-settings");
   },
+  getScorecard() {
+    return req<import("@fleetcal/types").DriverScorecardResponse>("GET", "/v1/driver/scorecard");
+  },
   listAssets() {
     return req<{
       assets: { id: number; name: string; unit?: string; truck?: string; color: string; type: string }[];

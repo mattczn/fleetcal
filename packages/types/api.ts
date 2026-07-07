@@ -955,6 +955,24 @@ export interface ListDriverScoresResponse {
   weights: { bonusThreshold: number };
 }
 
+// GET /v1/driver/scorecard — the signed-in driver's own inspection score for
+// the current month. Same math as the dispatcher scorecard, scoped to them.
+// `enabled` is false when the org lacks the Truck History module, so the app
+// simply doesn't render the card.
+export interface DriverScorecardResponse {
+  enabled: boolean;
+  from: string;
+  to: string;
+  activeDays: number;
+  inspectionDays: number;
+  preTrips: number;
+  postTrips: number;
+  completionPct: number;
+  score: number;
+  bonusEligible: boolean;
+  bonusThreshold: number;
+}
+
 // Query params:
 //   driverName  — required when listing
 //   weekStart?  — filter to a single week
