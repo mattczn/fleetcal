@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Plus, Layers, Truck, Users, Container, Menu, Settings } from 'lucide-react';
 import Link from 'next/link';
 import Image from 'next/image';
@@ -335,24 +335,50 @@ function PageNavSection() {
 
   // Drop Calendar (you're already on it — the brand header is the "here" cue).
   const items = PRIMARY_NAV.filter(it => it.href !== '/calendar' && allowed(it));
-  if (items.length === 0) return null;
 
+  // Collapsible groups (Equipment). Auto-open when you're actually on the
+  // group's route; otherwise collapsed until you click the chevron — same as
+  // AppSidebar, so it isn't stuck open on the calendar.
+  const onEquipment = pathname?.startsWith('/equipment') ?? false;
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    if (onEquipment) setOpenGroups(prev => ({ ...prev, '/equipment': true }));
+  }, [onEquipment]);
+
+  if (items.length === 0) return null;
   const eqTab = searchParams?.get('tab') ?? 'maintenance';
 
   return (
     <div className="flex-1 overflow-y-auto p-3 space-y-0.5">
       {items.map(item => {
         if (item.kind === 'group') {
-          const onGroup = !!pathname?.startsWith(item.href.split('?')[0]);
+          const groupKey = item.href.split('?')[0]; // '/equipment'
+          const onGroup = !!pathname?.startsWith(groupKey);
+          const open = openGroups[groupKey] ?? onGroup;
           return (
             <div key={item.href} className="space-y-0.5">
-              <RailLink href={item.href} label={item.label} Icon={item.icon} active={onGroup} trailingChevron />
-              <div className="pl-3 space-y-0.5">
-                {item.children.filter(allowed).map(child => (
-                  <RailLink key={child.href} href={child.href} label={child.label} Icon={child.icon}
-                    active={onGroup && eqTab === child.tab} />
-                ))}
+              {/* Label navigates; the chevron (separate hit target) toggles. */}
+              <div className="relative flex items-center">
+                <RailLink href={item.href} label={item.label} Icon={item.icon} active={onGroup} className="flex-1" />
+                <button
+                  type="button"
+                  aria-label={open ? 'Collapse Equipment' : 'Expand Equipment'}
+                  onClick={() => setOpenGroups(prev => ({ ...prev, [groupKey]: !open }))}
+                  className="absolute right-1 p-1.5 rounded-md transition-colors"
+                  style={{ color: 'var(--gc-text-3)' }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                  {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                </button>
               </div>
+              {open && (
+                <div className="pl-3 space-y-0.5">
+                  {item.children.filter(allowed).map(child => (
+                    <RailLink key={child.href} href={child.href} label={child.label} Icon={child.icon}
+                      active={onGroup && eqTab === child.tab} />
+                  ))}
+                </div>
+              )}
             </div>
           );
         }
@@ -365,17 +391,17 @@ function PageNavSection() {
   );
 }
 
-function RailLink({ href, label, Icon, active, trailingChevron }: {
+function RailLink({ href, label, Icon, active, className }: {
   href: string;
   label: string;
   Icon: React.ComponentType<{ size?: number; style?: React.CSSProperties }>;
   active: boolean;
-  trailingChevron?: boolean;
+  className?: string;
 }) {
   return (
     <Link
       href={href}
-      className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors"
+      className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${className ?? 'w-full'}`}
       style={{
         color:      active ? 'var(--gc-blue)'        : 'var(--gc-text-1)',
         background: active ? 'var(--gc-blue-light)'  : 'transparent',
@@ -385,7 +411,6 @@ function RailLink({ href, label, Icon, active, trailingChevron }: {
       onMouseLeave={e => { if (!active) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}>
       <Icon size={16} style={{ color: active ? 'var(--gc-blue)' : 'var(--gc-text-2)' }} />
       <span className="flex-1">{label}</span>
-      {trailingChevron && <ChevronDown size={14} style={{ color: 'var(--gc-text-3)' }} />}
     </Link>
   );
 }
