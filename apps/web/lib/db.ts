@@ -198,8 +198,16 @@ export async function fetchBrokerLoads(_orgId: string, names: string[]): Promise
 }
 
 export async function fetchCustomers(_orgId: string): Promise<Customer[]> {
-  try { return (await railway.listCustomers()).customers; }
-  catch (err) { console.error('fetchCustomers:', err); return []; }
+  try {
+    // Alternate broker names ("aliases") are disabled. They were auto-populated
+    // by customer merges and then matched against load broker names, linking
+    // loads to the wrong customer and rendering stray name badges. Strip them
+    // here — the single point where customers enter the web app — so every
+    // alias badge, "aka" label, and alias-based match reads an empty list.
+    // (Backend still stores the column; see the merge endpoint + data cleanup.)
+    const { customers } = await railway.listCustomers();
+    return customers.map(c => ({ ...c, aliases: [] }));
+  } catch (err) { console.error('fetchCustomers:', err); return []; }
 }
 
 export async function createCustomer(_orgId: string, c: Omit<Customer, 'id'>, force = false): Promise<Customer | null> {

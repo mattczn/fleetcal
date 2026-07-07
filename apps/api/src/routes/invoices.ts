@@ -293,7 +293,7 @@ async function buildSnapshot(
   // a broker — the user then had to manually re-pick from the
   // InvoiceDetailModal.
   //
-  // Conservative match: case-insensitive exact name OR exact alias.
+  // Conservative match: case-insensitive exact name.
   // We skip ambiguous matches (>1 customer matched) to avoid
   // silently picking the wrong broker. Backfilled to loads.customer_id
   // best-effort so future ops see the FK.
@@ -306,14 +306,11 @@ async function buildSnapshot(
     // per org) so the round-trip cost is negligible.
     const { data: candidateRows, error: candErr } = await supabase
       .from("customers")
-      .select("id,name,aliases")
+      .select("id,name")
       .eq("org_id", orgId);
     if (!candErr) {
-      const matches = ((candidateRows ?? []) as Array<{ id: string; name: string; aliases: string[] | null }>)
-        .filter(c =>
-          c.name.toLowerCase() === lower ||
-          (c.aliases ?? []).some(a => a.toLowerCase() === lower),
-        );
+      const matches = ((candidateRows ?? []) as Array<{ id: string; name: string }>)
+        .filter(c => c.name.toLowerCase() === lower);
       if (matches.length === 1) {
         load.customer_id = matches[0].id;
         // Best-effort backfill — don't fail invoice creation if the

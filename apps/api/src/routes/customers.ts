@@ -335,32 +335,10 @@ customers.post("/:id/merge", requireCapability("customers.edit"), async (c) => {
     return c.json({ error: "merge_failed", detail: iErr.message } satisfies ApiErrorResponse, 500);
   }
 
-  // Fold the source's name + short name + aliases into the target's
-  // alias list so future rate-con parsing still recognizes the old
-  // broker name. Dedup case-insensitively against the target's own name
-  // and existing aliases.
-  const have = new Set<string>([
-    target.name.trim().toLowerCase(),
-    ...(target.aliases ?? []).map((a) => a.trim().toLowerCase()),
-  ]);
-  const additions: string[] = [];
-  for (const cand of [source.name, source.short_name, ...(source.aliases ?? [])]) {
-    const v = (cand ?? "").trim();
-    if (!v) continue;
-    const lc = v.toLowerCase();
-    if (have.has(lc)) continue;
-    have.add(lc);
-    additions.push(v);
-  }
-  if (additions.length > 0) {
-    const merged = [...(target.aliases ?? []), ...additions];
-    const { error: aErr } = await sb
-      .from("customers")
-      .update({ aliases: merged })
-      .eq("id", targetId)
-      .eq("org_id", orgId);
-    if (aErr) console.error("[merge] alias fold failed (non-fatal):", aErr);
-  }
+  // Aliases are disabled: the merge intentionally no longer folds the
+  // source's name into the target's alias list. That auto-populated the
+  // alternate-name badges and mis-linked loads by matching broker text
+  // against an alias instead of the customer that was actually selected.
 
   // Source is no longer referenced anywhere — delete it.
   const { error: dErr } = await supabase
