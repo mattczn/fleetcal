@@ -94,13 +94,18 @@ interface RampPage {
 async function fetchAllTransactions(
   token: string, from: string, to: string,
 ): Promise<RampTransaction[]> {
+  // Ramp rejects date-only strings on from_date/to_date — it wants full
+  // ISO 8601 datetimes. We accept YYYY-MM-DD from the sweep and expand
+  // to start-of-day / end-of-day UTC here so callers don't need to care.
+  const fromDt = /T/.test(from) ? from : `${from}T00:00:00Z`;
+  const toDt   = /T/.test(to)   ? to   : `${to}T23:59:59Z`;
   const all: RampTransaction[] = [];
   const PAGE_SIZE = 100;
   let cursor: string | null = null;
   for (;;) {
     const url = new URL(`${RAMP_BASE}/transactions`);
-    url.searchParams.set("from_date", from);
-    url.searchParams.set("to_date",   to);
+    url.searchParams.set("from_date", fromDt);
+    url.searchParams.set("to_date",   toDt);
     url.searchParams.set("page_size", String(PAGE_SIZE));
     if (cursor) url.searchParams.set("start", cursor);
     const res = await fetch(url, {
