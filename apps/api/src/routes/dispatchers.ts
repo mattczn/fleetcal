@@ -57,7 +57,7 @@ function rowToDispatcher(r: DbDispatcherRow): Dispatcher {
 
 const ROW_COLUMNS = "id,first_name,last_name,hire_date,clerk_user_id,is_default,active";
 
-dispatchers.get("/", async (c) => {
+dispatchers.get("/", requireCapability("dispatchers.view"), async (c) => {
   const orgId = c.get("orgId");
   const { data, error } = await supabase
     .from("dispatchers")

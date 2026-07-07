@@ -90,7 +90,7 @@ function rowToCustomer(r: DbCustomerRow): Customer {
 
 const COLS = "id,name,short_name,aliases,mc_num,contact_name,contact_email,contact_phone,contacts,notes,parse_hints,invoice_method,invoice_email,invoice_portal,invoice_instructions,billing_address";
 
-customers.get("/", async (c) => {
+customers.get("/", requireCapability("customers.view"), async (c) => {
   const orgId = c.get("orgId");
   const { data, error } = await supabase
     .from("customers")

@@ -339,6 +339,8 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
               if (key === 'loadPrice' && !canDo('loads.view_price')) return [];
               if (key === 'totalBillable' && !canDo('loads.view_price')) return [];
               if (key === 'driverPay' && !canDo('loads.view_driver_pay')) return [];
+              if (key === 'driver' && !canDo('drivers.view')) return [];
+              if (key === 'broker' && !canDo('customers.view')) return [];
               const value = def.render(event, { driverLabel, customers });
               if (!value) return [];
               return [{ key, def, value }];

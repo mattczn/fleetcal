@@ -31,6 +31,7 @@ export default function AssetSidebar() {
   const [directoryTab, setDirectoryTab] = useState<DirectoryTab | null>(null);
   const [batchHovered, setBatchHovered] = useState(false);
   const { enabled: moduleEnabled } = useModules();
+  const { can } = usePermissions();
   const trailersOn = moduleEnabled('trailers');
 
   const openDirectory = (tab: DirectoryTab) => {
@@ -235,13 +236,19 @@ export default function AssetSidebar() {
           </button>
           {manageOpen && (
             <div className="pl-3 space-y-0.5">
-              <SubNavButton icon={Users}     label="Drivers"     onClick={() => openDirectory('drivers')} />
+              {can('drivers.view') && (
+                <SubNavButton icon={Users}   label="Drivers"     onClick={() => openDirectory('drivers')} />
+              )}
               <SubNavButton icon={Truck}     label="Trucks"      onClick={() => openDirectory('trucks')} />
               {trailersOn && (
                 <SubNavButton icon={Container} label="Trailers"  onClick={() => openDirectory('trailers')} />
               )}
-              <SubNavButton icon={Headset}   label="Dispatchers" onClick={() => openDirectory('dispatchers')} />
-              <SubNavButton icon={Building2} label="Customers"   onClick={() => openDirectory('customers')} />
+              {can('dispatchers.view') && (
+                <SubNavButton icon={Headset} label="Dispatchers" onClick={() => openDirectory('dispatchers')} />
+              )}
+              {can('customers.view') && (
+                <SubNavButton icon={Building2} label="Customers"  onClick={() => openDirectory('customers')} />
+              )}
               <SubNavButton icon={MapPin}    label="Locations"   onClick={() => openDirectory('locations')} />
             </div>
           )}

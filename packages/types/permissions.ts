@@ -141,6 +141,7 @@ export type Capability =
   | "savedLocations.create"
   | "savedLocations.edit"
   | "savedLocations.delete"
+  | "dispatchers.view"
   | "dispatchers.create"
   | "dispatchers.edit"
   | "dispatchers.delete"
@@ -198,7 +199,7 @@ const ALL_CAPS: Capability[] = [
   "assets.view", "assets.create", "assets.edit", "assets.delete",
   "trailers.view", "trailers.create", "trailers.edit", "trailers.delete",
   "savedLocations.create", "savedLocations.edit", "savedLocations.delete",
-  "dispatchers.create", "dispatchers.edit", "dispatchers.delete",
+  "dispatchers.view", "dispatchers.create", "dispatchers.edit", "dispatchers.delete",
   "closeout.access", "closeout.release", "closeout.flag",
   "accounting.access", "accounting.send_invoice",
   "payroll.access", "payroll.adjust", "payroll.finalize",
@@ -228,7 +229,7 @@ export const ROLE_CAPABILITIES: Record<OrgRole, ReadonlySet<Capability>> = {
     "assets.view", "assets.create", "assets.edit",
     "trailers.view", "trailers.create", "trailers.edit",
     "savedLocations.create", "savedLocations.edit",
-    "dispatchers.create", "dispatchers.edit",
+    "dispatchers.view", "dispatchers.create", "dispatchers.edit",
     "closeout.access", "closeout.release", "closeout.flag",
     "maintenance.access", "maintenance.edit", "inspections.access",
     "fuel.access", "fuel.edit",
@@ -387,6 +388,8 @@ export const CAPABILITY_CATALOG: CapabilityInfo[] = [
   { cap: "loads.view_driver_pay", label: "View driver pay", group: "Sensitive fields", hint: "Hides the Driver Pay column / field across reports, modals, and exports." },
   { cap: "loads.view_price",      label: "View load price", group: "Sensitive fields", hint: "Hides the load rate / revenue / total across the load modal, cards, dashboard, and reports." },
   { cap: "loads.view_rate_con",   label: "View rate confirmation", group: "Sensitive fields", hint: "Hides the rate confirmation PDF and the View PDF buttons on the load modal." },
+  { cap: "customers.view",        label: "View customers",  group: "Sensitive fields", hint: "Hides customer/broker names on calendar cards + the Customers directory. Off = the role can't see who the load is for." },
+  { cap: "dispatchers.view",      label: "View dispatchers", group: "Sensitive fields", hint: "Hides the Dispatchers directory + dispatcher names. Off = the role can't see who's dispatching." },
 
   // Sales (CRM) — internal FleetCal sales tooling. Only functions for
   // internal-allowlisted orgs (module + allowlist gated); shown here so an
