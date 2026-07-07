@@ -252,16 +252,18 @@ export default function AssetSidebar() {
               <SubNavButton icon={MapPin}    label="Locations"   onClick={() => openDirectory('locations')} />
             </div>
           )}
-          <Link
-            href="/settings"
-            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors"
-            style={{ color: 'var(--gc-text-2)' }}
-            onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
-            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-          >
-            <Settings size={16} />
-            Settings
-          </Link>
+          {can('loads.edit') && (
+            <Link
+              href="/settings"
+              className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors"
+              style={{ color: 'var(--gc-text-2)' }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+            >
+              <Settings size={16} />
+              Settings
+            </Link>
+          )}
         </div>
       </aside>
 
@@ -319,7 +321,7 @@ interface PageNavLink {
 
 const PAGE_NAV: PageNavLink[] = [
   { href: '/dashboard',  label: 'Dashboard',      icon: BarChart2,       cap: 'dashboard.access' },
-  { href: '/board',      label: 'Command Center', icon: LayoutDashboard, cap: 'loads.view',        module: 'dispatch_board' },
+  { href: '/board',      label: 'Command Center', icon: LayoutDashboard, cap: 'loads.edit',        module: 'dispatch_board' },
   // Display labels were "Closeout" / "Accounting" — renamed to
   // plain-language "Paperwork" / "Billing". URLs + capability
   // strings + module IDs stay unchanged so bookmarks, role configs,
