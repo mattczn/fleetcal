@@ -1,16 +1,18 @@
 'use client';
 
 import { useState, useRef } from 'react';
-import { Plus, Layers, Truck, Users, Container, Menu, Settings, BarChart2, LayoutDashboard, FileCheck2, Receipt, Package, Gauge } from 'lucide-react';
+import { Plus, Layers, Truck, Users, Container, Menu, Settings } from 'lucide-react';
 import Link from 'next/link';
 import Image from 'next/image';
-import { usePathname } from 'next/navigation';
+import { usePathname, useSearchParams } from 'next/navigation';
+import { useOrganization, useUser } from '@clerk/nextjs';
 import { useCalendarStore, BatchItem } from '@/store/useCalendarStore';
 import { usePermissions } from '@/lib/usePermissions';
 import { useModules } from '@/lib/useModules';
+import { isCrmUser, isInternalOrg } from '@/lib/internalOrg';
+import { PRIMARY_NAV, type NavItem } from '@/components/nav/AppSidebar';
 import DirectoryModal, { type DirectoryTab } from './DirectoryModal';
 import MiniCalendar from './MiniCalendar';
-import type { Capability, OrgModule } from '@fleetcal/types';
 import { ChevronRight, ChevronDown, Building2, MapPin, Headset } from 'lucide-react';
 
 export default function AssetSidebar() {
@@ -308,75 +310,83 @@ function SubNavButton({ icon: Icon, label, onClick }: {
 // Equipment links to the default Maintenance tab; users can switch
 // sub-tabs from inside the page.
 
-interface PageNavLink {
-  href:    string;
-  label:   string;
-  icon:    React.ComponentType<{ size?: number; style?: React.CSSProperties }>;
-  cap:     Capability;
-  module?: OrgModule;
-  /** Match by prefix when true (so /equipment?tab=fuel still highlights
-   *  the Equipment row). Default: exact pathname match. */
-  matchPrefix?: boolean;
-}
-
-const PAGE_NAV: PageNavLink[] = [
-  { href: '/dashboard',  label: 'Dashboard',      icon: BarChart2,       cap: 'dashboard.access' },
-  { href: '/board',      label: 'Command Center', icon: LayoutDashboard, cap: 'loads.edit',        module: 'dispatch_board' },
-  // Display labels were "Closeout" / "Accounting" — renamed to
-  // plain-language "Paperwork" / "Billing". URLs + capability
-  // strings + module IDs stay unchanged so bookmarks, role configs,
-  // and DB enum values keep working.
-  { href: '/closeout',   label: 'Paperwork',      icon: FileCheck2,      cap: 'closeout.access',   module: 'closeout' },
-  { href: '/accounting', label: 'Billing',        icon: Receipt,         cap: 'accounting.access', module: 'accounting' },
-  { href: '/equipment?tab=maintenance', label: 'Equipment', icon: Package, cap: 'maintenance.access', module: 'maintenance', matchPrefix: true },
-  { href: '/payroll',    label: 'Payroll',        icon: Users,           cap: 'payroll.access',    module: 'payroll' },
-  { href: '/drivers',    label: 'Drivers',        icon: Gauge,           cap: 'drivers.view',      module: 'performance' },
-];
+// The calendar rail's page nav reuses AppSidebar's PRIMARY_NAV directly
+// (imported above) so the two nav surfaces can never drift apart — this
+// list used to be a hand-maintained copy and kept falling out of sync
+// (Command Center gate, CRM, Equipment children). Calendar itself is
+// dropped since you're already on it. See PageNavSection below.
 
 function PageNavSection() {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const { can, isLoading } = usePermissions();
   const { enabled: moduleEnabled } = useModules();
+  const { organization } = useOrganization();
+  const { user } = useUser();
+  // CRM (internalOnly) shows only for internal-org CRM users — same gate as
+  // AppSidebar. isInternalOrg(undefined) is false during hydration → no flash.
+  const internal = isInternalOrg(organization?.id) && isCrmUser(user?.id);
 
-  // Same optimistic-render pattern AppSidebar uses — while perms are
-  // hydrating we show the full list rather than a flickering skeleton.
-  const visible = isLoading
-    ? PAGE_NAV
-    : PAGE_NAV.filter(l => can(l.cap) && (!l.module || moduleEnabled(l.module)));
+  const allowed = (it: NavItem): boolean =>
+    (!it.internalOnly || internal) &&
+    // Optimistic while perms hydrate (matches AppSidebar) — but internalOnly
+    // still applies so CRM never flashes for non-internal users.
+    (isLoading || (can(it.cap) && (!it.module || moduleEnabled(it.module))));
 
-  if (visible.length === 0) return null;
+  // Drop Calendar (you're already on it — the brand header is the "here" cue).
+  const items = PRIMARY_NAV.filter(it => it.href !== '/calendar' && allowed(it));
+  if (items.length === 0) return null;
+
+  const eqTab = searchParams?.get('tab') ?? 'maintenance';
 
   return (
-    <div
-      className="flex-1 overflow-y-auto p-3 space-y-0.5">
-      {visible.map(item => {
-        const Icon = item.icon;
-        const hrefPath = item.href.split('?')[0];
-        const active = item.matchPrefix
-          ? !!pathname?.startsWith(hrefPath)
-          : pathname === hrefPath;
+    <div className="flex-1 overflow-y-auto p-3 space-y-0.5">
+      {items.map(item => {
+        if (item.kind === 'group') {
+          const onGroup = !!pathname?.startsWith(item.href.split('?')[0]);
+          return (
+            <div key={item.href} className="space-y-0.5">
+              <RailLink href={item.href} label={item.label} Icon={item.icon} active={onGroup} trailingChevron />
+              <div className="pl-3 space-y-0.5">
+                {item.children.filter(allowed).map(child => (
+                  <RailLink key={child.href} href={child.href} label={child.label} Icon={child.icon}
+                    active={onGroup && eqTab === child.tab} />
+                ))}
+              </div>
+            </div>
+          );
+        }
         return (
-          <Link
-            key={item.href}
-            href={item.href}
-            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors"
-            style={{
-              color:      active ? 'var(--gc-blue)'        : 'var(--gc-text-1)',
-              background: active ? 'var(--gc-blue-light)'  : 'transparent',
-              fontWeight: active ? 600 : 500,
-            }}
-            onMouseEnter={e => {
-              if (!active) (e.currentTarget as HTMLElement).style.background = 'var(--gc-hover)';
-            }}
-            onMouseLeave={e => {
-              if (!active) (e.currentTarget as HTMLElement).style.background = 'transparent';
-            }}>
-            <Icon size={16} style={{ color: active ? 'var(--gc-blue)' : 'var(--gc-text-2)' }} />
-            {item.label}
-          </Link>
+          <RailLink key={item.href} href={item.href} label={item.label} Icon={item.icon}
+            active={pathname === item.href.split('?')[0]} />
         );
       })}
     </div>
+  );
+}
+
+function RailLink({ href, label, Icon, active, trailingChevron }: {
+  href: string;
+  label: string;
+  Icon: React.ComponentType<{ size?: number; style?: React.CSSProperties }>;
+  active: boolean;
+  trailingChevron?: boolean;
+}) {
+  return (
+    <Link
+      href={href}
+      className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors"
+      style={{
+        color:      active ? 'var(--gc-blue)'        : 'var(--gc-text-1)',
+        background: active ? 'var(--gc-blue-light)'  : 'transparent',
+        fontWeight: active ? 600 : 500,
+      }}
+      onMouseEnter={e => { if (!active) (e.currentTarget as HTMLElement).style.background = 'var(--gc-hover)'; }}
+      onMouseLeave={e => { if (!active) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}>
+      <Icon size={16} style={{ color: active ? 'var(--gc-blue)' : 'var(--gc-text-2)' }} />
+      <span className="flex-1">{label}</span>
+      {trailingChevron && <ChevronDown size={14} style={{ color: 'var(--gc-text-3)' }} />}
+    </Link>
   );
 }
 

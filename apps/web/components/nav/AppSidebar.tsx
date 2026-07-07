@@ -44,7 +44,7 @@ import { usePermissions } from '@/lib/usePermissions';
 import { useModules } from '@/lib/useModules';
 import { isCrmUser, isInternalOrg } from '@/lib/internalOrg';
 
-interface NavLeaf {
+export interface NavLeaf {
   kind:   'leaf';
   href:   string;
   /** Optional ?tab= match for sub-items on a shared route (Equipment). */
@@ -58,7 +58,7 @@ interface NavLeaf {
    *  is FleetCal-internal sales tooling, never a customer surface. */
   internalOnly?: boolean;
 }
-interface NavGroup {
+export interface NavGroup {
   kind:    'group';
   href:    string;     // landing route (clicking the parent still goes here)
   label:   string;
@@ -68,12 +68,12 @@ interface NavGroup {
   internalOnly?: boolean;
   children: NavLeaf[];
 }
-type NavItem = NavLeaf | NavGroup;
+export type NavItem = NavLeaf | NavGroup;
 
 /** Primary nav — order matters: most-used first (Calendar pins to the
  *  top because users jump back here constantly). Bottom-most items are
  *  rendered in the "secondary" section (Settings). */
-const PRIMARY_NAV: NavItem[] = [
+export const PRIMARY_NAV: NavItem[] = [
   { kind: 'leaf', href: '/calendar',    label: 'Calendar',       icon: Calendar,        cap: 'loads.view' },
   { kind: 'leaf', href: '/dashboard',   label: 'Dashboard',      icon: BarChart2,       cap: 'dashboard.access' },
   { kind: 'leaf', href: '/board',       label: 'Command Center', icon: LayoutDashboard, cap: 'loads.edit',        module: 'dispatch_board' },
