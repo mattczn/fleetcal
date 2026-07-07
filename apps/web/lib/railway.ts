@@ -71,6 +71,9 @@ import type {
   MatchFuelTransactionRequest, MatchFuelTransactionResponse,
   AssignFuelTransactionRequest, AssignFuelTransactionResponse,
   SingleRowAutoMatchResponse,
+  ListRampTransactionsRequest, ListRampTransactionsResponse,
+  MatchRampTransactionRequest, MatchRampTransactionResponse,
+  MarkRampNotApplicableResponse, RunRampSyncResponse,
   ListMaintenanceReportsQuery, ListMaintenanceReportsResponse,
   GetMaintenanceReportResponse,
   UpdateMaintenanceReportRequest, UpdateMaintenanceReportResponse,
@@ -1404,6 +1407,54 @@ class RailwayClient {
    *  The server also runs this every 15 min on its own. */
   runFuelAutoMatchSweep() {
     return this.req<{ scanned: number; matched: number }>('POST', `/v1/fuel-transactions/auto-match-sweep`);
+  }
+
+  // ── Ramp card transactions ──────────────────────────────────────────
+  listRampTransactions(query: ListRampTransactionsRequest = {}) {
+    const qs = new URLSearchParams();
+    if (query.matchStatus)      qs.set('matchStatus',      query.matchStatus);
+    if (query.assetId  != null) qs.set('assetId',          String(query.assetId));
+    if (query.trailerId != null)qs.set('trailerId',        String(query.trailerId));
+    if (query.cardholderUserId) qs.set('cardholderUserId', query.cardholderUserId);
+    if (query.category)         qs.set('category',         query.category);
+    if (query.from)             qs.set('from',             query.from);
+    if (query.to)               qs.set('to',               query.to);
+    if (query.q)                qs.set('q',                query.q);
+    if (query.limit  != null)   qs.set('limit',            String(query.limit));
+    if (query.offset != null)   qs.set('offset',           String(query.offset));
+    const s = qs.toString();
+    return this.req<ListRampTransactionsResponse>('GET', `/v1/ramp-transactions${s ? `?${s}` : ''}`);
+  }
+
+  /** Paginate through every ramp txn matching the query. Same shape as
+   *  listAllFuelTransactions — the board loads a rolling window so a
+   *  single call is enough for the default view. */
+  async listAllRampTransactions(
+    query: Omit<ListRampTransactionsRequest, 'limit' | 'offset'> = {},
+  ): Promise<ListRampTransactionsResponse> {
+    const PAGE = 500;
+    const MAX_PAGES = 40;
+    const all: ListRampTransactionsResponse['rampTransactions'] = [];
+    let offset = 0;
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const res = await this.listRampTransactions({ ...query, limit: PAGE, offset });
+      all.push(...res.rampTransactions);
+      offset += res.rampTransactions.length;
+      if (res.rampTransactions.length < PAGE || all.length >= res.total) break;
+    }
+    return { rampTransactions: all, total: all.length, limit: all.length, offset: 0 };
+  }
+
+  matchRampTransaction(id: string, body: MatchRampTransactionRequest) {
+    return this.req<MatchRampTransactionResponse>('PATCH', `/v1/ramp-transactions/${id}/match`, body);
+  }
+
+  markRampTransactionNotApplicable(id: string) {
+    return this.req<MarkRampNotApplicableResponse>('PATCH', `/v1/ramp-transactions/${id}/mark-not-applicable`);
+  }
+
+  runRampSync() {
+    return this.req<RunRampSyncResponse>('POST', `/v1/ramp-transactions/sync`);
   }
 
   /** Pull fuel transactions from the Mudflap Carriers API for the date

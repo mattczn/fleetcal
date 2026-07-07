@@ -23,7 +23,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { createPortal } from 'react-dom';
 import { useOrganization } from '@clerk/nextjs';
 import {
-  Package, Wrench, ClipboardCheck, Fuel as FuelIcon,
+  Package, Wrench, ClipboardCheck, Fuel as FuelIcon, CreditCard,
   Camera, Loader2, MapPin, X, Clock, User, Truck, FileText, ExternalLink, Check, Trash2,
   ChevronLeft, ChevronRight, ChevronDown, CalendarDays, List as ListIcon, AlertCircle, CheckCircle2,
   Calendar, Plus, Info, History as HistoryIcon, Sun, Moon, Flag, EyeOff, Trophy,
@@ -47,6 +47,7 @@ import {
 import { PeriodSelector } from '@/components/ui/PeriodSelector';
 import { StyledSelect } from '@/components/ui/StyledSelect';
 import { AssetSelect } from '@/components/calendar/AssetSelect';
+import CardSpendTabContent from './CardSpendTabContent';
 import DatePicker from '@/components/calendar/DatePicker';
 import { LOAD_ACCENT } from '@/lib/loadAccent';
 import { type Period, getPeriodRange, defaultCustomRangeISO } from '@/lib/periodRange';
@@ -76,7 +77,7 @@ type InspectionRow = {
   signedBy: string;
 };
 
-type Tab = 'maintenance' | 'inspections' | 'fuel' | 'history' | 'scorecard';
+type Tab = 'maintenance' | 'inspections' | 'fuel' | 'cardspend' | 'history' | 'scorecard';
 
 // MediaList — every photo for the currently-open report, grouped by
 // source (defect item, general, etc.) so the side-panel can show
@@ -138,7 +139,7 @@ function EquipmentPageInner() {
   const showHistory = isInternalOrg(organization?.id);
   const initialTab = (() => {
     const t = searchParams?.get('tab');
-    if (t === 'fuel' || t === 'maintenance' || t === 'inspections') return t;
+    if (t === 'fuel' || t === 'maintenance' || t === 'inspections' || t === 'cardspend') return t;
     if ((t === 'history' || t === 'scorecard') && showHistory) return t;
     return 'maintenance';
   })();
@@ -151,7 +152,7 @@ function EquipmentPageInner() {
   // future deep link that switches tabs while the page is mounted.
   useEffect(() => {
     const t = searchParams?.get('tab');
-    if (t === 'fuel' || t === 'maintenance' || t === 'inspections') {
+    if (t === 'fuel' || t === 'maintenance' || t === 'inspections' || t === 'cardspend') {
       setTab(t);
     } else if ((t === 'history' || t === 'scorecard') && showHistory) {
       setTab(t);
@@ -344,6 +345,7 @@ function EquipmentPageInner() {
             <TabButton active={tab === 'maintenance'} onClick={() => setTab('maintenance')} icon={<Wrench size={15} />}         label="Maintenance" />
             <TabButton active={tab === 'inspections'} onClick={() => setTab('inspections')} icon={<ClipboardCheck size={15} />} label="Inspections" />
             <TabButton active={tab === 'fuel'}        onClick={() => setTab('fuel')}        icon={<FuelIcon size={15} />}       label="Fuel" />
+            <TabButton active={tab === 'cardspend'}   onClick={() => setTab('cardspend')}   icon={<CreditCard size={15} />}     label="Card Spend" />
             {showHistory && (
               <TabButton active={tab === 'history'} onClick={() => setTab('history')} icon={<HistoryIcon size={15} />} label="History" />
             )}
@@ -394,6 +396,14 @@ function EquipmentPageInner() {
             panel={panel}
             setPanel={setPanel}
             reloadVersion={fuelDataVersion}
+          />
+        )}
+        {tab === 'cardspend' && (
+          <CardSpendTabContent
+            assets={assets}
+            trailers={trailers}
+            assetLabelById={assetLabelById}
+            trailerLabelById={trailerLabelById}
           />
         )}
         {tab === 'history' && showHistory && (

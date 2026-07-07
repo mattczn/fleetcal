@@ -1379,6 +1379,71 @@ export interface FuelTransaction {
   updatedAt?:             string;
 }
 
+// ── Ramp (card-spend) transactions ──────────────────────────────────────
+//
+// Corporate card purchases ingested from the Ramp Developer API. Unlike
+// fuel_transactions (fuel-only, deterministic card→truck link), Ramp
+// txns span every spend category and lean on a memo→asset matcher whose
+// confidence varies with the freeform prose the team writes.
+
+export type RampTransactionProvider = 'ramp';
+
+export type RampTransactionMatchStatus =
+  | 'unmatched'
+  | 'auto_matched'
+  | 'manual_matched'
+  | 'not_applicable';
+
+export type RampAssetLinkSource =
+  | 'memo_unit'
+  | 'memo_vin'
+  | 'memo_plate'
+  | 'driver_name'
+  | 'nickname'
+  | 'manual'
+  | 'none';
+
+export interface RampReceipt {
+  receiptId?: string;
+  id?:        string;
+  url?:       string;
+}
+
+export interface RampTransaction {
+  id:                     string;
+  orgId:                  string;
+  provider:               RampTransactionProvider;
+  providerTransactionId:  string;
+
+  transactedAt:           string;
+  amount:                 number;
+  currency:               string;
+  merchantName?:          string;
+  merchantCategoryCode?:  string;
+  skCategoryName?:        string;
+  memo?:                  string;
+  receipts:               RampReceipt[];
+
+  cardholderRampUserId?:  string;
+  cardholderName?:        string;
+  cardholderEmail?:       string;
+  cardId?:                string;
+  cardLast4?:             string;
+
+  assetId?:               number;
+  trailerId?:             number;
+  assetLinkSource:        RampAssetLinkSource;
+
+  matchStatus:            RampTransactionMatchStatus;
+  matchConfidence?:       number;
+  matchNotes?:            string;
+  matchedAt?:             string;
+  matchedBy?:             string;
+
+  createdAt:              string;
+  updatedAt?:             string;
+}
+
 // ── Maintenance ─────────────────────────────────────────────────────────
 //
 // Two-layer model:

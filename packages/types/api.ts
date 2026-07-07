@@ -1522,6 +1522,64 @@ export interface AssignFuelTransactionResponse {
 // Re-export the enums for caller convenience.
 export type { FuelTransactionMatchStatus, FuelTransactionProvider };
 
+// ── Ramp (card-spend) transactions ──────────────────────────────────────
+
+import type {
+  RampTransaction,
+  RampTransactionMatchStatus,
+} from './domain';
+
+export interface ListRampTransactionsRequest {
+  matchStatus?:      RampTransactionMatchStatus | 'all';
+  assetId?:          number;
+  trailerId?:        number;
+  cardholderUserId?: string;
+  category?:         string;
+  from?:             string;
+  to?:               string;
+  q?:                string;
+  limit?:            number;
+  offset?:           number;
+}
+export interface ListRampTransactionsResponse {
+  rampTransactions: RampTransaction[];
+  total:            number;
+  limit:            number;
+  offset:           number;
+}
+
+/** Manual match. Pass both assetId and trailerId as null to unlink. */
+export interface MatchRampTransactionRequest {
+  assetId?:    number | null;
+  trailerId?:  number | null;
+  matchNotes?: string | null;
+}
+export interface MatchRampTransactionResponse {
+  rampTransaction: RampTransaction;
+}
+
+export interface MarkRampNotApplicableResponse {
+  rampTransaction: RampTransaction;
+}
+
+export interface RunRampSyncResponse {
+  ok:      boolean;
+  skipped: boolean;
+  reason?: string;
+  orgId?:  string;
+  from?:   string;
+  to?:     string;
+  result?: {
+    fetched:       number;
+    inserted:      number;
+    updated:       number;
+    duplicates:    number;
+    failed:        number;
+    autoMatched:   number;
+    notApplicable: number;
+  };
+}
+
 // ── /v1/odometer-readings ───────────────────────────────────────────────
 //
 // Source-agnostic odometer storage. Backed by the motive_odometer_readings

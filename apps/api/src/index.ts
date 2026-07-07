@@ -47,6 +47,7 @@ import { odoApiKey, odoClerk } from "./routes/odometer-readings.js";
 import maintenanceReportsRoute from "./routes/maintenance-reports.js";
 import inspectionReportsRoute from "./routes/inspection-reports.js";
 import maintenanceActionItemsRoute from "./routes/maintenance-action-items.js";
+import rampTransactionsRoute from "./routes/ramp-transactions.js";
 import driverDocumentsRoute from "./routes/driver-documents.js";
 import assetDocumentsRoute from "./routes/asset-documents.js";
 import trailerDocumentsRoute from "./routes/trailer-documents.js";
@@ -66,6 +67,7 @@ import { runAiUsageSweep } from "./jobs/aiUsageSweep.js";
 import { trackCronRun } from "./lib/cronRun.js";
 import { runFuelAutoMatchSweep } from "./jobs/fuelAutoMatchSweep.js";
 import { runMudflapSyncSweep } from "./jobs/mudflapSyncSweep.js";
+import { runRampSyncSweep } from "./jobs/rampSyncSweep.js";
 import { runCrmFmcsaSyncSweep } from "./jobs/crmFmcsaSyncSweep.js";
 import { runCrmSendSweep } from "./jobs/crmSendSweep.js";
 import { crmRoute } from "./routes/crm.js";
@@ -237,6 +239,7 @@ authed.route("/cost-analysis", costAnalysisRoute);
 authed.route("/maintenance-reports", maintenanceReportsRoute);
 authed.route("/inspection-reports", inspectionReportsRoute);
 authed.route("/maintenance-action-items", maintenanceActionItemsRoute);
+authed.route("/ramp-transactions", rampTransactionsRoute);
 authed.route("/driver-documents", driverDocumentsRoute);
 authed.route("/asset-documents", assetDocumentsRoute);
 authed.route("/trailer-documents", trailerDocumentsRoute);
@@ -505,6 +508,45 @@ async function fireMudflapSync(label: string): Promise<void> {
 }
 setTimeout(() => void fireMudflapSync("startup pass"), MUDFLAP_SYNC_STARTUP_DELAY).unref();
 setInterval(() => void fireMudflapSync("tick"), MUDFLAP_SYNC_INTERVAL_MS).unref();
+
+// ── Ramp sync ─────────────────────────────────────────────────────────
+//
+// Pulls a rolling RAMP_SYNC_WINDOW_DAYS-day window (default 7) of Ramp
+// card transactions each run into ramp_transactions and runs the memo→
+// asset matcher inline. Same env-gated no-op behavior as Mudflap: with
+// no RAMP_CLIENT_ID/RAMP_CLIENT_SECRET the sweep skips cleanly. See
+// jobs/rampSyncSweep.ts.
+//
+// Single-replica caveat: same as the other in-process crons. Ingest is
+// idempotent (unique constraint on provider_transaction_id) so
+// accidental double-runs are safe.
+
+const RAMP_SYNC_INTERVAL_MS   = 30 * 60 * 1000;
+const RAMP_SYNC_STARTUP_DELAY = 180_000;
+
+async function fireRampSync(label: string): Promise<void> {
+  try {
+    await trackCronRun("ramp-sync", async () => {
+      const r = await runRampSyncSweep();
+      if (r.skipped || !r.result) {
+        return { meta: { skipped: true, reason: r.reason ?? "skipped" } };
+      }
+      const { fetched, inserted, updated, duplicates, failed, autoMatched, notApplicable } = r.result;
+      if (fetched > 0) {
+        console.log(
+          `[ramp-sync] ${label}: fetched=${fetched}, inserted=${inserted}, updated=${updated}, ` +
+          `duplicates=${duplicates}, failed=${failed}, autoMatched=${autoMatched}, ` +
+          `notApplicable=${notApplicable} (${r.from}→${r.to})`,
+        );
+      }
+      return { meta: { fetched, inserted, updated, duplicates, failed, autoMatched, notApplicable, from: r.from, to: r.to } };
+    });
+  } catch (err) {
+    console.error(`[ramp-sync] ${label} failed:`, err);
+  }
+}
+setTimeout(() => void fireRampSync("startup pass"), RAMP_SYNC_STARTUP_DELAY).unref();
+setInterval(() => void fireRampSync("tick"), RAMP_SYNC_INTERVAL_MS).unref();
 
 // ── Fuel auto-match sweep ──────────────────────────────────────────────
 //
