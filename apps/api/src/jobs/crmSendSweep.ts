@@ -74,26 +74,57 @@ function nowInTz(timezone: string): { hour: number; isWeekday: boolean; dayKey: 
 }
 
 /** UTC instant of local midnight (start of `dayKey`) in `timezone`.
- *  Walks the offset via Intl — no date libs in this repo. */
+ *
+ *  BUG HISTORY: the previous version started from UTC midnight of
+ *  dayKey and walked BACK by the offset. For negative-offset zones
+ *  (Denver = UTC-6), UTC midnight is 6pm of the PREVIOUS local day,
+ *  so walking back 18 hours landed on the previous day's local
+ *  midnight — a 24-hour undercount that dumped yesterday's sends
+ *  into today's daily-cap budget. First affected batch: Matt's 25
+ *  approved on 2026-07-02 stayed queued for a full day because his
+ *  25 from 2026-07-01 counted as "today's" usage.
+ *
+ *  Correct algorithm: interpret `dayKey` as the target LOCAL date,
+ *  start from noon UTC of that dayKey (safely away from DST edges),
+ *  and iterate the candidate toward the calendar delta between
+ *  local-time-of-candidate and (dayKey, 00:00). Converges in ≤ 2
+ *  iterations for every real timezone including half-hour offsets
+ *  (India UTC+5:30) and 45-minute offsets (Nepal UTC+5:45). */
 function startOfDayUtc(dayKey: string, timezone: string): Date {
-  // Start from the naive UTC midnight, then correct by the zone offset
-  // at that instant (two iterations handles DST edges well enough for
-  // a daily send cap).
-  let guess = new Date(`${dayKey}T00:00:00Z`);
-  for (let i = 0; i < 2; i++) {
-    const inTz = new Intl.DateTimeFormat("en-US", {
-      timeZone: timezone,
-      hour: "numeric",
-      hour12: false,
-      minute: "numeric",
-    }).formatToParts(guess);
-    const h = Number(inTz.find((p) => p.type === "hour")?.value ?? "0") % 24;
-    const m = Number(inTz.find((p) => p.type === "minute")?.value ?? "0");
-    const offsetMinutes = h * 60 + m; // how far past local midnight the guess lands
-    if (offsetMinutes === 0) break;
-    guess = new Date(guess.getTime() - offsetMinutes * 60_000);
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dayKey);
+  if (!match) return new Date(`${dayKey}T00:00:00Z`); // malformed input — safest fallback
+  const [, ys, ms, ds] = match;
+  const yTarget = Number(ys);
+  const mTarget = Number(ms);
+  const dTarget = Number(ds);
+  const targetMs = Date.UTC(yTarget, mTarget - 1, dTarget, 0, 0);
+
+  let candidate = new Date(`${dayKey}T12:00:00Z`);
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+
+  for (let i = 0; i < 3; i++) {
+    const parts = formatter.formatToParts(candidate);
+    const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "0";
+    const localMs = Date.UTC(
+      Number(get("year")),
+      Number(get("month")) - 1,
+      Number(get("day")),
+      Number(get("hour")) % 24,
+      Number(get("minute")),
+    );
+    const deltaMs = targetMs - localMs;
+    if (deltaMs === 0) break;
+    candidate = new Date(candidate.getTime() + deltaMs);
   }
-  return guess;
+  return candidate;
 }
 
 // ── Pass A: materialize due steps ───────────────────────────────────────
