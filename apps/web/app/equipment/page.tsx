@@ -29,6 +29,7 @@ import {
   Calendar, Plus, Info, History as HistoryIcon, Sun, Moon, Flag, EyeOff, Trophy,
 } from 'lucide-react';
 import { isInternalOrg } from '@/lib/internalOrg';
+import { usePermissions } from '@/lib/usePermissions';
 import Tooltip from '@/components/ui/Tooltip';
 import { railway } from '@/lib/railway';
 import AppShell from '@/components/nav/AppShell';
@@ -137,6 +138,21 @@ function EquipmentPageInner() {
   // hydration, so customer orgs never see even a flicker of the tab.
   const { organization } = useOrganization();
   const showHistory = isInternalOrg(organization?.id);
+  const { can, isLoading: permsLoading } = usePermissions();
+  // Per-tab capability gates. Card Spend + History keep their existing
+  // gates (module owner / internal-org). Scorecard also needs the internal
+  // org gate on top of the cap.
+  const tabAllowed = useCallback((t: Tab): boolean => {
+    switch (t) {
+      case 'maintenance': return can('maintenance.access');
+      case 'inspections': return can('inspections.access');
+      case 'fuel':        return can('fuel.access');
+      case 'cardspend':   return true;
+      case 'history':     return showHistory;
+      case 'scorecard':   return showHistory && can('scorecard.access');
+      default:            return false;
+    }
+  }, [can, showHistory]);
   const initialTab = (() => {
     const t = searchParams?.get('tab');
     if (t === 'fuel' || t === 'maintenance' || t === 'inspections' || t === 'cardspend') return t;
@@ -158,6 +174,15 @@ function EquipmentPageInner() {
       setTab(t);
     }
   }, [searchParams, showHistory]);
+
+  // If the active tab isn't allowed for this role (e.g. a maintenance user
+  // deep-linking ?tab=scorecard), bounce to the first tab they can see.
+  useEffect(() => {
+    if (permsLoading || tabAllowed(tab)) return;
+    const order: Tab[] = ['maintenance', 'inspections', 'fuel', 'cardspend', 'history', 'scorecard'];
+    const first = order.find(tabAllowed);
+    if (first) setTab(first);
+  }, [tab, permsLoading, tabAllowed]);
 
   // Page-level filters retired — OpsTable owns its own filter chips
   // now (search + select dropdowns scoped to each tab's data). The
@@ -342,14 +367,22 @@ function EquipmentPageInner() {
       <div className="border-b" style={{ borderColor: 'var(--gc-border-light)' }}>
         <div className="mx-auto w-full px-6 pt-5" style={{ maxWidth: 1400 }}>
           <div className="flex gap-1">
-            <TabButton active={tab === 'maintenance'} onClick={() => setTab('maintenance')} icon={<Wrench size={15} />}         label="Maintenance" />
-            <TabButton active={tab === 'inspections'} onClick={() => setTab('inspections')} icon={<ClipboardCheck size={15} />} label="Inspections" />
-            <TabButton active={tab === 'fuel'}        onClick={() => setTab('fuel')}        icon={<FuelIcon size={15} />}       label="Fuel" />
-            <TabButton active={tab === 'cardspend'}   onClick={() => setTab('cardspend')}   icon={<CreditCard size={15} />}     label="Card Spend" />
-            {showHistory && (
+            {tabAllowed('maintenance') && (
+              <TabButton active={tab === 'maintenance'} onClick={() => setTab('maintenance')} icon={<Wrench size={15} />}         label="Maintenance" />
+            )}
+            {tabAllowed('inspections') && (
+              <TabButton active={tab === 'inspections'} onClick={() => setTab('inspections')} icon={<ClipboardCheck size={15} />} label="Inspections" />
+            )}
+            {tabAllowed('fuel') && (
+              <TabButton active={tab === 'fuel'}        onClick={() => setTab('fuel')}        icon={<FuelIcon size={15} />}       label="Fuel" />
+            )}
+            {tabAllowed('cardspend') && (
+              <TabButton active={tab === 'cardspend'}   onClick={() => setTab('cardspend')}   icon={<CreditCard size={15} />}     label="Card Spend" />
+            )}
+            {tabAllowed('history') && (
               <TabButton active={tab === 'history'} onClick={() => setTab('history')} icon={<HistoryIcon size={15} />} label="History" />
             )}
-            {showHistory && (
+            {tabAllowed('scorecard') && (
               <TabButton active={tab === 'scorecard'} onClick={() => setTab('scorecard')} icon={<Trophy size={15} />} label="Scorecard" />
             )}
           </div>
@@ -363,7 +396,7 @@ function EquipmentPageInner() {
           way to reach the bottom rows. */}
       <div className="flex-1 min-h-0 overflow-y-auto">
         <div className="mx-auto w-full px-6 py-5" style={{ maxWidth: 1400 }}>
-        {tab === 'maintenance' && (
+        {tab === 'maintenance' && tabAllowed('maintenance') && (
           <MaintenanceTabContent
             key={`maint-${mutationTick}`}
             drivers={drivers}
@@ -376,7 +409,7 @@ function EquipmentPageInner() {
             setPanel={setPanel}
           />
         )}
-        {tab === 'inspections' && (
+        {tab === 'inspections' && tabAllowed('inspections') && (
           <InspectionsTabContent
             key={`insp-${mutationTick}`}
             drivers={drivers}
@@ -387,7 +420,7 @@ function EquipmentPageInner() {
             openId={panel?.kind === 'inspection' || panel?.kind === 'dirty' ? panel.id : null}
           />
         )}
-        {tab === 'fuel' && (
+        {tab === 'fuel' && tabAllowed('fuel') && (
           <FuelTabContent
             drivers={drivers}
             assets={assets}
@@ -414,7 +447,7 @@ function EquipmentPageInner() {
             onOpenInspection={(r) => setPanel({ kind: 'inspection', id: r.id, row: r })}
           />
         )}
-        {tab === 'scorecard' && showHistory && (
+        {tab === 'scorecard' && tabAllowed('scorecard') && (
           <ScorecardTabContent />
         )}
         </div>
