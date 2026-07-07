@@ -49,6 +49,7 @@ import type {
   UpdateSavedLocationRequest, UpdateSavedLocationResponse,
   ListPayrollAdjustmentsResponse, CreatePayrollAdjustmentRequest, CreatePayrollAdjustmentResponse,
   ListPayrollRecordsResponse, UpsertPayrollRecordRequest, UpsertPayrollRecordResponse,
+  ListDriverScoresResponse,
   GetOrgSettingsResponse, UpdateOrgSettingsRequest, UpdateOrgSettingsResponse,
   CreateInvoiceRequest, CreateInvoiceResponse,
   ListInvoicesResponse, GetInvoiceResponse,
@@ -859,12 +860,23 @@ class RailwayClient {
   deleteSavedLocation(id: string)            { return this.req<void>('DELETE', `/v1/saved-locations/${id}`); }
 
   // ── Payroll ───────────────────────────────────────────────────────────
-  listPayrollAdjustments(query: { weekStart?: string; driverName?: string } = {}) {
+  listPayrollAdjustments(query: { weekStart?: string; driverName?: string; inspectionReportId?: string } = {}) {
     const qs = new URLSearchParams();
     if (query.weekStart)  qs.set('weekStart',  query.weekStart);
     if (query.driverName) qs.set('driverName', query.driverName);
+    if (query.inspectionReportId) qs.set('inspectionReportId', query.inspectionReportId);
     const s = qs.toString();
     return this.req<ListPayrollAdjustmentsResponse>('GET', `/v1/payroll/adjustments${s ? `?${s}` : ''}`);
+  }
+
+  /** Per-driver accountability scorecard (Curzon-only). from/to are
+   *  YYYY-MM-DD; omit for a trailing-30-day default. */
+  getDriverScoring(query: { from?: string; to?: string } = {}) {
+    const qs = new URLSearchParams();
+    if (query.from) qs.set('from', query.from);
+    if (query.to)   qs.set('to',   query.to);
+    const s = qs.toString();
+    return this.req<ListDriverScoresResponse>('GET', `/v1/driver-scoring${s ? `?${s}` : ''}`);
   }
   createPayrollAdjustment(body: CreatePayrollAdjustmentRequest) {
     return this.req<CreatePayrollAdjustmentResponse>('POST', '/v1/payroll/adjustments', body);

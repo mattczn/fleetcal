@@ -358,6 +358,28 @@ export interface PayrollAdjustment {
   description?: string;
   amount: number;
   createdAt: string;
+  /** When present, the inspection report this adjustment was raised from
+   *  (e.g. a cleanliness "left dirty" deduction). Lets the UI mark a flag
+   *  as already-deducted and prevents double-charging. */
+  inspectionReportId?: string;
+}
+
+/** One driver's accountability score over a date range — completion of
+ *  inspections plus cleanliness. Derived on demand from inspection_reports,
+ *  events (active days), and payroll_adjustments (applied deductions); no
+ *  stored scoring state. Curzon-only (Truck History gating). */
+export interface DriverScore {
+  driverId: number;
+  driverName: string;
+  activeDays: number;        // distinct days the driver had a load event
+  inspectionDays: number;    // distinct days with ≥1 inspection submitted
+  preTrips: number;
+  postTrips: number;
+  completionPct: number;     // 0–100: inspectionDays / activeDays, capped at 100
+  dirtyIncidents: number;    // cleanliness deductions applied to this driver
+  deductionTotal: number;    // sum of those deduction amounts (absolute $)
+  score: number;             // 0–100 composite
+  bonusEligible: boolean;
 }
 
 export interface PayrollRecord {

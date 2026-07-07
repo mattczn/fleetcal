@@ -1775,6 +1775,7 @@ export type Database = {
           description: string | null
           driver_name: string
           id: string
+          inspection_report_id: string | null
           org_id: string
           week_start: string
         }
@@ -1785,6 +1786,7 @@ export type Database = {
           description?: string | null
           driver_name: string
           id?: string
+          inspection_report_id?: string | null
           org_id: string
           week_start: string
         }
@@ -1795,6 +1797,7 @@ export type Database = {
           description?: string | null
           driver_name?: string
           id?: string
+          inspection_report_id?: string | null
           org_id?: string
           week_start?: string
         }

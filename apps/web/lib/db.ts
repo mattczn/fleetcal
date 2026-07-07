@@ -346,7 +346,7 @@ export async function fetchPayrollAdjustments(_orgId: string, weekStart: string)
 }
 
 export async function addPayrollAdjustment(
-  adj: { orgId?: string; driverName: string; weekStart: string; category: string; description?: string; amount: number },
+  adj: { orgId?: string; driverName: string; weekStart: string; category: string; description?: string; amount: number; inspectionReportId?: string },
 ): Promise<PayrollAdjustment | null> {
   try {
     const { adjustment } = await railway.createPayrollAdjustment({
@@ -355,6 +355,7 @@ export async function addPayrollAdjustment(
       category:    adj.category,
       description: adj.description ?? null,
       amount:      adj.amount,
+      inspectionReportId: adj.inspectionReportId ?? null,
     });
     return adjustment;
   } catch (err) { console.error('addPayrollAdjustment:', err); return null; }

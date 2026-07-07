@@ -18,6 +18,7 @@ import type {
   MaintenanceReport, MaintenanceReportStatus, MaintenanceReportPhoto,
   MaintenanceActionItem, MaintenanceActionItemPhoto, MaintenanceCategory, MaintenancePriority, MaintenanceActionStatus,
   OrgSettings, PayrollAdjustment, PayrollRecord, RefNum, SavedLocation, Stop, Trailer,
+  DriverScore,
 } from "./domain";
 import type { CheckCallChannel, CheckCallParty, LoadStatus, RelayRole, TrailerCategory } from "./enums";
 
@@ -937,8 +938,22 @@ export interface CreatePayrollAdjustmentRequest {
   category:     string;
   description?: string | null;
   amount:       number;
+  /** Optional back-reference to the inspection report that triggered this
+   *  adjustment (cleanliness deduction). */
+  inspectionReportId?: string | null;
 }
 export interface CreatePayrollAdjustmentResponse { adjustment: PayrollAdjustment; }
+
+// ── Driver scoring ────────────────────────────────────────────────────────
+// GET /v1/driver-scoring?from=YYYY-MM-DD&to=YYYY-MM-DD  (Curzon-only)
+export interface ListDriverScoresResponse {
+  from: string;
+  to: string;
+  scores: DriverScore[];
+  /** The transparent weights used to compute `score`, echoed so the UI can
+   *  show how a number was reached. */
+  weights: { bonusThreshold: number; dirtyPenalty: number };
+}
 
 // Query params:
 //   driverName  — required when listing

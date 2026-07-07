@@ -45,6 +45,7 @@ interface AdjRow {
   description: string | null;
   amount: number | string;
   created_at: string;
+  inspection_report_id: string | null;
 }
 function rowToAdj(r: AdjRow): PayrollAdjustment {
   return {
@@ -55,6 +56,7 @@ function rowToAdj(r: AdjRow): PayrollAdjustment {
     description: r.description ?? undefined,
     amount:      Number(r.amount),
     createdAt:   r.created_at,
+    inspectionReportId: r.inspection_report_id ?? undefined,
   };
 }
 
@@ -77,7 +79,7 @@ function rowToRec(r: RecRow): PayrollRecord {
   };
 }
 
-const ADJ_COLS = "id,driver_name,week_start,category,description,amount,created_at";
+const ADJ_COLS = "id,driver_name,week_start,category,description,amount,created_at,inspection_report_id";
 const REC_COLS = "id,driver_name,week_start,total_pay,finalized_at,notes";
 
 // ── Adjustments ─────────────────────────────────────────────────────────
@@ -87,6 +89,7 @@ payroll.get("/adjustments", async (c) => {
   const url = new URL(c.req.url);
   const weekStart  = url.searchParams.get("weekStart");
   const driverName = url.searchParams.get("driverName");
+  const inspectionReportId = url.searchParams.get("inspectionReportId");
 
   let q = supabase
     .from("payroll_adjustments")
@@ -95,6 +98,7 @@ payroll.get("/adjustments", async (c) => {
     .order("created_at", { ascending: true });
   if (weekStart)  q = q.eq("week_start", weekStart);
   if (driverName) q = q.eq("driver_name", driverName);
+  if (inspectionReportId) q = q.eq("inspection_report_id", inspectionReportId);
 
   const { data, error } = await q;
   if (error) {
@@ -125,6 +129,7 @@ payroll.post("/adjustments", requireCapability("payroll.adjust"), async (c) => {
       category:    body.category,
       description: body.description ?? null,
       amount:      body.amount,
+      inspection_report_id: body.inspectionReportId ?? null,
     } as never)
     .select(ADJ_COLS)
     .single();

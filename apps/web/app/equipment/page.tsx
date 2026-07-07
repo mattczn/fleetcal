@@ -26,7 +26,7 @@ import {
   Package, Wrench, ClipboardCheck, Fuel as FuelIcon,
   Camera, Loader2, MapPin, X, Clock, User, Truck, FileText, ExternalLink, Check, Trash2,
   ChevronLeft, ChevronRight, ChevronDown, CalendarDays, List as ListIcon, AlertCircle, CheckCircle2,
-  Calendar, Plus, Info, History as HistoryIcon, Sun, Moon, Flag, EyeOff,
+  Calendar, Plus, Info, History as HistoryIcon, Sun, Moon, Flag, EyeOff, Trophy,
 } from 'lucide-react';
 import { isInternalOrg } from '@/lib/internalOrg';
 import Tooltip from '@/components/ui/Tooltip';
@@ -37,6 +37,7 @@ import type {
   MaintenanceReport, FuelReport, FuelTransaction, MaintenanceReportPhoto,
   MaintenanceActionItem, MaintenanceActionItemPhoto,
   MaintenanceCategory, MaintenancePriority, MaintenanceActionStatus,
+  PayrollAdjustment, DriverScore, ListDriverScoresResponse,
 } from '@fleetcal/types';
 import { loadGoogleMaps, MAP_ID } from '@/lib/googleMaps';
 import {
@@ -75,7 +76,7 @@ type InspectionRow = {
   signedBy: string;
 };
 
-type Tab = 'maintenance' | 'inspections' | 'fuel' | 'history';
+type Tab = 'maintenance' | 'inspections' | 'fuel' | 'history' | 'scorecard';
 
 // MediaList — every photo for the currently-open report, grouped by
 // source (defect item, general, etc.) so the side-panel can show
@@ -138,7 +139,7 @@ function EquipmentPageInner() {
   const initialTab = (() => {
     const t = searchParams?.get('tab');
     if (t === 'fuel' || t === 'maintenance' || t === 'inspections') return t;
-    if (t === 'history' && showHistory) return t;
+    if ((t === 'history' || t === 'scorecard') && showHistory) return t;
     return 'maintenance';
   })();
   const [tab, setTab] = useState<Tab>(initialTab);
@@ -152,8 +153,8 @@ function EquipmentPageInner() {
     const t = searchParams?.get('tab');
     if (t === 'fuel' || t === 'maintenance' || t === 'inspections') {
       setTab(t);
-    } else if (t === 'history' && showHistory) {
-      setTab('history');
+    } else if ((t === 'history' || t === 'scorecard') && showHistory) {
+      setTab(t);
     }
   }, [searchParams, showHistory]);
 
@@ -346,6 +347,9 @@ function EquipmentPageInner() {
             {showHistory && (
               <TabButton active={tab === 'history'} onClick={() => setTab('history')} icon={<HistoryIcon size={15} />} label="History" />
             )}
+            {showHistory && (
+              <TabButton active={tab === 'scorecard'} onClick={() => setTab('scorecard')} icon={<Trophy size={15} />} label="Scorecard" />
+            )}
           </div>
         </div>
       </div>
@@ -399,6 +403,9 @@ function EquipmentPageInner() {
             onOpenReport={(r) => setPanel({ kind: 'maintenance', id: r.id, report: r })}
             onOpenInspection={(r) => setPanel({ kind: 'inspection', id: r.id, row: r })}
           />
+        )}
+        {tab === 'scorecard' && showHistory && (
+          <ScorecardTabContent />
         )}
         </div>
       </div>
@@ -6364,6 +6371,162 @@ function InspectionDetail({
   );
 }
 
+/** The Saturday that starts the payroll week containing `date`, as a
+ *  local YYYY-MM-DD string. Mirrors PayrollView.weekSaturdayOf so a
+ *  cleanliness deduction lands in the same week bucket the payroll
+ *  screen computes. */
+function weekSaturdayISO(date: Date): string {
+  const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  d.setDate(d.getDate() - ((d.getDay() + 1) % 7)); // 0=Sun … 6=Sat
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${dd}`;
+}
+
+const money = (n: number) => `$${Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+/** Month options for the scorecard: current month + 11 past, newest-first.
+ *  `to` is clamped to today for the current month so an in-progress month
+ *  doesn't look like the driver missed days that haven't happened yet. */
+function buildMonthOptions(): Array<{ key: string; label: string; from: string; to: string }> {
+  const iso = (d: Date) => {
+    const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), dd = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${dd}`;
+  };
+  const today = new Date();
+  return Array.from({ length: 12 }, (_, i) => {
+    const first = new Date(today.getFullYear(), today.getMonth() - i, 1);
+    const lastOfMonth = new Date(first.getFullYear(), first.getMonth() + 1, 0);
+    const to = i === 0 ? today : lastOfMonth; // clamp current month to today
+    return {
+      key: `${first.getFullYear()}-${String(first.getMonth() + 1).padStart(2, '0')}`,
+      label: first.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
+      from: iso(first),
+      to: iso(to),
+    };
+  });
+}
+
+/** Scorecard tab — per-driver accountability over a month: inspection
+ *  completion + cleanliness, feeding the bonus program and weekly
+ *  deductions. Read-only view of GET /v1/driver-scoring; all numbers are
+ *  derived server-side (no stored scoring state). Curzon-only. */
+function ScorecardTabContent() {
+  const [months] = useState(buildMonthOptions);
+  const [monthKey, setMonthKey] = useState(months[0].key);
+  const sel = months.find(m => m.key === monthKey) ?? months[0];
+  const [data, setData] = useState<ListDriverScoresResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    railway.getDriverScoring({ from: sel.from, to: sel.to })
+      .then(r => { if (!cancelled) setData(r); })
+      .catch(() => { if (!cancelled) setError('Failed to load driver scores.'); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [sel.from, sel.to]);
+
+  const threshold = data?.weights.bonusThreshold ?? 85;
+  const scoreColor = (s: number) => s >= threshold ? '#1e8e3e' : s >= 60 ? '#b45309' : '#d93025';
+  const scoreBg    = (s: number) => s >= threshold ? '#e6f4ea' : s >= 60 ? '#fef3c7' : '#fdecea';
+
+  const th: React.CSSProperties = { textAlign: 'left', padding: '8px 12px', fontSize: 11.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--gc-text-3)', whiteSpace: 'nowrap' };
+  const td: React.CSSProperties = { padding: '11px 12px', fontSize: 13, color: 'var(--gc-text-1)', borderTop: '1px solid var(--gc-border-light)', whiteSpace: 'nowrap' };
+  const num: React.CSSProperties = { ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' };
+
+  return (
+    <div className="flex flex-col gap-4">
+      {/* Header — month picker + how the score is built. */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-center gap-2">
+          <Trophy size={18} style={{ color: 'var(--gc-text-2)' }} />
+          <h2 className="text-[16px] font-bold" style={{ color: 'var(--gc-text-1)' }}>Driver scorecard</h2>
+        </div>
+        <select value={monthKey} onChange={e => setMonthKey(e.target.value)}
+          className="rounded-md px-3 py-2 text-[13px] font-medium"
+          style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border-light)', color: 'var(--gc-text-1)' }}>
+          {months.map(m => <option key={m.key} value={m.key}>{m.label}</option>)}
+        </select>
+      </div>
+
+      <p className="text-[12.5px] leading-relaxed" style={{ color: 'var(--gc-text-3)' }}>
+        Completion = inspection days ÷ days on the road (capped 100%). Each cleanliness
+        deduction costs {data?.weights.dirtyPenalty ?? 10} points. A driver is
+        bonus-eligible at {threshold}+ with zero dirty flags. Deductions are the ones
+        you applied from the Inspections tab&rsquo;s &ldquo;left dirty&rdquo; panel.
+      </p>
+
+      {error && (
+        <div className="rounded-lg text-[13px] py-2.5 px-3" style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b' }}>{error}</div>
+      )}
+
+      {loading ? (
+        <div className="flex items-center gap-2 text-[13px] py-12 justify-center" style={{ color: 'var(--gc-text-3)' }}>
+          <Loader2 size={16} className="animate-spin" /> Loading scores…
+        </div>
+      ) : !data || data.scores.length === 0 ? (
+        <div className="rounded-lg text-[13px] py-10 px-4 text-center"
+          style={{ background: 'var(--gc-surface)', border: '1px dashed var(--gc-border-light)', color: 'var(--gc-text-3)' }}>
+          No driver activity in {sel.label}.
+        </div>
+      ) : (
+        <div className="rounded-xl overflow-hidden overflow-x-auto" style={{ border: '1px solid var(--gc-border-light)', background: 'var(--gc-surface)' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ background: 'var(--gc-bg)' }}>
+                <th style={th}>Driver</th>
+                <th style={{ ...th, textAlign: 'right' }}>On road</th>
+                <th style={{ ...th, textAlign: 'right' }}>Insp. days</th>
+                <th style={{ ...th, textAlign: 'right' }}>Completion</th>
+                <th style={{ ...th, textAlign: 'right' }}>Pre</th>
+                <th style={{ ...th, textAlign: 'right' }}>Post</th>
+                <th style={{ ...th, textAlign: 'right' }}>Dirty</th>
+                <th style={{ ...th, textAlign: 'right' }}>Deducted</th>
+                <th style={{ ...th, textAlign: 'right' }}>Score</th>
+                <th style={{ ...th, textAlign: 'center' }}>Bonus</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.scores.map((s: DriverScore) => (
+                <tr key={s.driverId}>
+                  <td style={{ ...td, fontWeight: 600 }}>{s.driverName}</td>
+                  <td style={num}>{s.activeDays}</td>
+                  <td style={num}>{s.inspectionDays}</td>
+                  <td style={num}>{s.completionPct}%</td>
+                  <td style={num}>{s.preTrips}</td>
+                  <td style={num}>{s.postTrips}</td>
+                  <td style={{ ...num, color: s.dirtyIncidents > 0 ? '#d93025' : 'var(--gc-text-3)', fontWeight: s.dirtyIncidents > 0 ? 700 : 400 }}>
+                    {s.dirtyIncidents}
+                  </td>
+                  <td style={{ ...num, color: s.deductionTotal > 0 ? '#d93025' : 'var(--gc-text-3)' }}>
+                    {s.deductionTotal > 0 ? `−${money(s.deductionTotal)}` : '—'}
+                  </td>
+                  <td style={num}>
+                    <span className="inline-flex items-center justify-center rounded-md font-bold"
+                      style={{ minWidth: 40, padding: '3px 8px', fontSize: 13, background: scoreBg(s.score), color: scoreColor(s.score) }}>
+                      {s.score}
+                    </span>
+                  </td>
+                  <td style={{ ...td, textAlign: 'center' }}>
+                    {s.bonusEligible
+                      ? <CheckCircle2 size={17} style={{ color: '#1e8e3e', display: 'inline' }} />
+                      : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** "Left dirty" review panel — opened from the amber flag on a
  *  post-trip inspection whose cleanlinessFlagged is true. Composes
  *  three existing endpoints (no new aggregate route):
@@ -6394,6 +6557,56 @@ function DirtyDetail({
   const [drivers, setDrivers] = useState<Array<{ name: string; lastSeen: string }>>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Payroll deductions raised from this exact flag. Loaded independently
+  // so the section still works if the cleanliness review above fails.
+  const [deds, setDeds] = useState<PayrollAdjustment[]>([]);
+  const [dedName, setDedName] = useState('');
+  const [dedAmount, setDedAmount] = useState('');
+  const [dedBusy, setDedBusy] = useState(false);
+  const [dedError, setDedError] = useState<string | null>(null);
+  const [dedTick, setDedTick] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    railway.listPayrollAdjustments({ inspectionReportId: row.id })
+      .then(r => { if (!cancelled) setDeds(r.adjustments); })
+      .catch(() => { if (!cancelled) setDeds([]); });
+    return () => { cancelled = true; };
+  }, [row.id, dedTick]);
+
+  const truckName0 = row.assetName ?? '—';
+  const addDeduction = async () => {
+    const val = Math.abs(parseFloat(dedAmount));
+    if (!dedName)        { setDedError('Pick a driver to charge.'); return; }
+    if (!isFinite(val) || val <= 0) { setDedError('Enter a dollar amount.'); return; }
+    setDedBusy(true);
+    setDedError(null);
+    try {
+      // Deductions are stored negative — payroll sums amounts into pay.
+      await railway.createPayrollAdjustment({
+        driverName:  dedName,
+        weekStart:   weekSaturdayISO(new Date(row.submittedAt)),
+        category:    'Deduction',
+        description: `Cab left dirty — Truck ${truckName0}, ${new Date(row.submittedAt).toLocaleDateString()}`,
+        amount:      -val,
+        inspectionReportId: row.id,
+      });
+      setDedAmount('');
+      setDedName('');
+      setDedTick(t => t + 1);
+    } catch {
+      setDedError('Could not save the deduction. Try again.');
+    } finally {
+      setDedBusy(false);
+    }
+  };
+  const removeDeduction = async (id: string) => {
+    setDedBusy(true);
+    try { await railway.deletePayrollAdjustment(id); setDedTick(t => t + 1); }
+    catch { setDedError('Could not remove the deduction.'); }
+    finally { setDedBusy(false); }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -6552,6 +6765,75 @@ function DirtyDetail({
                 ))}
               </div>
             )}
+          </section>
+
+          {/* Payroll deduction — charge the driver who left it dirty.
+              Stored as a negative "Deduction" adjustment linked back to
+              this flag so it can't be double-charged and shows here. */}
+          <section>
+            <SectionHeader>Payroll deduction</SectionHeader>
+
+            {deds.length > 0 && (
+              <div className="flex flex-col gap-2 mb-3">
+                {deds.map(d => (
+                  <div key={d.id} className="rounded-lg px-3.5 py-2.5 flex items-center justify-between"
+                    style={{ background: '#fef2f2', border: '1px solid #fecaca' }}>
+                    <div className="flex flex-col">
+                      <span className="text-[13px] font-semibold" style={{ color: '#991b1b' }}>
+                        {d.driverName} · −{money(d.amount)}
+                      </span>
+                      <span className="text-[11.5px]" style={{ color: '#b45454' }}>
+                        Week of {new Date(`${d.weekStart}T00:00:00`).toLocaleDateString()}
+                      </span>
+                    </div>
+                    <button onClick={() => removeDeduction(d.id)} disabled={dedBusy}
+                      className="rounded-md p-1.5 transition-colors disabled:opacity-40"
+                      style={{ color: '#991b1b' }} title="Remove deduction">
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="rounded-lg p-3 flex flex-col gap-2.5"
+              style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border-light)' }}>
+              <div className="flex items-center gap-2">
+                {drivers.length > 0 ? (
+                  <select value={dedName} onChange={e => setDedName(e.target.value)}
+                    className="flex-1 rounded-md px-2.5 py-2 text-[13px]"
+                    style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border-light)', color: 'var(--gc-text-1)' }}>
+                    <option value="">Charge which driver…</option>
+                    {drivers.map(dr => <option key={dr.name} value={dr.name}>{dr.name}</option>)}
+                  </select>
+                ) : (
+                  <input value={dedName} onChange={e => setDedName(e.target.value)} placeholder="Driver name"
+                    className="flex-1 rounded-md px-2.5 py-2 text-[13px]"
+                    style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border-light)', color: 'var(--gc-text-1)' }} />
+                )}
+                <div className="flex items-center rounded-md px-2"
+                  style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border-light)', width: 120 }}>
+                  <span className="text-[13px]" style={{ color: 'var(--gc-text-3)' }}>$</span>
+                  <input value={dedAmount} onChange={e => setDedAmount(e.target.value)} inputMode="decimal"
+                    placeholder="0.00"
+                    className="w-full py-2 text-[13px] bg-transparent outline-none"
+                    style={{ color: 'var(--gc-text-1)' }} />
+                </div>
+                <button onClick={addDeduction} disabled={dedBusy}
+                  className="rounded-md px-3 py-2 text-[13px] font-semibold flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                  style={{ background: '#d93025', color: '#fff', whiteSpace: 'nowrap' }}>
+                  {dedBusy ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />} Deduction
+                </button>
+              </div>
+              <p className="text-[11.5px]" style={{ color: 'var(--gc-text-3)' }}>
+                Adds a deduction to that driver&rsquo;s pay for the week of the flag. Shows up in Payroll.
+              </p>
+              {dedError && (
+                <div className="rounded-md text-[12px] py-2 px-2.5" style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b' }}>
+                  {dedError}
+                </div>
+              )}
+            </div>
           </section>
         </div>
       )}
