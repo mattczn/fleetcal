@@ -76,7 +76,7 @@ const BUCKET_ICONS: Partial<Record<ExpenseBucketKey, React.ComponentType<{ size?
 const BUCKET_HREFS: Record<ExpenseBucketKey, string> = {
   payroll:       '/payroll',
   fuel:          '/equipment?tab=fuel',
-  insurance:     '/settings?section=recurring-expenses',
+  insurance:     '/expenses/recurring',
   maintenance:   '/expenses/cards?category=maintenance',
   load_expenses: '/expenses/cards?category=load_expenses',
   hotels:        '/expenses/cards?category=hotels',
@@ -276,16 +276,30 @@ function ExpensesPageInner() {
                 {new Date(range.end).toLocaleDateString([], { month: 'long', day: 'numeric', year: 'numeric' })}
               </div>
             </div>
-            <PeriodSelector
-              period={period}
-              onPeriodChange={setPeriod}
-              customStart={customStart}
-              customEnd={customEnd}
-              onCustomStartChange={setCustomStart}
-              onCustomEndChange={setCustomEnd}
-              weekStart={weekStart}
-              onWeekStartChange={setWeekStart}
-            />
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => router.push('/expenses/recurring')}
+                className="text-xs font-semibold px-3 py-1.5 rounded border"
+                style={{
+                  borderColor: 'var(--gc-border)',
+                  background:  'var(--gc-surface)',
+                  color:       'var(--gc-text-2)',
+                }}
+                title="Manage weekly salaries and monthly insurance rules"
+              >
+                Manage recurring
+              </button>
+              <PeriodSelector
+                period={period}
+                onPeriodChange={setPeriod}
+                customStart={customStart}
+                customEnd={customEnd}
+                onCustomStartChange={setCustomStart}
+                onCustomEndChange={setCustomEnd}
+                weekStart={weekStart}
+                onWeekStartChange={setWeekStart}
+              />
+            </div>
           </div>
 
           {/* Total ribbon */}

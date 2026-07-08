@@ -3,8 +3,7 @@
 import { useRef, useState, useEffect, useMemo } from 'react';
 import { parseTimeInput, todayDateKeyInTz } from '@/lib/time-utils';
 import { useOrganization, OrganizationProfile } from '@clerk/nextjs';
-import { ArrowLeft, GripVertical, LayoutList, Bot, ChevronDown, ChevronUp, Globe, Sun, Moon, Monitor, Plus, Pencil, Trash2, Check, X, Truck, Plug, Loader2, Layers, RefreshCw, MapPin, Users, Smartphone, FileText, Sparkles, UserCog, Shield, RotateCcw, Lock, ShieldCheck, ExternalLink, DollarSign } from 'lucide-react';
-import RecurringExpensesPanel from './RecurringExpensesPanel';
+import { ArrowLeft, GripVertical, LayoutList, Bot, ChevronDown, ChevronUp, Globe, Sun, Moon, Monitor, Plus, Pencil, Trash2, Check, X, Truck, Plug, Loader2, Layers, RefreshCw, MapPin, Users, Smartphone, FileText, Sparkles, UserCog, Shield, RotateCcw, Lock, ShieldCheck, ExternalLink } from 'lucide-react';
 import { usePermissions } from '@/lib/usePermissions';
 import { useModules } from '@/lib/useModules';
 import { useIsSuperAdmin } from '@/lib/useIsSuperAdmin';
@@ -68,7 +67,7 @@ import type { InvoiceSnapshot } from '@fleetcal/types';
 
 const PREVIEW_COLOR = '#1a73e8';
 
-type NavItem = 'appearance' | 'timezone' | 'assets' | 'load-fields' | 'ratecon-ai' | 'invoicing' | 'integrations' | 'card-layout' | 'saved-locations' | 'customers' | 'trailers' | 'driver-app' | 'documents' | 'members' | 'role-permissions' | 'modules' | 'recurring-expenses';
+type NavItem = 'appearance' | 'timezone' | 'assets' | 'load-fields' | 'ratecon-ai' | 'invoicing' | 'integrations' | 'card-layout' | 'saved-locations' | 'customers' | 'trailers' | 'driver-app' | 'documents' | 'members' | 'role-permissions' | 'modules';
 
 // ─── Toggle ──────────────────────────────────────────────────────────────────
 
@@ -4718,7 +4717,6 @@ const NAV: { section: string; items: { id: NavItem; label: string; icon: React.R
       { id: 'card-layout',      label: 'Card Layout',      icon: <Layers size={15} /> },
       { id: 'ratecon-ai',       label: 'Rate Con AI',      icon: <Bot size={15} /> },
       { id: 'invoicing',        label: 'Invoicing',        icon: <FileText size={15} /> },
-      { id: 'recurring-expenses', label: 'Recurring Expenses', icon: <DollarSign size={15} /> },
       { id: 'integrations',     label: 'Integrations',     icon: <Plug size={15} /> },
       { id: 'documents',        label: 'Documents',        icon: <FileText size={15} /> },
       { id: 'driver-app',       label: 'Driver App',       icon: <Smartphone size={15} /> },
@@ -4740,7 +4738,6 @@ const NAV_CAPABILITY: Partial<Record<NavItem, Capability>> = {
   'role-permissions': 'org.settings.edit',
   'modules':          'org.settings.edit',
   'invoicing':        'org.settings.edit',
-  'recurring-expenses': 'expenses.access',
   'integrations':     'org.settings.edit',
   'documents':        'org.settings.edit',
   'driver-app':       'org.settings.edit',
@@ -4756,11 +4753,10 @@ const NAV_CAPABILITY: Partial<Record<NavItem, Capability>> = {
 // because absent keys are treated as enabled. MVP-launch orgs see only
 // the panels whose flags are ON in MVP_LAUNCH_DEFAULTS.
 const NAV_MODULE: Partial<Record<NavItem, OrgModule>> = {
-  'integrations':       'motive_integration',
-  'driver-app':         'driver_app',
-  'role-permissions':   'team_roles',
-  'documents':          'custom_documents',
-  'recurring-expenses': 'expenses',
+  'integrations':     'motive_integration',
+  'driver-app':       'driver_app',
+  'role-permissions': 'team_roles',
+  'documents':        'custom_documents',
 };
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
@@ -4933,7 +4929,6 @@ export default function SettingsPage() {
           {active === 'members'           && <MembersPanel />}
           {active === 'role-permissions'  && <RolePermissionsPanel />}
           {active === 'modules'           && <ModulesPanel />}
-          {active === 'recurring-expenses' && <RecurringExpensesPanel />}
         </main>
       </div>
     </div>
