@@ -14,7 +14,6 @@ import type {
   RampTransactionMatchStatus,
   RampAssetLinkSource,
   RampReceipt,
-  ExpenseBucketKey,
   ListRampTransactionsResponse,
   MatchRampTransactionRequest,
   MatchRampTransactionResponse,
@@ -22,7 +21,6 @@ import type {
   RunRampSyncResponse,
   ApiErrorResponse,
 } from "@fleetcal/types";
-import { EXPENSE_BUCKET_KEYS } from "@fleetcal/types";
 
 import { supabase as supabaseTyped } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
@@ -32,8 +30,6 @@ import { runRampSyncSweep } from "../jobs/rampSyncSweep.js";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const supabase = supabaseTyped as any;
 
-const VALID_BUCKETS = new Set<ExpenseBucketKey>(EXPENSE_BUCKET_KEYS);
-
 const TX_COLS = [
   "id", "org_id", "provider", "provider_transaction_id",
   "transacted_at", "amount", "currency",
@@ -42,7 +38,7 @@ const TX_COLS = [
   "cardholder_ramp_user_id", "cardholder_name", "cardholder_email",
   "card_id", "card_last4",
   "asset_id", "trailer_id", "asset_link_source",
-  "bucket_key", "expense_category",
+  "bucket_id", "bucket_key", "expense_category",
   "match_status", "match_confidence", "match_notes",
   "matched_at", "matched_by",
   "created_at", "updated_at",
@@ -69,6 +65,7 @@ interface RampTransactionRow {
   asset_id:                 number | null;
   trailer_id:               number | null;
   asset_link_source:        string;
+  bucket_id:                string | null;
   bucket_key:               string | null;
   expense_category:         string | null;
   match_status:             string;
@@ -102,7 +99,8 @@ function rowToTx(r: RampTransactionRow): RampTransaction {
     assetId:                r.asset_id               ?? undefined,
     trailerId:              r.trailer_id             ?? undefined,
     assetLinkSource:        r.asset_link_source as RampAssetLinkSource,
-    bucketKey:              (r.bucket_key ?? undefined) as ExpenseBucketKey | undefined,
+    bucketId:               r.bucket_id ?? undefined,
+    bucketKey:              r.bucket_key ?? undefined,
     expenseCategory:        r.expense_category ?? undefined,
     matchStatus:            r.match_status as RampTransactionMatchStatus,
     matchConfidence:        r.match_confidence       ?? undefined,
@@ -260,22 +258,31 @@ rampTx.patch("/:id/mark-not-applicable", async (c) => {
   return c.json(res);
 });
 
-// PATCH /v1/ramp-transactions/:id/bucket — set bucket_key for the Card
-// Spend board's inline dropdown. Pass `bucketKey: null` to clear
-// (returns row to Uncategorized).
+// PATCH /v1/ramp-transactions/:id/bucket — set bucket_id (UUID of an
+// expense_buckets row) for the Card Spend board's inline dropdown.
+// Pass `bucketId: null` to clear (returns row to Uncategorized).
 rampTx.patch("/:id/bucket", async (c) => {
   const orgId = c.get("orgId");
   const id    = c.req.param("id");
-  const body = await c.req.json<{ bucketKey: string | null }>().catch(() => null);
+  const body = await c.req.json<{ bucketId: string | null }>().catch(() => null);
   if (!body) {
     return c.json({ error: "bad_request", detail: "invalid json body" }, 400);
   }
-  if (body.bucketKey != null && !VALID_BUCKETS.has(body.bucketKey as ExpenseBucketKey)) {
-    return c.json({ error: "bad_request", detail: `invalid bucketKey: ${body.bucketKey}` }, 400);
+  // If setting non-null, verify the bucket belongs to this org.
+  if (body.bucketId) {
+    const { data: bucket } = await supabase
+      .from("expense_buckets")
+      .select("id")
+      .eq("id", body.bucketId).eq("org_id", orgId)
+      .is("deleted_at", null)
+      .maybeSingle();
+    if (!bucket) {
+      return c.json({ error: "bad_request", detail: "bucketId not found in this org" }, 400);
+    }
   }
   const { data, error } = await supabase
     .from("ramp_transactions")
-    .update({ bucket_key: body.bucketKey })
+    .update({ bucket_id: body.bucketId })
     .eq("id", id).eq("org_id", orgId)
     .select(TX_COLS)
     .single();

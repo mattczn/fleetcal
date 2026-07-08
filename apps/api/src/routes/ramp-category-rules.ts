@@ -2,20 +2,14 @@
  * /v1/ramp-category-rules — CRUD for the pattern→bucket mapping the
  * Ramp sync uses to auto-categorize new txns.
  *
- * Replaces the hardcoded regex table that used to live in
- * lib/rampCategoryMap.ts. The map is still there but only as a source
- * for the "Seed defaults" endpoint — once seeded, only DB rules apply.
- *
- * Match priority: lowest number first. Defaults seed at priority 100
- * so custom user rules at priority 10 take precedence.
- *
- * Module-gated on "expenses". Mutations require org.settings.edit.
+ * Each rule points at an expense_buckets row by bucket_id.
+ * "Seed defaults" inserts the FleetCal starter set, mapping each
+ * default pattern to a bucket by system_role or by name match.
  */
 
 import { Hono } from "hono";
 import type {
   RampCategoryRule,
-  ExpenseBucketKey,
   CreateRampCategoryRuleRequest,
   UpdateRampCategoryRuleRequest,
   ListRampCategoryRulesResponse,
@@ -23,7 +17,6 @@ import type {
   SeedRampCategoryRulesResponse,
   ApiErrorResponse,
 } from "@fleetcal/types";
-import { EXPENSE_BUCKET_KEYS } from "@fleetcal/types";
 
 import { supabase as supabaseTyped } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
@@ -33,35 +26,45 @@ import { DEFAULT_RAMP_RULES } from "../lib/rampCategoryMap.js";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const supabase = supabaseTyped as any;
 
-const VALID_BUCKETS = new Set<ExpenseBucketKey>(EXPENSE_BUCKET_KEYS);
-
 interface RuleRow {
   id:         string;
   org_id:     string;
   pattern:    string;
   is_regex:   boolean;
-  bucket_key: string;
+  bucket_id:  string;
   priority:   number;
   notes:      string | null;
   created_at: string;
   updated_at: string;
+  expense_buckets?: { name: string } | null;
 }
 
 function rowToDomain(r: RuleRow): RampCategoryRule {
   return {
-    id:        r.id,
-    orgId:     r.org_id,
-    pattern:   r.pattern,
-    isRegex:   r.is_regex,
-    bucketKey: r.bucket_key as ExpenseBucketKey,
-    priority:  r.priority,
-    notes:     r.notes ?? undefined,
-    createdAt: r.created_at,
-    updatedAt: r.updated_at,
+    id:         r.id,
+    orgId:      r.org_id,
+    pattern:    r.pattern,
+    isRegex:    r.is_regex,
+    bucketId:   r.bucket_id,
+    bucketName: r.expense_buckets?.name ?? undefined,
+    priority:   r.priority,
+    notes:      r.notes ?? undefined,
+    createdAt:  r.created_at,
+    updatedAt:  r.updated_at,
   };
 }
 
-const COLS = "id, org_id, pattern, is_regex, bucket_key, priority, notes, created_at, updated_at";
+const COLS = "id, org_id, pattern, is_regex, bucket_id, priority, notes, created_at, updated_at, expense_buckets!inner(name)";
+
+async function bucketBelongsToOrg(orgId: string, bucketId: string): Promise<boolean> {
+  const { data } = await supabase
+    .from("expense_buckets")
+    .select("id")
+    .eq("id", bucketId).eq("org_id", orgId)
+    .is("deleted_at", null)
+    .maybeSingle();
+  return !!data;
+}
 
 const rules = new Hono<{ Variables: AuthVariables }>();
 rules.use("*", requireModule("expenses"), requireCapability("expenses.access"));
@@ -90,8 +93,8 @@ rules.post("/", requireCapability("org.settings.edit"), async (c) => {
   if (!body.pattern?.trim()) {
     return c.json({ error: "bad_request", detail: "pattern is required" }, 400);
   }
-  if (!VALID_BUCKETS.has(body.bucketKey)) {
-    return c.json({ error: "bad_request", detail: `invalid bucketKey: ${body.bucketKey}` }, 400);
+  if (!body.bucketId || !(await bucketBelongsToOrg(orgId, body.bucketId))) {
+    return c.json({ error: "bad_request", detail: "bucketId not found in this org" }, 400);
   }
   const isRegex = body.isRegex ?? true;
   if (isRegex) {
@@ -101,12 +104,12 @@ rules.post("/", requireCapability("org.settings.edit"), async (c) => {
     }
   }
   const row = {
-    org_id:     orgId,
-    pattern:    body.pattern.trim(),
-    is_regex:   isRegex,
-    bucket_key: body.bucketKey,
-    priority:   body.priority ?? 100,
-    notes:      body.notes?.trim() || null,
+    org_id:    orgId,
+    pattern:   body.pattern.trim(),
+    is_regex:  isRegex,
+    bucket_id: body.bucketId,
+    priority:  body.priority ?? 100,
+    notes:     body.notes?.trim() || null,
   };
   const { data, error } = await supabase
     .from("ramp_category_rules")
@@ -132,16 +135,15 @@ rules.patch("/:id", requireCapability("org.settings.edit"), async (c) => {
     update.pattern = body.pattern.trim();
   }
   if (body.isRegex !== undefined) update.is_regex = body.isRegex;
-  if (body.bucketKey !== undefined) {
-    if (!VALID_BUCKETS.has(body.bucketKey)) {
-      return c.json({ error: "bad_request", detail: `invalid bucketKey: ${body.bucketKey}` }, 400);
+  if (body.bucketId !== undefined) {
+    if (!(await bucketBelongsToOrg(orgId, body.bucketId))) {
+      return c.json({ error: "bad_request", detail: "bucketId not found in this org" }, 400);
     }
-    update.bucket_key = body.bucketKey;
+    update.bucket_id = body.bucketId;
   }
   if (body.priority !== undefined) update.priority = body.priority;
   if (body.notes !== undefined) update.notes = body.notes?.trim() || null;
 
-  // Validate regex if either pattern OR is_regex is being changed to true.
   if ((update.is_regex ?? undefined) !== false && update.pattern) {
     try { new RegExp(update.pattern as string, "i"); }
     catch (e) {
@@ -175,13 +177,37 @@ rules.delete("/:id", requireCapability("org.settings.edit"), async (c) => {
   return c.json({ ok: true });
 });
 
-/** POST /v1/ramp-category-rules/seed-defaults
- *  Insert the built-in DEFAULT_RAMP_RULES for this org, skipping any
- *  that already exist by pattern. Idempotent — safe to call multiple
- *  times. */
+/** POST /seed-defaults — insert the built-in starter rules for this org.
+ *  Each DEFAULT_RAMP_RULES row targets a legacy bucket_key ('fleet_ops',
+ *  'software_overhead', 'insurance_claims'); we look up whichever
+ *  expense_buckets row currently holds the matching system_role (for
+ *  fleet_ops we use 'mudflap_fuel', for the others we match by name).
+ *  If the matching bucket doesn't exist, the rule is skipped. */
 rules.post("/seed-defaults", requireCapability("org.settings.edit"), async (c) => {
   const orgId = c.get("orgId");
   try {
+    // Load all buckets for this org to map legacy keys → uuids.
+    const { data: bucketRows } = await supabase
+      .from("expense_buckets")
+      .select("id, name, system_role")
+      .eq("org_id", orgId)
+      .is("deleted_at", null)
+      .is("parent_id", null);
+    const bucketByLegacy = new Map<string, string>();
+    for (const b of (bucketRows ?? []) as Array<{ id: string; name: string; system_role: string | null }>) {
+      if (b.system_role === 'mudflap_fuel') bucketByLegacy.set('fleet_ops', b.id);
+      if (b.system_role === 'driver_pay')   bucketByLegacy.set('payroll_people', b.id);
+      // Fallbacks: match by conventional name.
+      if (b.name === 'Fleet Operations')    bucketByLegacy.set('fleet_ops', b.id);
+      if (b.name === 'Payroll & People')    bucketByLegacy.set('payroll_people', b.id);
+      if (b.name === 'Facilities')          bucketByLegacy.set('facilities', b.id);
+      if (b.name === 'Insurance & Claims')  bucketByLegacy.set('insurance_claims', b.id);
+      if (b.name === 'Software & Overhead') bucketByLegacy.set('software_overhead', b.id);
+      if (b.name === 'Capex')               bucketByLegacy.set('capex', b.id);
+      if (b.name === 'Taxes')               bucketByLegacy.set('taxes', b.id);
+      if (b.name === 'Owner Draws')         bucketByLegacy.set('owner_draws', b.id);
+    }
+
     const { data: existing } = await supabase
       .from("ramp_category_rules")
       .select("pattern")
@@ -191,17 +217,19 @@ rules.post("/seed-defaults", requireCapability("org.settings.edit"), async (c) =
       ((existing ?? []) as Array<{ pattern: string }>).map(r => r.pattern),
     );
 
-    let seeded = 0;
+    let seeded  = 0;
     let skipped = 0;
     for (const rule of DEFAULT_RAMP_RULES) {
       if (existingPatterns.has(rule.pattern)) { skipped++; continue; }
+      const bucketId = bucketByLegacy.get(rule.bucketKey);
+      if (!bucketId) { skipped++; continue; }
       const { error } = await supabase.from("ramp_category_rules").insert({
-        org_id:     orgId,
-        pattern:    rule.pattern,
-        is_regex:   true,
-        bucket_key: rule.bucketKey,
-        priority:   100,
-        notes:      "seeded from FleetCal defaults",
+        org_id:    orgId,
+        pattern:   rule.pattern,
+        is_regex:  true,
+        bucket_id: bucketId,
+        priority:  100,
+        notes:     "seeded from FleetCal defaults",
       });
       if (error) continue;
       seeded++;

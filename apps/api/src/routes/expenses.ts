@@ -1,29 +1,28 @@
 /**
  * /v1/expenses — federated dashboard endpoints.
  *
- * Eight primary buckets + one CTA. Routing is now purely by bucket_key:
- * recurring_expenses.bucket_key, expense_entries.bucket_key, and
- * ramp_transactions.bucket_key all point directly at the dashboard tile
- * they feed. No more kind-to-bucket mapping table in code.
+ * Buckets are dynamic (expense_buckets table, 2-level tree per org).
+ * The summary route enumerates them and sums entries/rules/ramp txns
+ * by bucket_id, rolling sub-buckets up into their parents.
  *
- * Special cases still applied:
- *   - Payroll & People auto-includes driver_pay from events +
- *     payroll_adjustments (the /payroll page's live source of truth).
- *   - Fleet Operations auto-includes fuel_transactions (Mudflap) since
- *     those don't have a bucket_key column.
- *   - Uncategorized CTA lists Ramp txns with bucket_key IS NULL.
+ * Auto-injected sources — driver_pay + payroll_adjustments and
+ * Mudflap fuel_transactions — flow into whichever bucket carries the
+ * matching system_role. If no bucket holds a role, that source doesn't
+ * appear on any tile (visible via a client-side warning).
+ *
+ * Uncategorized Ramp txns become an "Uncategorized card spend" pseudo-
+ * bucket appended after the real ones.
  */
 
 import { Hono } from "hono";
 import type {
   ExpensesSummaryResponse,
-  ExpenseBucket,
-  ExpenseBucketKey,
+  ExpenseBucketSummary,
   ExpensesActivityResponse,
   ExpenseEvent,
   ApiErrorResponse,
 } from "@fleetcal/types";
-import { EXPENSE_BUCKET_KEYS, EXPENSE_BUCKET_LABELS } from "@fleetcal/types";
+import { UNCATEGORIZED_BUCKET_ID } from "@fleetcal/types";
 
 import { supabase as supabaseTyped } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
@@ -77,17 +76,15 @@ function prevWindow(w: Window): Window {
   };
 }
 
-// ── Recurring proration ────────────────────────────────────────────────
+// ── Prorate + data loading ─────────────────────────────────────────────
 
 interface RecurringRow {
-  id:             string;
-  bucket_key:     string;
+  bucket_id:      string;
   amount:         string | number;
   cadence:        string;
   effective_from: string;
   effective_to:   string | null;
 }
-
 function prorate(rule: RecurringRow, w: Window): number {
   const ruleStart = new Date(`${rule.effective_from}T00:00:00Z`);
   const ruleEnd   = rule.effective_to
@@ -103,72 +100,85 @@ function prorate(rule: RecurringRow, w: Window): number {
   return Number(rule.amount) * (overlapDays / periodDays);
 }
 
-async function loadActiveRules(orgId: string, w: Window): Promise<RecurringRow[]> {
-  const { data, error } = await supabase
-    .from("recurring_expenses")
-    .select("id, bucket_key, amount, cadence, effective_from, effective_to")
-    .eq("org_id", orgId)
-    .is("deleted_at", null)
-    .lte("effective_from", w.to)
-    .or(`effective_to.is.null,effective_to.gte.${w.from}`);
-  if (error) throw new Error(`recurring rules: ${error.message}`);
-  return (data ?? []) as RecurringRow[];
+interface BucketRow {
+  id:          string;
+  parent_id:   string | null;
+  name:        string;
+  icon:        string | null;
+  color:       string | null;
+  sort_order:  number;
+  system_role: string | null;
 }
 
-// ── One-time entries ────────────────────────────────────────────────────
-
-interface EntryRow { id: string; bucket_key: string; amount: string | number; }
-
-async function loadEntries(orgId: string, w: Window): Promise<EntryRow[]> {
-  const { data, error } = await supabase
-    .from("expense_entries")
-    .select("id, bucket_key, amount")
-    .eq("org_id", orgId)
-    .is("deleted_at", null)
-    .gte("date", w.from)
-    .lte("date", w.to);
-  if (error) throw new Error(`expense_entries: ${error.message}`);
-  return (data ?? []) as EntryRow[];
+interface Snapshot {
+  perBucket: Map<string, { total: number; count: number }>;
+  uncategorized: { total: number; count: number };
 }
 
-// ── Ramp categorized ────────────────────────────────────────────────────
-
-interface RampRow { id: string; bucket_key: string | null; amount: string | number; }
-
-async function loadRampCategorized(orgId: string, w: Window): Promise<RampRow[]> {
-  const { data, error } = await supabase
-    .from("ramp_transactions")
-    .select("id, bucket_key, amount")
-    .eq("org_id", orgId)
-    .is("deleted_at", null)
-    .not("bucket_key", "is", null)
-    .gte("transacted_at", w.fromTs)
-    .lte("transacted_at", w.toTs);
-  if (error) throw new Error(`ramp categorized: ${error.message}`);
-  return (data ?? []) as RampRow[];
-}
-
-async function loadRampUncategorized(orgId: string, w: Window) {
-  const { data, error } = await supabase
-    .from("ramp_transactions")
-    .select("amount")
-    .eq("org_id", orgId)
-    .is("deleted_at", null)
-    .is("bucket_key", null)
-    .gte("transacted_at", w.fromTs)
-    .lte("transacted_at", w.toTs);
-  if (error) throw new Error(`ramp uncategorized: ${error.message}`);
-  const rows = (data ?? []) as Array<{ amount: string | number | null }>;
-  return {
-    total: rows.reduce((s, r) => s + Number(r.amount ?? 0), 0),
-    count: rows.length,
+async function snapshot(orgId: string, w: Window, bucketIds: Set<string>): Promise<Snapshot> {
+  const perBucket = new Map<string, { total: number; count: number }>();
+  const add = (id: string | null | undefined, amount: number) => {
+    if (!id || !bucketIds.has(id)) return;
+    const cur = perBucket.get(id) ?? { total: 0, count: 0 };
+    cur.total += amount;
+    cur.count += 1;
+    perBucket.set(id, cur);
   };
+
+  const [rulesRes, entriesRes, rampCategRes, rampUncatRes] = await Promise.all([
+    supabase
+      .from("recurring_expenses")
+      .select("bucket_id, amount, cadence, effective_from, effective_to")
+      .eq("org_id", orgId)
+      .is("deleted_at", null)
+      .lte("effective_from", w.to)
+      .or(`effective_to.is.null,effective_to.gte.${w.from}`),
+    supabase
+      .from("expense_entries")
+      .select("bucket_id, amount")
+      .eq("org_id", orgId)
+      .is("deleted_at", null)
+      .gte("date", w.from)
+      .lte("date", w.to),
+    supabase
+      .from("ramp_transactions")
+      .select("bucket_id, amount")
+      .eq("org_id", orgId)
+      .is("deleted_at", null)
+      .not("bucket_id", "is", null)
+      .gte("transacted_at", w.fromTs)
+      .lte("transacted_at", w.toTs),
+    supabase
+      .from("ramp_transactions")
+      .select("amount")
+      .eq("org_id", orgId)
+      .is("deleted_at", null)
+      .is("bucket_id", null)
+      .gte("transacted_at", w.fromTs)
+      .lte("transacted_at", w.toTs),
+  ]);
+  if (rulesRes.error)     throw new Error(`recurring: ${rulesRes.error.message}`);
+  if (entriesRes.error)   throw new Error(`entries: ${entriesRes.error.message}`);
+  if (rampCategRes.error) throw new Error(`ramp categ: ${rampCategRes.error.message}`);
+  if (rampUncatRes.error) throw new Error(`ramp uncat: ${rampUncatRes.error.message}`);
+
+  for (const r of (rulesRes.data ?? []) as RecurringRow[]) add(r.bucket_id, prorate(r, w));
+  for (const e of (entriesRes.data ?? []) as Array<{ bucket_id: string; amount: string | number | null }>) {
+    add(e.bucket_id, Number(e.amount ?? 0));
+  }
+  for (const t of (rampCategRes.data ?? []) as Array<{ bucket_id: string; amount: string | number | null }>) {
+    add(t.bucket_id, Number(t.amount ?? 0));
+  }
+  const uncatRows = (rampUncatRes.data ?? []) as Array<{ amount: string | number | null }>;
+  const uncat = {
+    total: uncatRows.reduce((s, r) => s + Number(r.amount ?? 0), 0),
+    count: uncatRows.length,
+  };
+  return { perBucket, uncategorized: uncat };
 }
 
-// ── Payroll driver + adjustments (live source of truth) ────────────────
-
-async function payrollDriverAndAdjustments(orgId: string, w: Window) {
-  const [eventsQ1, eventsQ2, adjustments] = await Promise.all([
+async function payrollDriverAndAdjustments(orgId: string, w: Window): Promise<{ total: number; count: number }> {
+  const [q1, q2, adj] = await Promise.all([
     supabase
       .from("events")
       .select("driver_pay")
@@ -194,22 +204,20 @@ async function payrollDriverAndAdjustments(orgId: string, w: Window) {
       .gte("week_start", w.from)
       .lte("week_start", w.to),
   ]);
-  if (eventsQ1.error) throw new Error(`events (q1): ${eventsQ1.error.message}`);
-  if (eventsQ2.error) throw new Error(`events (q2): ${eventsQ2.error.message}`);
-  if (adjustments.error) throw new Error(`payroll_adjustments: ${adjustments.error.message}`);
+  if (q1.error)  throw new Error(`events (q1): ${q1.error.message}`);
+  if (q2.error)  throw new Error(`events (q2): ${q2.error.message}`);
+  if (adj.error) throw new Error(`payroll_adjustments: ${adj.error.message}`);
   const rows = [
-    ...((eventsQ1.data ?? []) as Array<{ driver_pay: string | number | null }>),
-    ...((eventsQ2.data ?? []) as Array<{ driver_pay: string | number | null }>),
+    ...((q1.data ?? []) as Array<{ driver_pay: string | number | null }>),
+    ...((q2.data ?? []) as Array<{ driver_pay: string | number | null }>),
   ];
   const loadPay = rows.reduce((s, r) => s + Number(r.driver_pay ?? 0), 0);
-  const adjSum  = ((adjustments.data ?? []) as Array<{ amount: string | number | null }>)
+  const adjSum  = ((adj.data ?? []) as Array<{ amount: string | number | null }>)
     .reduce((s, r) => s + Number(r.amount ?? 0), 0);
   return { total: loadPay + adjSum, count: rows.length };
 }
 
-// ── Fuel Mudflap (feeds Fleet Ops by default) ──────────────────────────
-
-async function mudflapFuel(orgId: string, w: Window) {
+async function mudflapFuel(orgId: string, w: Window): Promise<{ total: number; count: number }> {
   const { data, error } = await supabase
     .from("fuel_transactions")
     .select("total_charged")
@@ -225,100 +233,135 @@ async function mudflapFuel(orgId: string, w: Window) {
   };
 }
 
-// ── Compose one window's snapshot ───────────────────────────────────────
-
-interface Snapshot {
-  buckets: Record<ExpenseBucketKey, { total: number; count: number }>;
-  uncategorized: { total: number; count: number };
-}
-
-async function snapshot(orgId: string, w: Window): Promise<Snapshot> {
-  const [rules, entries, ramp, driver, fuel, uncat] = await Promise.all([
-    loadActiveRules(orgId, w),
-    loadEntries(orgId, w),
-    loadRampCategorized(orgId, w),
-    payrollDriverAndAdjustments(orgId, w),
-    mudflapFuel(orgId, w),
-    loadRampUncategorized(orgId, w),
-  ]);
-
-  // Initialize every bucket to zero, then accumulate from each source.
-  const buckets = Object.fromEntries(
-    EXPENSE_BUCKET_KEYS.map(k => [k, { total: 0, count: 0 }]),
-  ) as Record<ExpenseBucketKey, { total: number; count: number }>;
-
-  // Recurring rules → their declared bucket_key, prorated.
-  for (const rule of rules) {
-    const key = rule.bucket_key as ExpenseBucketKey;
-    if (!buckets[key]) continue;
-    buckets[key].total += prorate(rule, w);
-    buckets[key].count += 1;
-  }
-
-  // One-time entries → their declared bucket_key, at face value.
-  for (const e of entries) {
-    const key = e.bucket_key as ExpenseBucketKey;
-    if (!buckets[key]) continue;
-    buckets[key].total += Number(e.amount ?? 0);
-    buckets[key].count += 1;
-  }
-
-  // Ramp txns → their declared bucket_key. Uncategorized handled below.
-  for (const r of ramp) {
-    if (!r.bucket_key) continue;
-    const key = r.bucket_key as ExpenseBucketKey;
-    if (!buckets[key]) continue;
-    buckets[key].total += Number(r.amount ?? 0);
-    buckets[key].count += 1;
-  }
-
-  // Auto-added sources that don't carry a bucket_key column:
-  //   Payroll & People — always includes live driver pay + adjustments.
-  //   Fleet Operations — always includes Mudflap fuel transactions.
-  buckets.payroll_people.total += driver.total;
-  buckets.payroll_people.count += driver.count;
-  buckets.fleet_ops.total      += fuel.total;
-  buckets.fleet_ops.count      += fuel.count;
-
-  return { buckets, uncategorized: uncat };
-}
-
-// ── /summary ────────────────────────────────────────────────────────────
-
 expenses.get("/summary", async (c) => {
   const orgId = c.get("orgId");
   const w    = parseWindow(new URL(c.req.url));
   const prev = prevWindow(w);
 
   try {
+    // Load bucket tree + auto-injected sources for both windows.
+    const [{ data: buckets, error: bErr }, driver, fuel, driverPrev, fuelPrev] = await Promise.all([
+      supabase
+        .from("expense_buckets")
+        .select("id, parent_id, name, icon, color, sort_order, system_role")
+        .eq("org_id", orgId)
+        .is("deleted_at", null)
+        .order("sort_order", { ascending: true }),
+      payrollDriverAndAdjustments(orgId, w),
+      mudflapFuel(orgId, w),
+      payrollDriverAndAdjustments(orgId, prev),
+      mudflapFuel(orgId, prev),
+    ]);
+    if (bErr) throw new Error(`buckets: ${bErr.message}`);
+    const bucketRows = (buckets ?? []) as BucketRow[];
+    const bucketIds  = new Set(bucketRows.map(b => b.id));
+
     const [cur, past] = await Promise.all([
-      snapshot(orgId, w),
-      snapshot(orgId, prev),
+      snapshot(orgId, w,    bucketIds),
+      snapshot(orgId, prev, bucketIds),
     ]);
 
-    const buckets: ExpenseBucket[] = EXPENSE_BUCKET_KEYS.map(key => ({
-      key,
-      label: EXPENSE_BUCKET_LABELS[key],
-      total: cur.buckets[key].total,
-      count: cur.buckets[key].count,
-      prevTotal: past.buckets[key].total,
-      prevCount: past.buckets[key].count,
-    }));
+    // Route auto-injected sources into the buckets flagged with the
+    // matching system_role. If no bucket carries a role, the amounts
+    // silently do nothing (client shows a warning).
+    for (const b of bucketRows) {
+      if (b.system_role === 'driver_pay') {
+        const cur1  = cur.perBucket.get(b.id)  ?? { total: 0, count: 0 };
+        const past1 = past.perBucket.get(b.id) ?? { total: 0, count: 0 };
+        cur1.total  += driver.total;      cur1.count  += driver.count;
+        past1.total += driverPrev.total;  past1.count += driverPrev.count;
+        cur.perBucket.set(b.id, cur1);
+        past.perBucket.set(b.id, past1);
+      }
+      if (b.system_role === 'mudflap_fuel') {
+        const cur1  = cur.perBucket.get(b.id)  ?? { total: 0, count: 0 };
+        const past1 = past.perBucket.get(b.id) ?? { total: 0, count: 0 };
+        cur1.total  += fuel.total;      cur1.count  += fuel.count;
+        past1.total += fuelPrev.total;  past1.count += fuelPrev.count;
+        cur.perBucket.set(b.id, cur1);
+        past.perBucket.set(b.id, past1);
+      }
+    }
+
+    // Roll children into parents. Build a summary node per bucket then
+    // nest.
+    interface Node {
+      row:      BucketRow;
+      selfTotal: number;
+      selfCount: number;
+      selfPrevTotal: number;
+      selfPrevCount: number;
+    }
+    const nodes: Map<string, Node> = new Map();
+    for (const b of bucketRows) {
+      const c1 = cur.perBucket.get(b.id)  ?? { total: 0, count: 0 };
+      const p1 = past.perBucket.get(b.id) ?? { total: 0, count: 0 };
+      nodes.set(b.id, {
+        row: b,
+        selfTotal: c1.total, selfCount: c1.count,
+        selfPrevTotal: p1.total, selfPrevCount: p1.count,
+      });
+    }
+
+    // Build children index.
+    const kidsOf = new Map<string, BucketRow[]>();
+    for (const b of bucketRows) {
+      if (!b.parent_id) continue;
+      const arr = kidsOf.get(b.parent_id) ?? [];
+      arr.push(b);
+      kidsOf.set(b.parent_id, arr);
+    }
+
+    const tops = bucketRows.filter(b => !b.parent_id);
+    const buckets_out: ExpenseBucketSummary[] = tops.map(top => {
+      const self = nodes.get(top.id)!;
+      const kids = (kidsOf.get(top.id) ?? [])
+        .sort((a, b) => a.sort_order - b.sort_order)
+        .map(kid => {
+          const kn = nodes.get(kid.id)!;
+          return {
+            bucketId:       kid.id,
+            parentBucketId: top.id,
+            name:           kid.name,
+            icon:           kid.icon ?? undefined,
+            color:          kid.color ?? undefined,
+            total:          kn.selfTotal,
+            count:          kn.selfCount,
+            prevTotal:      kn.selfPrevTotal,
+            prevCount:      kn.selfPrevCount,
+          } satisfies ExpenseBucketSummary;
+        });
+      const total     = self.selfTotal     + kids.reduce((s, k) => s + k.total, 0);
+      const count     = self.selfCount     + kids.reduce((s, k) => s + k.count, 0);
+      const prevTotal = self.selfPrevTotal + kids.reduce((s, k) => s + k.prevTotal, 0);
+      const prevCount = self.selfPrevCount + kids.reduce((s, k) => s + k.prevCount, 0);
+      return {
+        bucketId:       top.id,
+        parentBucketId: null,
+        name:           top.name,
+        icon:           top.icon ?? undefined,
+        color:          top.color ?? undefined,
+        systemRole:     top.system_role ?? undefined,
+        total, count, prevTotal, prevCount,
+        children: kids.length ? kids : undefined,
+      };
+    });
 
     if (cur.uncategorized.count > 0) {
-      buckets.push({
-        key:       "uncategorized",
-        label:     "Uncategorized card spend",
-        total:     cur.uncategorized.total,
-        count:     cur.uncategorized.count,
-        prevTotal: 0,
-        prevCount: 0,
+      buckets_out.push({
+        bucketId:       UNCATEGORIZED_BUCKET_ID,
+        parentBucketId: null,
+        name:           "Uncategorized card spend",
+        total:          cur.uncategorized.total,
+        count:          cur.uncategorized.count,
+        prevTotal:      0,
+        prevCount:      0,
       });
     }
 
     const res: ExpensesSummaryResponse = {
       period: { from: w.from, to: w.to },
-      buckets,
+      buckets: buckets_out,
     };
     return c.json(res);
   } catch (err) {
@@ -366,7 +409,7 @@ expenses.get("/activity", async (c) => {
         .limit(limit),
       supabase
         .from("expense_entries")
-        .select("id, date, amount, bucket_key, kind, label")
+        .select("id, date, amount, kind, label")
         .eq("org_id", orgId)
         .is("deleted_at", null)
         .gte("date", w.from)
@@ -424,7 +467,7 @@ expenses.get("/activity", async (c) => {
     }
     for (const r of (entriesRes.data ?? []) as Array<{
       id: string; date: string; amount: string | number;
-      bucket_key: string; kind: string | null; label: string;
+      kind: string | null; label: string;
     }>) {
       const tag = r.kind ? ` (${r.kind})` : "";
       events.push({

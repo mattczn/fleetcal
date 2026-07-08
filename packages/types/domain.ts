@@ -1434,13 +1434,14 @@ export interface RampTransaction {
   trailerId?:             number;
   assetLinkSource:        RampAssetLinkSource;
 
-  /** Which /expenses bucket this txn feeds. Nullable — uncategorized
-   *  txns show up on the Uncategorized CTA. Set on sync by
-   *  ramp_category_rules (user-editable) with a hardcoded seed. */
-  bucketKey?:             ExpenseBucketKey;
+  /** UUID of the expense_bucket this txn feeds. Nullable —
+   *  uncategorized txns show up on the Uncategorized CTA. */
+  bucketId?:              string;
+  bucketName?:            string;
 
-  /** @deprecated superseded by bucketKey. Kept for backward-compat with
-   *  older UI code. Ramp's own SK category lives in skCategoryName. */
+  /** @deprecated superseded by bucketId. Kept for backward-compat. */
+  bucketKey?:             string;
+  /** @deprecated superseded by bucketId. */
   expenseCategory?:       string;
 
   matchStatus:            RampTransactionMatchStatus;
@@ -1478,11 +1479,11 @@ export type RecurringExpenseCadence = 'weekly' | 'monthly';
 export interface RecurringExpense {
   id:             string;
   orgId:          string;
-  /** Which dashboard tile this rule feeds. One of the fixed 8 buckets
-   *  (see ExpenseBucketKey / DASHBOARD_BUCKETS). */
-  bucketKey:      ExpenseBucketKey;
-  /** Optional descriptive tag ("payroll_admin", "yard_rent", or any
-   *  string the user picks). Only used for display. */
+  /** UUID of the expense_bucket this rule feeds. */
+  bucketId:       string;
+  /** Denormalized bucket name for UI display (populated by API). */
+  bucketName?:    string;
+  /** Optional descriptive tag the user picks. */
   kind?:          string;
   label:          string;
   amount:         number;
@@ -1526,61 +1527,83 @@ export const EXPENSE_ENTRY_KIND_SUGGESTIONS: readonly string[] = [
 ] as const;
 
 export interface ExpenseEntry {
-  id:         string;
-  orgId:      string;
-  bucketKey:  ExpenseBucketKey;
-  kind?:      string;
-  date:       string;   // YYYY-MM-DD
-  amount:     number;
-  label:      string;
-  notes?:     string;
-  createdAt:  string;
-  updatedAt:  string;
+  id:          string;
+  orgId:       string;
+  bucketId:    string;
+  bucketName?: string;
+  kind?:       string;
+  date:        string;   // YYYY-MM-DD
+  amount:      number;
+  label:       string;
+  notes?:      string;
+  createdAt:   string;
+  updatedAt:   string;
 }
 
 // ── Ramp category rules (user-editable auto-map) ────────────────────────
 
 export interface RampCategoryRule {
-  id:         string;
-  orgId:      string;
-  pattern:    string;
-  isRegex:    boolean;
-  bucketKey:  ExpenseBucketKey;
-  priority:   number;
-  notes?:     string;
-  createdAt:  string;
-  updatedAt:  string;
+  id:          string;
+  orgId:       string;
+  pattern:     string;
+  isRegex:     boolean;
+  bucketId:    string;
+  bucketName?: string;
+  priority:    number;
+  notes?:      string;
+  createdAt:   string;
+  updatedAt:   string;
 }
 
-/** The 8 fixed dashboard buckets. Hardcoded because they define the tile
- *  grid — adding a bucket is a code + migration change, but that's rare.
- *  Everything BELOW this level (kinds, categories, sub-groups) is free-
- *  text and user-editable. */
-export type ExpenseBucketKey =
-  | 'payroll_people'
-  | 'fleet_ops'
-  | 'facilities'
-  | 'insurance_claims'
-  | 'software_overhead'
-  | 'capex'
-  | 'taxes'
-  | 'owner_draws';
+// ── Expense buckets (user-editable tree) ────────────────────────────────
+//
+// The dashboard tile structure is now data, not code. Each org owns a
+// 2-level tree of buckets — top-level buckets become dashboard tiles,
+// sub-buckets show up in drill-in views. Users add/rename/reorder/
+// delete freely.
 
-export const EXPENSE_BUCKET_KEYS: readonly ExpenseBucketKey[] = [
-  'payroll_people', 'fleet_ops', 'facilities', 'insurance_claims',
-  'software_overhead', 'capex', 'taxes', 'owner_draws',
+/** Auto-injection markers. Only top-level buckets can carry one. The
+ *  API routes driver_pay + payroll_adjustments into whichever bucket
+ *  has 'driver_pay', and fuel_transactions into whichever has
+ *  'mudflap_fuel'. Reassign by editing the bucket. */
+export type ExpenseBucketSystemRole = 'driver_pay' | 'mudflap_fuel';
+
+export const EXPENSE_BUCKET_SYSTEM_ROLES: readonly ExpenseBucketSystemRole[] = [
+  'driver_pay', 'mudflap_fuel',
 ] as const;
 
-export const EXPENSE_BUCKET_LABELS: Record<ExpenseBucketKey, string> = {
-  payroll_people:    'Payroll & People',
-  fleet_ops:         'Fleet Operations',
-  facilities:        'Facilities',
-  insurance_claims:  'Insurance & Claims',
-  software_overhead: 'Software & Overhead',
-  capex:             'Capex',
-  taxes:             'Taxes',
-  owner_draws:       'Owner Draws',
-};
+/** One row in the expense_buckets table. Flat shape — the tree is
+ *  reconstructed client-side (or in the /buckets/tree endpoint) via
+ *  parentBucketId. */
+export interface ExpenseBucket {
+  id:              string;
+  orgId:           string;
+  parentBucketId?: string;
+  name:            string;
+  icon?:           string;    // lucide-react icon name
+  color?:          string;
+  sortOrder:       number;
+  systemRole?:     ExpenseBucketSystemRole;
+  createdAt:       string;
+  updatedAt:       string;
+}
+
+/** Tree-shaped bucket for UI rendering — a top-level bucket + its
+ *  ordered children. */
+export interface ExpenseBucketTreeNode {
+  bucket:   ExpenseBucket;
+  children: ExpenseBucket[];   // sorted by sortOrder
+}
+
+// ── Backward-compat exports ────────────────────────────────────────────
+//
+// The old 8-key enum has been retired at the DB level. These exports
+// remain as free-text `string` for anything typed against the old
+// literal union, so callers that still refer to ExpenseBucketKey
+// compile against a superset (any string).
+
+/** @deprecated buckets are now user-editable data. Use ExpenseBucket['id'] (uuid). */
+export type ExpenseBucketKey = string;
 
 // ── Maintenance ─────────────────────────────────────────────────────────
 //

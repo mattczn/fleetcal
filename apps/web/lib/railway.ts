@@ -82,6 +82,9 @@ import type {
   ListRampCategoryRulesResponse, CreateRampCategoryRuleRequest,
   UpdateRampCategoryRuleRequest, RampCategoryRuleResponse,
   SeedRampCategoryRulesResponse,
+  ListExpenseBucketsResponse, CreateExpenseBucketRequest,
+  UpdateExpenseBucketRequest, ExpenseBucketResponse,
+  ReorderExpenseBucketsRequest,
   ListMaintenanceReportsQuery, ListMaintenanceReportsResponse,
   GetMaintenanceReportResponse,
   UpdateMaintenanceReportRequest, UpdateMaintenanceReportResponse,
@@ -1465,9 +1468,9 @@ class RailwayClient {
     return this.req<RunRampSyncResponse>('POST', `/v1/ramp-transactions/sync`);
   }
 
-  setRampTransactionBucket(id: string, bucketKey: string | null) {
+  setRampTransactionBucket(id: string, bucketId: string | null) {
     return this.req<{ rampTransaction: import('@fleetcal/types').RampTransaction }>(
-      'PATCH', `/v1/ramp-transactions/${id}/bucket`, { bucketKey },
+      'PATCH', `/v1/ramp-transactions/${id}/bucket`, { bucketId },
     );
   }
 
@@ -1506,6 +1509,23 @@ class RailwayClient {
     return this.req<SeedRampCategoryRulesResponse>('POST', `/v1/ramp-category-rules/seed-defaults`);
   }
 
+  // ── Expense buckets ────────────────────────────────────────────────
+  listExpenseBuckets() {
+    return this.req<ListExpenseBucketsResponse>('GET', `/v1/expense-buckets`);
+  }
+  createExpenseBucket(body: CreateExpenseBucketRequest) {
+    return this.req<ExpenseBucketResponse>('POST', `/v1/expense-buckets`, body);
+  }
+  updateExpenseBucket(id: string, body: UpdateExpenseBucketRequest) {
+    return this.req<ExpenseBucketResponse>('PATCH', `/v1/expense-buckets/${id}`, body);
+  }
+  deleteExpenseBucket(id: string) {
+    return this.req<{ ok: true }>('DELETE', `/v1/expense-buckets/${id}`);
+  }
+  reorderExpenseBuckets(body: ReorderExpenseBucketsRequest) {
+    return this.req<{ ok: true }>('POST', `/v1/expense-buckets/reorder`, body);
+  }
+
   // ── Recurring expenses CRUD ────────────────────────────────────────
   listRecurringExpenses(query: { includeEnded?: boolean } = {}) {
     const qs = new URLSearchParams();
@@ -1529,10 +1549,10 @@ class RailwayClient {
   // ── One-time expense entries CRUD ──────────────────────────────────
   listExpenseEntries(query: ListExpenseEntriesRequest = {}) {
     const qs = new URLSearchParams();
-    if (query.from)          qs.set('from',      query.from);
-    if (query.to)            qs.set('to',        query.to);
-    if (query.bucketKey)     qs.set('bucketKey', query.bucketKey);
-    if (query.kind)          qs.set('kind',      query.kind);
+    if (query.from)          qs.set('from',     query.from);
+    if (query.to)            qs.set('to',       query.to);
+    if (query.bucketId)      qs.set('bucketId', query.bucketId);
+    if (query.kind)          qs.set('kind',     query.kind);
     if (query.limit  != null) qs.set('limit',  String(query.limit));
     if (query.offset != null) qs.set('offset', String(query.offset));
     const s = qs.toString();

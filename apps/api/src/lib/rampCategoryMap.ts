@@ -50,11 +50,11 @@ export const DEFAULT_RAMP_RULES: RampRule[] = [
 ];
 
 /** Match a single Ramp sk_category_name against a set of rules. Returns
- *  the first matching rule's bucket_key by ascending priority, or null. */
+ *  the first matching rule's bucket_id by ascending priority, or null. */
 export function matchRuleAgainst(
   skCategoryName: string | null | undefined,
-  rules: Array<{ pattern: string; is_regex: boolean; bucket_key: string; priority: number }>,
-): ExpenseBucketKey | null {
+  rules: Array<{ pattern: string; is_regex: boolean; bucket_id: string; priority: number }>,
+): string | null {
   if (!skCategoryName) return null;
   const sorted = [...rules].sort((a, b) => a.priority - b.priority);
   for (const r of sorted) {
@@ -66,7 +66,7 @@ export function matchRuleAgainst(
     } else {
       matched = skCategoryName.toLowerCase().includes(r.pattern.toLowerCase());
     }
-    if (matched) return r.bucket_key as ExpenseBucketKey;
+    if (matched) return r.bucket_id;
   }
   return null;
 }

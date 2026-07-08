@@ -17,26 +17,26 @@ import RequireCap from '@/components/auth/RequireCap';
 import AppShell from '@/components/nav/AppShell';
 import { StyledSelect } from '@/components/ui/StyledSelect';
 import { railway } from '@/lib/railway';
-import type { RampCategoryRule, ExpenseBucketKey } from '@fleetcal/types';
-import { EXPENSE_BUCKET_KEYS, EXPENSE_BUCKET_LABELS } from '@fleetcal/types';
+import type { RampCategoryRule } from '@fleetcal/types';
+import BucketSelect, { invalidateBucketCache } from '../BucketSelect';
 
 interface DraftForm {
-  pattern:   string;
-  isRegex:   boolean;
-  bucketKey: ExpenseBucketKey;
-  priority:  string;
-  notes:     string;
+  pattern:  string;
+  isRegex:  boolean;
+  bucketId: string;
+  priority: string;
+  notes:    string;
 }
 const EMPTY_DRAFT: DraftForm = {
-  pattern: '', isRegex: true, bucketKey: 'fleet_ops', priority: '100', notes: '',
+  pattern: '', isRegex: true, bucketId: '', priority: '100', notes: '',
 };
 function draftFrom(r: RampCategoryRule): DraftForm {
   return {
-    pattern: r.pattern,
-    isRegex: r.isRegex,
-    bucketKey: r.bucketKey,
+    pattern:  r.pattern,
+    isRegex:  r.isRegex,
+    bucketId: r.bucketId,
     priority: String(r.priority),
-    notes: r.notes ?? '',
+    notes:    r.notes ?? '',
   };
 }
 
@@ -77,21 +77,22 @@ function RulesPageInner() {
     if (!Number.isFinite(priority)) { alert('Priority must be a number.'); return; }
     setSaving(true);
     try {
+      if (!draft.bucketId) { alert('Pick a bucket.'); return; }
       if (editingId === 'new') {
         await railway.createRampCategoryRule({
-          pattern:   draft.pattern.trim(),
-          isRegex:   draft.isRegex,
-          bucketKey: draft.bucketKey,
+          pattern:  draft.pattern.trim(),
+          isRegex:  draft.isRegex,
+          bucketId: draft.bucketId,
           priority,
-          notes:     draft.notes.trim() || undefined,
+          notes:    draft.notes.trim() || undefined,
         });
       } else if (editingId) {
         await railway.updateRampCategoryRule(editingId, {
-          pattern:   draft.pattern.trim(),
-          isRegex:   draft.isRegex,
-          bucketKey: draft.bucketKey,
+          pattern:  draft.pattern.trim(),
+          isRegex:  draft.isRegex,
+          bucketId: draft.bucketId,
           priority,
-          notes:     draft.notes.trim() || null,
+          notes:    draft.notes.trim() || null,
         });
       }
       setEditingId(null);
@@ -211,7 +212,7 @@ function RulesPageInner() {
                         </span>
                       </div>
                       <div className="text-xs mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
-                        → {EXPENSE_BUCKET_LABELS[rule.bucketKey]}
+                        → {rule.bucketName ?? '(unknown bucket)'}
                         {rule.notes ? ` · ${rule.notes}` : ''}
                       </div>
                     </div>
@@ -289,14 +290,11 @@ function RuleEditor({
         <div className="col-span-2">
           <label className="text-[11px] font-bold uppercase tracking-wider block mb-1"
                  style={{ color: 'var(--gc-text-3)' }}>Assign to bucket</label>
-          <StyledSelect
-            value={draft.bucketKey}
-            onChange={e => setDraft({ ...draft, bucketKey: e.target.value as ExpenseBucketKey })}
-            style={{ width: '100%' }}>
-            {EXPENSE_BUCKET_KEYS.map(k => (
-              <option key={k} value={k}>{EXPENSE_BUCKET_LABELS[k]}</option>
-            ))}
-          </StyledSelect>
+          <BucketSelect
+            value={draft.bucketId}
+            onChange={id => setDraft({ ...draft, bucketId: id })}
+            style={{ width: '100%' }}
+          />
         </div>
         <div className="col-span-2">
           <label className="text-[11px] font-bold uppercase tracking-wider block mb-1"

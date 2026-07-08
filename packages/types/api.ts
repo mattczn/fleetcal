@@ -1588,27 +1588,32 @@ export interface RunRampSyncResponse {
  *  bucket-specific signals go in `meta` — Payroll uses it to expose
  *  the 4-way sub-bucket breakdown; Uncategorized uses it for the CTA
  *  count. */
-/** Bucket key on the summary response. The 8 primary buckets come from
- *  ExpenseBucketKey in domain.ts; 'uncategorized' is a CTA appended by
- *  the summary route when unassigned Ramp txns exist. Exposed as a
- *  distinct type name so it doesn't collide with the primary
- *  ExpenseBucketKey re-exported from domain. */
-import type { ExpenseBucketKey as DomainBucketKey } from './domain';
-export type SummaryBucketKey = DomainBucketKey | 'uncategorized';
+/** Special bucketId marker on /summary for the "Uncategorized card spend"
+ *  CTA row. Real buckets have UUID ids. */
+export const UNCATEGORIZED_BUCKET_ID = '__uncategorized__' as const;
+export type SummaryBucketKey = string | typeof UNCATEGORIZED_BUCKET_ID;
 
-export interface ExpenseBucket {
-  key:        SummaryBucketKey;
-  label:      string;
-  total:      number;
-  count:      number;
-  prevTotal:  number;
-  prevCount:  number;
-  meta?:      Record<string, number | string | null>;
+/** One rolled-up bucket on the /summary response. Top-level tiles are
+ *  the outer array; drill-in children (sub-buckets) live under
+ *  `children` already rolled up. */
+export interface ExpenseBucketSummary {
+  bucketId:       SummaryBucketKey;
+  parentBucketId: string | null;
+  name:           string;
+  icon?:          string;
+  color?:         string;
+  systemRole?:    string;
+  total:          number;
+  count:          number;
+  prevTotal:      number;
+  prevCount:      number;
+  children?:      ExpenseBucketSummary[];
 }
 
+
 export interface ExpensesSummaryResponse {
-  period: { from: string; to: string };
-  buckets: ExpenseBucket[];
+  period:  { from: string; to: string };
+  buckets: ExpenseBucketSummary[];
 }
 
 /** Normalized event for the /expenses "Latest activity" feed. */
@@ -1640,7 +1645,7 @@ export interface ListRecurringExpensesResponse {
 }
 
 export interface CreateRecurringExpenseRequest {
-  bucketKey:      DomainBucketKey;
+  bucketId:       string;
   kind?:          string;
   label:          string;
   amount:         number;
@@ -1651,13 +1656,13 @@ export interface CreateRecurringExpenseRequest {
 }
 
 export interface UpdateRecurringExpenseRequest {
-  bucketKey?:     DomainBucketKey;
+  bucketId?:      string;
   kind?:          string | null;
   label?:         string;
   amount?:        number;
   cadence?:       RecurringExpenseCadence;
   effectiveFrom?: string;
-  effectiveTo?:   string | null;   // pass null to reopen
+  effectiveTo?:   string | null;
   notes?:         string | null;
 }
 
@@ -1676,12 +1681,12 @@ export interface BackfillRampCategoriesResponse {
 import type { ExpenseEntry, RampCategoryRule } from './domain';
 
 export interface ListExpenseEntriesRequest {
-  from?:      string;
-  to?:        string;
-  bucketKey?: DomainBucketKey;
-  kind?:      string;
-  limit?:     number;
-  offset?:    number;
+  from?:     string;
+  to?:       string;
+  bucketId?: string;
+  kind?:     string;
+  limit?:    number;
+  offset?:   number;
 }
 export interface ListExpenseEntriesResponse {
   expenseEntries: ExpenseEntry[];
@@ -1689,20 +1694,20 @@ export interface ListExpenseEntriesResponse {
 }
 
 export interface CreateExpenseEntryRequest {
-  bucketKey: DomainBucketKey;
-  kind?:     string;
-  date:      string;   // YYYY-MM-DD
-  amount:    number;
-  label:     string;
-  notes?:    string;
+  bucketId: string;
+  kind?:    string;
+  date:     string;   // YYYY-MM-DD
+  amount:   number;
+  label:    string;
+  notes?:   string;
 }
 export interface UpdateExpenseEntryRequest {
-  bucketKey?: DomainBucketKey;
-  kind?:      string | null;
-  date?:      string;
-  amount?:    number;
-  label?:     string;
-  notes?:     string | null;
+  bucketId?: string;
+  kind?:     string | null;
+  date?:     string;
+  amount?:   number;
+  label?:    string;
+  notes?:    string | null;
 }
 export interface ExpenseEntryResponse {
   expenseEntry: ExpenseEntry;
@@ -1714,25 +1719,79 @@ export interface ListRampCategoryRulesResponse {
   rules: RampCategoryRule[];
 }
 export interface CreateRampCategoryRuleRequest {
-  pattern:   string;
-  isRegex?:  boolean;    // default true
-  bucketKey: DomainBucketKey;
-  priority?: number;     // default 100
+  pattern:  string;
+  isRegex?: boolean;
+  bucketId: string;
+  priority?: number;
   notes?:    string;
 }
 export interface UpdateRampCategoryRuleRequest {
-  pattern?:   string;
-  isRegex?:   boolean;
-  bucketKey?: DomainBucketKey;
-  priority?:  number;
-  notes?:     string | null;
+  pattern?:  string;
+  isRegex?:  boolean;
+  bucketId?: string;
+  priority?: number;
+  notes?:    string | null;
 }
 export interface RampCategoryRuleResponse {
   rule: RampCategoryRule;
 }
 export interface SeedRampCategoryRulesResponse {
-  seeded:    number;
-  skipped:   number;   // rules that would duplicate an existing pattern
+  seeded:  number;
+  skipped: number;
+}
+
+// ── Expense buckets CRUD ────────────────────────────────────────────────
+
+import type { ExpenseBucket, ExpenseBucketTreeNode, ExpenseBucketSystemRole } from './domain';
+
+export interface ListExpenseBucketsResponse {
+  /** Flat list, sorted top-level first (parentBucketId null) then by
+   *  parent then by sort_order. Client can either use directly or
+   *  build a tree. */
+  buckets: ExpenseBucket[];
+  /** Same data as `buckets` but already tree-shaped. */
+  tree:    ExpenseBucketTreeNode[];
+}
+
+export interface CreateExpenseBucketRequest {
+  name:            string;
+  parentBucketId?: string | null;
+  icon?:           string;
+  color?:          string;
+  sortOrder?:      number;
+  systemRole?:     ExpenseBucketSystemRole | null;
+}
+export interface UpdateExpenseBucketRequest {
+  name?:           string;
+  icon?:           string | null;
+  color?:          string | null;
+  sortOrder?:      number;
+  systemRole?:     ExpenseBucketSystemRole | null;
+  parentBucketId?: string | null;
+}
+export interface ExpenseBucketResponse {
+  bucket: ExpenseBucket;
+}
+
+/** Reordering: pass an ordered array of ids per parent (top-level uses
+ *  parentBucketId=null). */
+export interface ReorderExpenseBucketsRequest {
+  parentBucketId: string | null;
+  orderedIds:     string[];
+}
+
+/** Returned by DELETE when the bucket still has references. */
+export interface DeleteExpenseBucketBlockedResponse {
+  error:       'delete_blocked';
+  detail:      string;
+  references: {
+    recurring:  number;
+    entries:    number;
+    rampTxns:   number;
+    rampRules:  number;
+    subBuckets: number;
+    systemRole: ExpenseBucketSystemRole | null;
+  };
 }
 
 // ── /v1/odometer-readings ───────────────────────────────────────────────

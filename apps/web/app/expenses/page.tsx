@@ -3,23 +3,15 @@
 /**
  * /expenses — cross-source expenses dashboard.
  *
- * Federated view over fuel_transactions + payroll_records +
- * ramp_transactions. New sources become new API queries + a new tile
- * here; no data pipe. See apps/api/src/routes/expenses.ts for the
- * rollup logic.
- *
- * Deep links from tiles go to each bucket's existing detail surface:
- *   Fuel    → /equipment?tab=fuel
- *   Payroll → /payroll
- *   Cards   → /expenses/cards (this page's sibling)
+ * Tiles are dynamic: one per top-level expense_buckets row. Icons come
+ * from bucket.icon (lucide-react component name); we resolve them via
+ * a lookup below. When a name doesn't resolve, we fall back to a
+ * generic icon.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import {
-  Users, Truck, Building2, ShieldCheck, Cpu, Wrench, Landmark, HandCoins,
-  ArrowUpRight, ArrowDownRight, ArrowRight, CreditCard,
-} from 'lucide-react';
+import * as Icons from 'lucide-react';
 import RequireCap from '@/components/auth/RequireCap';
 import AppShell from '@/components/nav/AppShell';
 import { PeriodSelector } from '@/components/ui/PeriodSelector';
@@ -27,7 +19,8 @@ import {
   currentWeekStartISO, getPeriodRange, type Period,
 } from '@/lib/periodRange';
 import { railway } from '@/lib/railway';
-import type { ExpenseBucket, ExpenseEvent, SummaryBucketKey } from '@fleetcal/types';
+import type { ExpenseBucketSummary, ExpenseEvent } from '@fleetcal/types';
+import { UNCATEGORIZED_BUCKET_ID } from '@fleetcal/types';
 
 const fmtMoney0 = (n: number) =>
   new Intl.NumberFormat('en-US', {
@@ -39,6 +32,16 @@ const fmtMoney2 = (n: number) =>
     style: 'currency', currency: 'USD', maximumFractionDigits: 2,
   }).format(n);
 
+// Resolve a lucide icon name (string) to its component. Anything that
+// doesn't resolve falls back to CreditCard.
+function resolveIcon(name?: string | null): React.ComponentType<{ size?: number; strokeWidth?: number }> {
+  if (!name) return Icons.CreditCard;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const iconMap = Icons as unknown as Record<string, any>;
+  const c = iconMap[name];
+  return (typeof c === 'function' || (c && typeof c === 'object')) ? c : Icons.CreditCard;
+}
+
 function DeltaChip({ current, previous }: { current: number; previous: number }) {
   if (previous === 0 && current === 0) {
     return <span style={{ color: 'var(--gc-text-3)' }} className="text-xs">no data</span>;
@@ -46,7 +49,7 @@ function DeltaChip({ current, previous }: { current: number; previous: number })
   if (previous === 0) {
     return (
       <span className="text-xs inline-flex items-center gap-0.5 font-semibold" style={{ color: '#166534' }}>
-        <ArrowUpRight size={12} strokeWidth={2.4} />new
+        <Icons.ArrowUpRight size={12} strokeWidth={2.4} />new
       </span>
     );
   }
@@ -55,7 +58,7 @@ function DeltaChip({ current, previous }: { current: number; previous: number })
   const up = rounded > 0;
   const flat = rounded === 0;
   const color = flat ? 'var(--gc-text-3)' : up ? '#b91c1c' : '#166534';
-  const Icon  = flat ? ArrowRight : up ? ArrowUpRight : ArrowDownRight;
+  const Icon  = flat ? Icons.ArrowRight : up ? Icons.ArrowUpRight : Icons.ArrowDownRight;
   return (
     <span className="text-xs inline-flex items-center gap-0.5 font-semibold tabular-nums" style={{ color }}>
       <Icon size={12} strokeWidth={2.4} />{Math.abs(rounded)}% vs prev
@@ -63,55 +66,26 @@ function DeltaChip({ current, previous }: { current: number; previous: number })
   );
 }
 
-const BUCKET_ICONS: Partial<Record<SummaryBucketKey, React.ComponentType<{ size?: number; strokeWidth?: number }>>> = {
-  payroll_people:    Users,
-  fleet_ops:         Truck,
-  facilities:        Building2,
-  insurance_claims:  ShieldCheck,
-  software_overhead: Cpu,
-  capex:             Wrench,
-  taxes:             Landmark,
-  owner_draws:       HandCoins,
-  uncategorized:     CreditCard,
-};
-
-const BUCKET_HREFS: Record<SummaryBucketKey, string> = {
-  payroll_people:    '/payroll',
-  fleet_ops:         '/equipment?tab=fuel',
-  facilities:        '/expenses/recurring',
-  insurance_claims:  '/expenses/recurring',
-  software_overhead: '/expenses/recurring',
-  capex:             '/expenses/one-time',
-  taxes:             '/expenses/one-time',
-  owner_draws:       '/expenses/one-time',
-  uncategorized:     '/expenses/cards?category=uncategorized',
-} as const;
-
-function countLabel(bucket: ExpenseBucket): string {
-  const n = bucket.count;
-  const unit =
-    bucket.key === 'payroll_people' ? (n === 1 ? 'event'    : 'events') :
-    bucket.key === 'fleet_ops'      ? (n === 1 ? 'txn'      : 'txns') :
-    bucket.key === 'facilities'     ? (n === 1 ? 'rule'     : 'rules') :
-                                      (n === 1 ? 'entry'    : 'entries');
-  return `${n} ${unit}`;
+function bucketHref(b: ExpenseBucketSummary): string {
+  if (b.bucketId === UNCATEGORIZED_BUCKET_ID) {
+    return '/expenses/cards?category=uncategorized';
+  }
+  if (b.systemRole === 'driver_pay')  return '/payroll';
+  if (b.systemRole === 'mudflap_fuel') return '/equipment?tab=fuel';
+  // Generic drill-in: /expenses/cards filtered to this bucket lets you
+  // see every categorized txn / entry that landed here.
+  return `/expenses/cards?bucketId=${b.bucketId}`;
 }
 
-function BucketTile({ bucket, onClick }: { bucket: ExpenseBucket; onClick: () => void }) {
-  const Icon = BUCKET_ICONS[bucket.key] ?? CreditCard;
-  const isUncat = bucket.key === 'uncategorized';
-  // Tile breakdowns removed intentionally: the taxonomy under each
-  // bucket is now free-text (per-org), so we can't compute clean
-  // sub-slices from the summary shape. Users drill into the bucket
-  // (via the tile click) to see the actual entries.
-  const breakdown: null = null;
-
+function BucketTile({ bucket, onClick }: { bucket: ExpenseBucketSummary; onClick: () => void }) {
+  const Icon = resolveIcon(bucket.icon);
+  const isUncat = bucket.bucketId === UNCATEGORIZED_BUCKET_ID;
   return (
     <button
       onClick={onClick}
       className="text-left flex flex-col gap-2 p-5 rounded-xl border transition-colors hover:shadow-sm"
       style={{
-        borderColor: isUncat ? '#f59e0b' : 'var(--gc-border)',
+        borderColor: isUncat ? '#f59e0b' : (bucket.color || 'var(--gc-border)'),
         background:  isUncat ? '#fffbeb' : 'var(--gc-surface)',
         cursor:      'pointer',
       }}
@@ -120,10 +94,10 @@ function BucketTile({ bucket, onClick }: { bucket: ExpenseBucket; onClick: () =>
         <div className="flex items-center gap-2"
              style={{ color: isUncat ? '#b45309' : 'var(--gc-text-2)' }}>
           <Icon size={16} strokeWidth={2.2} />
-          <span className="text-[11px] font-bold uppercase tracking-wider">{bucket.label}</span>
+          <span className="text-[11px] font-bold uppercase tracking-wider">{bucket.name}</span>
         </div>
         <span style={{ color: isUncat ? '#f59e0b' : 'var(--gc-text-3)' }}>
-          <ArrowRight size={14} />
+          <Icons.ArrowRight size={14} />
         </span>
       </div>
       <div className="text-[24px] font-semibold tabular-nums leading-none"
@@ -133,9 +107,21 @@ function BucketTile({ bucket, onClick }: { bucket: ExpenseBucket; onClick: () =>
       <div className="flex items-center gap-3">
         {!isUncat && <DeltaChip current={bucket.total} previous={bucket.prevTotal} />}
         <span className="text-xs" style={{ color: isUncat ? '#b45309' : 'var(--gc-text-3)' }}>
-          {isUncat ? `${bucket.count} to categorize` : countLabel(bucket)}
+          {isUncat
+            ? `${bucket.count} to categorize`
+            : `${bucket.count} ${bucket.count === 1 ? 'item' : 'items'}`}
         </span>
       </div>
+      {bucket.children && bucket.children.length > 0 && (
+        <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px]"
+             style={{ color: 'var(--gc-text-3)' }}>
+          {bucket.children.filter(c => c.total > 0).slice(0, 4).map(c => (
+            <span key={c.bucketId} className="tabular-nums">
+              {c.name} <span style={{ color: 'var(--gc-text-2)' }}>{fmtMoney0(c.total)}</span>
+            </span>
+          ))}
+        </div>
+      )}
     </button>
   );
 }
@@ -175,10 +161,8 @@ function ActivityFeed({ events }: { events: ExpenseEvent[] }) {
             className="w-full text-left flex items-center gap-3 px-4 py-2.5 border-b transition-colors hover:bg-black/[0.02]"
             style={{ borderColor: 'var(--gc-border)' }}
           >
-            <span
-              className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider"
-              style={{ background: `${sourceColor(e.source)}22`, color: sourceColor(e.source) }}
-            >
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider"
+                  style={{ background: `${sourceColor(e.source)}22`, color: sourceColor(e.source) }}>
               {sourceLabel(e.source)}
             </span>
             <span className="text-xs tabular-nums" style={{ color: 'var(--gc-text-3)' }}>
@@ -207,7 +191,7 @@ function ExpensesPageInner() {
   const [customEnd, setCustomEnd]     = useState('');
   const [weekStart, setWeekStart]     = useState<string | undefined>(undefined);
 
-  const [buckets, setBuckets]   = useState<ExpenseBucket[]>([]);
+  const [buckets, setBuckets]   = useState<ExpenseBucketSummary[]>([]);
   const [events, setEvents]     = useState<ExpenseEvent[]>([]);
   const [loading, setLoading]   = useState(true);
   const [err, setErr]           = useState<string | null>(null);
@@ -245,17 +229,18 @@ function ExpensesPageInner() {
 
   useEffect(() => { void reload(); }, [reload]);
 
-  // Total ribbon excludes the "Uncategorized" CTA — that's a queue-
-  // depth signal, not a spend line-item that's been decided yet.
-  const primaryBuckets = buckets.filter(b => b.key !== 'uncategorized');
+  const primaryBuckets = buckets.filter(b => b.bucketId !== UNCATEGORIZED_BUCKET_ID);
   const total     = primaryBuckets.reduce((acc, b) => acc + b.total, 0);
   const prevTotal = primaryBuckets.reduce((acc, b) => acc + b.prevTotal, 0);
+
+  const gridCols = buckets.length <= 4 ? 'lg:grid-cols-4'
+                 : buckets.length <= 6 ? 'lg:grid-cols-3'
+                 : 'lg:grid-cols-4';
 
   return (
     <AppShell>
       <div className="flex-1 min-h-0 overflow-y-auto">
         <div className="mx-auto w-full px-6 py-6" style={{ maxWidth: 1400 }}>
-          {/* Header row */}
           <div className="flex items-baseline justify-between mb-6">
             <div>
               <h1 className="text-[22px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
@@ -269,38 +254,43 @@ function ExpensesPageInner() {
             </div>
             <div className="flex items-center gap-3">
               <button
+                onClick={() => router.push('/expenses/buckets')}
+                className="text-xs font-semibold px-3 py-1.5 rounded border"
+                style={{
+                  borderColor: 'var(--gc-border)', background:  'var(--gc-surface)',
+                  color: 'var(--gc-text-2)',
+                }}
+                title="Add / edit / reorder the bucket tree"
+              >
+                Buckets
+              </button>
+              <button
                 onClick={() => router.push('/expenses/one-time')}
                 className="text-xs font-semibold px-3 py-1.5 rounded border"
                 style={{
-                  borderColor: 'var(--gc-border)',
-                  background:  'var(--gc-surface)',
-                  color:       'var(--gc-text-2)',
+                  borderColor: 'var(--gc-border)', background:  'var(--gc-surface)',
+                  color: 'var(--gc-text-2)',
                 }}
-                title="One-off entries — Sophia/Luis payouts, truck purchases, tax payments, claim payouts, owner draws"
               >
-                One-time entries
+                One-time
               </button>
               <button
                 onClick={() => router.push('/expenses/recurring')}
                 className="text-xs font-semibold px-3 py-1.5 rounded border"
                 style={{
-                  borderColor: 'var(--gc-border)',
-                  background:  'var(--gc-surface)',
-                  color:       'var(--gc-text-2)',
+                  borderColor: 'var(--gc-border)', background:  'var(--gc-surface)',
+                  color: 'var(--gc-text-2)',
                 }}
-                title="Manage weekly salaries, monthly rent, insurance, and subscriptions"
               >
-                Recurring rules
+                Recurring
               </button>
               <button
                 onClick={() => router.push('/expenses/rules')}
                 className="text-xs font-semibold px-3 py-1.5 rounded border"
                 style={{
-                  borderColor: 'var(--gc-border)',
-                  background:  'var(--gc-surface)',
-                  color:       'var(--gc-text-2)',
+                  borderColor: 'var(--gc-border)', background:  'var(--gc-surface)',
+                  color: 'var(--gc-text-2)',
                 }}
-                title="Rules that decide which bucket a Ramp txn lands in on sync"
               >
                 Ramp rules
               </button>
@@ -317,7 +307,6 @@ function ExpensesPageInner() {
             </div>
           </div>
 
-          {/* Total ribbon */}
           <div className="mb-4 flex items-baseline gap-3">
             <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
               Total spend
@@ -328,18 +317,17 @@ function ExpensesPageInner() {
             <DeltaChip current={total} previous={prevTotal} />
           </div>
 
-          {/* Bucket tiles */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-8">
+          <div className={`grid grid-cols-1 sm:grid-cols-2 ${gridCols} gap-3 mb-8`}>
             {loading && buckets.length === 0
-              ? [0, 1, 2, 3, 4, 5, 6, 7].map(i => (
+              ? Array.from({ length: 8 }, (_, i) => (
                   <div key={i} className="h-[128px] rounded-xl border animate-pulse"
                        style={{ borderColor: 'var(--gc-border)', background: 'var(--gc-surface-2)' }} />
                 ))
               : buckets.map(b => (
                   <BucketTile
-                    key={b.key}
+                    key={b.bucketId}
                     bucket={b}
-                    onClick={() => router.push(BUCKET_HREFS[b.key])}
+                    onClick={() => router.push(bucketHref(b))}
                   />
                 ))
             }
@@ -349,6 +337,13 @@ function ExpensesPageInner() {
             <div className="rounded-lg border p-4 mb-4 text-sm"
                  style={{ borderColor: '#ef4444', background: '#fef2f2', color: '#991b1b' }}>
               {err}
+            </div>
+          )}
+
+          {!loading && buckets.length === 0 && !err && (
+            <div className="rounded-lg border p-8 text-center mb-6"
+                 style={{ borderColor: '#f59e0b', background: '#fffbeb', color: '#92400e' }}>
+              No buckets configured yet. <a href="/expenses/buckets" style={{ textDecoration: 'underline' }}>Create your first bucket</a> to start tracking expenses.
             </div>
           )}
 

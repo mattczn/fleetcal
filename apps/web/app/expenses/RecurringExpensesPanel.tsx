@@ -3,24 +3,18 @@
 /**
  * Recurring rules CRUD.
  *
- * Each rule picks a bucket (fixed 8) + writes a free-text "category"
- * tag for their own labeling. Rules are prorated into any dashboard
- * window at query time.
+ * Each rule picks a bucket from the user-editable bucket tree +
+ * writes a free-text "kind" tag for their own labeling.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Plus, Pencil, Square, Trash2, X, Check } from 'lucide-react';
 import { railway } from '@/lib/railway';
 import { StyledSelect } from '@/components/ui/StyledSelect';
+import BucketSelect, { invalidateBucketCache } from './BucketSelect';
 import type {
-  RecurringExpense, RecurringExpenseCadence, ExpenseBucketKey,
+  RecurringExpense, RecurringExpenseCadence, ExpenseBucketTreeNode,
 } from '@fleetcal/types';
-import {
-  EXPENSE_BUCKET_KEYS, EXPENSE_BUCKET_LABELS,
-  RECURRING_EXPENSE_KIND_SUGGESTIONS,
-} from '@fleetcal/types';
-
-const PRIMARY_BUCKETS = EXPENSE_BUCKET_KEYS;
 
 const fmtMoney = (n: number) =>
   new Intl.NumberFormat('en-US', {
@@ -30,7 +24,7 @@ const fmtMoney = (n: number) =>
 const todayIso = () => new Date().toISOString().slice(0, 10);
 
 interface DraftForm {
-  bucketKey: ExpenseBucketKey;
+  bucketId: string;
   kind: string;
   label: string;
   amount: string;
@@ -41,7 +35,7 @@ interface DraftForm {
 }
 
 const EMPTY_DRAFT: DraftForm = {
-  bucketKey: 'payroll_people',
+  bucketId: '',
   kind: '',
   label: '',
   amount: '',
@@ -53,7 +47,7 @@ const EMPTY_DRAFT: DraftForm = {
 
 function draftFrom(rule: RecurringExpense): DraftForm {
   return {
-    bucketKey: rule.bucketKey,
+    bucketId: rule.bucketId,
     kind: rule.kind ?? '',
     label: rule.label,
     amount: String(rule.amount),
@@ -66,6 +60,7 @@ function draftFrom(rule: RecurringExpense): DraftForm {
 
 export default function RecurringExpensesPanel() {
   const [rules, setRules]         = useState<RecurringExpense[]>([]);
+  const [tree, setTree]           = useState<ExpenseBucketTreeNode[]>([]);
   const [loading, setLoading]     = useState(true);
   const [err, setErr]             = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -77,8 +72,13 @@ export default function RecurringExpensesPanel() {
     setLoading(true);
     setErr(null);
     try {
-      const r = await railway.listRecurringExpenses({ includeEnded });
-      setRules(r.recurringExpenses);
+      invalidateBucketCache();
+      const [rulesRes, bucketsRes] = await Promise.all([
+        railway.listRecurringExpenses({ includeEnded }),
+        railway.listExpenseBuckets(),
+      ]);
+      setRules(rulesRes.recurringExpenses);
+      setTree(bucketsRes.tree);
     } catch (e) {
       console.error('[recurring-expenses] load failed:', e);
       setErr('Failed to load recurring expenses.');
@@ -88,7 +88,11 @@ export default function RecurringExpensesPanel() {
   }, [includeEnded]);
   useEffect(() => { void reload(); }, [reload]);
 
-  const openNew  = () => { setEditingId('new'); setDraft({ ...EMPTY_DRAFT }); };
+  const openNew  = () => {
+    const firstBucket = tree[0]?.bucket.id ?? '';
+    setEditingId('new');
+    setDraft({ ...EMPTY_DRAFT, bucketId: firstBucket });
+  };
   const openEdit = (rule: RecurringExpense) => {
     setEditingId(rule.id); setDraft(draftFrom(rule));
   };
@@ -96,6 +100,7 @@ export default function RecurringExpensesPanel() {
 
   const save = useCallback(async () => {
     if (!draft) return;
+    if (!draft.bucketId) { alert('Pick a bucket.'); return; }
     const amount = Number(draft.amount);
     if (!draft.label.trim()) { alert('Label is required.'); return; }
     if (!isFinite(amount) || amount <= 0) { alert('Amount must be greater than 0.'); return; }
@@ -109,7 +114,7 @@ export default function RecurringExpensesPanel() {
     try {
       if (editingId === 'new') {
         await railway.createRecurringExpense({
-          bucketKey: draft.bucketKey,
+          bucketId: draft.bucketId,
           kind: draft.kind.trim() || undefined,
           label: draft.label.trim(),
           amount,
@@ -120,7 +125,7 @@ export default function RecurringExpensesPanel() {
         });
       } else if (editingId) {
         await railway.updateRecurringExpense(editingId, {
-          bucketKey: draft.bucketKey,
+          bucketId: draft.bucketId,
           kind: draft.kind.trim() || null,
           label: draft.label.trim(),
           amount,
@@ -156,15 +161,34 @@ export default function RecurringExpensesPanel() {
   const isActive = (r: RecurringExpense) =>
     !r.effectiveTo || r.effectiveTo >= todayIso();
 
+  // Group by bucketId + preserve tree ordering.
   const byBucket = useMemo(() => {
-    const groups = new Map<ExpenseBucketKey, RecurringExpense[]>();
+    const g = new Map<string, RecurringExpense[]>();
     for (const r of rules) {
-      const arr = groups.get(r.bucketKey) ?? [];
+      const arr = g.get(r.bucketId) ?? [];
       arr.push(r);
-      groups.set(r.bucketKey, arr);
+      g.set(r.bucketId, arr);
     }
-    return groups;
+    return g;
   }, [rules]);
+
+  const orderedBucketIds = useMemo(() => {
+    const ids: string[] = [];
+    for (const node of tree) {
+      ids.push(node.bucket.id);
+      for (const child of node.children) ids.push(child.id);
+    }
+    return ids;
+  }, [tree]);
+
+  const bucketNameById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const node of tree) {
+      m.set(node.bucket.id, node.bucket.name);
+      for (const child of node.children) m.set(child.id, `${node.bucket.name} → ${child.name}`);
+    }
+    return m;
+  }, [tree]);
 
   return (
     <div className="max-w-4xl">
@@ -174,18 +198,18 @@ export default function RecurringExpensesPanel() {
             Recurring Expenses
           </h2>
           <p className="text-sm mt-1" style={{ color: 'var(--gc-text-3)' }}>
-            Weekly salaries, monthly rent + insurance, subscriptions — anything that
-            posts on a fixed cadence for a fixed amount. Feed the corresponding tile
-            on the <a href="/expenses" style={{ textDecoration: 'underline' }}>Expenses dashboard</a>.
+            Rules that post the same amount on a fixed cadence. Feed the corresponding tile on the
+            <a href="/expenses" style={{ textDecoration: 'underline' }}> Expenses dashboard</a>.
           </p>
         </div>
         <button
           onClick={openNew}
+          disabled={tree.length === 0}
           className="text-xs font-semibold px-3 py-1.5 rounded border inline-flex items-center gap-1.5"
           style={{
-            borderColor: 'var(--gc-border)',
-            background:  'var(--gc-surface)',
-            color:       'var(--gc-text-1)',
+            borderColor: 'var(--gc-border)', background: 'var(--gc-surface)',
+            color: 'var(--gc-text-1)',
+            cursor: tree.length === 0 ? 'not-allowed' : 'pointer',
           }}
         >
           <Plus size={14} /> Add rule
@@ -194,19 +218,21 @@ export default function RecurringExpensesPanel() {
 
       <div className="mb-3 flex items-center gap-3 text-xs" style={{ color: 'var(--gc-text-3)' }}>
         <label className="inline-flex items-center gap-1.5 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={includeEnded}
-            onChange={e => setIncludeEnded(e.target.checked)}
-          />
+          <input type="checkbox" checked={includeEnded}
+                 onChange={e => setIncludeEnded(e.target.checked)} />
           Show ended rules
         </label>
       </div>
 
       {err && (
         <div className="rounded-lg border p-4 mb-3 text-sm"
-             style={{ borderColor: '#ef4444', background: '#fef2f2', color: '#991b1b' }}>
-          {err}
+             style={{ borderColor: '#ef4444', background: '#fef2f2', color: '#991b1b' }}>{err}</div>
+      )}
+
+      {tree.length === 0 && !loading && (
+        <div className="rounded-lg border p-6 text-center mb-4"
+             style={{ borderColor: '#f59e0b', background: '#fffbeb', color: '#92400e' }}>
+          No buckets yet. <a href="/expenses/buckets" style={{ textDecoration: 'underline' }}>Create buckets</a> before adding recurring rules.
         </div>
       )}
 
@@ -215,14 +241,14 @@ export default function RecurringExpensesPanel() {
                     saving={saving} title="New rule" />
       )}
 
-      {PRIMARY_BUCKETS.map(bucketKey => {
-        const items = byBucket.get(bucketKey) ?? [];
+      {orderedBucketIds.map(bucketId => {
+        const items = byBucket.get(bucketId) ?? [];
         if (items.length === 0) return null;
         return (
-          <div key={bucketKey} className="mb-6">
+          <div key={bucketId} className="mb-6">
             <div className="text-[11px] font-bold uppercase tracking-wider mb-2"
                  style={{ color: 'var(--gc-text-3)' }}>
-              {EXPENSE_BUCKET_LABELS[bucketKey]}
+              {bucketNameById.get(bucketId) ?? '(unknown bucket)'}
             </div>
             <div className="rounded-lg border overflow-hidden"
                  style={{ borderColor: 'var(--gc-border)', background: 'var(--gc-surface)' }}>
@@ -288,7 +314,7 @@ export default function RecurringExpensesPanel() {
       {loading && rules.length === 0 && (
         <div className="text-sm py-6 text-center" style={{ color: 'var(--gc-text-3)' }}>Loading…</div>
       )}
-      {!loading && rules.length === 0 && !editingId && (
+      {!loading && rules.length === 0 && !editingId && tree.length > 0 && (
         <div className="rounded-lg border p-8 text-center"
              style={{ borderColor: 'var(--gc-border)', background: 'var(--gc-surface-2)' }}>
           <div className="text-sm mb-3" style={{ color: 'var(--gc-text-2)' }}>No recurring rules yet.</div>
@@ -324,14 +350,11 @@ function RuleEditor({
         <div>
           <label className="text-[11px] font-bold uppercase tracking-wider block mb-1"
                  style={{ color: 'var(--gc-text-3)' }}>Bucket</label>
-          <StyledSelect
-            value={draft.bucketKey}
-            onChange={e => setDraft({ ...draft, bucketKey: e.target.value as ExpenseBucketKey })}
-            style={{ width: '100%' }}>
-            {PRIMARY_BUCKETS.map(k => (
-              <option key={k} value={k}>{EXPENSE_BUCKET_LABELS[k]}</option>
-            ))}
-          </StyledSelect>
+          <BucketSelect
+            value={draft.bucketId}
+            onChange={id => setDraft({ ...draft, bucketId: id })}
+            style={{ width: '100%' }}
+          />
         </div>
         <div>
           <label className="text-[11px] font-bold uppercase tracking-wider block mb-1"
@@ -347,8 +370,7 @@ function RuleEditor({
         <div className="col-span-2">
           <label className="text-[11px] font-bold uppercase tracking-wider block mb-1"
                  style={{ color: 'var(--gc-text-3)' }}>Label</label>
-          <input
-            type="text"
+          <input type="text"
             value={draft.label}
             onChange={e => setDraft({ ...draft, label: e.target.value })}
             placeholder="Anna — office admin"
@@ -358,25 +380,17 @@ function RuleEditor({
         <div className="col-span-2">
           <label className="text-[11px] font-bold uppercase tracking-wider block mb-1"
                  style={{ color: 'var(--gc-text-3)' }}>Category tag (optional)</label>
-          <input
-            type="text"
-            list="recurring-kind-suggestions"
+          <input type="text"
             value={draft.kind}
             onChange={e => setDraft({ ...draft, kind: e.target.value })}
-            placeholder="payroll_admin, yard_rent, cell_phone, whatever…"
+            placeholder="admin_salary, yard_rent, cell_phone, whatever…"
             className="w-full px-3 py-1.5 rounded border text-sm"
             style={{ borderColor: 'var(--gc-border)', background: 'var(--gc-surface)' }} />
-          <datalist id="recurring-kind-suggestions">
-            {RECURRING_EXPENSE_KIND_SUGGESTIONS.map(k => (
-              <option key={k} value={k} />
-            ))}
-          </datalist>
         </div>
         <div>
           <label className="text-[11px] font-bold uppercase tracking-wider block mb-1"
                  style={{ color: 'var(--gc-text-3)' }}>Amount ($)</label>
-          <input
-            type="number" step="0.01" min="0"
+          <input type="number" step="0.01" min="0"
             value={draft.amount}
             onChange={e => setDraft({ ...draft, amount: e.target.value })}
             placeholder="1500.00"
@@ -387,8 +401,7 @@ function RuleEditor({
         <div>
           <label className="text-[11px] font-bold uppercase tracking-wider block mb-1"
                  style={{ color: 'var(--gc-text-3)' }}>Effective from</label>
-          <input
-            type="date"
+          <input type="date"
             value={draft.effectiveFrom}
             onChange={e => setDraft({ ...draft, effectiveFrom: e.target.value })}
             className="w-full px-3 py-1.5 rounded border text-sm"
@@ -397,8 +410,7 @@ function RuleEditor({
         <div>
           <label className="text-[11px] font-bold uppercase tracking-wider block mb-1"
                  style={{ color: 'var(--gc-text-3)' }}>Effective to (optional)</label>
-          <input
-            type="date"
+          <input type="date"
             value={draft.effectiveTo}
             onChange={e => setDraft({ ...draft, effectiveTo: e.target.value })}
             className="w-full px-3 py-1.5 rounded border text-sm"
@@ -407,8 +419,7 @@ function RuleEditor({
         <div className="col-span-2">
           <label className="text-[11px] font-bold uppercase tracking-wider block mb-1"
                  style={{ color: 'var(--gc-text-3)' }}>Notes (optional)</label>
-          <input
-            type="text"
+          <input type="text"
             value={draft.notes}
             onChange={e => setDraft({ ...draft, notes: e.target.value })}
             className="w-full px-3 py-1.5 rounded border text-sm"

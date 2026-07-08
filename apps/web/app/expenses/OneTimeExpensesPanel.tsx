@@ -1,21 +1,16 @@
 'use client';
 
 /**
- * One-off / ad-hoc entries. Each entry picks a bucket (fixed 8) + free-
- * text category tag. Feeds the matching tile on the dashboard.
+ * One-off / ad-hoc expense entries. Each entry picks a bucket from the
+ * user-editable bucket tree + free-text category tag.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Plus, Pencil, Trash2, X, Check } from 'lucide-react';
 import { railway } from '@/lib/railway';
 import { StyledSelect } from '@/components/ui/StyledSelect';
-import type { ExpenseEntry, ExpenseBucketKey } from '@fleetcal/types';
-import {
-  EXPENSE_BUCKET_KEYS, EXPENSE_BUCKET_LABELS,
-  EXPENSE_ENTRY_KIND_SUGGESTIONS,
-} from '@fleetcal/types';
-
-const PRIMARY_BUCKETS = EXPENSE_BUCKET_KEYS;
+import BucketSelect, { invalidateBucketCache } from './BucketSelect';
+import type { ExpenseEntry, ExpenseBucketTreeNode } from '@fleetcal/types';
 
 const fmtMoney = (n: number) =>
   new Intl.NumberFormat('en-US', {
@@ -27,55 +22,57 @@ const daysAgoIso = (n: number) =>
   new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10);
 
 interface DraftForm {
-  bucketKey: ExpenseBucketKey;
-  kind:      string;
-  date:      string;
-  amount:    string;
-  label:     string;
-  notes:     string;
+  bucketId: string;
+  kind:     string;
+  date:     string;
+  amount:   string;
+  label:    string;
+  notes:    string;
 }
 
 const EMPTY_DRAFT: DraftForm = {
-  bucketKey: 'payroll_people',
-  kind: '',
-  date: todayIso(),
-  amount: '',
-  label: '',
-  notes: '',
+  bucketId: '', kind: '',
+  date: todayIso(), amount: '', label: '', notes: '',
 };
 
 function draftFrom(e: ExpenseEntry): DraftForm {
   return {
-    bucketKey: e.bucketKey,
-    kind:      e.kind ?? '',
-    date:      e.date,
-    amount:    String(e.amount),
-    label:     e.label,
-    notes:     e.notes ?? '',
+    bucketId: e.bucketId,
+    kind:     e.kind ?? '',
+    date:     e.date,
+    amount:   String(e.amount),
+    label:    e.label,
+    notes:    e.notes ?? '',
   };
 }
 
 export default function OneTimeExpensesPanel() {
   const [entries, setEntries]     = useState<ExpenseEntry[]>([]);
+  const [tree, setTree]           = useState<ExpenseBucketTreeNode[]>([]);
   const [loading, setLoading]     = useState(true);
   const [err, setErr]             = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft]         = useState<DraftForm | null>(null);
   const [saving, setSaving]       = useState(false);
-  const [bucketFilter, setBucketFilter] = useState<'all' | ExpenseBucketKey>('all');
+  const [bucketFilter, setBucketFilter] = useState<string>('');
   const [windowDays, setWindowDays]     = useState<number>(90);
 
   const reload = useCallback(async () => {
     setLoading(true);
     setErr(null);
     try {
-      const r = await railway.listExpenseEntries({
-        from: daysAgoIso(windowDays),
-        to:   todayIso(),
-        bucketKey: bucketFilter === 'all' ? undefined : bucketFilter,
-        limit: 1000,
-      });
-      setEntries(r.expenseEntries);
+      invalidateBucketCache();
+      const [entriesRes, bucketsRes] = await Promise.all([
+        railway.listExpenseEntries({
+          from: daysAgoIso(windowDays),
+          to:   todayIso(),
+          bucketId: bucketFilter || undefined,
+          limit: 1000,
+        }),
+        railway.listExpenseBuckets(),
+      ]);
+      setEntries(entriesRes.expenseEntries);
+      setTree(bucketsRes.tree);
     } catch (e) {
       console.error('[one-time] load failed:', e);
       setErr('Failed to load one-time expenses.');
@@ -85,12 +82,17 @@ export default function OneTimeExpensesPanel() {
   }, [bucketFilter, windowDays]);
   useEffect(() => { void reload(); }, [reload]);
 
-  const openNew  = () => { setEditingId('new'); setDraft({ ...EMPTY_DRAFT }); };
+  const openNew  = () => {
+    const firstBucket = tree[0]?.bucket.id ?? '';
+    setEditingId('new');
+    setDraft({ ...EMPTY_DRAFT, bucketId: firstBucket });
+  };
   const openEdit = (e: ExpenseEntry) => { setEditingId(e.id); setDraft(draftFrom(e)); };
   const cancel   = () => { setEditingId(null); setDraft(null); };
 
   const save = useCallback(async () => {
     if (!draft) return;
+    if (!draft.bucketId) { alert('Pick a bucket.'); return; }
     const amount = Number(draft.amount);
     if (!draft.label.trim()) { alert('Label is required.'); return; }
     if (!isFinite(amount) || amount <= 0) { alert('Amount must be greater than 0.'); return; }
@@ -99,25 +101,24 @@ export default function OneTimeExpensesPanel() {
     try {
       if (editingId === 'new') {
         await railway.createExpenseEntry({
-          bucketKey: draft.bucketKey,
-          kind:      draft.kind.trim() || undefined,
-          date:      draft.date,
+          bucketId: draft.bucketId,
+          kind:     draft.kind.trim() || undefined,
+          date:     draft.date,
           amount,
-          label:     draft.label.trim(),
-          notes:     draft.notes.trim() || undefined,
+          label:    draft.label.trim(),
+          notes:    draft.notes.trim() || undefined,
         });
       } else if (editingId) {
         await railway.updateExpenseEntry(editingId, {
-          bucketKey: draft.bucketKey,
-          kind:      draft.kind.trim() || null,
-          date:      draft.date,
+          bucketId: draft.bucketId,
+          kind:     draft.kind.trim() || null,
+          date:     draft.date,
           amount,
-          label:     draft.label.trim(),
-          notes:     draft.notes.trim() || null,
+          label:    draft.label.trim(),
+          notes:    draft.notes.trim() || null,
         });
       }
-      setEditingId(null);
-      setDraft(null);
+      setEditingId(null); setDraft(null);
       await reload();
     } catch (e) {
       console.error('[one-time] save failed:', e);
@@ -146,17 +147,16 @@ export default function OneTimeExpensesPanel() {
             One-time Expenses
           </h2>
           <p className="text-sm mt-1" style={{ color: 'var(--gc-text-3)' }}>
-            Variable-amount and one-off entries — owner-op weekly payouts, wire transfers for
-            equipment, claim payouts, quarterly taxes, personal-biz card charges. Feed the matching
-            tile on the <a href="/expenses" style={{ textDecoration: 'underline' }}>dashboard</a>.
+            Variable-amount and one-off entries. Feed the matching tile on the
+            <a href="/expenses" style={{ textDecoration: 'underline' }}> dashboard</a>.
           </p>
         </div>
-        <button onClick={openNew}
+        <button onClick={openNew} disabled={tree.length === 0}
                 className="text-xs font-semibold px-3 py-1.5 rounded border inline-flex items-center gap-1.5"
                 style={{
-                  borderColor: 'var(--gc-border)',
-                  background:  'var(--gc-surface)',
-                  color:       'var(--gc-text-1)',
+                  borderColor: 'var(--gc-border)', background:  'var(--gc-surface)',
+                  color: 'var(--gc-text-1)',
+                  cursor: tree.length === 0 ? 'not-allowed' : 'pointer',
                 }}>
           <Plus size={14} /> Add entry
         </button>
@@ -165,15 +165,12 @@ export default function OneTimeExpensesPanel() {
       <div className="mb-3 flex items-center gap-3 text-xs">
         <label className="inline-flex items-center gap-1.5" style={{ color: 'var(--gc-text-3)' }}>
           Bucket
-          <StyledSelect
+          <BucketSelect
             value={bucketFilter}
-            onChange={e => setBucketFilter(e.target.value as 'all' | ExpenseBucketKey)}
-            style={{ fontSize: 12 }}>
-            <option value="all">All buckets</option>
-            {PRIMARY_BUCKETS.map(k => (
-              <option key={k} value={k}>{EXPENSE_BUCKET_LABELS[k]}</option>
-            ))}
-          </StyledSelect>
+            onChange={id => setBucketFilter(id)}
+            includeUncategorized
+            style={{ fontSize: 12 }}
+          />
         </label>
         <label className="inline-flex items-center gap-1.5" style={{ color: 'var(--gc-text-3)' }}>
           Window
@@ -195,6 +192,13 @@ export default function OneTimeExpensesPanel() {
       {err && (
         <div className="rounded-lg border p-4 mb-3 text-sm"
              style={{ borderColor: '#ef4444', background: '#fef2f2', color: '#991b1b' }}>{err}</div>
+      )}
+
+      {tree.length === 0 && !loading && (
+        <div className="rounded-lg border p-6 text-center mb-4"
+             style={{ borderColor: '#f59e0b', background: '#fffbeb', color: '#92400e' }}>
+          No buckets yet. <a href="/expenses/buckets" style={{ textDecoration: 'underline' }}>Create buckets</a> before adding entries.
+        </div>
       )}
 
       {editingId === 'new' && draft && (
@@ -229,7 +233,7 @@ export default function OneTimeExpensesPanel() {
                     </span>
                     <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
                           style={{ background: '#f3f4f6', color: '#6b7280' }}>
-                      {EXPENSE_BUCKET_LABELS[entry.bucketKey]}
+                      {entry.bucketName ?? '(unknown)'}
                     </span>
                     {entry.kind && (
                       <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
@@ -286,20 +290,16 @@ function EntryEditor({
         <div>
           <label className="text-[11px] font-bold uppercase tracking-wider block mb-1"
                  style={{ color: 'var(--gc-text-3)' }}>Bucket</label>
-          <StyledSelect
-            value={draft.bucketKey}
-            onChange={e => setDraft({ ...draft, bucketKey: e.target.value as ExpenseBucketKey })}
-            style={{ width: '100%' }}>
-            {PRIMARY_BUCKETS.map(k => (
-              <option key={k} value={k}>{EXPENSE_BUCKET_LABELS[k]}</option>
-            ))}
-          </StyledSelect>
+          <BucketSelect
+            value={draft.bucketId}
+            onChange={id => setDraft({ ...draft, bucketId: id })}
+            style={{ width: '100%' }}
+          />
         </div>
         <div>
           <label className="text-[11px] font-bold uppercase tracking-wider block mb-1"
                  style={{ color: 'var(--gc-text-3)' }}>Date</label>
-          <input
-            type="date" value={draft.date}
+          <input type="date" value={draft.date}
             onChange={e => setDraft({ ...draft, date: e.target.value })}
             className="w-full px-3 py-1.5 rounded border text-sm"
             style={{ borderColor: 'var(--gc-border)', background: 'var(--gc-surface)' }} />
@@ -307,8 +307,7 @@ function EntryEditor({
         <div className="col-span-2">
           <label className="text-[11px] font-bold uppercase tracking-wider block mb-1"
                  style={{ color: 'var(--gc-text-3)' }}>Label</label>
-          <input
-            type="text" value={draft.label}
+          <input type="text" value={draft.label}
             onChange={e => setDraft({ ...draft, label: e.target.value })}
             placeholder="Penske wire — Truck #0812"
             className="w-full px-3 py-1.5 rounded border text-sm"
@@ -317,24 +316,16 @@ function EntryEditor({
         <div className="col-span-2">
           <label className="text-[11px] font-bold uppercase tracking-wider block mb-1"
                  style={{ color: 'var(--gc-text-3)' }}>Category tag (optional)</label>
-          <input
-            type="text" list="one-time-kind-suggestions"
-            value={draft.kind}
+          <input type="text" value={draft.kind}
             onChange={e => setDraft({ ...draft, kind: e.target.value })}
-            placeholder="owner_op_payout, truck_purchase, or anything…"
+            placeholder="truck_purchase, tax, or anything…"
             className="w-full px-3 py-1.5 rounded border text-sm"
             style={{ borderColor: 'var(--gc-border)', background: 'var(--gc-surface)' }} />
-          <datalist id="one-time-kind-suggestions">
-            {EXPENSE_ENTRY_KIND_SUGGESTIONS.map(k => (
-              <option key={k} value={k} />
-            ))}
-          </datalist>
         </div>
         <div>
           <label className="text-[11px] font-bold uppercase tracking-wider block mb-1"
                  style={{ color: 'var(--gc-text-3)' }}>Amount ($)</label>
-          <input
-            type="number" step="0.01" min="0"
+          <input type="number" step="0.01" min="0"
             value={draft.amount}
             onChange={e => setDraft({ ...draft, amount: e.target.value })}
             placeholder="45000.00"
@@ -345,8 +336,7 @@ function EntryEditor({
         <div className="col-span-2">
           <label className="text-[11px] font-bold uppercase tracking-wider block mb-1"
                  style={{ color: 'var(--gc-text-3)' }}>Notes (optional)</label>
-          <input
-            type="text" value={draft.notes}
+          <input type="text" value={draft.notes}
             onChange={e => setDraft({ ...draft, notes: e.target.value })}
             className="w-full px-3 py-1.5 rounded border text-sm"
             style={{ borderColor: 'var(--gc-border)', background: 'var(--gc-surface)' }} />

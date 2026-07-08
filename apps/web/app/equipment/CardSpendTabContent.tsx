@@ -21,9 +21,8 @@ import { StyledSelect } from '@/components/ui/StyledSelect';
 import type {
   RampTransaction,
   RampTransactionMatchStatus,
-  ExpenseBucketKey,
+  ExpenseBucketTreeNode,
 } from '@fleetcal/types';
-import { EXPENSE_BUCKET_KEYS, EXPENSE_BUCKET_LABELS } from '@fleetcal/types';
 import type { Asset } from '@/lib/types';
 import { Receipt as ReceiptIcon } from 'lucide-react';
 
@@ -59,6 +58,7 @@ export default function CardSpendTabContent({
   assets, trailers, assetLabelById, trailerLabelById, defaultCategoryFilter,
 }: Props) {
   const [rows, setRows]         = useState<RampTransaction[]>([]);
+  const [bucketTree, setBucketTree] = useState<ExpenseBucketTreeNode[]>([]);
   const [loading, setLoading]   = useState(false);
   const [fetchErr, setFetchErr] = useState<string | null>(null);
   const [syncBusy, setSyncBusy] = useState(false);
@@ -73,8 +73,12 @@ export default function CardSpendTabContent({
       // without dragging in ancient history the board doesn't need.
       const from = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000)
         .toISOString().slice(0, 10);
-      const res = await railway.listAllRampTransactions({ from });
+      const [res, bucketsRes] = await Promise.all([
+        railway.listAllRampTransactions({ from }),
+        railway.listExpenseBuckets(),
+      ]);
       setRows(res.rampTransactions);
+      setBucketTree(bucketsRes.tree);
     } catch (err) {
       const status = (err as { status?: number })?.status;
       if (status === 403) {
@@ -116,8 +120,8 @@ export default function CardSpendTabContent({
 
   const onBucketChange = useCallback(async (tx: RampTransaction, value: string) => {
     try {
-      const bucketKey = value === '' ? null : value;
-      const r = await railway.setRampTransactionBucket(tx.id, bucketKey);
+      const bucketId = value === '' ? null : value;
+      const r = await railway.setRampTransactionBucket(tx.id, bucketId);
       setRows(prev => prev.map(row => row.id === tx.id ? r.rampTransaction : row));
     } catch (err) {
       console.error('[card-spend] bucket change failed:', err);
@@ -208,22 +212,29 @@ export default function CardSpendTabContent({
       ),
     },
     {
-      key: 'bucket_key',
+      key: 'bucket_id',
       header: 'Bucket',
-      width: 180,
+      width: 200,
       sortable: true,
-      sortValue: r => r.bucketKey ?? '',
+      sortValue: r => r.bucketName ?? '',
       render: r => (
         <div onClick={e => e.stopPropagation()}
              title={r.skCategoryName ? `Ramp said: ${r.skCategoryName}` : undefined}>
           <StyledSelect
-            value={r.bucketKey ?? ''}
+            value={r.bucketId ?? ''}
             onChange={e => void onBucketChange(r, e.target.value)}
-            style={{ minWidth: 160, fontSize: 12 }}
+            style={{ minWidth: 180, fontSize: 12 }}
           >
             <option value="">— Uncategorized —</option>
-            {EXPENSE_BUCKET_KEYS.map(k => (
-              <option key={k} value={k}>{EXPENSE_BUCKET_LABELS[k]}</option>
+            {bucketTree.map(node => (
+              <optgroup key={node.bucket.id} label={node.bucket.name}>
+                <option value={node.bucket.id}>{node.bucket.name}</option>
+                {node.children.map(child => (
+                  <option key={child.id} value={child.id}>
+                    {'  '}↳ {child.name}
+                  </option>
+                ))}
+              </optgroup>
             ))}
           </StyledSelect>
         </div>
@@ -387,18 +398,23 @@ export default function CardSpendTabContent({
     }] : []),
     {
       kind: 'select' as const,
-      key: 'bucket_key',
+      key: 'bucket_id',
       label: 'Bucket',
       options: [
         { value: 'all',           label: 'All buckets' },
         { value: 'uncategorized', label: 'Uncategorized' },
-        ...EXPENSE_BUCKET_KEYS.map(k => ({ value: k, label: EXPENSE_BUCKET_LABELS[k] })),
+        ...bucketTree.flatMap(node => [
+          { value: node.bucket.id, label: node.bucket.name },
+          ...node.children.map(child => ({
+            value: child.id, label: `${node.bucket.name} → ${child.name}`,
+          })),
+        ]),
       ],
       defaultValue: defaultCategoryFilter ?? 'all',
       predicate: (r: RampTransaction, v: string) => {
         if (v === 'all')           return true;
-        if (v === 'uncategorized') return !r.bucketKey;
-        return r.bucketKey === v;
+        if (v === 'uncategorized') return !r.bucketId;
+        return r.bucketId === v;
       },
     },
     ...(categoryOptions.length > 1 ? [{
