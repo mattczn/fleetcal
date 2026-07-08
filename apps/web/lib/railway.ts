@@ -75,11 +75,13 @@ import type {
   MatchRampTransactionRequest, MatchRampTransactionResponse,
   MarkRampNotApplicableResponse, RunRampSyncResponse,
   ExpensesSummaryResponse, ExpensesActivityResponse,
-  BackfillRampCategoriesResponse,
   ListRecurringExpensesResponse, CreateRecurringExpenseRequest,
   UpdateRecurringExpenseRequest, RecurringExpenseResponse,
   ListExpenseEntriesRequest, ListExpenseEntriesResponse,
   CreateExpenseEntryRequest, UpdateExpenseEntryRequest, ExpenseEntryResponse,
+  ListRampCategoryRulesResponse, CreateRampCategoryRuleRequest,
+  UpdateRampCategoryRuleRequest, RampCategoryRuleResponse,
+  SeedRampCategoryRulesResponse,
   ListMaintenanceReportsQuery, ListMaintenanceReportsResponse,
   GetMaintenanceReportResponse,
   UpdateMaintenanceReportRequest, UpdateMaintenanceReportResponse,
@@ -1463,9 +1465,9 @@ class RailwayClient {
     return this.req<RunRampSyncResponse>('POST', `/v1/ramp-transactions/sync`);
   }
 
-  setRampTransactionCategory(id: string, category: string | null) {
+  setRampTransactionBucket(id: string, bucketKey: string | null) {
     return this.req<{ rampTransaction: import('@fleetcal/types').RampTransaction }>(
-      'PATCH', `/v1/ramp-transactions/${id}/category`, { category },
+      'PATCH', `/v1/ramp-transactions/${id}/bucket`, { bucketKey },
     );
   }
 
@@ -1487,8 +1489,21 @@ class RailwayClient {
     return this.req<ExpensesActivityResponse>('GET', `/v1/expenses/activity${s ? `?${s}` : ''}`);
   }
 
-  backfillRampCategories() {
-    return this.req<BackfillRampCategoriesResponse>('POST', `/v1/expenses/backfill-categories`);
+  // ── Ramp category rules ────────────────────────────────────────────
+  listRampCategoryRules() {
+    return this.req<ListRampCategoryRulesResponse>('GET', `/v1/ramp-category-rules`);
+  }
+  createRampCategoryRule(body: CreateRampCategoryRuleRequest) {
+    return this.req<RampCategoryRuleResponse>('POST', `/v1/ramp-category-rules`, body);
+  }
+  updateRampCategoryRule(id: string, body: UpdateRampCategoryRuleRequest) {
+    return this.req<RampCategoryRuleResponse>('PATCH', `/v1/ramp-category-rules/${id}`, body);
+  }
+  deleteRampCategoryRule(id: string) {
+    return this.req<{ ok: true }>('DELETE', `/v1/ramp-category-rules/${id}`);
+  }
+  seedRampCategoryDefaults() {
+    return this.req<SeedRampCategoryRulesResponse>('POST', `/v1/ramp-category-rules/seed-defaults`);
   }
 
   // ── Recurring expenses CRUD ────────────────────────────────────────
@@ -1514,9 +1529,10 @@ class RailwayClient {
   // ── One-time expense entries CRUD ──────────────────────────────────
   listExpenseEntries(query: ListExpenseEntriesRequest = {}) {
     const qs = new URLSearchParams();
-    if (query.from)          qs.set('from',   query.from);
-    if (query.to)            qs.set('to',     query.to);
-    if (query.kind)          qs.set('kind',   query.kind);
+    if (query.from)          qs.set('from',      query.from);
+    if (query.to)            qs.set('to',        query.to);
+    if (query.bucketKey)     qs.set('bucketKey', query.bucketKey);
+    if (query.kind)          qs.set('kind',      query.kind);
     if (query.limit  != null) qs.set('limit',  String(query.limit));
     if (query.offset != null) qs.set('offset', String(query.offset));
     const s = qs.toString();

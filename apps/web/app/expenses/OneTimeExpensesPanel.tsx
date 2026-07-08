@@ -1,42 +1,21 @@
 'use client';
 
 /**
- * One-off / ad-hoc expense entries. Sibling to RecurringExpensesPanel.
- *
- * These land in the dashboard's Payroll & People / Insurance & Claims /
- * Capex / Taxes / Owner Draws / Software & Overhead buckets depending
- * on kind. See routes/expenses.ts for the mapping.
- *
- * Default view: last 90 days, all kinds, newest first.
+ * One-off / ad-hoc entries. Each entry picks a bucket (fixed 8) + free-
+ * text category tag. Feeds the matching tile on the dashboard.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Plus, Pencil, Trash2, X, Check } from 'lucide-react';
 import { railway } from '@/lib/railway';
 import { StyledSelect } from '@/components/ui/StyledSelect';
-import type { ExpenseEntry, ExpenseEntryKind } from '@fleetcal/types';
+import type { ExpenseEntry, ExpenseBucketKey } from '@fleetcal/types';
+import {
+  EXPENSE_BUCKET_KEYS, EXPENSE_BUCKET_LABELS,
+  EXPENSE_ENTRY_KIND_SUGGESTIONS,
+} from '@fleetcal/types';
 
-const KIND_LABELS: Record<ExpenseEntryKind, string> = {
-  owner_op_payout:    'Owner-op payout (Sophia/Luis)',
-  claim_payout:       'Insurance claim payout',
-  truck_purchase:     'Truck purchase (Capex)',
-  equipment_purchase: 'Equipment purchase (Capex)',
-  tax:                'Tax payment (IRP/IFTA/income/state)',
-  owner_draw:         'Owner draw (Chase Sapphire / withdrawal)',
-  subscription:       'Subscription (one-off)',
-  misc:               'Misc',
-};
-
-const KIND_BUCKET: Record<ExpenseEntryKind, string> = {
-  owner_op_payout:    'Payroll & People',
-  claim_payout:       'Insurance & Claims',
-  truck_purchase:     'Capex',
-  equipment_purchase: 'Capex',
-  tax:                'Taxes',
-  owner_draw:         'Owner Draws',
-  subscription:       'Software & Overhead',
-  misc:               'Software & Overhead',
-};
+const PRIMARY_BUCKETS = EXPENSE_BUCKET_KEYS;
 
 const fmtMoney = (n: number) =>
   new Intl.NumberFormat('en-US', {
@@ -48,15 +27,17 @@ const daysAgoIso = (n: number) =>
   new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10);
 
 interface DraftForm {
-  kind:   ExpenseEntryKind;
-  date:   string;
-  amount: string;
-  label:  string;
-  notes:  string;
+  bucketKey: ExpenseBucketKey;
+  kind:      string;
+  date:      string;
+  amount:    string;
+  label:     string;
+  notes:     string;
 }
 
 const EMPTY_DRAFT: DraftForm = {
-  kind: 'owner_op_payout',
+  bucketKey: 'payroll_people',
+  kind: '',
   date: todayIso(),
   amount: '',
   label: '',
@@ -65,11 +46,12 @@ const EMPTY_DRAFT: DraftForm = {
 
 function draftFrom(e: ExpenseEntry): DraftForm {
   return {
-    kind: e.kind,
-    date: e.date,
-    amount: String(e.amount),
-    label: e.label,
-    notes: e.notes ?? '',
+    bucketKey: e.bucketKey,
+    kind:      e.kind ?? '',
+    date:      e.date,
+    amount:    String(e.amount),
+    label:     e.label,
+    notes:     e.notes ?? '',
   };
 }
 
@@ -80,8 +62,8 @@ export default function OneTimeExpensesPanel() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft]         = useState<DraftForm | null>(null);
   const [saving, setSaving]       = useState(false);
-  const [kindFilter, setKindFilter] = useState<'all' | ExpenseEntryKind>('all');
-  const [windowDays, setWindowDays] = useState<number>(90);
+  const [bucketFilter, setBucketFilter] = useState<'all' | ExpenseBucketKey>('all');
+  const [windowDays, setWindowDays]     = useState<number>(90);
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -90,7 +72,7 @@ export default function OneTimeExpensesPanel() {
       const r = await railway.listExpenseEntries({
         from: daysAgoIso(windowDays),
         to:   todayIso(),
-        kind: kindFilter === 'all' ? undefined : kindFilter,
+        bucketKey: bucketFilter === 'all' ? undefined : bucketFilter,
         limit: 1000,
       });
       setEntries(r.expenseEntries);
@@ -100,7 +82,7 @@ export default function OneTimeExpensesPanel() {
     } finally {
       setLoading(false);
     }
-  }, [kindFilter, windowDays]);
+  }, [bucketFilter, windowDays]);
   useEffect(() => { void reload(); }, [reload]);
 
   const openNew  = () => { setEditingId('new'); setDraft({ ...EMPTY_DRAFT }); };
@@ -117,19 +99,21 @@ export default function OneTimeExpensesPanel() {
     try {
       if (editingId === 'new') {
         await railway.createExpenseEntry({
-          kind:   draft.kind,
-          date:   draft.date,
+          bucketKey: draft.bucketKey,
+          kind:      draft.kind.trim() || undefined,
+          date:      draft.date,
           amount,
-          label:  draft.label.trim(),
-          notes:  draft.notes.trim() || undefined,
+          label:     draft.label.trim(),
+          notes:     draft.notes.trim() || undefined,
         });
       } else if (editingId) {
         await railway.updateExpenseEntry(editingId, {
-          kind:   draft.kind,
-          date:   draft.date,
+          bucketKey: draft.bucketKey,
+          kind:      draft.kind.trim() || null,
+          date:      draft.date,
           amount,
-          label:  draft.label.trim(),
-          notes:  draft.notes.trim() || null,
+          label:     draft.label.trim(),
+          notes:     draft.notes.trim() || null,
         });
       }
       setEditingId(null);
@@ -144,13 +128,9 @@ export default function OneTimeExpensesPanel() {
   }, [draft, editingId, reload]);
 
   const deleteEntry = useCallback(async (id: string) => {
-    if (!confirm('Delete this entry? Historical dashboard windows already computed will not change; this entry stops contributing going forward.')) return;
-    try {
-      await railway.deleteExpenseEntry(id);
-      await reload();
-    } catch (e) {
-      alert('Failed to delete.');
-    }
+    if (!confirm('Delete this entry?')) return;
+    try { await railway.deleteExpenseEntry(id); await reload(); }
+    catch { alert('Failed to delete.'); }
   }, [reload]);
 
   const total = useMemo(
@@ -166,35 +146,32 @@ export default function OneTimeExpensesPanel() {
             One-time Expenses
           </h2>
           <p className="text-sm mt-1" style={{ color: 'var(--gc-text-3)' }}>
-            Variable-amount and one-off entries — Sophia/Luis weekly payouts, Penske wire transfers,
-            claim payouts, tax payments, Jon/Mike owner draws from the Chase Sapphire card, etc.
-            These land in the matching bucket on the <a href="/expenses" style={{ textDecoration: 'underline' }}>dashboard</a>.
+            Variable-amount and one-off entries — owner-op weekly payouts, wire transfers for
+            equipment, claim payouts, quarterly taxes, personal-biz card charges. Feed the matching
+            tile on the <a href="/expenses" style={{ textDecoration: 'underline' }}>dashboard</a>.
           </p>
         </div>
-        <button
-          onClick={openNew}
-          className="text-xs font-semibold px-3 py-1.5 rounded border inline-flex items-center gap-1.5"
-          style={{
-            borderColor: 'var(--gc-border)',
-            background:  'var(--gc-surface)',
-            color:       'var(--gc-text-1)',
-          }}
-        >
+        <button onClick={openNew}
+                className="text-xs font-semibold px-3 py-1.5 rounded border inline-flex items-center gap-1.5"
+                style={{
+                  borderColor: 'var(--gc-border)',
+                  background:  'var(--gc-surface)',
+                  color:       'var(--gc-text-1)',
+                }}>
           <Plus size={14} /> Add entry
         </button>
       </div>
 
       <div className="mb-3 flex items-center gap-3 text-xs">
         <label className="inline-flex items-center gap-1.5" style={{ color: 'var(--gc-text-3)' }}>
-          Kind
+          Bucket
           <StyledSelect
-            value={kindFilter}
-            onChange={e => setKindFilter(e.target.value as 'all' | ExpenseEntryKind)}
-            style={{ fontSize: 12 }}
-          >
-            <option value="all">All kinds</option>
-            {Object.entries(KIND_LABELS).map(([k, label]) => (
-              <option key={k} value={k}>{label}</option>
+            value={bucketFilter}
+            onChange={e => setBucketFilter(e.target.value as 'all' | ExpenseBucketKey)}
+            style={{ fontSize: 12 }}>
+            <option value="all">All buckets</option>
+            {PRIMARY_BUCKETS.map(k => (
+              <option key={k} value={k}>{EXPENSE_BUCKET_LABELS[k]}</option>
             ))}
           </StyledSelect>
         </label>
@@ -203,8 +180,7 @@ export default function OneTimeExpensesPanel() {
           <StyledSelect
             value={String(windowDays)}
             onChange={e => setWindowDays(Number(e.target.value))}
-            style={{ fontSize: 12 }}
-          >
+            style={{ fontSize: 12 }}>
             <option value="30">Last 30 days</option>
             <option value="90">Last 90 days</option>
             <option value="365">Last year</option>
@@ -218,9 +194,7 @@ export default function OneTimeExpensesPanel() {
 
       {err && (
         <div className="rounded-lg border p-4 mb-3 text-sm"
-             style={{ borderColor: '#ef4444', background: '#fef2f2', color: '#991b1b' }}>
-          {err}
-        </div>
+             style={{ borderColor: '#ef4444', background: '#fef2f2', color: '#991b1b' }}>{err}</div>
       )}
 
       {editingId === 'new' && draft && (
@@ -255,31 +229,30 @@ export default function OneTimeExpensesPanel() {
                     </span>
                     <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
                           style={{ background: '#f3f4f6', color: '#6b7280' }}>
-                      {KIND_BUCKET[entry.kind]}
+                      {EXPENSE_BUCKET_LABELS[entry.bucketKey]}
                     </span>
+                    {entry.kind && (
+                      <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
+                            style={{ background: '#eef2ff', color: '#4f46e5' }}>
+                        {entry.kind}
+                      </span>
+                    )}
                   </div>
-                  <div className="text-xs mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
-                    {KIND_LABELS[entry.kind]}
-                    {entry.notes ? ` · ${entry.notes}` : ''}
-                  </div>
+                  {entry.notes && (
+                    <div className="text-xs mt-0.5" style={{ color: 'var(--gc-text-3)' }}>{entry.notes}</div>
+                  )}
                 </div>
                 <div className="text-sm font-semibold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>
                   {fmtMoney(entry.amount)}
                 </div>
-                <button
-                  onClick={() => openEdit(entry)}
-                  className="p-1.5 rounded hover:bg-black/5"
-                  style={{ color: 'var(--gc-text-2)' }}
-                  title="Edit"
-                >
+                <button onClick={() => openEdit(entry)}
+                        className="p-1.5 rounded hover:bg-black/5"
+                        style={{ color: 'var(--gc-text-2)' }} title="Edit">
                   <Pencil size={14} />
                 </button>
-                <button
-                  onClick={() => deleteEntry(entry.id)}
-                  className="p-1.5 rounded hover:bg-red-50"
-                  style={{ color: '#dc2626' }}
-                  title="Delete"
-                >
+                <button onClick={() => deleteEntry(entry.id)}
+                        className="p-1.5 rounded hover:bg-red-50"
+                        style={{ color: '#dc2626' }} title="Delete">
                   <Trash2 size={14} />
                 </button>
               </div>
@@ -287,9 +260,7 @@ export default function OneTimeExpensesPanel() {
           </div>
         ))}
         {loading && entries.length === 0 && (
-          <div className="p-8 text-center text-sm" style={{ color: 'var(--gc-text-3)' }}>
-            Loading…
-          </div>
+          <div className="p-8 text-center text-sm" style={{ color: 'var(--gc-text-3)' }}>Loading…</div>
         )}
       </div>
     </div>
@@ -310,20 +281,17 @@ function EntryEditor({
     <div className="rounded-lg border p-4 mb-4"
          style={{ borderColor: 'var(--gc-accent, #1a73e8)', background: 'var(--gc-surface)' }}>
       <div className="text-[11px] font-bold uppercase tracking-wider mb-3"
-           style={{ color: 'var(--gc-text-3)' }}>
-        {title}
-      </div>
+           style={{ color: 'var(--gc-text-3)' }}>{title}</div>
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label className="text-[11px] font-bold uppercase tracking-wider block mb-1"
-                 style={{ color: 'var(--gc-text-3)' }}>Kind</label>
+                 style={{ color: 'var(--gc-text-3)' }}>Bucket</label>
           <StyledSelect
-            value={draft.kind}
-            onChange={e => setDraft({ ...draft, kind: e.target.value as ExpenseEntryKind })}
-            style={{ width: '100%' }}
-          >
-            {Object.entries(KIND_LABELS).map(([k, label]) => (
-              <option key={k} value={k}>{label}</option>
+            value={draft.bucketKey}
+            onChange={e => setDraft({ ...draft, bucketKey: e.target.value as ExpenseBucketKey })}
+            style={{ width: '100%' }}>
+            {PRIMARY_BUCKETS.map(k => (
+              <option key={k} value={k}>{EXPENSE_BUCKET_LABELS[k]}</option>
             ))}
           </StyledSelect>
         </div>
@@ -331,67 +299,68 @@ function EntryEditor({
           <label className="text-[11px] font-bold uppercase tracking-wider block mb-1"
                  style={{ color: 'var(--gc-text-3)' }}>Date</label>
           <input
-            type="date"
-            value={draft.date}
+            type="date" value={draft.date}
             onChange={e => setDraft({ ...draft, date: e.target.value })}
             className="w-full px-3 py-1.5 rounded border text-sm"
-            style={{ borderColor: 'var(--gc-border)', background: 'var(--gc-surface)' }}
-          />
+            style={{ borderColor: 'var(--gc-border)', background: 'var(--gc-surface)' }} />
         </div>
         <div className="col-span-2">
           <label className="text-[11px] font-bold uppercase tracking-wider block mb-1"
                  style={{ color: 'var(--gc-text-3)' }}>Label</label>
           <input
-            type="text"
-            value={draft.label}
+            type="text" value={draft.label}
             onChange={e => setDraft({ ...draft, label: e.target.value })}
             placeholder="Penske wire — Truck #0812"
             className="w-full px-3 py-1.5 rounded border text-sm"
-            style={{ borderColor: 'var(--gc-border)', background: 'var(--gc-surface)' }}
-          />
+            style={{ borderColor: 'var(--gc-border)', background: 'var(--gc-surface)' }} />
+        </div>
+        <div className="col-span-2">
+          <label className="text-[11px] font-bold uppercase tracking-wider block mb-1"
+                 style={{ color: 'var(--gc-text-3)' }}>Category tag (optional)</label>
+          <input
+            type="text" list="one-time-kind-suggestions"
+            value={draft.kind}
+            onChange={e => setDraft({ ...draft, kind: e.target.value })}
+            placeholder="owner_op_payout, truck_purchase, or anything…"
+            className="w-full px-3 py-1.5 rounded border text-sm"
+            style={{ borderColor: 'var(--gc-border)', background: 'var(--gc-surface)' }} />
+          <datalist id="one-time-kind-suggestions">
+            {EXPENSE_ENTRY_KIND_SUGGESTIONS.map(k => (
+              <option key={k} value={k} />
+            ))}
+          </datalist>
         </div>
         <div>
           <label className="text-[11px] font-bold uppercase tracking-wider block mb-1"
                  style={{ color: 'var(--gc-text-3)' }}>Amount ($)</label>
           <input
-            type="number"
-            step="0.01"
-            min="0"
+            type="number" step="0.01" min="0"
             value={draft.amount}
             onChange={e => setDraft({ ...draft, amount: e.target.value })}
             placeholder="45000.00"
             className="w-full px-3 py-1.5 rounded border text-sm tabular-nums"
-            style={{ borderColor: 'var(--gc-border)', background: 'var(--gc-surface)' }}
-          />
+            style={{ borderColor: 'var(--gc-border)', background: 'var(--gc-surface)' }} />
         </div>
         <div />
         <div className="col-span-2">
           <label className="text-[11px] font-bold uppercase tracking-wider block mb-1"
                  style={{ color: 'var(--gc-text-3)' }}>Notes (optional)</label>
           <input
-            type="text"
-            value={draft.notes}
+            type="text" value={draft.notes}
             onChange={e => setDraft({ ...draft, notes: e.target.value })}
             className="w-full px-3 py-1.5 rounded border text-sm"
-            style={{ borderColor: 'var(--gc-border)', background: 'var(--gc-surface)' }}
-          />
+            style={{ borderColor: 'var(--gc-border)', background: 'var(--gc-surface)' }} />
         </div>
       </div>
       <div className="mt-4 flex items-center justify-end gap-2">
-        <button
-          onClick={onCancel}
-          disabled={saving}
-          className="text-xs font-semibold px-3 py-1.5 rounded border inline-flex items-center gap-1.5"
-          style={{ borderColor: 'var(--gc-border)', background: 'var(--gc-surface)' }}
-        >
+        <button onClick={onCancel} disabled={saving}
+                className="text-xs font-semibold px-3 py-1.5 rounded border inline-flex items-center gap-1.5"
+                style={{ borderColor: 'var(--gc-border)', background: 'var(--gc-surface)' }}>
           <X size={13} /> Cancel
         </button>
-        <button
-          onClick={onSave}
-          disabled={saving}
-          className="text-xs font-semibold px-3 py-1.5 rounded inline-flex items-center gap-1.5"
-          style={{ background: '#1a73e8', color: 'white', cursor: saving ? 'wait' : 'pointer' }}
-        >
+        <button onClick={onSave} disabled={saving}
+                className="text-xs font-semibold px-3 py-1.5 rounded inline-flex items-center gap-1.5"
+                style={{ background: '#1a73e8', color: 'white', cursor: saving ? 'wait' : 'pointer' }}>
           <Check size={13} /> {saving ? 'Saving…' : 'Save'}
         </button>
       </div>

@@ -1,29 +1,28 @@
 /**
  * /v1/recurring-expenses — CRUD for the recurring charges that feed the
- * /expenses dashboard (weekly admin/dispatch/maintenance salaries,
- * monthly insurance premiums).
+ * /expenses dashboard's tiles.
  *
- * Rules aren't materialized — the summary route prorates them into any
- * window at query time. Ending a rule (POST /:id/end) sets effective_to
- * to today so it stops contributing to future windows without deleting
- * the history.
+ * Each rule picks a `bucketKey` (which of the 8 dashboard tiles it hits)
+ * + an optional free-text `kind` tag for the user's own labeling. No
+ * hardcoded enum on kind — admins can call something "Cell phone
+ * reimbursement" or "Marketing retainer" and it just works.
  *
- * Module-gated on "expenses". Mutations require org.settings.edit
- * because these are org-level financial baselines, not per-driver
- * ops data.
+ * Rules aren't materialized. The summary route prorates them into any
+ * window at query time.
  */
 
 import { Hono } from "hono";
 import type {
   RecurringExpense,
-  RecurringExpenseKind,
   RecurringExpenseCadence,
+  ExpenseBucketKey,
   CreateRecurringExpenseRequest,
   UpdateRecurringExpenseRequest,
   ListRecurringExpensesResponse,
   RecurringExpenseResponse,
   ApiErrorResponse,
 } from "@fleetcal/types";
+import { EXPENSE_BUCKET_KEYS } from "@fleetcal/types";
 
 import { supabase as supabaseTyped } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
@@ -32,16 +31,14 @@ import { requireCapability, requireModule } from "../middleware/require.js";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const supabase = supabaseTyped as any;
 
-const VALID_KINDS = new Set<RecurringExpenseKind>([
-  'payroll_admin', 'payroll_dispatch', 'payroll_maintenance', 'insurance',
-  'yard_rent', 'office_rent', 'address_stipend', 'software_subscription',
-]);
+const VALID_BUCKETS = new Set<ExpenseBucketKey>(EXPENSE_BUCKET_KEYS);
 const VALID_CADENCES = new Set<RecurringExpenseCadence>(['weekly', 'monthly']);
 
 interface RecurringRow {
   id:             string;
   org_id:         string;
-  kind:           string;
+  bucket_key:     string;
+  kind:           string | null;
   label:          string;
   amount:         string | number;
   cadence:        string;
@@ -56,7 +53,8 @@ function rowToDomain(r: RecurringRow): RecurringExpense {
   return {
     id:            r.id,
     orgId:         r.org_id,
-    kind:          r.kind as RecurringExpenseKind,
+    bucketKey:     r.bucket_key as ExpenseBucketKey,
+    kind:          r.kind ?? undefined,
     label:         r.label,
     amount:        Number(r.amount),
     cadence:       r.cadence as RecurringExpenseCadence,
@@ -68,13 +66,11 @@ function rowToDomain(r: RecurringRow): RecurringExpense {
   };
 }
 
-const COLS = "id, org_id, kind, label, amount, cadence, effective_from, effective_to, notes, created_at, updated_at";
+const COLS = "id, org_id, bucket_key, kind, label, amount, cadence, effective_from, effective_to, notes, created_at, updated_at";
 
 const recurring = new Hono<{ Variables: AuthVariables }>();
 recurring.use("*", requireModule("expenses"), requireCapability("expenses.access"));
 
-// GET /v1/recurring-expenses — list all (optional includeEnded=false
-// to hide rules whose effective_to has passed).
 recurring.get("/", async (c) => {
   const orgId = c.get("orgId");
   const includeEnded = c.req.query("includeEnded") !== "false";
@@ -98,14 +94,13 @@ recurring.get("/", async (c) => {
   return c.json(res);
 });
 
-// POST /v1/recurring-expenses — create a new rule.
 recurring.post("/", requireCapability("org.settings.edit"), async (c) => {
   const orgId = c.get("orgId");
   const body = await c.req.json<CreateRecurringExpenseRequest>().catch(() => null);
   if (!body) return c.json({ error: "bad_request", detail: "invalid json body" }, 400);
 
-  if (!VALID_KINDS.has(body.kind)) {
-    return c.json({ error: "bad_request", detail: `invalid kind: ${body.kind}` }, 400);
+  if (!VALID_BUCKETS.has(body.bucketKey)) {
+    return c.json({ error: "bad_request", detail: `invalid bucketKey: ${body.bucketKey}` }, 400);
   }
   if (!VALID_CADENCES.has(body.cadence)) {
     return c.json({ error: "bad_request", detail: `invalid cadence: ${body.cadence}` }, 400);
@@ -124,14 +119,15 @@ recurring.post("/", requireCapability("org.settings.edit"), async (c) => {
   }
 
   const row = {
-    org_id: orgId,
-    kind: body.kind,
-    label: body.label.trim(),
-    amount: body.amount,
-    cadence: body.cadence,
+    org_id:         orgId,
+    bucket_key:     body.bucketKey,
+    kind:           body.kind?.trim() || null,
+    label:          body.label.trim(),
+    amount:         body.amount,
+    cadence:        body.cadence,
     effective_from: body.effectiveFrom,
-    effective_to: body.effectiveTo ?? null,
-    notes: body.notes?.trim() || null,
+    effective_to:   body.effectiveTo ?? null,
+    notes:          body.notes?.trim() || null,
   };
   const { data, error } = await supabase
     .from("recurring_expenses")
@@ -147,8 +143,6 @@ recurring.post("/", requireCapability("org.settings.edit"), async (c) => {
   return c.json(res);
 });
 
-// PATCH /v1/recurring-expenses/:id — edit fields. effective_to accepts
-// null to reopen a previously-ended rule.
 recurring.patch("/:id", requireCapability("org.settings.edit"), async (c) => {
   const orgId = c.get("orgId");
   const id = c.req.param("id");
@@ -156,6 +150,15 @@ recurring.patch("/:id", requireCapability("org.settings.edit"), async (c) => {
   if (!body) return c.json({ error: "bad_request", detail: "invalid json body" }, 400);
 
   const update: Record<string, unknown> = {};
+  if (body.bucketKey !== undefined) {
+    if (!VALID_BUCKETS.has(body.bucketKey)) {
+      return c.json({ error: "bad_request", detail: `invalid bucketKey: ${body.bucketKey}` }, 400);
+    }
+    update.bucket_key = body.bucketKey;
+  }
+  if (body.kind !== undefined) {
+    update.kind = body.kind == null ? null : (body.kind.trim() || null);
+  }
   if (body.label !== undefined) {
     if (!body.label.trim()) return c.json({ error: "bad_request", detail: "label cannot be empty" }, 400);
     update.label = body.label.trim();
@@ -203,9 +206,6 @@ recurring.patch("/:id", requireCapability("org.settings.edit"), async (c) => {
   return c.json(res);
 });
 
-// POST /v1/recurring-expenses/:id/end — convenience for the "End rule"
-// button. Sets effective_to = today so the rule stops contributing to
-// windows that begin tomorrow onward without deleting history.
 recurring.post("/:id/end", requireCapability("org.settings.edit"), async (c) => {
   const orgId = c.get("orgId");
   const id = c.req.param("id");
@@ -225,7 +225,6 @@ recurring.post("/:id/end", requireCapability("org.settings.edit"), async (c) => 
   return c.json(res);
 });
 
-// DELETE /v1/recurring-expenses/:id — hard-delete via deleted_at.
 recurring.delete("/:id", requireCapability("org.settings.edit"), async (c) => {
   const orgId = c.get("orgId");
   const id = c.req.param("id");

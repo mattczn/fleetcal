@@ -19,7 +19,7 @@ import {
   matchMemo,
   type RampMatchInputs,
 } from "./rampMatcher.js";
-import { mapRampCategory } from "./rampCategoryMap.js";
+import { matchRuleAgainst } from "./rampCategoryMap.js";
 
 const RAMP_BASE = process.env.RAMP_BASE_URL || "https://api.ramp.com/developer/v1";
 const TOKEN_EARLY_EXPIRY_MS = 60_000;
@@ -138,19 +138,41 @@ export interface RampSyncResult {
   failedSample:  Array<{ providerTransactionId: string; error: string }>;
 }
 
+interface CategoryRuleRow {
+  pattern:    string;
+  is_regex:   boolean;
+  bucket_key: string;
+  priority:   number;
+}
+
+async function loadCategoryRules(orgId: string): Promise<CategoryRuleRow[]> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (supabase as any)
+    .from("ramp_category_rules")
+    .select("pattern, is_regex, bucket_key, priority")
+    .eq("org_id", orgId)
+    .is("deleted_at", null);
+  if (error) {
+    // Non-fatal: fall back to no auto-categorization.
+    console.error("[rampSync] category rules fetch failed:", error.message);
+    return [];
+  }
+  return (data ?? []) as CategoryRuleRow[];
+}
+
 function buildRow(
   orgId: string,
   tx: RampTransaction,
   inputs: RampMatchInputs,
+  rules: CategoryRuleRow[],
 ) {
   const match = matchMemo(tx.memo, tx.sk_category_name ?? null, inputs);
   const cardholderName =
     [tx.card_holder?.first_name, tx.card_holder?.last_name]
       .filter(Boolean).join(" ").trim() || null;
-  // Auto-derive expense_category from Ramp's own category. Manual
-  // overrides are preserved on re-sync via the duplicate branch (only
-  // NULL rows get refreshed).
-  const expenseCategory = mapRampCategory(tx.sk_category_name);
+  // Auto-derive bucket_key from ramp_category_rules (DB, user-editable).
+  // NULL when no rule matches — surfaces on the "Uncategorized" tile.
+  const bucketKey = matchRuleAgainst(tx.sk_category_name ?? null, rules);
   return {
     row: {
       org_id: orgId,
@@ -172,7 +194,7 @@ function buildRow(
       asset_id: match.asset_id,
       trailer_id: match.trailer_id,
       asset_link_source: match.source,
-      expense_category: expenseCategory,
+      bucket_key: bucketKey,
       match_status: match.status,
       match_confidence: match.confidence,
       match_notes: match.notes,
@@ -196,7 +218,10 @@ export async function syncRamp(
 ): Promise<RampSyncResult> {
   const token = await getAccessToken();
   const txns  = await fetchAllTransactions(token, from, to);
-  const matchInputs = await loadRampMatchInputs(orgId);
+  const [matchInputs, categoryRules] = await Promise.all([
+    loadRampMatchInputs(orgId),
+    loadCategoryRules(orgId),
+  ]);
 
   const result: RampSyncResult = {
     fetched: txns.length, inserted: 0, updated: 0, duplicates: 0,
@@ -204,7 +229,7 @@ export async function syncRamp(
   };
 
   for (const tx of txns) {
-    const { row, match } = buildRow(orgId, tx, matchInputs);
+    const { row, match } = buildRow(orgId, tx, matchInputs, categoryRules);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { error } = await (supabase as any)
@@ -225,7 +250,7 @@ export async function syncRamp(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data: existing } = await (supabase as any)
         .from("ramp_transactions")
-        .select("id, match_status, asset_link_source, expense_category")
+        .select("id, match_status, asset_link_source, bucket_key")
         .eq("org_id", orgId)
         .eq("provider", "ramp")
         .eq("provider_transaction_id", tx.id)
@@ -237,10 +262,10 @@ export async function syncRamp(
       const preserveMatch =
         existing.match_status === "manual_matched" ||
         existing.asset_link_source === "manual";
-      // Category is preserved on re-sync once ANY value is set — the
-      // auto-mapper only ever fills in NULLs, so a human choice (via the
-      // UI) or an earlier auto-map survives.
-      const preserveCategory = existing.expense_category != null;
+      // Bucket is preserved on re-sync once ANY value is set — the auto-
+      // mapper only fills in NULLs, so a human choice or earlier auto-
+      // map survives future syncs.
+      const preserveBucket = existing.bucket_key != null;
       const updateRow: Record<string, unknown> = {
         amount: row.amount,
         currency: row.currency,
@@ -264,8 +289,8 @@ export async function syncRamp(
         updateRow.match_notes       = row.match_notes;
         updateRow.matched_at        = row.matched_at;
       }
-      if (!preserveCategory && row.expense_category != null) {
-        updateRow.expense_category = row.expense_category;
+      if (!preserveBucket && row.bucket_key != null) {
+        updateRow.bucket_key = row.bucket_key;
       }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { error: uErr } = await (supabase as any)

@@ -1,49 +1,72 @@
 /**
- * Ramp sk_category_name → FleetCal expense_category mapping.
+ * Ramp sk_category_name → FleetCal bucket mapping.
  *
- * Applied on sync (for new rows) and on demand via the backfill
- * endpoint. Manual overrides are preserved separately (asset_link_source
- * = 'manual' OR match_status = 'manual_matched' short-circuits the
- * mapper on re-sync).
+ * This file used to be the runtime auto-mapper. It's now DEFAULTS ONLY:
+ * the ramp_category_rules table is the source of truth at sync time.
+ * The DEFAULT_RAMP_RULES below are what the "Seed defaults" endpoint
+ * inserts as DB rows for an org that hasn't customized their rules yet.
  *
- * Coverage of common Ramp categories today — extend as new ones surface
- * in production. Anything not on this list stays NULL and shows up on
- * the "Uncategorized" tile so a human can decide.
+ * Runtime matching happens against rules loaded from the DB via
+ * matchRuleAgainst() below — same in-memory shape either way.
  */
 
-import type { RampExpenseCategory } from "@fleetcal/types";
+import type { ExpenseBucketKey } from "@fleetcal/types";
 
-const RULES: Array<{ match: RegExp; category: RampExpenseCategory }> = [
-  // Maintenance — parts, repair labor, tires, oil, DEF
-  { match: /^(automotive|auto\s+parts|auto\s+repair|auto\s+service|tires?|oil\s+change|vehicle\s+repair|truck\s+repair)/i,
-    category: "maintenance" },
-  { match: /(parts|service).*(auto|truck|vehicle)/i,        category: "maintenance" },
+export interface RampRule {
+  pattern:   string;     // regex or literal
+  isRegex:   boolean;
+  bucketKey: ExpenseBucketKey;
+  priority:  number;
+}
 
-  // Load expenses — lumpers, tolls, permits, truck stops, DOT scale fees
-  { match: /^(freight|tolls?|lumpers?|permits?|scale|weigh\s+station|truck\s+stops?)/i,
-    category: "load_expenses" },
+/** Starter regex → bucket mappings. Seeded into ramp_category_rules
+ *  on demand via POST /v1/ramp-category-rules/seed-defaults. Once
+ *  seeded, the DB is authoritative; editing DEFAULT_RAMP_RULES has no
+ *  runtime effect until reseeded. */
+export const DEFAULT_RAMP_RULES: RampRule[] = [
+  // Fleet Ops — vehicle maintenance, tolls, fuel, hotels-on-the-road
+  { pattern: "^(automotive|auto\\s+parts|auto\\s+repair|auto\\s+service|tires?|oil\\s+change|vehicle\\s+repair|truck\\s+repair)",
+    isRegex: true, bucketKey: "fleet_ops", priority: 100 },
+  { pattern: "(parts|service).*(auto|truck|vehicle)",
+    isRegex: true, bucketKey: "fleet_ops", priority: 100 },
+  { pattern: "^(freight|tolls?|lumpers?|permits?|scale|weigh\\s+station|truck\\s+stops?)",
+    isRegex: true, bucketKey: "fleet_ops", priority: 100 },
+  { pattern: "^(lodging|hotels?|motels?|inns?)",
+    isRegex: true, bucketKey: "fleet_ops", priority: 100 },
+  { pattern: "^(fuel|gas(oline)?|petroleum|diesel)",
+    isRegex: true, bucketKey: "fleet_ops", priority: 100 },
+  { pattern: "fuel\\s*&\\s*gas",
+    isRegex: true, bucketKey: "fleet_ops", priority: 100 },
 
-  // Hotels / lodging — on-the-road stays
-  { match: /^(lodging|hotels?|motels?|inns?)/i,             category: "hotels" },
+  // Software & Overhead — SaaS, office supplies, banking, professional services
+  { pattern: "^(software|subscriptions?|office\\s+supplies|hardware\\s+&?\\s*software)",
+    isRegex: true, bucketKey: "software_overhead", priority: 100 },
+  { pattern: "^(professional\\s+services|legal|accounting|banking)",
+    isRegex: true, bucketKey: "software_overhead", priority: 100 },
 
-  // Fuel (non-Mudflap card fuel-ups, cash fuel)
-  { match: /^(fuel|gas(oline)?|petroleum|diesel)/i,         category: "fuel" },
-  { match: /fuel\s*&\s*gas/i,                                category: "fuel" },
-
-  // Overhead — software subs, office supplies, professional services
-  { match: /^(software|subscriptions?|office\s+supplies|hardware\s+&?\s*software)/i,
-    category: "office" },
-  { match: /^(professional\s+services|legal|accounting|banking|insurance\s+(payment|premium))/i,
-    category: "office" },
+  // Insurance & Claims
+  { pattern: "^(insurance\\s+(payment|premium|policy))",
+    isRegex: true, bucketKey: "insurance_claims", priority: 100 },
 ];
 
-/** Returns the mapped category, or null when no rule fires. */
-export function mapRampCategory(
+/** Match a single Ramp sk_category_name against a set of rules. Returns
+ *  the first matching rule's bucket_key by ascending priority, or null. */
+export function matchRuleAgainst(
   skCategoryName: string | null | undefined,
-): RampExpenseCategory | null {
+  rules: Array<{ pattern: string; is_regex: boolean; bucket_key: string; priority: number }>,
+): ExpenseBucketKey | null {
   if (!skCategoryName) return null;
-  for (const { match, category } of RULES) {
-    if (match.test(skCategoryName)) return category;
+  const sorted = [...rules].sort((a, b) => a.priority - b.priority);
+  for (const r of sorted) {
+    let matched = false;
+    if (r.is_regex) {
+      try {
+        matched = new RegExp(r.pattern, "i").test(skCategoryName);
+      } catch { matched = false; }
+    } else {
+      matched = skCategoryName.toLowerCase().includes(r.pattern.toLowerCase());
+    }
+    if (matched) return r.bucket_key as ExpenseBucketKey;
   }
   return null;
 }

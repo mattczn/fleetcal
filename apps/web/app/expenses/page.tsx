@@ -27,7 +27,7 @@ import {
   currentWeekStartISO, getPeriodRange, type Period,
 } from '@/lib/periodRange';
 import { railway } from '@/lib/railway';
-import type { ExpenseBucket, ExpenseEvent, ExpenseBucketKey } from '@fleetcal/types';
+import type { ExpenseBucket, ExpenseEvent, SummaryBucketKey } from '@fleetcal/types';
 
 const fmtMoney0 = (n: number) =>
   new Intl.NumberFormat('en-US', {
@@ -63,7 +63,7 @@ function DeltaChip({ current, previous }: { current: number; previous: number })
   );
 }
 
-const BUCKET_ICONS: Partial<Record<ExpenseBucketKey, React.ComponentType<{ size?: number; strokeWidth?: number }>>> = {
+const BUCKET_ICONS: Partial<Record<SummaryBucketKey, React.ComponentType<{ size?: number; strokeWidth?: number }>>> = {
   payroll_people:    Users,
   fleet_ops:         Truck,
   facilities:        Building2,
@@ -75,7 +75,7 @@ const BUCKET_ICONS: Partial<Record<ExpenseBucketKey, React.ComponentType<{ size?
   uncategorized:     CreditCard,
 };
 
-const BUCKET_HREFS: Record<ExpenseBucketKey, string> = {
+const BUCKET_HREFS: Record<SummaryBucketKey, string> = {
   payroll_people:    '/payroll',
   fleet_ops:         '/equipment?tab=fuel',
   facilities:        '/expenses/recurring',
@@ -85,7 +85,7 @@ const BUCKET_HREFS: Record<ExpenseBucketKey, string> = {
   taxes:             '/expenses/one-time',
   owner_draws:       '/expenses/one-time',
   uncategorized:     '/expenses/cards?category=uncategorized',
-};
+} as const;
 
 function countLabel(bucket: ExpenseBucket): string {
   const n = bucket.count;
@@ -100,39 +100,11 @@ function countLabel(bucket: ExpenseBucket): string {
 function BucketTile({ bucket, onClick }: { bucket: ExpenseBucket; onClick: () => void }) {
   const Icon = BUCKET_ICONS[bucket.key] ?? CreditCard;
   const isUncat = bucket.key === 'uncategorized';
-  const breakdown =
-    bucket.key === 'payroll_people' && bucket.meta ? [
-      { label: 'Driver',    value: Number(bucket.meta.driver         ?? 0) },
-      { label: 'Admin',     value: Number(bucket.meta.admin          ?? 0) },
-      { label: 'Dispatch',  value: Number(bucket.meta.dispatch       ?? 0) },
-      { label: 'Maint',     value: Number(bucket.meta.maintenance    ?? 0) },
-      { label: 'Stipends',  value: Number(bucket.meta.stipends       ?? 0) },
-      { label: 'Owner-op',  value: Number(bucket.meta.ownerOpPayouts ?? 0) },
-    ].filter(x => x.value > 0) :
-    bucket.key === 'fleet_ops' && bucket.meta ? [
-      { label: 'Fuel',      value: Number(bucket.meta.fuel         ?? 0) },
-      { label: 'Maint',     value: Number(bucket.meta.maintenance  ?? 0) },
-      { label: 'Load exp',  value: Number(bucket.meta.loadExpenses ?? 0) },
-      { label: 'Hotels',    value: Number(bucket.meta.hotels       ?? 0) },
-    ].filter(x => x.value > 0) :
-    bucket.key === 'facilities' && bucket.meta ? [
-      { label: 'Yard',   value: Number(bucket.meta.yard   ?? 0) },
-      { label: 'Office', value: Number(bucket.meta.office ?? 0) },
-    ].filter(x => x.value > 0) :
-    bucket.key === 'insurance_claims' && bucket.meta ? [
-      { label: 'Premium', value: Number(bucket.meta.insurance ?? 0) },
-      { label: 'Claims',  value: Number(bucket.meta.claims    ?? 0) },
-    ].filter(x => x.value > 0) :
-    bucket.key === 'software_overhead' && bucket.meta ? [
-      { label: 'Subs',     value: Number(bucket.meta.recurring  ?? 0) },
-      { label: 'Card',     value: Number(bucket.meta.rampOffice ?? 0) },
-      { label: 'One-off',  value: Number(bucket.meta.oneOff     ?? 0) },
-    ].filter(x => x.value > 0) :
-    bucket.key === 'capex' && bucket.meta ? [
-      { label: 'Trucks',    value: Number(bucket.meta.truck     ?? 0) },
-      { label: 'Equipment', value: Number(bucket.meta.equipment ?? 0) },
-    ].filter(x => x.value > 0) :
-    null;
+  // Tile breakdowns removed intentionally: the taxonomy under each
+  // bucket is now free-text (per-org), so we can't compute clean
+  // sub-slices from the summary shape. Users drill into the bucket
+  // (via the tile click) to see the actual entries.
+  const breakdown: null = null;
 
   return (
     <button
@@ -164,16 +136,6 @@ function BucketTile({ bucket, onClick }: { bucket: ExpenseBucket; onClick: () =>
           {isUncat ? `${bucket.count} to categorize` : countLabel(bucket)}
         </span>
       </div>
-      {breakdown && breakdown.length > 0 && (
-        <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px]"
-             style={{ color: 'var(--gc-text-3)' }}>
-          {breakdown.map(b => (
-            <span key={b.label} className="tabular-nums">
-              {b.label} <span style={{ color: 'var(--gc-text-2)' }}>{fmtMoney0(b.value)}</span>
-            </span>
-          ))}
-        </div>
-      )}
     </button>
   );
 }
@@ -329,6 +291,18 @@ function ExpensesPageInner() {
                 title="Manage weekly salaries, monthly rent, insurance, and subscriptions"
               >
                 Recurring rules
+              </button>
+              <button
+                onClick={() => router.push('/expenses/rules')}
+                className="text-xs font-semibold px-3 py-1.5 rounded border"
+                style={{
+                  borderColor: 'var(--gc-border)',
+                  background:  'var(--gc-surface)',
+                  color:       'var(--gc-text-2)',
+                }}
+                title="Rules that decide which bucket a Ramp txn lands in on sync"
+              >
+                Ramp rules
               </button>
               <PeriodSelector
                 period={period}

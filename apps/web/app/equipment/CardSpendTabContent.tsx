@@ -21,8 +21,9 @@ import { StyledSelect } from '@/components/ui/StyledSelect';
 import type {
   RampTransaction,
   RampTransactionMatchStatus,
-  RampExpenseCategory,
+  ExpenseBucketKey,
 } from '@fleetcal/types';
+import { EXPENSE_BUCKET_KEYS, EXPENSE_BUCKET_LABELS } from '@fleetcal/types';
 import type { Asset } from '@/lib/types';
 import { Receipt as ReceiptIcon } from 'lucide-react';
 
@@ -53,14 +54,6 @@ function statusPill(s: RampTransactionMatchStatus) {
   }
 }
 
-const CATEGORY_LABELS: Record<RampExpenseCategory, string> = {
-  maintenance:   'Maintenance',
-  load_expenses: 'Load expenses',
-  hotels:        'Hotels',
-  fuel:          'Fuel',
-  office:        'Office / overhead',
-  other:         'Other',
-};
 
 export default function CardSpendTabContent({
   assets, trailers, assetLabelById, trailerLabelById, defaultCategoryFilter,
@@ -121,14 +114,14 @@ export default function CardSpendTabContent({
     }
   }, []);
 
-  const onCategoryChange = useCallback(async (tx: RampTransaction, value: string) => {
+  const onBucketChange = useCallback(async (tx: RampTransaction, value: string) => {
     try {
-      const category = value === '' ? null : value;
-      const r = await railway.setRampTransactionCategory(tx.id, category);
+      const bucketKey = value === '' ? null : value;
+      const r = await railway.setRampTransactionBucket(tx.id, bucketKey);
       setRows(prev => prev.map(row => row.id === tx.id ? r.rampTransaction : row));
     } catch (err) {
-      console.error('[card-spend] category change failed:', err);
-      alert('Failed to update category.');
+      console.error('[card-spend] bucket change failed:', err);
+      alert('Failed to update bucket.');
     }
   }, []);
 
@@ -215,26 +208,23 @@ export default function CardSpendTabContent({
       ),
     },
     {
-      key: 'expense_category',
-      header: 'Category',
-      width: 170,
+      key: 'bucket_key',
+      header: 'Bucket',
+      width: 180,
       sortable: true,
-      sortValue: r => r.expenseCategory ?? '',
+      sortValue: r => r.bucketKey ?? '',
       render: r => (
         <div onClick={e => e.stopPropagation()}
              title={r.skCategoryName ? `Ramp said: ${r.skCategoryName}` : undefined}>
           <StyledSelect
-            value={r.expenseCategory ?? ''}
-            onChange={e => void onCategoryChange(r, e.target.value)}
-            style={{ minWidth: 150, fontSize: 12 }}
+            value={r.bucketKey ?? ''}
+            onChange={e => void onBucketChange(r, e.target.value)}
+            style={{ minWidth: 160, fontSize: 12 }}
           >
             <option value="">— Uncategorized —</option>
-            <option value="maintenance">Maintenance</option>
-            <option value="load_expenses">Load expenses</option>
-            <option value="hotels">Hotels</option>
-            <option value="fuel">Fuel</option>
-            <option value="office">Office / overhead</option>
-            <option value="other">Other</option>
+            {EXPENSE_BUCKET_KEYS.map(k => (
+              <option key={k} value={k}>{EXPENSE_BUCKET_LABELS[k]}</option>
+            ))}
           </StyledSelect>
         </div>
       ),
@@ -397,23 +387,18 @@ export default function CardSpendTabContent({
     }] : []),
     {
       kind: 'select' as const,
-      key: 'expense_category',
+      key: 'bucket_key',
       label: 'Bucket',
       options: [
         { value: 'all',           label: 'All buckets' },
         { value: 'uncategorized', label: 'Uncategorized' },
-        { value: 'maintenance',   label: 'Maintenance' },
-        { value: 'load_expenses', label: 'Load expenses' },
-        { value: 'hotels',        label: 'Hotels' },
-        { value: 'fuel',          label: 'Fuel' },
-        { value: 'office',        label: 'Office / overhead' },
-        { value: 'other',         label: 'Other' },
+        ...EXPENSE_BUCKET_KEYS.map(k => ({ value: k, label: EXPENSE_BUCKET_LABELS[k] })),
       ],
       defaultValue: defaultCategoryFilter ?? 'all',
       predicate: (r: RampTransaction, v: string) => {
         if (v === 'all')           return true;
-        if (v === 'uncategorized') return !r.expenseCategory;
-        return r.expenseCategory === v;
+        if (v === 'uncategorized') return !r.bucketKey;
+        return r.bucketKey === v;
       },
     },
     ...(categoryOptions.length > 1 ? [{

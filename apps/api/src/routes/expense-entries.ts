@@ -1,25 +1,21 @@
 /**
  * /v1/expense-entries — CRUD for one-off / ad-hoc expenses.
  *
- * Sibling to /v1/recurring-expenses. Rules that repeat go there;
- * one-time hits (Sophia/Luis weekly payouts with variable amount, Penske
- * wire for a truck purchase, claim payouts, Jon/Mike owner draws from
- * Chase Sapphire, quarterly tax payments) land here.
- *
- * Module-gated on "expenses". Mutations require org.settings.edit — this
- * is money-out data that shouldn't be editable by every seat.
+ * Each entry picks a `bucketKey` (which dashboard tile) + an optional
+ * free-text `kind` tag. No hardcoded enum on kind.
  */
 
 import { Hono } from "hono";
 import type {
   ExpenseEntry,
-  ExpenseEntryKind,
+  ExpenseBucketKey,
   ListExpenseEntriesResponse,
   CreateExpenseEntryRequest,
   UpdateExpenseEntryRequest,
   ExpenseEntryResponse,
   ApiErrorResponse,
 } from "@fleetcal/types";
+import { EXPENSE_BUCKET_KEYS } from "@fleetcal/types";
 
 import { supabase as supabaseTyped } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
@@ -28,15 +24,13 @@ import { requireCapability, requireModule } from "../middleware/require.js";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const supabase = supabaseTyped as any;
 
-const VALID_KINDS = new Set<ExpenseEntryKind>([
-  'owner_op_payout', 'claim_payout', 'truck_purchase', 'equipment_purchase',
-  'tax', 'owner_draw', 'subscription', 'misc',
-]);
+const VALID_BUCKETS = new Set<ExpenseBucketKey>(EXPENSE_BUCKET_KEYS);
 
 interface EntryRow {
   id:         string;
   org_id:     string;
-  kind:       string;
+  bucket_key: string;
+  kind:       string | null;
   date:       string;
   amount:     string | number;
   label:      string;
@@ -49,7 +43,8 @@ function rowToDomain(r: EntryRow): ExpenseEntry {
   return {
     id:        r.id,
     orgId:     r.org_id,
-    kind:      r.kind as ExpenseEntryKind,
+    bucketKey: r.bucket_key as ExpenseBucketKey,
+    kind:      r.kind ?? undefined,
     date:      r.date,
     amount:    Number(r.amount),
     label:     r.label,
@@ -59,7 +54,7 @@ function rowToDomain(r: EntryRow): ExpenseEntry {
   };
 }
 
-const COLS = "id, org_id, kind, date, amount, label, notes, created_at, updated_at";
+const COLS = "id, org_id, bucket_key, kind, date, amount, label, notes, created_at, updated_at";
 
 const entries = new Hono<{ Variables: AuthVariables }>();
 entries.use("*", requireModule("expenses"), requireCapability("expenses.access"));
@@ -67,9 +62,10 @@ entries.use("*", requireModule("expenses"), requireCapability("expenses.access")
 entries.get("/", async (c) => {
   const orgId = c.get("orgId");
   const url = new URL(c.req.url);
-  const from = url.searchParams.get("from");
-  const to   = url.searchParams.get("to");
-  const kind = url.searchParams.get("kind");
+  const from       = url.searchParams.get("from");
+  const to         = url.searchParams.get("to");
+  const bucketKey  = url.searchParams.get("bucketKey");
+  const kind       = url.searchParams.get("kind");
   const limit  = Math.min(Math.max(Number(url.searchParams.get("limit")  ?? "200"), 1), 1000);
   const offset = Math.max(Number(url.searchParams.get("offset") ?? "0"), 0);
 
@@ -78,9 +74,10 @@ entries.get("/", async (c) => {
     .select(COLS, { count: "exact" })
     .eq("org_id", orgId)
     .is("deleted_at", null);
-  if (from) query = query.gte("date", from);
-  if (to)   query = query.lte("date", to);
-  if (kind) query = query.eq("kind", kind);
+  if (from)      query = query.gte("date", from);
+  if (to)        query = query.lte("date", to);
+  if (bucketKey) query = query.eq("bucket_key", bucketKey);
+  if (kind)      query = query.eq("kind", kind);
 
   const { data, error, count } = await query
     .order("date", { ascending: false })
@@ -100,8 +97,8 @@ entries.post("/", requireCapability("org.settings.edit"), async (c) => {
   const orgId = c.get("orgId");
   const body = await c.req.json<CreateExpenseEntryRequest>().catch(() => null);
   if (!body) return c.json({ error: "bad_request", detail: "invalid json body" }, 400);
-  if (!VALID_KINDS.has(body.kind)) {
-    return c.json({ error: "bad_request", detail: `invalid kind: ${body.kind}` }, 400);
+  if (!VALID_BUCKETS.has(body.bucketKey)) {
+    return c.json({ error: "bad_request", detail: `invalid bucketKey: ${body.bucketKey}` }, 400);
   }
   if (!body.label?.trim()) {
     return c.json({ error: "bad_request", detail: "label is required" }, 400);
@@ -113,12 +110,13 @@ entries.post("/", requireCapability("org.settings.edit"), async (c) => {
     return c.json({ error: "bad_request", detail: "date must be YYYY-MM-DD" }, 400);
   }
   const row = {
-    org_id: orgId,
-    kind:   body.kind,
-    date:   body.date,
-    amount: body.amount,
-    label:  body.label.trim(),
-    notes:  body.notes?.trim() || null,
+    org_id:     orgId,
+    bucket_key: body.bucketKey,
+    kind:       body.kind?.trim() || null,
+    date:       body.date,
+    amount:     body.amount,
+    label:      body.label.trim(),
+    notes:      body.notes?.trim() || null,
   };
   const { data, error } = await supabase
     .from("expense_entries")
@@ -141,11 +139,14 @@ entries.patch("/:id", requireCapability("org.settings.edit"), async (c) => {
   if (!body) return c.json({ error: "bad_request", detail: "invalid json body" }, 400);
 
   const update: Record<string, unknown> = {};
-  if (body.kind !== undefined) {
-    if (!VALID_KINDS.has(body.kind)) {
-      return c.json({ error: "bad_request", detail: `invalid kind: ${body.kind}` }, 400);
+  if (body.bucketKey !== undefined) {
+    if (!VALID_BUCKETS.has(body.bucketKey)) {
+      return c.json({ error: "bad_request", detail: `invalid bucketKey: ${body.bucketKey}` }, 400);
     }
-    update.kind = body.kind;
+    update.bucket_key = body.bucketKey;
+  }
+  if (body.kind !== undefined) {
+    update.kind = body.kind == null ? null : (body.kind.trim() || null);
   }
   if (body.date !== undefined) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(body.date)) {

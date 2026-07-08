@@ -1434,9 +1434,13 @@ export interface RampTransaction {
   trailerId?:             number;
   assetLinkSource:        RampAssetLinkSource;
 
-  /** Sub-categorization the /expenses page drives. Nullable — the
-   *  canonical set is still being decided; auto-mapping from
-   *  skCategoryName lands in Phase B. */
+  /** Which /expenses bucket this txn feeds. Nullable — uncategorized
+   *  txns show up on the Uncategorized CTA. Set on sync by
+   *  ramp_category_rules (user-editable) with a hardcoded seed. */
+  bucketKey?:             ExpenseBucketKey;
+
+  /** @deprecated superseded by bucketKey. Kept for backward-compat with
+   *  older UI code. Ramp's own SK category lives in skCategoryName. */
   expenseCategory?:       string;
 
   matchStatus:            RampTransactionMatchStatus;
@@ -1455,19 +1459,18 @@ export interface RampTransaction {
 // (see apps/api/src/routes/expenses.ts). New cadences (annual, quarterly)
 // slot in with a cadence value + a periodDays entry in the prorater.
 
-export type RecurringExpenseKind =
-  | 'payroll_admin'
-  | 'payroll_dispatch'
-  | 'payroll_maintenance'
-  | 'insurance'
-  | 'yard_rent'
-  | 'office_rent'
-  | 'address_stipend'
-  | 'software_subscription';
+/** Free-text descriptive tag. The DB no longer enforces an enum — users
+ *  can type any category. Bucket routing lives on `bucketKey` (8 fixed
+ *  dashboard tiles). The values below are just suggestions for the UI
+ *  autocomplete / starter dropdown. */
+export type RecurringExpenseKind = string;
 
-export const RECURRING_EXPENSE_KINDS: readonly RecurringExpenseKind[] = [
-  'payroll_admin', 'payroll_dispatch', 'payroll_maintenance', 'insurance',
-  'yard_rent', 'office_rent', 'address_stipend', 'software_subscription',
+export const RECURRING_EXPENSE_KIND_SUGGESTIONS: readonly string[] = [
+  'payroll_admin', 'payroll_dispatch', 'payroll_maintenance',
+  'address_stipend',
+  'yard_rent', 'office_rent',
+  'insurance',
+  'software_subscription',
 ] as const;
 
 export type RecurringExpenseCadence = 'weekly' | 'monthly';
@@ -1475,7 +1478,12 @@ export type RecurringExpenseCadence = 'weekly' | 'monthly';
 export interface RecurringExpense {
   id:             string;
   orgId:          string;
-  kind:           RecurringExpenseKind;
+  /** Which dashboard tile this rule feeds. One of the fixed 8 buckets
+   *  (see ExpenseBucketKey / DASHBOARD_BUCKETS). */
+  bucketKey:      ExpenseBucketKey;
+  /** Optional descriptive tag ("payroll_admin", "yard_rent", or any
+   *  string the user picks). Only used for display. */
+  kind?:          string;
   label:          string;
   amount:         number;
   cadence:        RecurringExpenseCadence;
@@ -1509,17 +1517,10 @@ export const RAMP_EXPENSE_CATEGORIES: readonly RampExpenseCategory[] = [
 // (variable weekly amounts, unpredictable cadence, or truly one-off).
 // Manual entry — no integration for now. See expense_entries table.
 
-export type ExpenseEntryKind =
-  | 'owner_op_payout'      // Sophia/Luis weekly variable payouts
-  | 'claim_payout'         // Accident/damage payouts from insurance
-  | 'truck_purchase'       // Capex — Penske wires
-  | 'equipment_purchase'   // Capex — other equipment
-  | 'tax'                  // IRP, IFTA, income, state (specify in label)
-  | 'owner_draw'           // Chase Sapphire / Jon+Mike withdrawals
-  | 'subscription'         // One-off subs not covered by recurring
-  | 'misc';
+/** Free-text descriptive tag. DB no longer enforces an enum. */
+export type ExpenseEntryKind = string;
 
-export const EXPENSE_ENTRY_KINDS: readonly ExpenseEntryKind[] = [
+export const EXPENSE_ENTRY_KIND_SUGGESTIONS: readonly string[] = [
   'owner_op_payout', 'claim_payout', 'truck_purchase', 'equipment_purchase',
   'tax', 'owner_draw', 'subscription', 'misc',
 ] as const;
@@ -1527,7 +1528,8 @@ export const EXPENSE_ENTRY_KINDS: readonly ExpenseEntryKind[] = [
 export interface ExpenseEntry {
   id:         string;
   orgId:      string;
-  kind:       ExpenseEntryKind;
+  bucketKey:  ExpenseBucketKey;
+  kind?:      string;
   date:       string;   // YYYY-MM-DD
   amount:     number;
   label:      string;
@@ -1535,6 +1537,50 @@ export interface ExpenseEntry {
   createdAt:  string;
   updatedAt:  string;
 }
+
+// ── Ramp category rules (user-editable auto-map) ────────────────────────
+
+export interface RampCategoryRule {
+  id:         string;
+  orgId:      string;
+  pattern:    string;
+  isRegex:    boolean;
+  bucketKey:  ExpenseBucketKey;
+  priority:   number;
+  notes?:     string;
+  createdAt:  string;
+  updatedAt:  string;
+}
+
+/** The 8 fixed dashboard buckets. Hardcoded because they define the tile
+ *  grid — adding a bucket is a code + migration change, but that's rare.
+ *  Everything BELOW this level (kinds, categories, sub-groups) is free-
+ *  text and user-editable. */
+export type ExpenseBucketKey =
+  | 'payroll_people'
+  | 'fleet_ops'
+  | 'facilities'
+  | 'insurance_claims'
+  | 'software_overhead'
+  | 'capex'
+  | 'taxes'
+  | 'owner_draws';
+
+export const EXPENSE_BUCKET_KEYS: readonly ExpenseBucketKey[] = [
+  'payroll_people', 'fleet_ops', 'facilities', 'insurance_claims',
+  'software_overhead', 'capex', 'taxes', 'owner_draws',
+] as const;
+
+export const EXPENSE_BUCKET_LABELS: Record<ExpenseBucketKey, string> = {
+  payroll_people:    'Payroll & People',
+  fleet_ops:         'Fleet Operations',
+  facilities:        'Facilities',
+  insurance_claims:  'Insurance & Claims',
+  software_overhead: 'Software & Overhead',
+  capex:             'Capex',
+  taxes:             'Taxes',
+  owner_draws:       'Owner Draws',
+};
 
 // ── Maintenance ─────────────────────────────────────────────────────────
 //

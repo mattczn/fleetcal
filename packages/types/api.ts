@@ -1588,19 +1588,16 @@ export interface RunRampSyncResponse {
  *  bucket-specific signals go in `meta` — Payroll uses it to expose
  *  the 4-way sub-bucket breakdown; Uncategorized uses it for the CTA
  *  count. */
-export type ExpenseBucketKey =
-  | 'payroll_people'      // driver + admin/dispatch/maint + stipends + owner-op payouts
-  | 'fleet_ops'           // Mudflap fuel + Ramp maint + load exp + hotels + Ramp fuel
-  | 'facilities'          // yard rent + office rent
-  | 'insurance_claims'    // insurance recurring + claim_payout entries
-  | 'software_overhead'   // SaaS recurring + Ramp office + one-off subscriptions
-  | 'capex'               // truck_purchase + equipment_purchase entries
-  | 'taxes'               // tax entries
-  | 'owner_draws'         // owner_draw entries (Chase Sapphire / withdrawals)
-  | 'uncategorized';      // CTA — Ramp txns w/o expense_category
+/** Bucket key on the summary response. The 8 primary buckets come from
+ *  ExpenseBucketKey in domain.ts; 'uncategorized' is a CTA appended by
+ *  the summary route when unassigned Ramp txns exist. Exposed as a
+ *  distinct type name so it doesn't collide with the primary
+ *  ExpenseBucketKey re-exported from domain. */
+import type { ExpenseBucketKey as DomainBucketKey } from './domain';
+export type SummaryBucketKey = DomainBucketKey | 'uncategorized';
 
 export interface ExpenseBucket {
-  key:        ExpenseBucketKey;
+  key:        SummaryBucketKey;
   label:      string;
   total:      number;
   count:      number;
@@ -1635,7 +1632,6 @@ export interface ExpensesActivityResponse {
 
 import type {
   RecurringExpense,
-  RecurringExpenseKind,
   RecurringExpenseCadence,
 } from './domain';
 
@@ -1644,7 +1640,8 @@ export interface ListRecurringExpensesResponse {
 }
 
 export interface CreateRecurringExpenseRequest {
-  kind:           RecurringExpenseKind;
+  bucketKey:      DomainBucketKey;
+  kind?:          string;
   label:          string;
   amount:         number;
   cadence:        RecurringExpenseCadence;
@@ -1654,12 +1651,14 @@ export interface CreateRecurringExpenseRequest {
 }
 
 export interface UpdateRecurringExpenseRequest {
+  bucketKey?:     DomainBucketKey;
+  kind?:          string | null;
   label?:         string;
   amount?:        number;
   cadence?:       RecurringExpenseCadence;
   effectiveFrom?: string;
   effectiveTo?:   string | null;   // pass null to reopen
-  notes?:        string | null;
+  notes?:         string | null;
 }
 
 export interface RecurringExpenseResponse {
@@ -1674,14 +1673,15 @@ export interface BackfillRampCategoriesResponse {
 
 // ── Expense entries CRUD (one-off / ad-hoc) ─────────────────────────────
 
-import type { ExpenseEntry, ExpenseEntryKind } from './domain';
+import type { ExpenseEntry, RampCategoryRule } from './domain';
 
 export interface ListExpenseEntriesRequest {
-  from?:  string;
-  to?:    string;
-  kind?:  ExpenseEntryKind;
-  limit?: number;
-  offset?: number;
+  from?:      string;
+  to?:        string;
+  bucketKey?: DomainBucketKey;
+  kind?:      string;
+  limit?:     number;
+  offset?:    number;
 }
 export interface ListExpenseEntriesResponse {
   expenseEntries: ExpenseEntry[];
@@ -1689,21 +1689,50 @@ export interface ListExpenseEntriesResponse {
 }
 
 export interface CreateExpenseEntryRequest {
-  kind:    ExpenseEntryKind;
-  date:    string;   // YYYY-MM-DD
-  amount:  number;
-  label:   string;
-  notes?:  string;
+  bucketKey: DomainBucketKey;
+  kind?:     string;
+  date:      string;   // YYYY-MM-DD
+  amount:    number;
+  label:     string;
+  notes?:    string;
 }
 export interface UpdateExpenseEntryRequest {
-  kind?:   ExpenseEntryKind;
-  date?:   string;
-  amount?: number;
-  label?:  string;
-  notes?:  string | null;
+  bucketKey?: DomainBucketKey;
+  kind?:      string | null;
+  date?:      string;
+  amount?:    number;
+  label?:     string;
+  notes?:     string | null;
 }
 export interface ExpenseEntryResponse {
   expenseEntry: ExpenseEntry;
+}
+
+// ── Ramp category rules CRUD ────────────────────────────────────────────
+
+export interface ListRampCategoryRulesResponse {
+  rules: RampCategoryRule[];
+}
+export interface CreateRampCategoryRuleRequest {
+  pattern:   string;
+  isRegex?:  boolean;    // default true
+  bucketKey: DomainBucketKey;
+  priority?: number;     // default 100
+  notes?:    string;
+}
+export interface UpdateRampCategoryRuleRequest {
+  pattern?:   string;
+  isRegex?:   boolean;
+  bucketKey?: DomainBucketKey;
+  priority?:  number;
+  notes?:     string | null;
+}
+export interface RampCategoryRuleResponse {
+  rule: RampCategoryRule;
+}
+export interface SeedRampCategoryRulesResponse {
+  seeded:    number;
+  skipped:   number;   // rules that would duplicate an existing pattern
 }
 
 // ── /v1/odometer-readings ───────────────────────────────────────────────
