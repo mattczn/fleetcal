@@ -1589,9 +1589,15 @@ export interface RunRampSyncResponse {
  *  the 4-way sub-bucket breakdown; Uncategorized uses it for the CTA
  *  count. */
 export type ExpenseBucketKey =
-  | 'payroll' | 'fuel' | 'insurance'
-  | 'maintenance' | 'load_expenses' | 'hotels'
-  | 'uncategorized';
+  | 'payroll_people'      // driver + admin/dispatch/maint + stipends + owner-op payouts
+  | 'fleet_ops'           // Mudflap fuel + Ramp maint + load exp + hotels + Ramp fuel
+  | 'facilities'          // yard rent + office rent
+  | 'insurance_claims'    // insurance recurring + claim_payout entries
+  | 'software_overhead'   // SaaS recurring + Ramp office + one-off subscriptions
+  | 'capex'               // truck_purchase + equipment_purchase entries
+  | 'taxes'               // tax entries
+  | 'owner_draws'         // owner_draw entries (Chase Sapphire / withdrawals)
+  | 'uncategorized';      // CTA — Ramp txns w/o expense_category
 
 export interface ExpenseBucket {
   key:        ExpenseBucketKey;
@@ -1664,6 +1670,40 @@ export interface BackfillRampCategoriesResponse {
   scanned:     number;
   categorized: number;
   perCategory: Record<string, number>;
+}
+
+// ── Expense entries CRUD (one-off / ad-hoc) ─────────────────────────────
+
+import type { ExpenseEntry, ExpenseEntryKind } from './domain';
+
+export interface ListExpenseEntriesRequest {
+  from?:  string;
+  to?:    string;
+  kind?:  ExpenseEntryKind;
+  limit?: number;
+  offset?: number;
+}
+export interface ListExpenseEntriesResponse {
+  expenseEntries: ExpenseEntry[];
+  total:          number;
+}
+
+export interface CreateExpenseEntryRequest {
+  kind:    ExpenseEntryKind;
+  date:    string;   // YYYY-MM-DD
+  amount:  number;
+  label:   string;
+  notes?:  string;
+}
+export interface UpdateExpenseEntryRequest {
+  kind?:   ExpenseEntryKind;
+  date?:   string;
+  amount?: number;
+  label?:  string;
+  notes?:  string | null;
+}
+export interface ExpenseEntryResponse {
+  expenseEntry: ExpenseEntry;
 }
 
 // ── /v1/odometer-readings ───────────────────────────────────────────────

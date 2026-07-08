@@ -17,8 +17,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Fuel as FuelIcon, Wallet, CreditCard, ArrowUpRight, ArrowDownRight, ArrowRight,
-  Shield, Wrench, Package as PackageIcon, BedDouble, AlertCircle,
+  Users, Truck, Building2, ShieldCheck, Cpu, Wrench, Landmark, HandCoins,
+  ArrowUpRight, ArrowDownRight, ArrowRight, CreditCard,
 } from 'lucide-react';
 import RequireCap from '@/components/auth/RequireCap';
 import AppShell from '@/components/nav/AppShell';
@@ -64,46 +64,75 @@ function DeltaChip({ current, previous }: { current: number; previous: number })
 }
 
 const BUCKET_ICONS: Partial<Record<ExpenseBucketKey, React.ComponentType<{ size?: number; strokeWidth?: number }>>> = {
-  payroll:       Wallet,
-  fuel:          FuelIcon,
-  insurance:     Shield,
-  maintenance:   Wrench,
-  load_expenses: PackageIcon,
-  hotels:        BedDouble,
-  uncategorized: CreditCard,
+  payroll_people:    Users,
+  fleet_ops:         Truck,
+  facilities:        Building2,
+  insurance_claims:  ShieldCheck,
+  software_overhead: Cpu,
+  capex:             Wrench,
+  taxes:             Landmark,
+  owner_draws:       HandCoins,
+  uncategorized:     CreditCard,
 };
 
 const BUCKET_HREFS: Record<ExpenseBucketKey, string> = {
-  payroll:       '/payroll',
-  fuel:          '/equipment?tab=fuel',
-  insurance:     '/expenses/recurring',
-  maintenance:   '/expenses/cards?category=maintenance',
-  load_expenses: '/expenses/cards?category=load_expenses',
-  hotels:        '/expenses/cards?category=hotels',
-  uncategorized: '/expenses/cards?category=uncategorized',
+  payroll_people:    '/payroll',
+  fleet_ops:         '/equipment?tab=fuel',
+  facilities:        '/expenses/recurring',
+  insurance_claims:  '/expenses/recurring',
+  software_overhead: '/expenses/recurring',
+  capex:             '/expenses/one-time',
+  taxes:             '/expenses/one-time',
+  owner_draws:       '/expenses/one-time',
+  uncategorized:     '/expenses/cards?category=uncategorized',
 };
 
 function countLabel(bucket: ExpenseBucket): string {
   const n = bucket.count;
   const unit =
-    bucket.key === 'payroll'   ? (n === 1 ? 'load'      : 'loads') :
-    bucket.key === 'fuel'      ? (n === 1 ? 'fill-up'   : 'fill-ups') :
-    bucket.key === 'insurance' ? (n === 1 ? 'policy'    : 'policies') :
-                                 (n === 1 ? 'txn'       : 'txns');
+    bucket.key === 'payroll_people' ? (n === 1 ? 'event'    : 'events') :
+    bucket.key === 'fleet_ops'      ? (n === 1 ? 'txn'      : 'txns') :
+    bucket.key === 'facilities'     ? (n === 1 ? 'rule'     : 'rules') :
+                                      (n === 1 ? 'entry'    : 'entries');
   return `${n} ${unit}`;
 }
 
 function BucketTile({ bucket, onClick }: { bucket: ExpenseBucket; onClick: () => void }) {
   const Icon = BUCKET_ICONS[bucket.key] ?? CreditCard;
   const isUncat = bucket.key === 'uncategorized';
-  const breakdown = bucket.key === 'payroll' && bucket.meta
-    ? [
-        { label: 'Driver',   value: Number(bucket.meta.driver      ?? 0) },
-        { label: 'Admin',    value: Number(bucket.meta.admin       ?? 0) },
-        { label: 'Dispatch', value: Number(bucket.meta.dispatch    ?? 0) },
-        { label: 'Maint',    value: Number(bucket.meta.maintenance ?? 0) },
-      ].filter(x => x.value > 0)
-    : null;
+  const breakdown =
+    bucket.key === 'payroll_people' && bucket.meta ? [
+      { label: 'Driver',    value: Number(bucket.meta.driver         ?? 0) },
+      { label: 'Admin',     value: Number(bucket.meta.admin          ?? 0) },
+      { label: 'Dispatch',  value: Number(bucket.meta.dispatch       ?? 0) },
+      { label: 'Maint',     value: Number(bucket.meta.maintenance    ?? 0) },
+      { label: 'Stipends',  value: Number(bucket.meta.stipends       ?? 0) },
+      { label: 'Owner-op',  value: Number(bucket.meta.ownerOpPayouts ?? 0) },
+    ].filter(x => x.value > 0) :
+    bucket.key === 'fleet_ops' && bucket.meta ? [
+      { label: 'Fuel',      value: Number(bucket.meta.fuel         ?? 0) },
+      { label: 'Maint',     value: Number(bucket.meta.maintenance  ?? 0) },
+      { label: 'Load exp',  value: Number(bucket.meta.loadExpenses ?? 0) },
+      { label: 'Hotels',    value: Number(bucket.meta.hotels       ?? 0) },
+    ].filter(x => x.value > 0) :
+    bucket.key === 'facilities' && bucket.meta ? [
+      { label: 'Yard',   value: Number(bucket.meta.yard   ?? 0) },
+      { label: 'Office', value: Number(bucket.meta.office ?? 0) },
+    ].filter(x => x.value > 0) :
+    bucket.key === 'insurance_claims' && bucket.meta ? [
+      { label: 'Premium', value: Number(bucket.meta.insurance ?? 0) },
+      { label: 'Claims',  value: Number(bucket.meta.claims    ?? 0) },
+    ].filter(x => x.value > 0) :
+    bucket.key === 'software_overhead' && bucket.meta ? [
+      { label: 'Subs',     value: Number(bucket.meta.recurring  ?? 0) },
+      { label: 'Card',     value: Number(bucket.meta.rampOffice ?? 0) },
+      { label: 'One-off',  value: Number(bucket.meta.oneOff     ?? 0) },
+    ].filter(x => x.value > 0) :
+    bucket.key === 'capex' && bucket.meta ? [
+      { label: 'Trucks',    value: Number(bucket.meta.truck     ?? 0) },
+      { label: 'Equipment', value: Number(bucket.meta.equipment ?? 0) },
+    ].filter(x => x.value > 0) :
+    null;
 
   return (
     <button
@@ -278,6 +307,18 @@ function ExpensesPageInner() {
             </div>
             <div className="flex items-center gap-3">
               <button
+                onClick={() => router.push('/expenses/one-time')}
+                className="text-xs font-semibold px-3 py-1.5 rounded border"
+                style={{
+                  borderColor: 'var(--gc-border)',
+                  background:  'var(--gc-surface)',
+                  color:       'var(--gc-text-2)',
+                }}
+                title="One-off entries — Sophia/Luis payouts, truck purchases, tax payments, claim payouts, owner draws"
+              >
+                One-time entries
+              </button>
+              <button
                 onClick={() => router.push('/expenses/recurring')}
                 className="text-xs font-semibold px-3 py-1.5 rounded border"
                 style={{
@@ -285,9 +326,9 @@ function ExpensesPageInner() {
                   background:  'var(--gc-surface)',
                   color:       'var(--gc-text-2)',
                 }}
-                title="Manage weekly salaries and monthly insurance rules"
+                title="Manage weekly salaries, monthly rent, insurance, and subscriptions"
               >
-                Manage recurring
+                Recurring rules
               </button>
               <PeriodSelector
                 period={period}
@@ -314,9 +355,9 @@ function ExpensesPageInner() {
           </div>
 
           {/* Bucket tiles */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-8">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-8">
             {loading && buckets.length === 0
-              ? [0, 1, 2, 3, 4, 5].map(i => (
+              ? [0, 1, 2, 3, 4, 5, 6, 7].map(i => (
                   <div key={i} className="h-[128px] rounded-xl border animate-pulse"
                        style={{ borderColor: 'var(--gc-border)', background: 'var(--gc-surface-2)' }} />
                 ))

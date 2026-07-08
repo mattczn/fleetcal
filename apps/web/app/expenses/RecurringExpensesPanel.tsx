@@ -20,10 +20,14 @@ import type {
 } from '@fleetcal/types';
 
 const KIND_LABELS: Record<RecurringExpenseKind, string> = {
-  payroll_admin:       'Payroll · Admin',
-  payroll_dispatch:    'Payroll · Dispatch',
-  payroll_maintenance: 'Payroll · Maintenance',
-  insurance:           'Insurance',
+  payroll_admin:         'Payroll · Admin',
+  payroll_dispatch:      'Payroll · Dispatch',
+  payroll_maintenance:   'Payroll · Maintenance',
+  address_stipend:       'Payroll · Address stipend',
+  yard_rent:             'Facilities · Yard rent',
+  office_rent:           'Facilities · Office rent',
+  insurance:             'Insurance premium',
+  software_subscription: 'Software & Overhead · Subscription',
 };
 
 const fmtMoney = (n: number) =>
@@ -174,7 +178,11 @@ export default function RecurringExpensesPanel() {
   }, [rules]);
 
   const kindOrder: RecurringExpenseKind[] = [
-    'payroll_admin', 'payroll_dispatch', 'payroll_maintenance', 'insurance',
+    'payroll_admin', 'payroll_dispatch', 'payroll_maintenance',
+    'address_stipend',
+    'yard_rent', 'office_rent',
+    'insurance',
+    'software_subscription',
   ];
 
   return (

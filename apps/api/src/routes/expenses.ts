@@ -1,27 +1,29 @@
 /**
  * /v1/expenses — federated dashboard endpoints.
  *
- * Six primary buckets + one CTA:
- *   Payroll        = live driver_pay from events (matches /payroll page)
- *                    + payroll_adjustments in window
- *                    + recurring rules of kinds admin/dispatch/maintenance
- *                    Sub-buckets exposed in meta so the tile can drill down.
- *   Fuel           = fuel_transactions.total_charged
- *                    + ramp_transactions.amount WHERE expense_category='fuel'
- *   Insurance      = recurring rules of kind 'insurance'
- *   Maintenance    = ramp_transactions.amount WHERE expense_category='maintenance'
- *   Load expenses  = ramp_transactions.amount WHERE expense_category='load_expenses'
- *   Hotels         = ramp_transactions.amount WHERE expense_category='hotels'
- *   Uncategorized  = ramp_transactions WHERE expense_category IS NULL — CTA only
+ * Eight primary buckets + one CTA:
  *
- * Payroll accuracy note: reads live from events + adjustments the same
- * way the /payroll page does (see PayrollView.tsx). payroll_records is
- * NOT the source of truth — those only exist after finalize.
+ *   Payroll & People       driver pay (live events) + admin/dispatch/maint
+ *                          recurring + address stipends (recurring) + Sophia/Luis
+ *                          owner-op payouts (one-time entries)
+ *   Fleet Operations       Mudflap fuel + Ramp categorized fuel/maintenance/
+ *                          load_expenses/hotels
+ *   Facilities             yard_rent + office_rent (recurring)
+ *   Insurance & Claims     insurance recurring + claim_payout entries
+ *   Software & Overhead    software_subscription recurring + Ramp office +
+ *                          one-off subscription entries
+ *   Capex                  truck_purchase + equipment_purchase entries
+ *   Taxes                  tax entries (IRP/IFTA/income/state, spelled in label)
+ *   Owner Draws            owner_draw entries (Chase Sapphire personal biz +
+ *                          explicit withdrawals)
+ *   Uncategorized card CTA Ramp txns where expense_category IS NULL — only
+ *                          included when count > 0
  *
- * Recurring proration: rules stored as amount + cadence + effective
- * range. Summed into any window as amount * (window_days / period_days)
- * where period_days = 7 for weekly, 30.4375 for monthly. Editing a
- * rate applies from the effective date forward, no historical rewrite.
+ * Payroll accuracy: driver comes live from events + payroll_adjustments the
+ * same way PayrollView does, NOT from finalized payroll_records.
+ *
+ * Recurring proration: amount × (window_days / period_days). weekly = 7,
+ * monthly = 30.4375.
  */
 
 import { Hono } from "hono";
@@ -99,7 +101,6 @@ interface RecurringRow {
 }
 
 function prorate(rule: RecurringRow, w: Window): number {
-  // Clamp the rule's effective range to the requested window.
   const ruleStart = new Date(`${rule.effective_from}T00:00:00Z`);
   const ruleEnd   = rule.effective_to
     ? new Date(`${rule.effective_to}T00:00:00Z`)
@@ -115,9 +116,6 @@ function prorate(rule: RecurringRow, w: Window): number {
 }
 
 async function loadActiveRules(orgId: string, w: Window): Promise<RecurringRow[]> {
-  // A rule is "active during the window" iff its effective range
-  // overlaps the window: effective_from <= to AND (effective_to IS NULL
-  // OR effective_to >= from).
   const { data, error } = await supabase
     .from("recurring_expenses")
     .select("id, kind, amount, cadence, effective_from, effective_to")
@@ -129,15 +127,44 @@ async function loadActiveRules(orgId: string, w: Window): Promise<RecurringRow[]
   return (data ?? []) as RecurringRow[];
 }
 
-// ── Bucket computations ────────────────────────────────────────────────
+function sumRecurring(rules: RecurringRow[], kinds: string[], w: Window): number {
+  return rules
+    .filter(r => kinds.includes(r.kind))
+    .reduce((s, r) => s + prorate(r, w), 0);
+}
 
-/** Payroll — live driver pay from events + adjustments + recurring rules.
- *  Returns the sub-bucket breakdown too. */
-async function payrollBucket(orgId: string, w: Window, rules: RecurringRow[]) {
-  // events with driver_pay:
-  //   Q1 — not deferred, start falls in window
-  //   Q2 — deferred to a Saturday inside the window
-  // No overlap: Q1 filters deferred_to_week IS NULL, Q2 filters IS NOT NULL.
+// ── One-time entries ────────────────────────────────────────────────────
+
+interface EntryRow {
+  id:     string;
+  kind:   string;
+  date:   string;
+  amount: string | number;
+}
+
+async function loadEntries(orgId: string, w: Window): Promise<EntryRow[]> {
+  const { data, error } = await supabase
+    .from("expense_entries")
+    .select("id, kind, date, amount")
+    .eq("org_id", orgId)
+    .is("deleted_at", null)
+    .gte("date", w.from)
+    .lte("date", w.to);
+  if (error) throw new Error(`expense_entries: ${error.message}`);
+  return (data ?? []) as EntryRow[];
+}
+
+function sumEntries(entries: EntryRow[], kinds: string[]): { total: number; count: number } {
+  const rows = entries.filter(e => kinds.includes(e.kind));
+  return {
+    total: rows.reduce((s, r) => s + Number(r.amount ?? 0), 0),
+    count: rows.length,
+  };
+}
+
+// ── Payroll bucket ──────────────────────────────────────────────────────
+
+async function payrollDriverAndAdjustments(orgId: string, w: Window) {
   const [eventsQ1, eventsQ2, adjustments] = await Promise.all([
     supabase
       .from("events")
@@ -167,30 +194,20 @@ async function payrollBucket(orgId: string, w: Window, rules: RecurringRow[]) {
   if (eventsQ1.error) throw new Error(`events (q1): ${eventsQ1.error.message}`);
   if (eventsQ2.error) throw new Error(`events (q2): ${eventsQ2.error.message}`);
   if (adjustments.error) throw new Error(`payroll_adjustments: ${adjustments.error.message}`);
-
   const eventRows = [
     ...((eventsQ1.data ?? []) as Array<{ driver_pay: string | number | null }>),
     ...((eventsQ2.data ?? []) as Array<{ driver_pay: string | number | null }>),
   ];
-  const driverFromLoads   = eventRows.reduce((s, r) => s + Number(r.driver_pay ?? 0), 0);
-  const driverFromAdjust  = ((adjustments.data ?? []) as Array<{ amount: string | number | null }>)
+  const loadPay = eventRows.reduce((s, r) => s + Number(r.driver_pay ?? 0), 0);
+  const adjSum  = ((adjustments.data ?? []) as Array<{ amount: string | number | null }>)
     .reduce((s, r) => s + Number(r.amount ?? 0), 0);
-  const driver = driverFromLoads + driverFromAdjust;
-  const driverCount = eventRows.length;
-
-  const admin       = rules.filter(r => r.kind === "payroll_admin").reduce((s, r) => s + prorate(r, w), 0);
-  const dispatch    = rules.filter(r => r.kind === "payroll_dispatch").reduce((s, r) => s + prorate(r, w), 0);
-  const maintenance = rules.filter(r => r.kind === "payroll_maintenance").reduce((s, r) => s + prorate(r, w), 0);
-
-  return {
-    total: driver + admin + dispatch + maintenance,
-    count: driverCount,   // just load-count for the tile; recurring people aren't "events"
-    breakdown: { driver, admin, dispatch, maintenance },
-  };
+  return { total: loadPay + adjSum, count: eventRows.length };
 }
 
-async function fuelBucket(orgId: string, w: Window) {
-  const [mudflap, rampFuel] = await Promise.all([
+// ── Fleet operations ────────────────────────────────────────────────────
+
+async function fleetOpsSubs(orgId: string, w: Window) {
+  const [mudflap, rampCat] = await Promise.all([
     supabase
       .from("fuel_transactions")
       .select("total_charged")
@@ -200,42 +217,42 @@ async function fuelBucket(orgId: string, w: Window) {
       .lte("transaction_date", w.to),
     supabase
       .from("ramp_transactions")
-      .select("amount")
+      .select("amount, expense_category")
       .eq("org_id", orgId)
       .is("deleted_at", null)
-      .eq("expense_category", "fuel")
+      .in("expense_category", ["fuel", "maintenance", "load_expenses", "hotels"])
       .gte("transacted_at", w.fromTs)
       .lte("transacted_at", w.toTs),
   ]);
-  if (mudflap.error)  throw new Error(`fuel_transactions: ${mudflap.error.message}`);
-  if (rampFuel.error) throw new Error(`ramp fuel: ${rampFuel.error.message}`);
-  const mfRows = (mudflap.data ?? [])  as Array<{ total_charged: string | number | null }>;
-  const rfRows = (rampFuel.data ?? []) as Array<{ amount: string | number | null }>;
+  if (mudflap.error) throw new Error(`fuel_transactions: ${mudflap.error.message}`);
+  if (rampCat.error) throw new Error(`ramp fleet_ops: ${rampCat.error.message}`);
+  const mudflapRows = (mudflap.data ?? []) as Array<{ total_charged: string | number | null }>;
+  const rampRows    = (rampCat.data ?? []) as Array<{ amount: string | number | null; expense_category: string }>;
+  const fuel = mudflapRows.reduce((s, r) => s + Number(r.total_charged ?? 0), 0)
+             + rampRows.filter(r => r.expense_category === "fuel").reduce((s, r) => s + Number(r.amount ?? 0), 0);
+  const maintenance = rampRows.filter(r => r.expense_category === "maintenance")
+    .reduce((s, r) => s + Number(r.amount ?? 0), 0);
+  const loadExp = rampRows.filter(r => r.expense_category === "load_expenses")
+    .reduce((s, r) => s + Number(r.amount ?? 0), 0);
+  const hotels = rampRows.filter(r => r.expense_category === "hotels")
+    .reduce((s, r) => s + Number(r.amount ?? 0), 0);
   return {
-    total: mfRows.reduce((s, r) => s + Number(r.total_charged ?? 0), 0)
-         + rfRows.reduce((s, r) => s + Number(r.amount ?? 0), 0),
-    count: mfRows.length + rfRows.length,
+    fuel, maintenance, loadExpenses: loadExp, hotels,
+    total: fuel + maintenance + loadExp + hotels,
+    count: mudflapRows.length + rampRows.length,
   };
 }
 
-function insuranceBucket(w: Window, rules: RecurringRow[]) {
-  const active = rules.filter(r => r.kind === "insurance");
-  return {
-    total: active.reduce((s, r) => s + prorate(r, w), 0),
-    count: active.length,
-  };
-}
-
-async function rampCategoryBucket(orgId: string, w: Window, category: string) {
+async function rampOfficeSum(orgId: string, w: Window) {
   const { data, error } = await supabase
     .from("ramp_transactions")
     .select("amount")
     .eq("org_id", orgId)
     .is("deleted_at", null)
-    .eq("expense_category", category)
+    .eq("expense_category", "office")
     .gte("transacted_at", w.fromTs)
     .lte("transacted_at", w.toTs);
-  if (error) throw new Error(`ramp ${category}: ${error.message}`);
+  if (error) throw new Error(`ramp office: ${error.message}`);
   const rows = (data ?? []) as Array<{ amount: string | number | null }>;
   return {
     total: rows.reduce((s, r) => s + Number(r.amount ?? 0), 0),
@@ -260,6 +277,92 @@ async function uncategorizedRampBucket(orgId: string, w: Window) {
   };
 }
 
+// ── Compose one window's snapshot ───────────────────────────────────────
+
+interface Snapshot {
+  payroll_people:    { total: number; count: number; driver: number; admin: number; dispatch: number; maintenance: number; stipends: number; ownerOpPayouts: number };
+  fleet_ops:         { total: number; count: number; fuel: number; maintenance: number; loadExpenses: number; hotels: number };
+  facilities:        { total: number; count: number; yard: number; office: number };
+  insurance_claims:  { total: number; count: number; insurance: number; claims: number };
+  software_overhead: { total: number; count: number; recurring: number; rampOffice: number; oneOff: number };
+  capex:             { total: number; count: number; truck: number; equipment: number };
+  taxes:             { total: number; count: number };
+  owner_draws:       { total: number; count: number };
+  uncategorized:     { total: number; count: number };
+}
+
+async function snapshot(orgId: string, w: Window): Promise<Snapshot> {
+  const [rules, entries, driver, fleetOps, rampOff, uncat] = await Promise.all([
+    loadActiveRules(orgId, w),
+    loadEntries(orgId, w),
+    payrollDriverAndAdjustments(orgId, w),
+    fleetOpsSubs(orgId, w),
+    rampOfficeSum(orgId, w),
+    uncategorizedRampBucket(orgId, w),
+  ]);
+
+  const admin    = sumRecurring(rules, ["payroll_admin"], w);
+  const dispatch = sumRecurring(rules, ["payroll_dispatch"], w);
+  const maint    = sumRecurring(rules, ["payroll_maintenance"], w);
+  const stipends = sumRecurring(rules, ["address_stipend"], w);
+  const ownerOp  = sumEntries(entries, ["owner_op_payout"]);
+
+  const yardRent   = sumRecurring(rules, ["yard_rent"], w);
+  const officeRent = sumRecurring(rules, ["office_rent"], w);
+
+  const insurance  = sumRecurring(rules, ["insurance"], w);
+  const claims     = sumEntries(entries, ["claim_payout"]);
+
+  const subs      = sumRecurring(rules, ["software_subscription"], w);
+  const oneOffSub = sumEntries(entries, ["subscription"]);
+
+  const truckCapex = sumEntries(entries, ["truck_purchase"]);
+  const equipCapex = sumEntries(entries, ["equipment_purchase"]);
+
+  const taxes      = sumEntries(entries, ["tax"]);
+  const draws      = sumEntries(entries, ["owner_draw"]);
+
+  return {
+    payroll_people: {
+      total: driver.total + admin + dispatch + maint + stipends + ownerOp.total,
+      count: driver.count + ownerOp.count,
+      driver: driver.total, admin, dispatch, maintenance: maint,
+      stipends, ownerOpPayouts: ownerOp.total,
+    },
+    fleet_ops: {
+      total: fleetOps.total,
+      count: fleetOps.count,
+      fuel: fleetOps.fuel,
+      maintenance: fleetOps.maintenance,
+      loadExpenses: fleetOps.loadExpenses,
+      hotels: fleetOps.hotels,
+    },
+    facilities: {
+      total: yardRent + officeRent,
+      count: rules.filter(r => r.kind === "yard_rent" || r.kind === "office_rent").length,
+      yard: yardRent, office: officeRent,
+    },
+    insurance_claims: {
+      total: insurance + claims.total,
+      count: rules.filter(r => r.kind === "insurance").length + claims.count,
+      insurance, claims: claims.total,
+    },
+    software_overhead: {
+      total: subs + rampOff.total + oneOffSub.total,
+      count: rules.filter(r => r.kind === "software_subscription").length + rampOff.count + oneOffSub.count,
+      recurring: subs, rampOffice: rampOff.total, oneOff: oneOffSub.total,
+    },
+    capex: {
+      total: truckCapex.total + equipCapex.total,
+      count: truckCapex.count + equipCapex.count,
+      truck: truckCapex.total, equipment: equipCapex.total,
+    },
+    taxes:       { total: taxes.total, count: taxes.count },
+    owner_draws: { total: draws.total, count: draws.count },
+    uncategorized: uncat,
+  };
+}
+
 // ── /summary ────────────────────────────────────────────────────────────
 
 expenses.get("/summary", async (c) => {
@@ -268,60 +371,103 @@ expenses.get("/summary", async (c) => {
   const prev = prevWindow(w);
 
   try {
-    const [rulesW, rulesP] = await Promise.all([
-      loadActiveRules(orgId, w),
-      loadActiveRules(orgId, prev),
-    ]);
-
-    const [
-      payroll,    fuel,    insurance,    maintenance,    loadExpenses,    hotels,    uncat,
-      payrollPrev, fuelPrev, insurancePrev, maintenancePrev, loadExpensesPrev, hotelsPrev,
-    ] = await Promise.all([
-      payrollBucket(orgId, w, rulesW),
-      fuelBucket(orgId, w),
-      Promise.resolve(insuranceBucket(w, rulesW)),
-      rampCategoryBucket(orgId, w, "maintenance"),
-      rampCategoryBucket(orgId, w, "load_expenses"),
-      rampCategoryBucket(orgId, w, "hotels"),
-      uncategorizedRampBucket(orgId, w),
-      payrollBucket(orgId, prev, rulesP),
-      fuelBucket(orgId, prev),
-      Promise.resolve(insuranceBucket(prev, rulesP)),
-      rampCategoryBucket(orgId, prev, "maintenance"),
-      rampCategoryBucket(orgId, prev, "load_expenses"),
-      rampCategoryBucket(orgId, prev, "hotels"),
-    ]);
+    const [cur, past] = await Promise.all([snapshot(orgId, w), snapshot(orgId, prev)]);
 
     const buckets: ExpenseBucket[] = [
       {
-        key: "payroll",
-        label: "Payroll",
-        total: payroll.total,
-        count: payroll.count,
-        prevTotal: payrollPrev.total,
-        prevCount: payrollPrev.count,
+        key: "payroll_people",
+        label: "Payroll & People",
+        total: cur.payroll_people.total,
+        count: cur.payroll_people.count,
+        prevTotal: past.payroll_people.total,
+        prevCount: past.payroll_people.count,
         meta: {
-          driver:      payroll.breakdown.driver,
-          admin:       payroll.breakdown.admin,
-          dispatch:    payroll.breakdown.dispatch,
-          maintenance: payroll.breakdown.maintenance,
+          driver:         cur.payroll_people.driver,
+          admin:          cur.payroll_people.admin,
+          dispatch:       cur.payroll_people.dispatch,
+          maintenance:    cur.payroll_people.maintenance,
+          stipends:       cur.payroll_people.stipends,
+          ownerOpPayouts: cur.payroll_people.ownerOpPayouts,
         },
       },
-      { key: "fuel",          label: "Fuel",          total: fuel.total,         count: fuel.count,         prevTotal: fuelPrev.total,         prevCount: fuelPrev.count },
-      { key: "insurance",     label: "Insurance",     total: insurance.total,    count: insurance.count,    prevTotal: insurancePrev.total,    prevCount: insurancePrev.count },
-      { key: "maintenance",   label: "Maintenance",   total: maintenance.total,  count: maintenance.count,  prevTotal: maintenancePrev.total,  prevCount: maintenancePrev.count },
-      { key: "load_expenses", label: "Load expenses", total: loadExpenses.total, count: loadExpenses.count, prevTotal: loadExpensesPrev.total, prevCount: loadExpensesPrev.count },
-      { key: "hotels",        label: "Hotels",        total: hotels.total,       count: hotels.count,       prevTotal: hotelsPrev.total,       prevCount: hotelsPrev.count },
+      {
+        key: "fleet_ops",
+        label: "Fleet Operations",
+        total: cur.fleet_ops.total,
+        count: cur.fleet_ops.count,
+        prevTotal: past.fleet_ops.total,
+        prevCount: past.fleet_ops.count,
+        meta: {
+          fuel:         cur.fleet_ops.fuel,
+          maintenance:  cur.fleet_ops.maintenance,
+          loadExpenses: cur.fleet_ops.loadExpenses,
+          hotels:       cur.fleet_ops.hotels,
+        },
+      },
+      {
+        key: "facilities",
+        label: "Facilities",
+        total: cur.facilities.total,
+        count: cur.facilities.count,
+        prevTotal: past.facilities.total,
+        prevCount: past.facilities.count,
+        meta: { yard: cur.facilities.yard, office: cur.facilities.office },
+      },
+      {
+        key: "insurance_claims",
+        label: "Insurance & Claims",
+        total: cur.insurance_claims.total,
+        count: cur.insurance_claims.count,
+        prevTotal: past.insurance_claims.total,
+        prevCount: past.insurance_claims.count,
+        meta: { insurance: cur.insurance_claims.insurance, claims: cur.insurance_claims.claims },
+      },
+      {
+        key: "software_overhead",
+        label: "Software & Overhead",
+        total: cur.software_overhead.total,
+        count: cur.software_overhead.count,
+        prevTotal: past.software_overhead.total,
+        prevCount: past.software_overhead.count,
+        meta: {
+          recurring:  cur.software_overhead.recurring,
+          rampOffice: cur.software_overhead.rampOffice,
+          oneOff:     cur.software_overhead.oneOff,
+        },
+      },
+      {
+        key: "capex",
+        label: "Capex",
+        total: cur.capex.total,
+        count: cur.capex.count,
+        prevTotal: past.capex.total,
+        prevCount: past.capex.count,
+        meta: { truck: cur.capex.truck, equipment: cur.capex.equipment },
+      },
+      {
+        key: "taxes",
+        label: "Taxes",
+        total: cur.taxes.total,
+        count: cur.taxes.count,
+        prevTotal: past.taxes.total,
+        prevCount: past.taxes.count,
+      },
+      {
+        key: "owner_draws",
+        label: "Owner Draws",
+        total: cur.owner_draws.total,
+        count: cur.owner_draws.count,
+        prevTotal: past.owner_draws.total,
+        prevCount: past.owner_draws.count,
+      },
     ];
 
-    // Uncategorized is a CTA — only include it when there's something to
-    // categorize so the client can conditionally render.
-    if (uncat.count > 0) {
+    if (cur.uncategorized.count > 0) {
       buckets.push({
         key: "uncategorized",
         label: "Uncategorized card spend",
-        total: uncat.total,
-        count: uncat.count,
+        total: cur.uncategorized.total,
+        count: cur.uncategorized.count,
         prevTotal: 0,
         prevCount: 0,
       });
@@ -348,7 +494,7 @@ expenses.get("/activity", async (c) => {
   const limit = Math.min(Math.max(Number(url.searchParams.get("limit") ?? "20"), 1), 100);
 
   try {
-    const [fuelRes, adjRes, cardsRes] = await Promise.all([
+    const [fuelRes, adjRes, cardsRes, entriesRes] = await Promise.all([
       supabase
         .from("fuel_transactions")
         .select("id, transaction_date, total_charged, location, driver_name, asset_id")
@@ -358,9 +504,6 @@ expenses.get("/activity", async (c) => {
         .lte("transaction_date", w.to)
         .order("transaction_date", { ascending: false })
         .limit(limit),
-      // Adjustments as a proxy for "payroll events" in the feed — they're
-      // the discrete payroll actions humans take (finalize, adjust,
-      // defer). Loads are already surfaced elsewhere in the app.
       supabase
         .from("payroll_adjustments")
         .select("id, week_start, amount, category, description, driver_name, created_at")
@@ -371,12 +514,21 @@ expenses.get("/activity", async (c) => {
         .limit(limit),
       supabase
         .from("ramp_transactions")
-        .select("id, transacted_at, amount, merchant_name, memo, cardholder_name, asset_id, expense_category")
+        .select("id, transacted_at, amount, merchant_name, memo, cardholder_name, asset_id")
         .eq("org_id", orgId)
         .is("deleted_at", null)
         .gte("transacted_at", w.fromTs)
         .lte("transacted_at", w.toTs)
         .order("transacted_at", { ascending: false })
+        .limit(limit),
+      supabase
+        .from("expense_entries")
+        .select("id, date, amount, kind, label")
+        .eq("org_id", orgId)
+        .is("deleted_at", null)
+        .gte("date", w.from)
+        .lte("date", w.to)
+        .order("date", { ascending: false })
         .limit(limit),
     ]);
 
@@ -414,7 +566,6 @@ expenses.get("/activity", async (c) => {
       id: string; transacted_at: string; amount: string | number;
       merchant_name: string | null; memo: string | null;
       cardholder_name: string | null; asset_id: number | null;
-      expense_category: string | null;
     }>) {
       const parts = [r.merchant_name, r.memo].filter(Boolean).join(" · ") || "Card purchase";
       events.push({
@@ -426,6 +577,18 @@ expenses.get("/activity", async (c) => {
         assetId: r.asset_id ?? undefined,
         driverName: r.cardholder_name ?? undefined,
         href: `/expenses/cards`,
+      });
+    }
+    for (const r of (entriesRes.data ?? []) as Array<{
+      id: string; date: string; amount: string | number; kind: string; label: string;
+    }>) {
+      events.push({
+        source: "payroll", // reuse "payroll" for the pill color; entries span sources
+        id: r.id,
+        at: `${r.date}T12:00:00Z`,
+        amount: Number(r.amount ?? 0),
+        description: `${r.label} (${r.kind.replace(/_/g, " ")})`,
+        href: `/expenses/one-time`,
       });
     }
 
@@ -440,10 +603,6 @@ expenses.get("/activity", async (c) => {
 });
 
 // ── /backfill-categories ───────────────────────────────────────────────
-//
-// One-shot to populate expense_category on legacy ramp_transactions
-// that were synced before the auto-mapper existed. Skips rows that
-// already have a value so manual assignments aren't clobbered.
 
 expenses.post("/backfill-categories", async (c) => {
   const orgId = c.get("orgId");
@@ -456,7 +615,6 @@ expenses.post("/backfill-categories", async (c) => {
       .is("deleted_at", null);
     if (error) throw new Error(error.message);
     const rows = (data ?? []) as Array<{ id: string; sk_category_name: string | null }>;
-
     const perCategory: Record<string, number> = {};
     let categorized = 0;
     for (const r of rows) {

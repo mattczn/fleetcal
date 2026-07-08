@@ -1459,10 +1459,15 @@ export type RecurringExpenseKind =
   | 'payroll_admin'
   | 'payroll_dispatch'
   | 'payroll_maintenance'
-  | 'insurance';
+  | 'insurance'
+  | 'yard_rent'
+  | 'office_rent'
+  | 'address_stipend'
+  | 'software_subscription';
 
 export const RECURRING_EXPENSE_KINDS: readonly RecurringExpenseKind[] = [
   'payroll_admin', 'payroll_dispatch', 'payroll_maintenance', 'insurance',
+  'yard_rent', 'office_rent', 'address_stipend', 'software_subscription',
 ] as const;
 
 export type RecurringExpenseCadence = 'weekly' | 'monthly';
@@ -1497,6 +1502,39 @@ export type RampExpenseCategory =
 export const RAMP_EXPENSE_CATEGORIES: readonly RampExpenseCategory[] = [
   'maintenance', 'load_expenses', 'hotels', 'fuel', 'office', 'other',
 ] as const;
+
+// ── One-time expense entries ────────────────────────────────────────────
+//
+// Ad-hoc / one-off charges that don't fit the recurring-rules model
+// (variable weekly amounts, unpredictable cadence, or truly one-off).
+// Manual entry — no integration for now. See expense_entries table.
+
+export type ExpenseEntryKind =
+  | 'owner_op_payout'      // Sophia/Luis weekly variable payouts
+  | 'claim_payout'         // Accident/damage payouts from insurance
+  | 'truck_purchase'       // Capex — Penske wires
+  | 'equipment_purchase'   // Capex — other equipment
+  | 'tax'                  // IRP, IFTA, income, state (specify in label)
+  | 'owner_draw'           // Chase Sapphire / Jon+Mike withdrawals
+  | 'subscription'         // One-off subs not covered by recurring
+  | 'misc';
+
+export const EXPENSE_ENTRY_KINDS: readonly ExpenseEntryKind[] = [
+  'owner_op_payout', 'claim_payout', 'truck_purchase', 'equipment_purchase',
+  'tax', 'owner_draw', 'subscription', 'misc',
+] as const;
+
+export interface ExpenseEntry {
+  id:         string;
+  orgId:      string;
+  kind:       ExpenseEntryKind;
+  date:       string;   // YYYY-MM-DD
+  amount:     number;
+  label:      string;
+  notes?:     string;
+  createdAt:  string;
+  updatedAt:  string;
+}
 
 // ── Maintenance ─────────────────────────────────────────────────────────
 //

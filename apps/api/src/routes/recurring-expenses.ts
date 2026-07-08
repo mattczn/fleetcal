@@ -34,6 +34,7 @@ const supabase = supabaseTyped as any;
 
 const VALID_KINDS = new Set<RecurringExpenseKind>([
   'payroll_admin', 'payroll_dispatch', 'payroll_maintenance', 'insurance',
+  'yard_rent', 'office_rent', 'address_stipend', 'software_subscription',
 ]);
 const VALID_CADENCES = new Set<RecurringExpenseCadence>(['weekly', 'monthly']);
 

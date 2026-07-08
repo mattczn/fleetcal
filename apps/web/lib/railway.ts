@@ -78,6 +78,8 @@ import type {
   BackfillRampCategoriesResponse,
   ListRecurringExpensesResponse, CreateRecurringExpenseRequest,
   UpdateRecurringExpenseRequest, RecurringExpenseResponse,
+  ListExpenseEntriesRequest, ListExpenseEntriesResponse,
+  CreateExpenseEntryRequest, UpdateExpenseEntryRequest, ExpenseEntryResponse,
   ListMaintenanceReportsQuery, ListMaintenanceReportsResponse,
   GetMaintenanceReportResponse,
   UpdateMaintenanceReportRequest, UpdateMaintenanceReportResponse,
@@ -1507,6 +1509,27 @@ class RailwayClient {
   }
   deleteRecurringExpense(id: string) {
     return this.req<{ ok: true }>('DELETE', `/v1/recurring-expenses/${id}`);
+  }
+
+  // ── One-time expense entries CRUD ──────────────────────────────────
+  listExpenseEntries(query: ListExpenseEntriesRequest = {}) {
+    const qs = new URLSearchParams();
+    if (query.from)          qs.set('from',   query.from);
+    if (query.to)            qs.set('to',     query.to);
+    if (query.kind)          qs.set('kind',   query.kind);
+    if (query.limit  != null) qs.set('limit',  String(query.limit));
+    if (query.offset != null) qs.set('offset', String(query.offset));
+    const s = qs.toString();
+    return this.req<ListExpenseEntriesResponse>('GET', `/v1/expense-entries${s ? `?${s}` : ''}`);
+  }
+  createExpenseEntry(body: CreateExpenseEntryRequest) {
+    return this.req<ExpenseEntryResponse>('POST', `/v1/expense-entries`, body);
+  }
+  updateExpenseEntry(id: string, body: UpdateExpenseEntryRequest) {
+    return this.req<ExpenseEntryResponse>('PATCH', `/v1/expense-entries/${id}`, body);
+  }
+  deleteExpenseEntry(id: string) {
+    return this.req<{ ok: true }>('DELETE', `/v1/expense-entries/${id}`);
   }
 
   /** Pull fuel transactions from the Mudflap Carriers API for the date
