@@ -1585,9 +1585,16 @@ export interface RunRampSyncResponse {
 /** One bucket in the /expenses summary. `total` and `count` are for the
  *  requested period; `prevTotal` / `prevCount` are for the immediately-
  *  prior window of equal length (for Δ callouts on the tile). Extra
- *  bucket-specific signals go in `meta`. */
+ *  bucket-specific signals go in `meta` — Payroll uses it to expose
+ *  the 4-way sub-bucket breakdown; Uncategorized uses it for the CTA
+ *  count. */
+export type ExpenseBucketKey =
+  | 'payroll' | 'fuel' | 'insurance'
+  | 'maintenance' | 'load_expenses' | 'hotels'
+  | 'uncategorized';
+
 export interface ExpenseBucket {
-  key:        'fuel' | 'payroll' | 'cards';
+  key:        ExpenseBucketKey;
   label:      string;
   total:      number;
   count:      number;
@@ -1616,6 +1623,47 @@ export interface ExpenseEvent {
 
 export interface ExpensesActivityResponse {
   events: ExpenseEvent[];
+}
+
+// ── Recurring expenses CRUD ─────────────────────────────────────────────
+
+import type {
+  RecurringExpense,
+  RecurringExpenseKind,
+  RecurringExpenseCadence,
+} from './domain';
+
+export interface ListRecurringExpensesResponse {
+  recurringExpenses: RecurringExpense[];
+}
+
+export interface CreateRecurringExpenseRequest {
+  kind:           RecurringExpenseKind;
+  label:          string;
+  amount:         number;
+  cadence:        RecurringExpenseCadence;
+  effectiveFrom:  string;   // YYYY-MM-DD
+  effectiveTo?:   string;
+  notes?:         string;
+}
+
+export interface UpdateRecurringExpenseRequest {
+  label?:         string;
+  amount?:        number;
+  cadence?:       RecurringExpenseCadence;
+  effectiveFrom?: string;
+  effectiveTo?:   string | null;   // pass null to reopen
+  notes?:        string | null;
+}
+
+export interface RecurringExpenseResponse {
+  recurringExpense: RecurringExpense;
+}
+
+export interface BackfillRampCategoriesResponse {
+  scanned:     number;
+  categorized: number;
+  perCategory: Record<string, number>;
 }
 
 // ── /v1/odometer-readings ───────────────────────────────────────────────

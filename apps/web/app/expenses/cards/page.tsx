@@ -15,6 +15,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { CreditCard } from 'lucide-react';
 import RequireCap from '@/components/auth/RequireCap';
 import AppShell from '@/components/nav/AppShell';
@@ -25,6 +26,8 @@ import CardSpendTabContent from '../../equipment/CardSpendTabContent';
 interface Trailer { id: number; name: string; trailerNumber?: string; category: string }
 
 function CardsPageInner() {
+  const searchParams = useSearchParams();
+  const initialCategory = searchParams?.get('category') ?? undefined;
   const [assets, setAssets]     = useState<Asset[]>([]);
   const [trailers, setTrailers] = useState<Trailer[]>([]);
   const [err, setErr]           = useState<string | null>(null);
@@ -82,6 +85,7 @@ function CardsPageInner() {
             trailers={trailers}
             assetLabelById={assetLabelById}
             trailerLabelById={trailerLabelById}
+            defaultCategoryFilter={initialCategory}
           />
         </div>
       </div>

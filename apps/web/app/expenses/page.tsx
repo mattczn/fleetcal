@@ -16,7 +16,10 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Fuel as FuelIcon, Wallet, CreditCard, ArrowUpRight, ArrowDownRight, ArrowRight } from 'lucide-react';
+import {
+  Fuel as FuelIcon, Wallet, CreditCard, ArrowUpRight, ArrowDownRight, ArrowRight,
+  Shield, Wrench, Package as PackageIcon, BedDouble, AlertCircle,
+} from 'lucide-react';
 import RequireCap from '@/components/auth/RequireCap';
 import AppShell from '@/components/nav/AppShell';
 import { PeriodSelector } from '@/components/ui/PeriodSelector';
@@ -24,7 +27,7 @@ import {
   currentWeekStartISO, getPeriodRange, type Period,
 } from '@/lib/periodRange';
 import { railway } from '@/lib/railway';
-import type { ExpenseBucket, ExpenseEvent } from '@fleetcal/types';
+import type { ExpenseBucket, ExpenseEvent, ExpenseBucketKey } from '@fleetcal/types';
 
 const fmtMoney0 = (n: number) =>
   new Intl.NumberFormat('en-US', {
@@ -60,48 +63,87 @@ function DeltaChip({ current, previous }: { current: number; previous: number })
   );
 }
 
-function BucketTile({
-  bucket, icon: Icon, href, onClick, subtitle,
-}: {
-  bucket: ExpenseBucket;
-  icon:   React.ComponentType<{ size?: number; strokeWidth?: number }>;
-  href:   string;
-  onClick: () => void;
-  subtitle?: string;
-}) {
+const BUCKET_ICONS: Partial<Record<ExpenseBucketKey, React.ComponentType<{ size?: number; strokeWidth?: number }>>> = {
+  payroll:       Wallet,
+  fuel:          FuelIcon,
+  insurance:     Shield,
+  maintenance:   Wrench,
+  load_expenses: PackageIcon,
+  hotels:        BedDouble,
+  uncategorized: CreditCard,
+};
+
+const BUCKET_HREFS: Record<ExpenseBucketKey, string> = {
+  payroll:       '/payroll',
+  fuel:          '/equipment?tab=fuel',
+  insurance:     '/settings?section=recurring-expenses',
+  maintenance:   '/expenses/cards?category=maintenance',
+  load_expenses: '/expenses/cards?category=load_expenses',
+  hotels:        '/expenses/cards?category=hotels',
+  uncategorized: '/expenses/cards?category=uncategorized',
+};
+
+function countLabel(bucket: ExpenseBucket): string {
+  const n = bucket.count;
+  const unit =
+    bucket.key === 'payroll'   ? (n === 1 ? 'load'      : 'loads') :
+    bucket.key === 'fuel'      ? (n === 1 ? 'fill-up'   : 'fill-ups') :
+    bucket.key === 'insurance' ? (n === 1 ? 'policy'    : 'policies') :
+                                 (n === 1 ? 'txn'       : 'txns');
+  return `${n} ${unit}`;
+}
+
+function BucketTile({ bucket, onClick }: { bucket: ExpenseBucket; onClick: () => void }) {
+  const Icon = BUCKET_ICONS[bucket.key] ?? CreditCard;
+  const isUncat = bucket.key === 'uncategorized';
+  const breakdown = bucket.key === 'payroll' && bucket.meta
+    ? [
+        { label: 'Driver',   value: Number(bucket.meta.driver      ?? 0) },
+        { label: 'Admin',    value: Number(bucket.meta.admin       ?? 0) },
+        { label: 'Dispatch', value: Number(bucket.meta.dispatch    ?? 0) },
+        { label: 'Maint',    value: Number(bucket.meta.maintenance ?? 0) },
+      ].filter(x => x.value > 0)
+    : null;
+
   return (
     <button
       onClick={onClick}
       className="text-left flex flex-col gap-2 p-5 rounded-xl border transition-colors hover:shadow-sm"
       style={{
-        borderColor: 'var(--gc-border)',
-        background:  'var(--gc-surface)',
+        borderColor: isUncat ? '#f59e0b' : 'var(--gc-border)',
+        background:  isUncat ? '#fffbeb' : 'var(--gc-surface)',
         cursor:      'pointer',
       }}
     >
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2" style={{ color: 'var(--gc-text-2)' }}>
+        <div className="flex items-center gap-2"
+             style={{ color: isUncat ? '#b45309' : 'var(--gc-text-2)' }}>
           <Icon size={16} strokeWidth={2.2} />
           <span className="text-[11px] font-bold uppercase tracking-wider">{bucket.label}</span>
         </div>
-        <span style={{ color: 'var(--gc-text-3)' }}>
+        <span style={{ color: isUncat ? '#f59e0b' : 'var(--gc-text-3)' }}>
           <ArrowRight size={14} />
         </span>
       </div>
-      <div className="text-[24px] font-semibold tabular-nums leading-none" style={{ color: 'var(--gc-text-1)' }}>
+      <div className="text-[24px] font-semibold tabular-nums leading-none"
+           style={{ color: isUncat ? '#b45309' : 'var(--gc-text-1)' }}>
         {fmtMoney0(bucket.total)}
       </div>
       <div className="flex items-center gap-3">
-        <DeltaChip current={bucket.total} previous={bucket.prevTotal} />
-        <span className="text-xs" style={{ color: 'var(--gc-text-3)' }}>
-          {bucket.count}{' '}
-          {bucket.key === 'payroll' ? (bucket.count === 1 ? 'driver' : 'drivers') :
-           bucket.key === 'fuel'    ? (bucket.count === 1 ? 'fill-up' : 'fill-ups') :
-                                     (bucket.count === 1 ? 'txn' : 'txns')}
+        {!isUncat && <DeltaChip current={bucket.total} previous={bucket.prevTotal} />}
+        <span className="text-xs" style={{ color: isUncat ? '#b45309' : 'var(--gc-text-3)' }}>
+          {isUncat ? `${bucket.count} to categorize` : countLabel(bucket)}
         </span>
       </div>
-      {subtitle && (
-        <div className="text-xs mt-1" style={{ color: '#c026d3' }}>{subtitle}</div>
+      {breakdown && breakdown.length > 0 && (
+        <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px]"
+             style={{ color: 'var(--gc-text-3)' }}>
+          {breakdown.map(b => (
+            <span key={b.label} className="tabular-nums">
+              {b.label} <span style={{ color: 'var(--gc-text-2)' }}>{fmtMoney0(b.value)}</span>
+            </span>
+          ))}
+        </div>
       )}
     </button>
   );
@@ -212,13 +254,11 @@ function ExpensesPageInner() {
 
   useEffect(() => { void reload(); }, [reload]);
 
-  const bucketByKey = new Map(buckets.map(b => [b.key, b]));
-  const fuel    = bucketByKey.get('fuel');
-  const payroll = bucketByKey.get('payroll');
-  const cards   = bucketByKey.get('cards');
-
-  const total = buckets.reduce((acc, b) => acc + b.total, 0);
-  const prevTotal = buckets.reduce((acc, b) => acc + b.prevTotal, 0);
+  // Total ribbon excludes the "Uncategorized" CTA — that's a queue-
+  // depth signal, not a spend line-item that's been decided yet.
+  const primaryBuckets = buckets.filter(b => b.key !== 'uncategorized');
+  const total     = primaryBuckets.reduce((acc, b) => acc + b.total, 0);
+  const prevTotal = primaryBuckets.reduce((acc, b) => acc + b.prevTotal, 0);
 
   return (
     <AppShell>
@@ -262,43 +302,17 @@ function ExpensesPageInner() {
           {/* Bucket tiles */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-8">
             {loading && buckets.length === 0
-              ? [0, 1, 2].map(i => (
+              ? [0, 1, 2, 3, 4, 5].map(i => (
                   <div key={i} className="h-[128px] rounded-xl border animate-pulse"
                        style={{ borderColor: 'var(--gc-border)', background: 'var(--gc-surface-2)' }} />
                 ))
-              : (
-                <>
-                  {fuel && (
-                    <BucketTile
-                      bucket={fuel}
-                      icon={FuelIcon}
-                      href="/equipment?tab=fuel"
-                      onClick={() => router.push('/equipment?tab=fuel')}
-                    />
-                  )}
-                  {payroll && (
-                    <BucketTile
-                      bucket={payroll}
-                      icon={Wallet}
-                      href="/payroll"
-                      onClick={() => router.push('/payroll')}
-                    />
-                  )}
-                  {cards && (
-                    <BucketTile
-                      bucket={cards}
-                      icon={CreditCard}
-                      href="/expenses/cards"
-                      onClick={() => router.push('/expenses/cards')}
-                      subtitle={
-                        cards.meta && typeof cards.meta.unmatched === 'number' && cards.meta.unmatched > 0
-                          ? `${cards.meta.unmatched} unreviewed`
-                          : undefined
-                      }
-                    />
-                  )}
-                </>
-              )
+              : buckets.map(b => (
+                  <BucketTile
+                    key={b.key}
+                    bucket={b}
+                    onClick={() => router.push(BUCKET_HREFS[b.key])}
+                  />
+                ))
             }
           </div>
 

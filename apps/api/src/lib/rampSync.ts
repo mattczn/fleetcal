@@ -19,6 +19,7 @@ import {
   matchMemo,
   type RampMatchInputs,
 } from "./rampMatcher.js";
+import { mapRampCategory } from "./rampCategoryMap.js";
 
 const RAMP_BASE = process.env.RAMP_BASE_URL || "https://api.ramp.com/developer/v1";
 const TOKEN_EARLY_EXPIRY_MS = 60_000;
@@ -146,6 +147,10 @@ function buildRow(
   const cardholderName =
     [tx.card_holder?.first_name, tx.card_holder?.last_name]
       .filter(Boolean).join(" ").trim() || null;
+  // Auto-derive expense_category from Ramp's own category. Manual
+  // overrides are preserved on re-sync via the duplicate branch (only
+  // NULL rows get refreshed).
+  const expenseCategory = mapRampCategory(tx.sk_category_name);
   return {
     row: {
       org_id: orgId,
@@ -167,6 +172,7 @@ function buildRow(
       asset_id: match.asset_id,
       trailer_id: match.trailer_id,
       asset_link_source: match.source,
+      expense_category: expenseCategory,
       match_status: match.status,
       match_confidence: match.confidence,
       match_notes: match.notes,
@@ -219,7 +225,7 @@ export async function syncRamp(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data: existing } = await (supabase as any)
         .from("ramp_transactions")
-        .select("id, match_status, asset_link_source")
+        .select("id, match_status, asset_link_source, expense_category")
         .eq("org_id", orgId)
         .eq("provider", "ramp")
         .eq("provider_transaction_id", tx.id)
@@ -231,6 +237,10 @@ export async function syncRamp(
       const preserveMatch =
         existing.match_status === "manual_matched" ||
         existing.asset_link_source === "manual";
+      // Category is preserved on re-sync once ANY value is set — the
+      // auto-mapper only ever fills in NULLs, so a human choice (via the
+      // UI) or an earlier auto-map survives.
+      const preserveCategory = existing.expense_category != null;
       const updateRow: Record<string, unknown> = {
         amount: row.amount,
         currency: row.currency,
@@ -253,6 +263,9 @@ export async function syncRamp(
         updateRow.match_confidence  = row.match_confidence;
         updateRow.match_notes       = row.match_notes;
         updateRow.matched_at        = row.matched_at;
+      }
+      if (!preserveCategory && row.expense_category != null) {
+        updateRow.expense_category = row.expense_category;
       }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { error: uErr } = await (supabase as any)

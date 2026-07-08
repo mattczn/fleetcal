@@ -254,6 +254,32 @@ rampTx.patch("/:id/mark-not-applicable", async (c) => {
   return c.json(res);
 });
 
+// PATCH /v1/ramp-transactions/:id/category — set expense_category for
+// the Card Spend board's inline dropdown. Pass `category: null` to
+// clear (returns row to Uncategorized).
+rampTx.patch("/:id/category", async (c) => {
+  const orgId = c.get("orgId");
+  const id    = c.req.param("id");
+  const body = await c.req.json<{ category: string | null }>().catch(() => null);
+  if (!body) {
+    return c.json({ error: "bad_request", detail: "invalid json body" }, 400);
+  }
+  const VALID = new Set(['maintenance','load_expenses','hotels','fuel','office','other']);
+  if (body.category != null && !VALID.has(body.category)) {
+    return c.json({ error: "bad_request", detail: `invalid category: ${body.category}` }, 400);
+  }
+  const { data, error } = await supabase
+    .from("ramp_transactions")
+    .update({ expense_category: body.category })
+    .eq("id", id).eq("org_id", orgId)
+    .select(TX_COLS)
+    .single();
+  if (error || !data) {
+    return c.json({ error: "update_failed", detail: error?.message ?? "not_found" }, 500);
+  }
+  return c.json({ rampTransaction: rowToTx(data as unknown as RampTransactionRow) });
+});
+
 // POST /v1/ramp-transactions/sync — kick the sweep on demand (parallels
 // Mudflap's manual sync button on the equipment page).
 rampTx.post("/sync", async (c) => {

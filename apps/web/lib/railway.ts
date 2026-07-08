@@ -75,6 +75,9 @@ import type {
   MatchRampTransactionRequest, MatchRampTransactionResponse,
   MarkRampNotApplicableResponse, RunRampSyncResponse,
   ExpensesSummaryResponse, ExpensesActivityResponse,
+  BackfillRampCategoriesResponse,
+  ListRecurringExpensesResponse, CreateRecurringExpenseRequest,
+  UpdateRecurringExpenseRequest, RecurringExpenseResponse,
   ListMaintenanceReportsQuery, ListMaintenanceReportsResponse,
   GetMaintenanceReportResponse,
   UpdateMaintenanceReportRequest, UpdateMaintenanceReportResponse,
@@ -1458,6 +1461,12 @@ class RailwayClient {
     return this.req<RunRampSyncResponse>('POST', `/v1/ramp-transactions/sync`);
   }
 
+  setRampTransactionCategory(id: string, category: string | null) {
+    return this.req<{ rampTransaction: import('@fleetcal/types').RampTransaction }>(
+      'PATCH', `/v1/ramp-transactions/${id}/category`, { category },
+    );
+  }
+
   // ── /expenses dashboard ─────────────────────────────────────────────
   getExpensesSummary(query: { from?: string; to?: string } = {}) {
     const qs = new URLSearchParams();
@@ -1474,6 +1483,30 @@ class RailwayClient {
     if (query.limit != null) qs.set('limit', String(query.limit));
     const s = qs.toString();
     return this.req<ExpensesActivityResponse>('GET', `/v1/expenses/activity${s ? `?${s}` : ''}`);
+  }
+
+  backfillRampCategories() {
+    return this.req<BackfillRampCategoriesResponse>('POST', `/v1/expenses/backfill-categories`);
+  }
+
+  // ── Recurring expenses CRUD ────────────────────────────────────────
+  listRecurringExpenses(query: { includeEnded?: boolean } = {}) {
+    const qs = new URLSearchParams();
+    if (query.includeEnded === false) qs.set('includeEnded', 'false');
+    const s = qs.toString();
+    return this.req<ListRecurringExpensesResponse>('GET', `/v1/recurring-expenses${s ? `?${s}` : ''}`);
+  }
+  createRecurringExpense(body: CreateRecurringExpenseRequest) {
+    return this.req<RecurringExpenseResponse>('POST', `/v1/recurring-expenses`, body);
+  }
+  updateRecurringExpense(id: string, body: UpdateRecurringExpenseRequest) {
+    return this.req<RecurringExpenseResponse>('PATCH', `/v1/recurring-expenses/${id}`, body);
+  }
+  endRecurringExpense(id: string) {
+    return this.req<RecurringExpenseResponse>('POST', `/v1/recurring-expenses/${id}/end`);
+  }
+  deleteRecurringExpense(id: string) {
+    return this.req<{ ok: true }>('DELETE', `/v1/recurring-expenses/${id}`);
   }
 
   /** Pull fuel transactions from the Mudflap Carriers API for the date

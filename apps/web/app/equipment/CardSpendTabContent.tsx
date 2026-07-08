@@ -21,6 +21,7 @@ import { StyledSelect } from '@/components/ui/StyledSelect';
 import type {
   RampTransaction,
   RampTransactionMatchStatus,
+  RampExpenseCategory,
 } from '@fleetcal/types';
 import type { Asset } from '@/lib/types';
 import { Receipt as ReceiptIcon } from 'lucide-react';
@@ -32,6 +33,10 @@ interface Props {
   trailers:          Trailer[];
   assetLabelById:    Map<number, string>;
   trailerLabelById:  Map<number, string>;
+  /** Optional initial filter (from URL param on /expenses/cards). One
+   *  of the RampExpenseCategory values, or "uncategorized" for null,
+   *  or undefined for no filter. */
+  defaultCategoryFilter?: string;
 }
 
 const fmtMoney = (n: number) =>
@@ -48,8 +53,17 @@ function statusPill(s: RampTransactionMatchStatus) {
   }
 }
 
+const CATEGORY_LABELS: Record<RampExpenseCategory, string> = {
+  maintenance:   'Maintenance',
+  load_expenses: 'Load expenses',
+  hotels:        'Hotels',
+  fuel:          'Fuel',
+  office:        'Office / overhead',
+  other:         'Other',
+};
+
 export default function CardSpendTabContent({
-  assets, trailers, assetLabelById, trailerLabelById,
+  assets, trailers, assetLabelById, trailerLabelById, defaultCategoryFilter,
 }: Props) {
   const [rows, setRows]         = useState<RampTransaction[]>([]);
   const [loading, setLoading]   = useState(false);
@@ -104,6 +118,17 @@ export default function CardSpendTabContent({
       setSyncMsg(`Sync failed: ${msg}`);
     } finally {
       setSyncBusy(false);
+    }
+  }, []);
+
+  const onCategoryChange = useCallback(async (tx: RampTransaction, value: string) => {
+    try {
+      const category = value === '' ? null : value;
+      const r = await railway.setRampTransactionCategory(tx.id, category);
+      setRows(prev => prev.map(row => row.id === tx.id ? r.rampTransaction : row));
+    } catch (err) {
+      console.error('[card-spend] category change failed:', err);
+      alert('Failed to update category.');
     }
   }, []);
 
@@ -190,9 +215,35 @@ export default function CardSpendTabContent({
       ),
     },
     {
-      key: 'category',
+      key: 'expense_category',
       header: 'Category',
-      width: 140,
+      width: 170,
+      sortable: true,
+      sortValue: r => r.expenseCategory ?? '',
+      render: r => (
+        <div onClick={e => e.stopPropagation()}
+             title={r.skCategoryName ? `Ramp said: ${r.skCategoryName}` : undefined}>
+          <StyledSelect
+            value={r.expenseCategory ?? ''}
+            onChange={e => void onCategoryChange(r, e.target.value)}
+            style={{ minWidth: 150, fontSize: 12 }}
+          >
+            <option value="">— Uncategorized —</option>
+            <option value="maintenance">Maintenance</option>
+            <option value="load_expenses">Load expenses</option>
+            <option value="hotels">Hotels</option>
+            <option value="fuel">Fuel</option>
+            <option value="office">Office / overhead</option>
+            <option value="other">Other</option>
+          </StyledSelect>
+        </div>
+      ),
+    },
+    {
+      key: 'ramp_category',
+      header: 'Ramp says',
+      width: 130,
+      defaultHidden: true,
       sortable: true,
       sortValue: r => r.skCategoryName ?? '',
       render: r => r.skCategoryName ?? <OpsMuted />,
@@ -344,11 +395,32 @@ export default function CardSpendTabContent({
       predicate: (r: RampTransaction, v: string) =>
         v === 'all' ? true : r.cardholderRampUserId === v,
     }] : []),
+    {
+      kind: 'select' as const,
+      key: 'expense_category',
+      label: 'Bucket',
+      options: [
+        { value: 'all',           label: 'All buckets' },
+        { value: 'uncategorized', label: 'Uncategorized' },
+        { value: 'maintenance',   label: 'Maintenance' },
+        { value: 'load_expenses', label: 'Load expenses' },
+        { value: 'hotels',        label: 'Hotels' },
+        { value: 'fuel',          label: 'Fuel' },
+        { value: 'office',        label: 'Office / overhead' },
+        { value: 'other',         label: 'Other' },
+      ],
+      defaultValue: defaultCategoryFilter ?? 'all',
+      predicate: (r: RampTransaction, v: string) => {
+        if (v === 'all')           return true;
+        if (v === 'uncategorized') return !r.expenseCategory;
+        return r.expenseCategory === v;
+      },
+    },
     ...(categoryOptions.length > 1 ? [{
       kind: 'select' as const,
-      key: 'category',
-      label: 'Category',
-      options: [{ value: 'all', label: 'All categories' }, ...categoryOptions],
+      key: 'ramp_category',
+      label: 'Ramp category',
+      options: [{ value: 'all', label: 'All Ramp categories' }, ...categoryOptions],
       defaultValue: 'all',
       predicate: (r: RampTransaction, v: string) =>
         v === 'all' ? true : r.skCategoryName === v,

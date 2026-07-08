@@ -1449,6 +1449,55 @@ export interface RampTransaction {
   updatedAt?:             string;
 }
 
+// ── Recurring expenses ──────────────────────────────────────────────────
+//
+// Rules stored once + prorated into any reporting window at query time
+// (see apps/api/src/routes/expenses.ts). New cadences (annual, quarterly)
+// slot in with a cadence value + a periodDays entry in the prorater.
+
+export type RecurringExpenseKind =
+  | 'payroll_admin'
+  | 'payroll_dispatch'
+  | 'payroll_maintenance'
+  | 'insurance';
+
+export const RECURRING_EXPENSE_KINDS: readonly RecurringExpenseKind[] = [
+  'payroll_admin', 'payroll_dispatch', 'payroll_maintenance', 'insurance',
+] as const;
+
+export type RecurringExpenseCadence = 'weekly' | 'monthly';
+
+export interface RecurringExpense {
+  id:             string;
+  orgId:          string;
+  kind:           RecurringExpenseKind;
+  label:          string;
+  amount:         number;
+  cadence:        RecurringExpenseCadence;
+  effectiveFrom:  string;    // YYYY-MM-DD
+  effectiveTo?:   string;    // YYYY-MM-DD (nullable = open-ended)
+  notes?:         string;
+  createdAt:      string;
+  updatedAt:      string;
+}
+
+/** Ramp card sub-categorization. Drives which /expenses bucket a card
+ *  txn feeds. 'office' is treated as overhead — not surfaced on the
+ *  primary tiles. 'other' + null are equivalent from a bucket-routing
+ *  standpoint but differ intent (other = "I looked at it and it's
+ *  none of the above"; null = "not yet reviewed"). */
+export type RampExpenseCategory =
+  | 'maintenance'
+  | 'load_expenses'
+  | 'hotels'
+  | 'fuel'
+  | 'office'
+  | 'other';
+
+export const RAMP_EXPENSE_CATEGORIES: readonly RampExpenseCategory[] = [
+  'maintenance', 'load_expenses', 'hotels', 'fuel', 'office', 'other',
+] as const;
+
 // ── Maintenance ─────────────────────────────────────────────────────────
 //
 // Two-layer model:
