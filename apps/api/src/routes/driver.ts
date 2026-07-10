@@ -3641,7 +3641,7 @@ driver.get("/safety-score", async (c) => {
 
   // Score constants — MUST match driver-safety-scoring.ts. If those
   // constants change, update these too or extract into a shared module.
-  const SEV_WEIGHT: Record<string, number> = { low: 0, moderate: 1, severe: 25 };
+  const SEV_WEIGHT: Record<string, number> = { low: 0, moderate: 1, severe: 10 };
   const TYPE_WEIGHT: Record<string, number> = {
     tailgating: 1.5, distraction: 1.5, cell_phone: 1.5, drowsiness: 1.5,
   };

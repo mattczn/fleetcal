@@ -63,14 +63,14 @@ safetyScoring.use(
 
 // ── Constants (tune here) ─────────────────────────────────────────────
 
-// Severity weights — SEVERE is the dominant signal (25x moderate), and
+// Severity weights — SEVERE is the dominant signal (10x moderate), and
 // LOW events are ignored entirely as noise. A driver averaging a lot of
 // low-severity brakes isn't the same problem as one who occasionally
 // crushes a stop, so we don't want low events padding the penalty.
 const SEVERITY_LEVEL_WEIGHT: Record<string, number> = {
   low:      0,
   moderate: 1,
-  severe:   25,
+  severe:   10,
 };
 
 const EVENT_TYPE_WEIGHT: Record<string, number> = {
