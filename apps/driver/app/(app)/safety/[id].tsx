@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, TextInput, Modal, Alert as RNAlert } from "react-native";
+import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, TextInput, Modal, Alert as RNAlert, KeyboardAvoidingView, Platform, TouchableWithoutFeedback, Keyboard } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -191,7 +191,19 @@ export default function SafetyAlertDetailScreen() {
         animationType="slide"
         onRequestClose={() => !disputeSubmitting && setDisputeOpen(false)}
       >
-        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end" }}>
+        {/* Tap outside the sheet to dismiss the keyboard (nice on Android
+            where the keyboard obscures the send button until scrolled). */}
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+          <KeyboardAvoidingView
+            style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end" }}
+            // iOS uses `padding` to lift the sheet above the keyboard.
+            // Android's system keyboard is already respected by the OS
+            // when Modal has `windowSoftInputMode=adjustResize` (Expo
+            // default), but wrapping with `height` behavior guarantees
+            // the sheet resizes on both platforms instead of hiding
+            // behind the keyboard.
+            behavior={Platform.OS === "ios" ? "padding" : "height"}
+          >
           <View style={{ backgroundColor: "#fff", borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20 }}>
             <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
               <Text style={[txt(700), { fontSize: 16, color: "#111827" }]}>Dispute this alert</Text>
@@ -253,7 +265,8 @@ export default function SafetyAlertDetailScreen() {
               </TouchableOpacity>
             </View>
           </View>
-        </View>
+          </KeyboardAvoidingView>
+        </TouchableWithoutFeedback>
       </Modal>
     </SafeAreaView>
   );

@@ -96,12 +96,24 @@ const MEDIAN_ANCHOR_SCORE = 80;
  *  per-mile rate to reliably represent "average." */
 const MIN_MILES_FOR_MEDIAN = 500;
 
+/** Below this many miles we don't score a driver AT ALL — their
+ *  penalty-per-mile would swing wildly on any single event and mislead
+ *  the dispatcher. Displays as "insufficient data" instead. */
+const MIN_MILES_FOR_SCORE  = 200;
+
 /** Small-fleet fallback: when fewer than 3 drivers cleared MIN_MILES_FOR_MEDIAN
  *  we use this reference penalty instead of the unstable calculated
  *  median. Rough Curzon early-data estimate of "one severe event per
  *  2000mi" = ~6 penalty units per 1000mi. */
 const FALLBACK_MEDIAN_PENALTY = 6;
 const MIN_MEDIAN_ELIGIBLE_DRIVERS = 3;
+
+/** Bottom floor for the effective median used by the score curve.
+ *  Even a fleet with a genuinely tiny median penalty (very clean) uses
+ *  at least this much so that a driver's first moderate event doesn't
+ *  crash their score to 0. Roughly "one severe event per 1000mi is
+ *  where the score starts dropping". */
+const MIN_EFFECTIVE_MEDIAN = 3;
 
 /** Auto-flag thresholds. Now keyed off SEVERE events specifically —
  *  a pile of moderate events isn't a flag, but two severe events in
@@ -435,12 +447,14 @@ safetyScoring.get("/", async (c) => {
   const rowsUnranked: Array<Omit<DriverSafetyScoreRow, "rank">> = perDriver.map(r => {
     const { driver: d, acc: a, miles, penaltyPer1kMi, prevPenaltyPer1k } = r;
 
-    // Score is null when the driver didn't drive at all — we can't
-    // judge someone who wasn't on the road.
-    const safetyScore = miles > 0
+    // Score is null when we don't have enough miles to trust the
+    // per-mile rate. Below MIN_MILES_FOR_SCORE a single event would
+    // swing the number wildly, so we show "insufficient data" instead
+    // of a misleading 0 or 100.
+    const safetyScore = miles >= MIN_MILES_FOR_SCORE
       ? scoreFromPenalty(penaltyPer1kMi, fleetMedianPenalty)
       : null;
-    const prevSafetyScore = miles > 0
+    const prevSafetyScore = miles >= MIN_MILES_FOR_SCORE
       ? scoreFromPenalty(prevPenaltyPer1k, fleetMedianPenalty)
       : null;
 
@@ -548,8 +562,14 @@ function utcIsoToNaiveMt(iso: string): string | null {
  *  drivers), we cap the low end so a driver with any penalty doesn't
  *  divide by zero and collapse to 0. */
 function scoreFromPenalty(penalty: number, medianPen: number): number {
-  const effectiveMedian = Math.max(medianPen, 0.5); // guard against zero-fleet division
+  // No events attributed → perfect score. This branch is the whole
+  // point of the fix: a driver who did nothing wrong should not have
+  // their score bounced around by the fleet median.
   if (penalty <= 0) return 100;
+  // Anchor floor prevents a squeaky-clean fleet's tiny median from
+  // producing a "3× median" band so small that a driver's first
+  // moderate event crashes them to 0.
+  const effectiveMedian = Math.max(medianPen, MIN_EFFECTIVE_MEDIAN);
   if (penalty <= effectiveMedian) {
     // 80 at median, 100 at 0 — linear.
     const raw = MEDIAN_ANCHOR_SCORE + (100 - MEDIAN_ANCHOR_SCORE) * (effectiveMedian - penalty) / effectiveMedian;

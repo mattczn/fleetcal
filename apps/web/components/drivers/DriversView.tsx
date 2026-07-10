@@ -579,15 +579,19 @@ export default function DriversView() {
             </div>
           </div>
 
-          {/* Dual-score chart — inspection + safety per active driver
-              in the period. First thing dispatchers see so problem
-              drivers surface immediately. */}
+          {/* Fleet health strip — 4 tiles: average inspection %,
+              average safety score, flagged drivers, alerts this window.
+              Scannable at a glance, no bar chart. */}
           {!loading && rows.length > 0 && (
-            <DriverScoresChart
-              rows={rows}
-              fleet={safetyFleet}
-              onRowClick={setOpenDriverId}
-            />
+            <FleetHealthStrip rows={rows} fleet={safetyFleet} />
+          )}
+
+          {/* Needs-attention cards — surfaces drivers who are flagged
+              on either dimension (safety flagged OR inspection < 60).
+              Big numbers, one-line why, click through to the detail
+              panel. Renders nothing when the fleet is healthy. */}
+          {!loading && rows.length > 0 && (
+            <NeedsAttentionSection rows={rows} onOpen={setOpenDriverId} />
           )}
 
           {/* Inspection scorecard — the compact per-driver bonus view
@@ -668,9 +672,10 @@ function PctCell({
   );
 }
 
-/** Safety-score cell — same threshold philosophy as PctCell but with
- *  a trend arrow next to the number and a flag icon before it when
- *  the row was auto-flagged. Null → em-dash + subtle "no miles" hint. */
+/** Safety-score cell — filled color chip with trend arrow. Same
+ *  green/amber/red bands as the attention cards. Null → "no data"
+ *  with a subtle hint about the min-miles gate so a dispatcher isn't
+ *  confused about why some drivers have no score. */
 export function SafetyScoreCell({ row }: {
   row: {
     safetyScore: number | null;
@@ -681,9 +686,9 @@ export function SafetyScoreCell({ row }: {
 }) {
   if (row.safetyScore == null) {
     return (
-      <span style={{ color: 'var(--gc-text-3)' }}>
+      <span title="Not enough miles in 30 days for a reliable score" style={{ color: 'var(--gc-text-3)', fontSize: 11 }}>
         —
-        <span className="text-[10px] block" style={{ marginTop: -2 }}>no miles</span>
+        <span className="block" style={{ fontSize: 9.5, marginTop: -1 }}>no data</span>
       </span>
     );
   }
@@ -691,11 +696,25 @@ export function SafetyScoreCell({ row }: {
     row.safetyScore >= 85 ? '#137333' :
     row.safetyScore >= 70 ? '#b06000' :
                             '#c5221f';
+  const bg =
+    row.safetyScore >= 85 ? '#e6f4ea' :
+    row.safetyScore >= 70 ? '#fef3c7' :
+                            '#fdecea';
   const delta = row.safetyPrevScore != null ? row.safetyScore - row.safetyPrevScore : 0;
   const trendArrow = delta > 2 ? '↑' : delta < -2 ? '↓' : '';
   const trendColor = delta > 2 ? '#137333' : delta < -2 ? '#c5221f' : 'var(--gc-text-3)';
   return (
-    <span className="font-semibold tabular-nums inline-flex items-center gap-1" style={{ color }}>
+    <span
+      className="tabular-nums inline-flex items-center gap-1"
+      style={{
+        padding: '3px 7px',
+        borderRadius: 6,
+        background: bg,
+        color,
+        fontWeight: 700,
+        fontSize: 12.5,
+      }}
+    >
       {row.safetyFlagged && <span title="Auto-flagged for review" style={{ color: '#c5221f' }}>⚠</span>}
       {row.safetyScore}
       {trendArrow && <span style={{ color: trendColor, fontSize: 11 }}>{trendArrow}</span>}
@@ -703,19 +722,221 @@ export function SafetyScoreCell({ row }: {
   );
 }
 
-// ── Dual bar chart — inspection + safety per driver ─────────────────
+// ── Fleet health strip + attention cards ─────────────────────────────
+
+/** Four compact KPI tiles at the top of the drivers page. Purpose is
+ *  "read fleet condition at a glance" — the previous stacked bar chart
+ *  was 20+ rows of data compressed into the header, which read as
+ *  noise. Numbers are period-scoped where they can be (inspection) and
+ *  30-day for safety (matches the score's own window). */
+function FleetHealthStrip({
+  rows, fleet,
+}: {
+  rows: DriverScorecardRow[];
+  fleet: DriverSafetyFleetSummary | null;
+}) {
+  const activeRows = rows.filter(r => r.loads > 0 || r.inspections > 0);
+  const inspAvg = avg(activeRows.map(r => r.inspectionCompliancePct).filter((x): x is number => x != null));
+  const safetyAvg = fleet?.fleetMean ?? null;
+  const flaggedCount = rows.filter(r => r.safetyFlagged).length;
+  const alertsCount  = rows.reduce((s, r) => s + r.safetyCountedEvents, 0);
+  const severeCount  = rows.reduce((s, r) => s + r.safetySevereEvents, 0);
+
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+        gap: 10,
+        marginBottom: 14,
+      }}
+    >
+      <KpiTile
+        label="Fleet inspection"
+        value={inspAvg != null ? `${Math.round(inspAvg)}%` : '—'}
+        color={inspAvg == null ? 'var(--gc-text-3)' : inspAvg >= 85 ? '#137333' : inspAvg >= 70 ? '#b06000' : '#c5221f'}
+        sub={`${activeRows.length} active driver${activeRows.length === 1 ? '' : 's'}`}
+      />
+      <KpiTile
+        label="Fleet safety"
+        value={safetyAvg != null ? String(Math.round(safetyAvg)) : '—'}
+        color={safetyAvg == null ? 'var(--gc-text-3)' : safetyAvg >= 85 ? '#137333' : safetyAvg >= 70 ? '#b06000' : '#c5221f'}
+        sub={fleet?.medianIsFallback ? 'Calibrating — few drivers with miles' : `30-day rolling · median ${fleet?.fleetMedian ?? '—'}`}
+      />
+      <KpiTile
+        label="Flagged for coaching"
+        value={String(flaggedCount)}
+        color={flaggedCount > 0 ? '#c5221f' : 'var(--gc-text-3)'}
+        sub={flaggedCount === 0 ? 'No drivers flagged' : 'Score < 60 + ≥ 2 severe'}
+      />
+      <KpiTile
+        label="Safety events (30d)"
+        value={String(alertsCount)}
+        color={severeCount > 0 ? '#c5221f' : 'var(--gc-text-3)'}
+        sub={severeCount > 0 ? `${severeCount} severe · ${Math.round((fleet?.fleetMiles ?? 0)).toLocaleString()} mi driven` : `${Math.round((fleet?.fleetMiles ?? 0)).toLocaleString()} mi driven`}
+      />
+    </div>
+  );
+}
+
+function KpiTile({ label, value, color, sub }: {
+  label: string; value: string; color: string; sub: string;
+}) {
+  return (
+    <div
+      style={{
+        border: '1px solid var(--gc-border-light)',
+        borderRadius: 10,
+        background: 'var(--gc-surface)',
+        padding: '10px 12px',
+      }}
+    >
+      <div style={{ fontSize: 10.5, color: 'var(--gc-text-3)', fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase' }}>
+        {label}
+      </div>
+      <div
+        className="tabular-nums"
+        style={{ fontSize: 26, fontWeight: 800, color, lineHeight: 1.1, marginTop: 4, letterSpacing: -0.6 }}
+      >
+        {value}
+      </div>
+      <div style={{ fontSize: 11, color: 'var(--gc-text-3)', marginTop: 3 }}>
+        {sub}
+      </div>
+    </div>
+  );
+}
+
+/** Attention section — surfaces drivers who need coaching. Trigger
+ *  rules: safety_flagged OR inspection compliance < 60 (with enough
+ *  activity to matter — loads > 0 in the period). Big scannable cards,
+ *  click through to the driver detail panel. Renders nothing when the
+ *  fleet is healthy, so a clean week doesn't push the table down. */
+function NeedsAttentionSection({
+  rows, onOpen,
+}: {
+  rows: DriverScorecardRow[];
+  onOpen: (driverId: number) => void;
+}) {
+  const attention = rows
+    .filter(r => {
+      const insp = r.inspectionCompliancePct;
+      const inspLow = insp != null && r.loads > 0 && insp < 60;
+      return r.safetyFlagged || inspLow;
+    })
+    .map(r => {
+      const reasons: string[] = [];
+      if (r.safetyFlagged) {
+        reasons.push(`${r.safetySevereEvents} severe event${r.safetySevereEvents === 1 ? '' : 's'} in 30d`);
+      }
+      const insp = r.inspectionCompliancePct;
+      if (insp != null && r.loads > 0 && insp < 60) {
+        reasons.push(`${insp}% inspection compliance`);
+      }
+      return { row: r, reason: reasons.join(' · ') };
+    })
+    .slice(0, 5);
+  if (attention.length === 0) return null;
+
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <div style={{
+        display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 8,
+      }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--gc-text-1)' }}>
+          ⚠ Needs attention
+        </div>
+        <div style={{ fontSize: 11.5, color: 'var(--gc-text-3)' }}>
+          {attention.length} driver{attention.length === 1 ? '' : 's'}
+        </div>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {attention.map(({ row, reason }) => (
+          <button
+            key={row.driverId}
+            type="button"
+            onClick={() => onOpen(row.driverId)}
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr auto auto',
+              alignItems: 'center',
+              gap: 14,
+              padding: '10px 12px',
+              border: '1px solid #fecaca',
+              borderRadius: 10,
+              background: '#fef2f2',
+              cursor: 'pointer',
+              textAlign: 'left',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = '#fee2e2'; }}
+            onMouseLeave={e => { e.currentTarget.style.background = '#fef2f2'; }}
+          >
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--gc-text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {row.driverName}
+              </div>
+              <div style={{ fontSize: 11.5, color: '#991b1b', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {reason}
+              </div>
+            </div>
+            <ScoreChip label="Safety" value={row.safetyScore} />
+            <ScoreChip label="Insp" value={row.inspectionCompliancePct} suffix="%" />
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Compact color-coded score chip. Used in the attention cards + the
+ *  main table's Safety column. Reads as "green good, red bad" at a
+ *  glance so a dispatcher can scan a column without parsing digits. */
+function ScoreChip({ label, value, suffix }: {
+  label: string;
+  value: number | null;
+  suffix?: string;
+}) {
+  const isMissing = value == null;
+  const color =
+    isMissing         ? 'var(--gc-text-3)' :
+    value >= 85       ? '#137333' :
+    value >= 70       ? '#b06000' :
+                        '#c5221f';
+  const bg =
+    isMissing         ? 'var(--gc-bg)' :
+    value >= 85       ? '#e6f4ea' :
+    value >= 70       ? '#fef3c7' :
+                        '#fdecea';
+  return (
+    <div style={{
+      minWidth: 60, textAlign: 'center',
+      padding: '5px 8px', borderRadius: 8,
+      background: bg, color,
+      display: 'flex', flexDirection: 'column', alignItems: 'center',
+    }}>
+      <div className="tabular-nums" style={{ fontSize: 16, fontWeight: 800, lineHeight: 1, letterSpacing: -0.4 }}>
+        {isMissing ? '—' : `${value}${suffix ?? ''}`}
+      </div>
+      <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', marginTop: 3, color }}>
+        {label}
+      </div>
+    </div>
+  );
+}
+
+function avg(xs: number[]): number | null {
+  if (xs.length === 0) return null;
+  return xs.reduce((a, b) => a + b, 0) / xs.length;
+}
+
+// Old dual bar chart kept below for parity — no longer rendered. Left
+// exported so callers referencing the symbol still resolve, in case a
+// future revert or an old branch pulls it back. TODO: delete after
+// the redesign lands.
 
 const INSPECTION_COLOR = '#137333'; // green
 const SAFETY_COLOR     = '#7c3aed'; // purple
 
-/** Two horizontal bars per driver — inspection compliance % and safety
- *  score. Both 0–100 axis. Fleet median tick rendered on the safety bar
- *  so a dispatcher can see who's below the middle at a glance. Only
- *  active-in-period drivers are shown (loads OR inspections in the
- *  window). Sorted by min(insp, safety) ascending — the worst-of-two
- *  surfaces at the top so problem drivers can't hide behind a strong
- *  score on the other dimension.  Truncated at 25 rows so a big fleet
- *  doesn't blow out the header — full ranking is in the table below. */
 export function DriverScoresChart({
   rows, fleet, onRowClick,
 }: {

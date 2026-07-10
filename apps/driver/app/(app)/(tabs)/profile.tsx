@@ -22,6 +22,7 @@ import {
   Pencil, Check,
 } from "lucide-react-native";
 import { useQuery } from "@tanstack/react-query";
+import { useRouter } from "expo-router";
 import { useModules } from "@/lib/useModules";
 import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
@@ -437,6 +438,12 @@ export default function ProfileScreen() {
             </View>
           ) : (
             <>
+              {/* Safety score — 30d rolling, fleet-median-anchored,
+                  same math dispatch uses. Tap opens the /safety alert
+                  history. Renders nothing when the driver has no ELD
+                  miles this month. */}
+              <SafetyScoreCard C={C} />
+
               {/* Inspection score — Curzon-only; renders nothing otherwise */}
               <ScorecardCard />
 
@@ -883,6 +890,89 @@ function Card({ children }: { children: React.ReactNode }) {
     }}>
       {children}
     </View>
+  );
+}
+
+/** Safety score card — 30d rolling, fleet-median-anchored, exposes THIS
+ *  driver's number only. Same math dispatch sees on the drivers page.
+ *  Tap opens the /safety alert history so drivers can review the events
+ *  that fed the number. Renders nothing when the driver has no ELD miles
+ *  in the last 30 days (new hires, drivers on leave, or an org without
+ *  Motive integration — the endpoint 404s and the query rests silent). */
+function SafetyScoreCard({ C }: { C: ReturnType<typeof useTheme>["C"] }) {
+  const router = useRouter();
+  const { data } = useQuery({
+    queryKey: ["driver-safety-score"],
+    queryFn:  () => railway.getSafetyScore(),
+    staleTime: 60_000,
+    // Failure-tolerant: 404 from a non-Motive org, timeout, etc — just
+    // hide the card. Never surface an error to the driver.
+    retry:    false,
+  });
+
+  if (!data || data.milesDriven <= 0 || data.safetyScore == null) return null;
+
+  const score        = data.safetyScore;
+  const countedEvents = data.moderateEvents + data.severeEvents;
+  const bandColor =
+    data.flagged  ? C.redInk :
+    score >= 85   ? C.greenInk :
+    score >= 70   ? C.amberInk :
+                    C.redInk;
+  const bandBg =
+    data.flagged  ? C.redBg :
+    score >= 85   ? C.greenBg :
+    score >= 70   ? C.amberBg :
+                    C.redBg;
+
+  return (
+    <TouchableOpacity
+      onPress={() => router.push("/safety" as never)}
+      activeOpacity={0.85}
+      style={{
+        marginBottom: 16,
+        backgroundColor: C.surface,
+        borderRadius: 14,
+        borderWidth: 1,
+        borderColor: C.border,
+        padding: 14,
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 12,
+      }}
+    >
+      <View style={{
+        width: 56, height: 56, borderRadius: 12,
+        backgroundColor: bandBg,
+        alignItems: "center", justifyContent: "center",
+      }}>
+        <Text style={[txt(800), { fontSize: 22, color: bandColor, letterSpacing: -0.5 }]}>
+          {score}
+        </Text>
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={[txt(700), { fontSize: 14, color: C.t1 }]}>
+          Safety score · 30 days
+        </Text>
+        <Text style={[txt(500), { fontSize: 12.5, color: C.t3, marginTop: 2 }]}>
+          {countedEvents === 0
+            ? "No safety events. Keep it up."
+            : `${countedEvents} event${countedEvents === 1 ? "" : "s"}${data.severeEvents > 0 ? ` · ${data.severeEvents} severe` : ""}`}
+        </Text>
+        {data.flagged && (
+          <Text style={[txt(700), { fontSize: 11.5, color: C.redInk, marginTop: 3 }]}>
+            Flagged — dispatch may reach out.
+          </Text>
+        )}
+      </View>
+      <View style={{
+        width: 26, height: 26, borderRadius: 13,
+        backgroundColor: C.surfaceSunk,
+        alignItems: "center", justifyContent: "center",
+      }}>
+        <Text style={[txt(600), { fontSize: 14, color: C.t3 }]}>›</Text>
+      </View>
+    </TouchableOpacity>
   );
 }
 

@@ -3647,8 +3647,13 @@ driver.get("/safety-score", async (c) => {
   };
   const MEDIAN_ANCHOR = 80;
   const MIN_MILES_FOR_MEDIAN = 500;
+  const MIN_MILES_FOR_SCORE  = 200;    // below this → score = null ("insufficient data")
   const FALLBACK_MEDIAN = 6;
   const MIN_MEDIAN_ELIGIBLE = 3;
+  // Bottom floor on the effective median so a clean fleet's tiny
+  // median doesn't crash a driver's score to 0 on their first
+  // moderate event. Must match the dispatch route's constant.
+  const MIN_EFFECTIVE_MEDIAN = 3;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   type EventRow = { event_type: string; event_time: string; notified_driver_id: number | null; assigned_driver_id: number | null; raw: any };
@@ -3699,8 +3704,10 @@ driver.get("/safety-score", async (c) => {
     : FALLBACK_MEDIAN;
 
   function scoreFor(penaltyPer1k: number): number {
-    const m = Math.max(medianPen, 0.5);
+    // 0 events → 100 always. Fleet median doesn't punish a driver who
+    // did nothing wrong.
     if (penaltyPer1k <= 0) return 100;
+    const m = Math.max(medianPen, MIN_EFFECTIVE_MEDIAN);
     if (penaltyPer1k <= m) {
       return Math.round(Math.max(MEDIAN_ANCHOR, Math.min(100,
         MEDIAN_ANCHOR + (100 - MEDIAN_ANCHOR) * (m - penaltyPer1k) / m)));
@@ -3710,10 +3717,10 @@ driver.get("/safety-score", async (c) => {
       MEDIAN_ANCHOR - MEDIAN_ANCHOR * (penaltyPer1k - m) / (2 * m))));
   }
 
-  const safetyScore = myMiles > 0
+  const safetyScore = myMiles >= MIN_MILES_FOR_SCORE
     ? scoreFor(myCurr.total / (myMiles / 1000))
     : null;
-  const prevSafetyScore = myMiles > 0
+  const prevSafetyScore = myMiles >= MIN_MILES_FOR_SCORE
     ? scoreFor(myPrev.total / (myMiles / 1000))
     : null;
   const flagged = safetyScore != null && safetyScore < 60 && myCurr.severe >= 2 && myMiles >= 500;
