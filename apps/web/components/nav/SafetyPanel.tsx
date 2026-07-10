@@ -249,7 +249,6 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
                   onMouseEnter={ev => { if (e.id !== selectedId) ev.currentTarget.style.background = 'var(--gc-bg)'; }}
                   onMouseLeave={ev => { if (e.id !== selectedId) ev.currentTarget.style.background = 'transparent'; }}
                 >
-                  <AlertTriangle size={14} style={{ color: severityLevelColor(e.severity_level), flexShrink: 0, marginTop: 2 }} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     {/* Row 1: event type + status chip + time (right-aligned) */}
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
@@ -275,6 +274,18 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
                       </div>
                     )}
                   </div>
+                  {/* Severity icon on the RIGHT so it doesn't collide
+                      with the truck color bar on the left — the two
+                      signals stay visually distinct. */}
+                  <AlertTriangle
+                    size={18}
+                    style={{
+                      color: severityLevelColor(e.severity_level),
+                      flexShrink: 0,
+                      alignSelf: 'center',
+                      marginLeft: 6,
+                    }}
+                  />
                 </button>
               );
             })}

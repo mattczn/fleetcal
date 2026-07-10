@@ -13,7 +13,8 @@ import {
 import { SafeAreaView, SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Inbox, AlertTriangle, Moon, Sun } from "lucide-react-native";
+import { Inbox, AlertTriangle, Moon, Sun, Bell } from "lucide-react-native";
+import { useRouter } from "expo-router";
 import { SyncStatusPill } from "@/components/SyncStatusPill";
 import InspectionCard from "@/components/InspectionCard";
 import InspectionFormScreen from "@/components/InspectionFormScreen";
@@ -51,8 +52,21 @@ export default function LoadsScreen() {
   const insets = useSafeAreaInsets();
   const { C, SHADOW, ACCENT, isDark, toggle } = useTheme();
   const { reporting, truckHistory } = useModules();
+  const router = useRouter();
   const session = useDriverSession();
   const driver  = session.status === "matched" ? session.driver : null;
+
+  // Safety-alert history for the top-right button. Small red dot when
+  // there's any history — the driver-app doesn't yet track "unread"
+  // per-alert (would need a viewed_at column), so the dot signals
+  // presence, not urgency. Actual detail lives on /safety.
+  const { data: safetyData } = useQuery({
+    queryKey: ["driver-safety-alerts", driver?.driverId],
+    queryFn:  () => railway.listSafetyAlerts(),
+    enabled:  !!driver,
+    staleTime: 60_000,
+  });
+  const safetyAlertsCount = safetyData?.alerts.length ?? 0;
   useLoadsRealtime(driver?.driverId, driver?.orgId);
   // Registers the device for push silently. We intentionally don't surface
   // a "registration failed" banner — it's noise the driver can't action.
@@ -220,6 +234,34 @@ export default function LoadsScreen() {
           </View>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
             <SyncStatusPill />
+            {/* Safety-alert history — small red dot when the driver
+                has any past alerts. Tap opens the /safety inbox. */}
+            <TouchableOpacity
+              onPress={() => router.push("/safety" as never)}
+              activeOpacity={0.8}
+              accessibilityLabel={
+                safetyAlertsCount > 0
+                  ? `Safety alerts, ${safetyAlertsCount} in history`
+                  : "Safety alerts"
+              }
+              style={{ width: 36, height: 36, borderRadius: RADIUS.iconBtn, alignItems: "center", justifyContent: "center", position: "relative" }}
+            >
+              <Bell size={19} color={C.t2} strokeWidth={2.2} />
+              {safetyAlertsCount > 0 && (
+                <View
+                  pointerEvents="none"
+                  style={{
+                    position: "absolute",
+                    top: 6, right: 6,
+                    width: 8, height: 8,
+                    borderRadius: 4,
+                    backgroundColor: "#dc2626",
+                    borderWidth: 1.5,
+                    borderColor: C.surface,
+                  }}
+                />
+              )}
+            </TouchableOpacity>
             <TouchableOpacity
               onPress={toggle}
               activeOpacity={0.8}
