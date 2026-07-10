@@ -115,6 +115,12 @@ const MIN_MEDIAN_ELIGIBLE_DRIVERS = 3;
  *  where the score starts dropping". */
 const MIN_EFFECTIVE_MEDIAN = 3;
 
+/** Score floor. Even the worst driver never falls below this — a
+ *  literal 0 reads as "we've given up on you" and doesn't leave
+ *  headroom for the coaching conversation. Bad drivers still land in
+ *  the flagged zone (< 60), just not at zero. */
+const MIN_SCORE_FLOOR = 20;
+
 /** Bayesian smoothing: prior "clean miles" added to every driver's
  *  denominator. Interpret as "we assume 15,000 miles of clean driving
  *  as prior evidence — roughly a full month at typical fleet pace —
@@ -597,10 +603,10 @@ function scoreFromPenalty(penalty: number, medianPen: number): number {
     return Math.round(clamp(raw, MEDIAN_ANCHOR_SCORE, 100));
   }
   const upperBound = effectiveMedian * 3;
-  if (penalty >= upperBound) return 0;
-  // 80 at median, 0 at 3× median — linear.
-  const raw = MEDIAN_ANCHOR_SCORE - MEDIAN_ANCHOR_SCORE * (penalty - effectiveMedian) / (upperBound - effectiveMedian);
-  return Math.round(clamp(raw, 0, MEDIAN_ANCHOR_SCORE));
+  if (penalty >= upperBound) return MIN_SCORE_FLOOR;
+  // MEDIAN_ANCHOR at median, MIN_SCORE_FLOOR at 3× median — linear.
+  const raw = MEDIAN_ANCHOR_SCORE - (MEDIAN_ANCHOR_SCORE - MIN_SCORE_FLOOR) * (penalty - effectiveMedian) / (upperBound - effectiveMedian);
+  return Math.round(clamp(raw, MIN_SCORE_FLOOR, MEDIAN_ANCHOR_SCORE));
 }
 
 function median(xs: number[]): number | null {

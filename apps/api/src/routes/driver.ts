@@ -3654,6 +3654,9 @@ driver.get("/safety-score", async (c) => {
   // median doesn't crash a driver's score to 0 on their first
   // moderate event. Must match the dispatch route's constant.
   const MIN_EFFECTIVE_MEDIAN = 3;
+  // Score floor — worst-case driver lands here, never at 0. Must match
+  // the dispatch route's constant.
+  const MIN_SCORE_FLOOR = 20;
   // Bayesian prior: pretend the driver already has this many miles
   // of clean driving before adding their actual data. Prevents the
   // per-mile rate from swinging wildly on 300 miles + 2 severe
@@ -3723,9 +3726,9 @@ driver.get("/safety-score", async (c) => {
       return Math.round(Math.max(MEDIAN_ANCHOR, Math.min(100,
         MEDIAN_ANCHOR + (100 - MEDIAN_ANCHOR) * (m - penaltyPer1k) / m)));
     }
-    if (penaltyPer1k >= 3 * m) return 0;
-    return Math.round(Math.max(0, Math.min(MEDIAN_ANCHOR,
-      MEDIAN_ANCHOR - MEDIAN_ANCHOR * (penaltyPer1k - m) / (2 * m))));
+    if (penaltyPer1k >= 3 * m) return MIN_SCORE_FLOOR;
+    return Math.round(Math.max(MIN_SCORE_FLOOR, Math.min(MEDIAN_ANCHOR,
+      MEDIAN_ANCHOR - (MEDIAN_ANCHOR - MIN_SCORE_FLOOR) * (penaltyPer1k - m) / (2 * m))));
   }
 
   const myDenominator = (myMiles + PRIOR_MILES) / 1000;
