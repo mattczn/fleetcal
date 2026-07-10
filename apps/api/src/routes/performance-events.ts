@@ -119,6 +119,12 @@ perf.get("/", async (c) => {
   // `?since=24h|12h|1h` narrows to the trailing window; used by the
   // Safety Panel to show every alert in the last day (not just unread).
   const sinceMs = parseWindow(url.searchParams.get("since"));
+  // `?driverId=<fleetcal.drivers.id>` narrows to events attributed to
+  // that driver — same attribution the safety score uses (notified >
+  // assigned). Used by the DriverDetailPanel to show the events that
+  // fed the driver's score.
+  const driverIdParam = url.searchParams.get("driverId");
+  const driverId = driverIdParam ? Number(driverIdParam) : null;
   // `?include=raw,movements` — opt-in payload extras for the panel.
   // Popover doesn't ask for either (raw is multi-KB per row for GPS
   // arrays; movements need a second query per truck).
@@ -138,6 +144,14 @@ perf.get("/", async (c) => {
     .limit(limit);
   if (status !== "all") q = q.eq("dispatch_status", status);
   if (sinceMs != null) q = q.gte("event_time", new Date(Date.now() - sinceMs).toISOString());
+  if (driverId != null && Number.isFinite(driverId)) {
+    // Match either attribution column — same rule the safety score
+    // uses. Exclude accepted-dispute events so the list matches what's
+    // actually counted toward the score.
+    q = q
+      .or(`notified_driver_id.eq.${driverId},assigned_driver_id.eq.${driverId}`)
+      .neq("dispute_status", "accepted");
+  }
 
   const { data, error } = await q;
   if (error) {

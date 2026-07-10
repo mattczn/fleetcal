@@ -761,6 +761,16 @@ class RailwayClient {
       newCount: number;
     }>('GET', `/v1/performance-events?status=${status}&limit=${limit}`);
   }
+  /** Safety events attributed to one driver over a trailing window.
+   *  Same attribution rule the safety score uses (notified > assigned),
+   *  accepted disputes excluded — so the list matches what actually
+   *  fed the driver's score. */
+  listDriverSafetyEvents(driverId: number, hours = 720) {
+    return this.req<{
+      events:   PerformanceEventRow[];
+      newCount: number;
+    }>('GET', `/v1/performance-events?status=all&driverId=${driverId}&since=${hours}h&limit=500`);
+  }
   /** Panel query — trailing window, all statuses, raw payload + movement
    *  sidecar included so the map can draw the GPS trace + between-load
    *  movement OD line without a second round trip. */

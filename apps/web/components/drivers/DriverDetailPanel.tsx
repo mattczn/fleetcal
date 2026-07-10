@@ -13,11 +13,12 @@
  * onClose, parent unmounts.
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import { X, Truck, ClipboardCheck, Fuel as FuelIcon, Wrench, MapPin, FileCheck2, ShieldAlert } from 'lucide-react';
-import type { LoadSummary } from '@fleetcal/types';
+import type { LoadSummary, PerformanceEventRow } from '@fleetcal/types';
+import { railway } from '@/lib/railway';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import type { DriverScorecardRow } from './DriversView';
 
@@ -221,6 +222,10 @@ export default function DriverDetailPanel({ row, loads, inspections, period, onC
                 </div>
               </div>
             )}
+            {/* Event list — the actual events feeding the score. Same
+                attribution as scoring (notified > assigned), accepted
+                disputes excluded. */}
+            <SafetyEventsList driverId={row.driverId} />
           </Section>
 
           {/* Inspections list */}
@@ -277,6 +282,149 @@ export default function DriverDetailPanel({ row, loads, inspections, period, onC
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
+
+/** Actual list of safety events attributed to this driver in the last
+ *  30 days. Same attribution the safety score uses, accepted disputes
+ *  excluded — so this list is exactly what fed the score. Fetched on
+ *  driver-open, cached at the RQ layer would be nice but this file
+ *  isn't a RQ consumer yet; fresh fetch per open. */
+function SafetyEventsList({ driverId }: { driverId: number }) {
+  const [events, setEvents] = useState<PerformanceEventRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true); setErr(null);
+    // 720h = 30 days — matches the safety score window. Trailing zero
+    // shows what's actually in scope for the current score.
+    railway.listDriverSafetyEvents(driverId, 720)
+      .then(r => { if (!cancelled) { setEvents(r.events); setLoading(false); } })
+      .catch(e => { if (!cancelled) { setErr((e as Error).message ?? 'Failed to load'); setLoading(false); } });
+    return () => { cancelled = true; };
+  }, [driverId]);
+
+  if (loading) {
+    return (
+      <div style={{ padding: 20, fontSize: 12.5, color: 'var(--gc-text-3)', textAlign: 'center' }}>
+        Loading events…
+      </div>
+    );
+  }
+  if (err) {
+    return (
+      <div style={{ padding: 12, fontSize: 12.5, color: '#c5221f' }}>
+        Couldn&rsquo;t load events: {err}
+      </div>
+    );
+  }
+  if (events.length === 0) {
+    return (
+      <div
+        style={{
+          padding: 20, fontSize: 12.5, color: 'var(--gc-text-3)', textAlign: 'center',
+          border: '1px dashed var(--gc-border-light)', borderRadius: 10,
+          marginTop: 12,
+        }}
+      >
+        No safety events in the last 30 days.
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <div style={{
+        fontSize: 10.5, fontWeight: 700, letterSpacing: 0.4,
+        color: 'var(--gc-text-3)', textTransform: 'uppercase',
+        marginBottom: 4, paddingLeft: 4,
+      }}>
+        Events feeding the score · {events.length}
+      </div>
+      {events.map(e => (
+        <div
+          key={e.id}
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'auto 1fr auto',
+            gap: 10,
+            alignItems: 'center',
+            padding: '8px 10px',
+            borderRadius: 6,
+            border: '1px solid var(--gc-border-light)',
+            background: 'var(--gc-surface)',
+          }}
+        >
+          <SeverityDot level={e.severity_level} />
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--gc-text-1)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {eventTypeLabel(e.event_type)}
+              {e.severity_display ? ` · ${e.severity_display}` : ''}
+              {e.dispute_status === 'pending' && (
+                <span style={{
+                  marginLeft: 6, padding: '1px 5px', borderRadius: 3,
+                  fontSize: 9.5, fontWeight: 700, letterSpacing: 0.3,
+                  color: '#991b1b', background: '#fee2e2',
+                }}>DISPUTED</span>
+              )}
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--gc-text-2)', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {e.asset_name ?? e.vehicle_number ?? `Vehicle ${e.vehicle_id ?? ''}`}
+              {e.location_label ? ` · ${e.location_label}` : ''}
+            </div>
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--gc-text-3)', whiteSpace: 'nowrap' }}>
+            {fmtEventTime(e.event_time)}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function SeverityDot({ level }: { level: PerformanceEventRow['severity_level'] }) {
+  const color =
+    level === 'severe'   ? '#c5221f' :
+    level === 'moderate' ? '#b06000' :
+                           '#3b82f6';
+  return (
+    <span
+      aria-hidden
+      title={level ?? 'unknown severity'}
+      style={{
+        display: 'inline-block',
+        width: 8, height: 8, borderRadius: 4,
+        background: color,
+      }}
+    />
+  );
+}
+
+function eventTypeLabel(t: string): string {
+  switch (t) {
+    case 'hard_accel':   return 'Hard acceleration';
+    case 'hard_brake':   return 'Hard brake';
+    case 'hard_corner':  return 'Hard cornering';
+    case 'tailgating':   return 'Tailgating';
+    case 'cell_phone':   return 'Phone use';
+    case 'distraction':  return 'Distraction';
+    case 'drowsiness':   return 'Drowsiness';
+    case 'seatbelt':     return 'Seatbelt violation';
+    default:             return t.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  }
+}
+
+function fmtEventTime(iso: string): string {
+  const d = new Date(iso);
+  if (!isFinite(d.getTime())) return iso;
+  return d.toLocaleString('en-US', {
+    timeZone: 'America/Denver',
+    month:    'short',
+    day:      'numeric',
+    hour:     'numeric',
+    minute:   '2-digit',
+  });
+}
 
 function SafetyScoreBadge({
   score, prevScore, flagged,
