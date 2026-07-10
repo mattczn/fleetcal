@@ -116,13 +116,20 @@ const MIN_MEDIAN_ELIGIBLE_DRIVERS = 3;
 const MIN_EFFECTIVE_MEDIAN = 3;
 
 /** Bayesian smoothing: prior "clean miles" added to every driver's
- *  denominator. Without this, a driver with 300 mi + 2 severe events
- *  looks catastrophic per-mile even though a full month of data would
- *  wash it out. With PRIOR_MILES=5000, the effective per-mile rate is
- *  half of raw for a new driver, and barely dented for a driver who
- *  clocked 10k miles. Interpret as "we assume 5000 miles of clean
- *  driving as prior evidence, then integrate what we actually saw". */
-const PRIOR_MILES = 5000;
+ *  denominator. Interpret as "we assume 15,000 miles of clean driving
+ *  as prior evidence — roughly a full month at typical fleet pace —
+ *  then integrate the actual events into that prior".
+ *
+ *  This is the constant that determines how much day-1 or low-mile
+ *  data can move a driver's score. With 15k prior:
+ *  - A driver with 4 severe events on 500 mi lands around 68 (not 0).
+ *  - A driver with 10 severe events on 500 mi still lands near 0 —
+ *    truly bad behavior isn't washed away.
+ *  - A heavy driver with 10k+ actual miles is barely affected by the
+ *    prior (5000 raw miles + 15k prior = 3.75x smoothing → nudged
+ *    toward the middle by a small amount, dominated by real data).
+ */
+const PRIOR_MILES = 15000;
 
 /** Auto-flag thresholds. Now keyed off SEVERE events specifically —
  *  a pile of moderate events isn't a flag, but two severe events in

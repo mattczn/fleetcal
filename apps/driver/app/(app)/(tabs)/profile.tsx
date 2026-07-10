@@ -902,7 +902,7 @@ function Card({ children }: { children: React.ReactNode }) {
  *  Tappable when onPress is provided; otherwise renders as a plain
  *  View so a score you can't drill into doesn't fake being clickable. */
 function ScoreCard({
-  title, subtitle, score, badge, barPct, detailLine, tipTitle, tipBody, tone,
+  title, subtitle, score, badge, barPct, detailLine, tone,
   infoTitle, infoBody, onPress, C,
 }: {
   title:        string;
@@ -913,8 +913,6 @@ function ScoreCard({
   /** 0–100 fill width for the progress bar. */
   barPct:       number;
   detailLine:   string;
-  tipTitle?:    string;
-  tipBody?:     string;
   tone:         { fg: string; bg: string; bar: string };
   infoTitle:    string;
   infoBody:     string;
@@ -991,20 +989,6 @@ function ScoreCard({
         <View style={{ height: 6, borderRadius: 999, backgroundColor: C.surfaceSunk, marginTop: 12, overflow: "hidden" }}>
           <View style={{ width: `${Math.max(0, Math.min(100, barPct))}%`, height: "100%", borderRadius: 999, backgroundColor: tone.bar }} />
         </View>
-
-        {/* Optional in-card tip (kept for inspection's "how to improve"
-            text). Safety uses the info modal instead so the card stays
-            skimmable. */}
-        {tipTitle && tipBody && (
-          <View style={{ marginTop: 12, padding: 10, borderRadius: 10, backgroundColor: C.surfaceSunk }}>
-            <Text style={[txt(700), { fontSize: 12, color: C.t1, marginBottom: 2 }]}>
-              {tipTitle}
-            </Text>
-            <Text style={[txt(500), { fontSize: 12, color: C.t2, lineHeight: 17 }]}>
-              {tipBody}
-            </Text>
-          </View>
-        )}
       </Container>
 
       {/* Info tooltip — bottom-sheet modal with the score's explanation. */}
@@ -1137,8 +1121,6 @@ function ScorecardCard() {
       barPct={completionPct}
       detailLine={detailLine}
       tone={tone}
-      tipTitle={score >= 85 ? "Keep it up" : "How to improve"}
-      tipBody="Complete a pre-trip or post-trip inspection every day you drive, and report any maintenance issues in the app."
       infoTitle="Inspection score"
       infoBody={
         "Complete a pre-trip and a post-trip inspection every day you drive, and send any damage to maintenance through the app. Keep the cab clean for the next driver."

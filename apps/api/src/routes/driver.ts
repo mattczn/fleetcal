@@ -3657,10 +3657,11 @@ driver.get("/safety-score", async (c) => {
   // Bayesian prior: pretend the driver already has this many miles
   // of clean driving before adding their actual data. Prevents the
   // per-mile rate from swinging wildly on 300 miles + 2 severe
-  // events. See driver-safety-scoring.ts for the full rationale;
-  // must match that route's constant so drivers see the same number
-  // dispatch does.
-  const PRIOR_MILES = 5000;
+  // events. 15,000 mi ≈ a typical active driver's monthly total, so
+  // early-window data doesn't dominate the score. See
+  // driver-safety-scoring.ts for the full rationale; must match that
+  // route's constant so drivers see the same number dispatch does.
+  const PRIOR_MILES = 15000;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   type EventRow = { event_type: string; event_time: string; notified_driver_id: number | null; assigned_driver_id: number | null; raw: any };
