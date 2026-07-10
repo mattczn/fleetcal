@@ -19,7 +19,7 @@ import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
 import {
   LogOut, User, FileText, Trash2, X, Share2, Eye, Plus, Calendar as CalendarIcon, ChevronDown,
-  Pencil, Check,
+  Pencil, Check, Info, ChevronRight,
 } from "lucide-react-native";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
@@ -438,13 +438,15 @@ export default function ProfileScreen() {
             </View>
           ) : (
             <>
-              {/* Safety score — 30d rolling, fleet-median-anchored,
-                  same math dispatch uses. Tap opens the /safety alert
-                  history. Renders nothing when the driver has no ELD
-                  miles this month. */}
+              {/* Your scores — safety + inspection grouped together
+                  under one section header. Both use the same ScoreCard
+                  visual (title + info tap + big number + colored bar
+                  + one-line detail) so they read as a matched pair.
+                  Each renders nothing when its own data isn't
+                  available, so drivers on non-Motive orgs or with no
+                  ELD miles just see whichever score applies. */}
+              <SectionHeader label="Your scores" />
               <SafetyScoreCard C={C} />
-
-              {/* Inspection score — Curzon-only; renders nothing otherwise */}
               <ScorecardCard />
 
               {/* Appearance — in-app light/dark toggle */}
@@ -893,6 +895,151 @@ function Card({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** Shared score card — used by both SafetyScoreCard and ScorecardCard
+ *  so the two scores read as a matched pair on the Profile screen.
+ *  Layout: [title + info tap] [big number in colored band] [colored
+ *  progress bar] [one-line detail] [optional "coach me" tip block].
+ *  Tappable when onPress is provided; otherwise renders as a plain
+ *  View so a score you can't drill into doesn't fake being clickable. */
+function ScoreCard({
+  title, subtitle, score, badge, barPct, detailLine, tipTitle, tipBody, tone,
+  infoTitle, infoBody, onPress, C,
+}: {
+  title:        string;
+  subtitle:     string;
+  score:        number;
+  /** Optional right-side callout ("Flagged", "Bonus"). */
+  badge?:       string | null;
+  /** 0–100 fill width for the progress bar. */
+  barPct:       number;
+  detailLine:   string;
+  tipTitle?:    string;
+  tipBody?:     string;
+  tone:         { fg: string; bg: string; bar: string };
+  infoTitle:    string;
+  infoBody:     string;
+  onPress?:     () => void;
+  C:            ReturnType<typeof useTheme>["C"];
+}) {
+  const [infoOpen, setInfoOpen] = useState(false);
+  const Container = onPress ? TouchableOpacity : View;
+  const containerProps: {
+    onPress?:     () => void;
+    activeOpacity?: number;
+  } = onPress ? { onPress, activeOpacity: 0.85 } : {};
+
+  return (
+    <>
+      <Container
+        {...containerProps}
+        style={{
+          marginBottom: 12,
+          backgroundColor: C.surface,
+          borderRadius: 14,
+          borderWidth: 1,
+          borderColor: C.border,
+          padding: 14,
+        }}
+      >
+        {/* Header row: title + info + optional chevron */}
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 10 }}>
+          <Text style={[txt(700), { fontSize: 13.5, color: C.t1, flex: 1 }]}>
+            {title}
+          </Text>
+          <TouchableOpacity
+            onPress={() => setInfoOpen(true)}
+            hitSlop={10}
+            accessibilityLabel={`What is ${title}?`}
+            style={{ padding: 2 }}
+          >
+            <Info size={15} color={C.t3} />
+          </TouchableOpacity>
+          {onPress && (
+            <ChevronRight size={16} color={C.t3} />
+          )}
+        </View>
+
+        {/* Big number in a colored band + subtitle stack */}
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+          <View
+            style={{
+              width: 56, height: 56, borderRadius: 12,
+              backgroundColor: tone.bg,
+              alignItems: "center", justifyContent: "center",
+            }}
+          >
+            <Text style={[txt(800), { fontSize: 22, color: tone.fg, letterSpacing: -0.5 }]}>
+              {score}
+            </Text>
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[txt(500), { fontSize: 12, color: C.t3 }]}>
+              {subtitle}
+            </Text>
+            <Text style={[txt(600), { fontSize: 13, color: C.t1, marginTop: 3 }]}>
+              {detailLine}
+            </Text>
+            {badge && (
+              <Text style={[txt(700), { fontSize: 11.5, color: C.redInk, marginTop: 3 }]}>
+                {badge}
+              </Text>
+            )}
+          </View>
+        </View>
+
+        {/* Colored progress bar */}
+        <View style={{ height: 6, borderRadius: 999, backgroundColor: C.surfaceSunk, marginTop: 12, overflow: "hidden" }}>
+          <View style={{ width: `${Math.max(0, Math.min(100, barPct))}%`, height: "100%", borderRadius: 999, backgroundColor: tone.bar }} />
+        </View>
+
+        {/* Optional in-card tip (kept for inspection's "how to improve"
+            text). Safety uses the info modal instead so the card stays
+            skimmable. */}
+        {tipTitle && tipBody && (
+          <View style={{ marginTop: 12, padding: 10, borderRadius: 10, backgroundColor: C.surfaceSunk }}>
+            <Text style={[txt(700), { fontSize: 12, color: C.t1, marginBottom: 2 }]}>
+              {tipTitle}
+            </Text>
+            <Text style={[txt(500), { fontSize: 12, color: C.t2, lineHeight: 17 }]}>
+              {tipBody}
+            </Text>
+          </View>
+        )}
+      </Container>
+
+      {/* Info tooltip — bottom-sheet modal with the score's explanation. */}
+      <Modal
+        visible={infoOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setInfoOpen(false)}
+      >
+        <TouchableOpacity
+          activeOpacity={1}
+          onPress={() => setInfoOpen(false)}
+          style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end" }}
+        >
+          <TouchableOpacity
+            activeOpacity={1}
+            onPress={() => {}}
+            style={{ backgroundColor: C.surface, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20 }}
+          >
+            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+              <Text style={[txt(700), { fontSize: 16, color: C.t1 }]}>{infoTitle}</Text>
+              <TouchableOpacity onPress={() => setInfoOpen(false)} hitSlop={10}>
+                <X size={20} color={C.t3} />
+              </TouchableOpacity>
+            </View>
+            <Text style={[txt(500), { fontSize: 14, color: C.t2, lineHeight: 21 }]}>
+              {infoBody}
+            </Text>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+    </>
+  );
+}
+
 /** Safety score card — 30d rolling, fleet-median-anchored, exposes THIS
  *  driver's number only. Same math dispatch sees on the drivers page.
  *  Tap opens the /safety alert history so drivers can review the events
@@ -912,79 +1059,49 @@ function SafetyScoreCard({ C }: { C: ReturnType<typeof useTheme>["C"] }) {
 
   if (!data || data.milesDriven <= 0 || data.safetyScore == null) return null;
 
-  const score        = data.safetyScore;
+  const score = data.safetyScore;
   const countedEvents = data.moderateEvents + data.severeEvents;
-  const bandColor =
-    data.flagged  ? C.redInk :
-    score >= 85   ? C.greenInk :
-    score >= 70   ? C.amberInk :
-                    C.redInk;
-  const bandBg =
-    data.flagged  ? C.redBg :
-    score >= 85   ? C.greenBg :
-    score >= 70   ? C.amberBg :
-                    C.redBg;
+  const tone =
+    data.flagged    ? { fg: C.redInk,   bg: C.redBg,   bar: C.red } :
+    score >= 85     ? { fg: C.greenInk, bg: C.greenBg, bar: C.green } :
+    score >= 70     ? { fg: C.amberInk, bg: C.amberBg, bar: C.amber } :
+                      { fg: C.redInk,   bg: C.redBg,   bar: C.red };
+
+  const detailLine = countedEvents === 0
+    ? "No safety events. Keep it up."
+    : `${countedEvents} event${countedEvents === 1 ? "" : "s"}${data.severeEvents > 0 ? ` · ${data.severeEvents} severe` : ""}`;
 
   return (
-    <TouchableOpacity
+    <ScoreCard
+      title="Safety score"
+      subtitle="Last 30 days"
+      score={score}
+      barPct={score}
+      detailLine={detailLine}
+      badge={data.flagged ? "Flagged — dispatch may reach out." : null}
+      tone={tone}
+      infoTitle="How your safety score works"
+      infoBody={
+        "Motive records safety events on your truck — hard brakes, tailgating, phone use, and similar. Over the last 30 days these are weighted by severity: severe events count heavily, moderate events count a little, and low-severity events don't count at all.\n\n" +
+        "The score is calibrated against the whole fleet: an average driver lands around 80. Above 85 is green, 70–84 is amber, below 70 is red.\n\n" +
+        "Tap the card to review your events. If something looks wrong — a passenger touched the phone, the alert wasn't yours — tap the alert and file a dispute. If dispatch agrees, it drops from your score."
+      }
       onPress={() => router.push("/safety" as never)}
-      activeOpacity={0.85}
-      style={{
-        marginBottom: 16,
-        backgroundColor: C.surface,
-        borderRadius: 14,
-        borderWidth: 1,
-        borderColor: C.border,
-        padding: 14,
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 12,
-      }}
-    >
-      <View style={{
-        width: 56, height: 56, borderRadius: 12,
-        backgroundColor: bandBg,
-        alignItems: "center", justifyContent: "center",
-      }}>
-        <Text style={[txt(800), { fontSize: 22, color: bandColor, letterSpacing: -0.5 }]}>
-          {score}
-        </Text>
-      </View>
-      <View style={{ flex: 1 }}>
-        <Text style={[txt(700), { fontSize: 14, color: C.t1 }]}>
-          Safety score · 30 days
-        </Text>
-        <Text style={[txt(500), { fontSize: 12.5, color: C.t3, marginTop: 2 }]}>
-          {countedEvents === 0
-            ? "No safety events. Keep it up."
-            : `${countedEvents} event${countedEvents === 1 ? "" : "s"}${data.severeEvents > 0 ? ` · ${data.severeEvents} severe` : ""}`}
-        </Text>
-        {data.flagged && (
-          <Text style={[txt(700), { fontSize: 11.5, color: C.redInk, marginTop: 3 }]}>
-            Flagged — dispatch may reach out.
-          </Text>
-        )}
-      </View>
-      <View style={{
-        width: 26, height: 26, borderRadius: 13,
-        backgroundColor: C.surfaceSunk,
-        alignItems: "center", justifyContent: "center",
-      }}>
-        <Text style={[txt(600), { fontSize: 14, color: C.t3 }]}>›</Text>
-      </View>
-    </TouchableOpacity>
+      C={C}
+    />
   );
 }
 
-/** Inspection score — the driver's own read-only scorecard, so they can
- *  monitor it and see how to improve. Curzon-only: gated on the Truck
- *  History module and the endpoint's `enabled` flag, so it renders nothing
- *  for orgs without it. Score = share of driving days with ≥1 inspection;
- *  cleanliness is intentionally not part of it. */
+/** Inspection score — the driver's own read-only scorecard. Curzon-only:
+ *  gated on the Truck History module and the endpoint's `enabled` flag,
+ *  so it renders nothing for orgs without it. Score = share of driving
+ *  days with ≥ 1 inspection; cleanliness is intentionally not part of it.
+ *  Uses the same ScoreCard visual as SafetyScoreCard so both scores read
+ *  as a matched pair on the Profile screen. */
 function ScorecardCard() {
   const { C } = useTheme();
   const { truckHistory } = useModules();
-  const { data, isLoading } = useQuery({
+  const { data } = useQuery({
     queryKey: ["driver-scorecard"],
     queryFn:  () => railway.getScorecard(),
     enabled:  truckHistory,
@@ -993,68 +1110,45 @@ function ScorecardCard() {
 
   if (!truckHistory) return null;
   if (data && !data.enabled) return null;
+  if (!data) return null;
 
-  const score     = data?.score ?? 0;
-  const activeDays     = data?.activeDays ?? 0;
-  const inspectionDays = data?.inspectionDays ?? 0;
-  const completionPct  = data?.completionPct ?? 0;
+  const score     = data.score ?? 0;
+  const activeDays     = data.activeDays ?? 0;
+  const inspectionDays = data.inspectionDays ?? 0;
+  const completionPct  = data.completionPct ?? 0;
   const noData = activeDays === 0 && inspectionDays === 0;
 
-  const monthLabel = new Date(`${data?.to ?? new Date().toISOString().slice(0, 10)}T00:00:00`)
+  const monthLabel = new Date(`${data.to ?? new Date().toISOString().slice(0, 10)}T00:00:00`)
     .toLocaleDateString(undefined, { month: "long", year: "numeric" });
 
   const tone = score >= 85
-    ? { fg: C.greenInk, bar: C.green }
+    ? { fg: C.greenInk, bg: C.greenBg, bar: C.green }
     : score >= 60
-      ? { fg: C.amberInk, bar: C.amber }
-      : { fg: C.redInk, bar: C.red };
+      ? { fg: C.amberInk, bg: C.amberBg, bar: C.amber }
+      : { fg: C.redInk,   bg: C.redBg,   bar: C.red };
+
+  const detailLine = noData
+    ? "No driving days yet this month"
+    : `Inspections on ${inspectionDays} of ${activeDays} driving days (${completionPct}%)`;
 
   return (
-    <>
-      <SectionHeader label="Inspection score" />
-      <Card>
-        {isLoading && !data ? (
-          <View style={{ paddingVertical: 20, alignItems: "center" }}>
-            <ActivityIndicator />
-          </View>
-        ) : noData ? (
-          <View style={{ paddingVertical: 12 }}>
-            <Text style={[txt(500), { fontSize: 12, color: C.t3 }]}>{monthLabel}</Text>
-            <Text style={[txt(600), { fontSize: 13.5, color: C.t2, marginTop: 6, lineHeight: 19 }]}>
-              No driving days recorded yet this month. Your inspection score appears here once
-              you&rsquo;re back on the road.
-            </Text>
-          </View>
-        ) : (
-          <View style={{ paddingVertical: 6 }}>
-            {/* Score */}
-            <Text style={[txt(500), { fontSize: 12, color: C.t3 }]}>{monthLabel}</Text>
-            <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 4, marginTop: 2 }}>
-              <Text style={[txt(800), { fontSize: 40, color: tone.fg, letterSpacing: -1 }]}>{score}</Text>
-              <Text style={[txt(700), { fontSize: 16, color: C.t3, marginBottom: 7 }]}>/100</Text>
-            </View>
-
-            {/* Completion bar */}
-            <View style={{ height: 8, borderRadius: 999, backgroundColor: C.surfaceSunk, marginTop: 14, overflow: "hidden" }}>
-              <View style={{ width: `${completionPct}%`, height: "100%", borderRadius: 999, backgroundColor: tone.bar }} />
-            </View>
-            <Text style={[txt(500), { fontSize: 12.5, color: C.t2, marginTop: 8 }]}>
-              Inspections on {inspectionDays} of {activeDays} driving days ({completionPct}%)
-            </Text>
-
-            {/* How to improve */}
-            <View style={{ marginTop: 12, padding: 12, borderRadius: 10, backgroundColor: C.surfaceSunk }}>
-              <Text style={[txt(700), { fontSize: 12.5, color: C.t1, marginBottom: 3 }]}>
-                {score >= 85 ? "Keep it up" : "How to improve"}
-              </Text>
-              <Text style={[txt(500), { fontSize: 12.5, color: C.t2, lineHeight: 18 }]}>
-                Complete both your pre-trip and post-trip inspections every day you drive, and report any maintenance issues in the app.
-              </Text>
-            </View>
-          </View>
-        )}
-      </Card>
-    </>
+    <ScoreCard
+      title="Inspection score"
+      subtitle={monthLabel}
+      score={score}
+      barPct={completionPct}
+      detailLine={detailLine}
+      tone={tone}
+      tipTitle={score >= 85 ? "Keep it up" : "How to improve"}
+      tipBody="Complete a pre-trip or post-trip inspection every day you drive, and report any maintenance issues in the app."
+      infoTitle="How your inspection score works"
+      infoBody={
+        "Your score is the share of days you were on the road that you also submitted at least one inspection. Doing either a pre-trip or a post-trip covers the day.\n\n" +
+        "Above 85 is green, 60–84 is amber, below 60 is red. Bonus eligibility kicks in at 85+.\n\n" +
+        "Cab cleanliness is handled separately and does not affect this score."
+      }
+      C={C}
+    />
   );
 }
 
