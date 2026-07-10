@@ -2081,6 +2081,10 @@ export interface PerformanceEventRow {
   resolved_driver_id:   number | null;
   resolved_driver_name: string | null;
   resolved_load_num:    string | null;
+  /** Load event title from the covering calendar row — e.g.
+   *  "SLC → Portland" or a broker/customer label if that's how the
+   *  dispatcher named it. Panel/drawer show this alongside load_num. */
+  resolved_load_title:  string | null;
   lat:                number | null;
   lon:                number | null;
   location_label:     string | null;

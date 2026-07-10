@@ -64,6 +64,7 @@ interface PerfEventRow {
   resolved_driver_id:   number | null;
   resolved_driver_name: string | null;
   resolved_load_num:    string | null;
+  resolved_load_title:  string | null;
   lat:                number | null;
   lon:                number | null;
   location_label:     string | null;
@@ -538,13 +539,14 @@ async function enrichEventsBatch(orgId: string, rows: PerfEventRow[]): Promise<v
   interface CalEventRow {
     id: string; asset_id: number;
     driver_id: number | null; driver_name: string | null;
-    load_num: string | null; start: string; end: string;
+    load_num: string | null; title: string | null;
+    start: string; end: string;
   }
   let calRows: CalEventRow[] = [];
   if (assetIds.length > 0 && rangeStart && rangeEnd) {
     const { data } = await supabase
       .from("events")
-      .select("id, asset_id, driver_id, driver_name, load_num, start, end")
+      .select("id, asset_id, driver_id, driver_name, load_num, title, start, end")
       .eq("org_id", orgId)
       .in("asset_id", assetIds)
       .not("driver_id", "is", null)
@@ -575,6 +577,7 @@ async function enrichEventsBatch(orgId: string, rows: PerfEventRow[]): Promise<v
     row.resolved_driver_id   = null;
     row.resolved_driver_name = null;
     row.resolved_load_num    = null;
+    row.resolved_load_title  = null;
     if (row.asset_id == null) continue;
 
     const naiveMt = utcIsoToNaiveMt(row.event_time);
@@ -602,6 +605,7 @@ async function enrichEventsBatch(orgId: string, rows: PerfEventRow[]): Promise<v
       row.resolved_driver_id   = best.driver_id;
       row.resolved_driver_name = best.driver_name;
       row.resolved_load_num    = best.load_num;
+      row.resolved_load_title  = best.title;
     } else {
       needPref.add(row.asset_id);
     }

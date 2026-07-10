@@ -31,6 +31,14 @@ type PanelEvent = PerformanceEventRow & { raw?: MotivePerfRaw; vehicle_id?: numb
 
 interface Driver { id: number; name: string }
 
+const WINDOW_OPTIONS: Array<{ key: '1h' | '6h' | '24h' | '72h' | '168h'; hours: number; label: string }> = [
+  { key: '1h',   hours: 1,   label: 'Last 1 hour'  },
+  { key: '6h',   hours: 6,   label: 'Last 6 hours' },
+  { key: '24h',  hours: 24,  label: 'Last 24 hours' },
+  { key: '72h',  hours: 72,  label: 'Last 3 days'  },
+  { key: '168h', hours: 168, label: 'Last 7 days'  },
+];
+
 export default function SafetyPanel({ onClose }: { onClose: () => void }) {
   const [events,    setEvents]    = useState<PanelEvent[]>([]);
   const [movements, setMovements] = useState<PerformanceEventMovement[]>([]);
@@ -38,28 +46,36 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
   const [loading,   setLoading]   = useState(true);
   const [error,     setError]     = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [typeFilter, setTypeFilter] = useState<string>('all');
+  const [typeFilter,   setTypeFilter]   = useState<string>('all');
+  const [truckFilter,  setTruckFilter]  = useState<string>('all');
+  const [driverFilter, setDriverFilter] = useState<string>('all');
+  const [windowHours,  setWindowHours]  = useState<number>(24);
 
   const load = useMemo(() => async () => {
     setLoading(true); setError(null);
     try {
       const [panel, driverList] = await Promise.all([
-        railway.listPerformanceEventsForPanel(24),
+        railway.listPerformanceEventsForPanel(windowHours),
         railway.listDrivers(),
       ]);
       setEvents(panel.events);
       setMovements(panel.movements);
       setDrivers(driverList.drivers.map(d => ({ id: d.id, name: d.name })));
-      if (panel.events.length > 0 && selectedId == null) setSelectedId(panel.events[0].id);
+      // Keep the selection if it's still in the new window; otherwise
+      // jump to the newest event so the map isn't blank.
+      if (panel.events.length > 0) {
+        setSelectedId(prev => (prev != null && panel.events.some(e => e.id === prev)) ? prev : panel.events[0].id);
+      } else {
+        setSelectedId(null);
+      }
     } catch (err) {
       setError((err as Error).message ?? 'Failed to load safety events');
     }
     setLoading(false);
-  // Load only on open — subsequent refreshes are dispatcher-initiated
-  // via the header button.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [windowHours]);
 
+  // Reload whenever the time window changes; truck + driver + type
+  // filters are client-side over the already-loaded set.
   useEffect(() => { void load(); }, [load]);
 
   // Escape closes the panel — matches the drawer/EventModal convention.
@@ -69,13 +85,37 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const selected = events.find(e => e.id === selectedId) ?? null;
-
+  // Distinct filter options — derived off the CURRENT window's events so
+  // a filter never shows a truck/driver that has nothing in scope.
   const eventTypes = useMemo(
     () => Array.from(new Set(events.map(e => e.event_type))).sort(),
     [events],
   );
-  const visible = typeFilter === 'all' ? events : events.filter(e => e.event_type === typeFilter);
+  const truckOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const e of events) {
+      const label = e.asset_name ?? e.vehicle_number ?? `Vehicle ${e.vehicle_id}`;
+      map.set(label, label);
+    }
+    return Array.from(map.keys()).sort();
+  }, [events]);
+  const driverOptions = useMemo(() => {
+    const s = new Set<string>();
+    for (const e of events) if (e.resolved_driver_name) s.add(e.resolved_driver_name);
+    return Array.from(s).sort();
+  }, [events]);
+
+  const visible = useMemo(() => events.filter(e => {
+    if (typeFilter   !== 'all' && e.event_type !== typeFilter)   return false;
+    if (driverFilter !== 'all' && e.resolved_driver_name !== driverFilter) return false;
+    if (truckFilter  !== 'all') {
+      const label = e.asset_name ?? e.vehicle_number ?? `Vehicle ${e.vehicle_id}`;
+      if (label !== truckFilter) return false;
+    }
+    return true;
+  }), [events, typeFilter, driverFilter, truckFilter]);
+
+  const selected = visible.find(e => e.id === selectedId) ?? events.find(e => e.id === selectedId) ?? null;
 
   // Group by asset for the left rail. Preserves recency ordering within
   // each truck bucket.
@@ -117,7 +157,12 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
             display: 'flex', flexDirection: 'column', gap: 8,
           }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--gc-text-1)' }}>Safety alerts · 24h</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--gc-text-1)' }}>
+                Safety alerts
+                <span style={{ fontSize: 11, fontWeight: 500, color: 'var(--gc-text-3)', marginLeft: 6 }}>
+                  {visible.length}{visible.length !== events.length ? ` of ${events.length}` : ''}
+                </span>
+              </div>
               <button
                 type="button"
                 onClick={() => void load()}
@@ -126,22 +171,42 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
                 Refresh
               </button>
             </div>
-            <select
+            {/* Time window — server-side re-fetches when changed. */}
+            <FilterSelect
+              value={String(windowHours)}
+              onChange={v => setWindowHours(Number(v))}
+              options={WINDOW_OPTIONS.map(w => ({ value: String(w.hours), label: w.label }))}
+            />
+            {/* Type / Truck / Driver — client-side filter over the
+                already-loaded window. Options auto-derive so an empty
+                dropdown never appears. */}
+            <FilterSelect
               value={typeFilter}
-              onChange={e => setTypeFilter(e.target.value)}
-              style={{
-                padding: '5px 8px', fontSize: 11.5, borderRadius: 5,
-                border: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)',
-                color: 'var(--gc-text-1)',
-              }}
-            >
-              <option value="all">All types ({events.length})</option>
-              {eventTypes.map(t => (
-                <option key={t} value={t}>
-                  {eventTypeLabel(t)} ({events.filter(e => e.event_type === t).length})
-                </option>
-              ))}
-            </select>
+              onChange={setTypeFilter}
+              options={[
+                { value: 'all', label: `All types (${events.length})` },
+                ...eventTypes.map(t => ({
+                  value: t,
+                  label: `${eventTypeLabel(t)} (${events.filter(e => e.event_type === t).length})`,
+                })),
+              ]}
+            />
+            <FilterSelect
+              value={truckFilter}
+              onChange={setTruckFilter}
+              options={[
+                { value: 'all', label: `All trucks (${truckOptions.length})` },
+                ...truckOptions.map(t => ({ value: t, label: t })),
+              ]}
+            />
+            <FilterSelect
+              value={driverFilter}
+              onChange={setDriverFilter}
+              options={[
+                { value: 'all', label: `All drivers (${driverOptions.length})` },
+                ...driverOptions.map(d => ({ value: d, label: d })),
+              ]}
+            />
           </div>
 
           {/* Grouped list */}
@@ -198,6 +263,11 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
                         {e.resolved_driver_name ?? 'Unassigned'}
                         {e.resolved_load_num ? ` · Load ${e.resolved_load_num}` : ''}
                       </div>
+                      {e.resolved_load_title && (
+                        <div style={{ fontSize: 11, color: 'var(--gc-text-3)', marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {e.resolved_load_title}
+                        </div>
+                      )}
                       <div style={{ fontSize: 11, color: 'var(--gc-text-3)', marginTop: 2 }}>{relTime(e.event_time)}</div>
                     </div>
                   </button>
@@ -223,6 +293,7 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
                 <div style={{ fontSize: 12, color: 'var(--gc-text-2)' }}>
                   {selected.asset_name ?? selected.vehicle_number} · {selected.resolved_driver_name ?? 'unassigned'}
                   {selected.resolved_load_num ? ` · Load ${selected.resolved_load_num}` : ''}
+                  {selected.resolved_load_title ? ` · ${selected.resolved_load_title}` : ''}
                 </div>
                 <div style={{ fontSize: 11, color: 'var(--gc-text-3)', marginLeft: 'auto' }}>
                   {new Date(selected.event_time).toLocaleString()}
@@ -344,10 +415,11 @@ function SafetyDetail({
         bounds.extend({ lat: event.lat, lng: event.lon });
       }
 
-      // (3) Covering motive_driving_period — straight-line OD overlay so
-      //     the dispatcher sees where the truck was heading. Motive
-      //     doesn't expose the full path between origin/destination so
-      //     this is an OD line, not the real polyline.
+      // (3) Covering motive_driving_period — draw the ACTUAL driving
+      //     route (Mapbox Directions) between origin → event pin →
+      //     destination so the map shows real roads, not straight
+      //     hypotenuse lines. Falls back to a straight polyline if the
+      //     Mapbox token is missing or the routing call fails.
       const eventMs = Date.parse(event.event_time);
       const period = movements
         .filter(m => m.vehicle_id === event.vehicle_id)
@@ -360,18 +432,48 @@ function SafetyDetail({
         period?.origin_lat != null && period.origin_lon != null &&
         period?.destination_lat != null && period.destination_lon != null
       ) {
-        const line = new google.maps.Polyline({
-          path: [
-            { lat: period.origin_lat,      lng: period.origin_lon },
-            { lat: period.destination_lat, lng: period.destination_lon },
-          ],
+        const waypoints: Array<{ lat: number; lng: number }> = [
+          { lat: period.origin_lat, lng: period.origin_lon },
+        ];
+        // Route THROUGH the event pin when we have one — that way the
+        // rendered path visibly threads the incident location and the
+        // dispatcher can tell "yes, the safety event happened along the
+        // truck's actual road path".
+        if (event.lat != null && event.lon != null) {
+          waypoints.push({ lat: event.lat, lng: event.lon });
+        }
+        waypoints.push({ lat: period.destination_lat, lng: period.destination_lon });
+
+        // Kick off the Mapbox fetch — the straight line is drawn first
+        // so the map has SOMETHING while the async call is in-flight,
+        // then swapped for the road-following polyline when it resolves.
+        const straight = new google.maps.Polyline({
+          path: waypoints,
           strokeColor: '#64748b',
-          strokeOpacity: 0.55,
+          strokeOpacity: 0.35,
           strokeWeight: 2,
           icons: [{ icon: { path: 'M 0,-1 0,1', strokeOpacity: 1, scale: 2 }, offset: '0', repeat: '10px' }],
           map,
         });
-        disposables.push(line);
+        disposables.push(straight);
+
+        void fetchRouteGeometry(waypoints).then(path => {
+          if (!path || cancelled || mapRef.current !== map) return;
+          straight.setMap(null);
+          const route = new google.maps.Polyline({
+            path,
+            strokeColor: '#475569',
+            strokeOpacity: 0.85,
+            strokeWeight: 3,
+            map,
+          });
+          disposables.push(route);
+          for (const p of path) bounds.extend(p);
+          // Refit so the road path is fully visible — the straight
+          // line's bounds were a subset so we don't lose the event pin.
+          map.fitBounds(bounds, 80);
+        });
+
         bounds.extend({ lat: period.origin_lat,      lng: period.origin_lon });
         bounds.extend({ lat: period.destination_lat, lng: period.destination_lon });
       }
@@ -562,6 +664,28 @@ function SafetyDetail({
 
 // ── Presentation helpers ───────────────────────────────────────────────
 
+function FilterSelect({
+  value, onChange, options,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: Array<{ value: string; label: string }>;
+}) {
+  return (
+    <select
+      value={value}
+      onChange={e => onChange(e.target.value)}
+      style={{
+        padding: '5px 8px', fontSize: 11.5, borderRadius: 5,
+        border: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)',
+        color: 'var(--gc-text-1)',
+      }}
+    >
+      {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+    </select>
+  );
+}
+
 function DetailBlock({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
@@ -628,6 +752,30 @@ function errorMessage(err: unknown): string {
     return String((err as { message: unknown }).message);
   }
   return 'Something went wrong.';
+}
+
+/** Mapbox Directions → path coordinates. Same call the MapDrawer makes
+ *  for its truck-to-stop route line: `overview=full&geometries=geojson`
+ *  returns the encoded road polyline for the driving profile. Returns
+ *  null when the token is missing or the API errors — caller keeps the
+ *  straight-line fallback in that case. */
+const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? '';
+async function fetchRouteGeometry(
+  waypoints: Array<{ lat: number; lng: number }>,
+): Promise<Array<{ lat: number; lng: number }> | null> {
+  if (!MAPBOX_TOKEN || waypoints.length < 2) return null;
+  try {
+    const coords = waypoints.slice(0, 25).map(p => `${p.lng},${p.lat}`).join(';');
+    const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${coords}?access_token=${MAPBOX_TOKEN}&geometries=geojson&overview=full`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) return null;
+    const json = await res.json() as { routes?: { geometry: { coordinates: [number, number][] } }[] };
+    const coordinates = json.routes?.[0]?.geometry.coordinates;
+    if (!coordinates) return null;
+    return coordinates.map(([lng, lat]) => ({ lat, lng }));
+  } catch {
+    return null;
+  }
 }
 
 /** google.maps.marker.AdvancedMarkerElement doesn't expose setMap

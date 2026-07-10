@@ -266,6 +266,11 @@ function BellPopover({
                   {e.resolved_load_num ? `Load ${e.resolved_load_num} · ` : ''}
                   {relTime(e.event_time)}
                 </div>
+                {e.resolved_load_title && (
+                  <div style={{ fontSize: 11, color: 'var(--gc-text-3)', marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {e.resolved_load_title}
+                  </div>
+                )}
               </div>
             </button>
           ))
@@ -466,6 +471,9 @@ function EventDetailDrawer({ eventId, onClose }: { eventId: number; onClose: () 
                 )}
                 {event.resolved_load_num && (
                   <span style={{ fontSize: 12, color: 'var(--gc-text-2)' }}>· Load {event.resolved_load_num}</span>
+                )}
+                {event.resolved_load_title && (
+                  <span style={{ fontSize: 12, color: 'var(--gc-text-3)' }}>· {event.resolved_load_title}</span>
                 )}
               </div>
               {event.location_label && (
