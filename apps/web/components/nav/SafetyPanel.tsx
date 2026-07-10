@@ -410,18 +410,25 @@ function SafetyDetail({
 
       const bounds = new google.maps.LatLngBounds();
 
+      // All route lines get colored by the ASSET (truck), not by
+      // severity — that way the map's line color matches the popover's
+      // left accent bar for the same truck. Severity still comes through
+      // via the event pin's fill color below.
+      const routeColor = event.asset_color ?? '#475569';
+
       // (1) GPS trace of the incident — Motive stores ~1Hz samples in
       //     m_gps_lat/m_gps_lon during the event window. Renders as a
-      //     colored polyline so dispatchers see the truck's path AT
-      //     the moment the alert fired (e.g. tailgating closing speed).
+      //     truck-colored polyline so dispatchers see the truck's path
+      //     AT the moment the alert fired (e.g. tailgating closing
+      //     speed).
       const raw = event.raw ?? {};
       const trace = zip(raw.m_gps_lat ?? [], raw.m_gps_lon ?? []);
       if (trace.length >= 2) {
         const line = new google.maps.Polyline({
           path: trace.map(([lat, lng]) => ({ lat, lng })),
-          strokeColor: severityColor(event.intensity),
-          strokeOpacity: 0.9,
-          strokeWeight: 4,
+          strokeColor: routeColor,
+          strokeOpacity: 0.95,
+          strokeWeight: 5,
           map,
         });
         disposables.push(line);
@@ -471,9 +478,11 @@ function SafetyDetail({
         // Kick off the Mapbox fetch — the straight line is drawn first
         // so the map has SOMETHING while the async call is in-flight,
         // then swapped for the road-following polyline when it resolves.
+        // Both variants use the truck color so a dispatcher can tell at
+        // a glance which alerts on the panel belong to the same truck.
         const straight = new google.maps.Polyline({
           path: waypoints,
-          strokeColor: '#64748b',
+          strokeColor: routeColor,
           strokeOpacity: 0.35,
           strokeWeight: 2,
           icons: [{ icon: { path: 'M 0,-1 0,1', strokeOpacity: 1, scale: 2 }, offset: '0', repeat: '10px' }],
@@ -486,9 +495,9 @@ function SafetyDetail({
           straight.setMap(null);
           const route = new google.maps.Polyline({
             path,
-            strokeColor: '#475569',
+            strokeColor: routeColor,
             strokeOpacity: 0.85,
-            strokeWeight: 3,
+            strokeWeight: 4,
             map,
           });
           disposables.push(route);
