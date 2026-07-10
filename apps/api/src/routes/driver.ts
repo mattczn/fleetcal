@@ -3420,4 +3420,278 @@ driver.get("/safety-alerts", async (c) => {
   return c.json({ alerts });
 });
 
+// ─────────────────────────────────────────────────────────────────────────
+// Safety score — 30-day rolling, calendar-attributed, scoped to the
+// authed driver only.
+//
+// Same formula as the dispatch-side /v1/driver-safety-scoring endpoint
+// (severe=25, moderate=1, low=0; recency-weighted; median-anchored) but
+// only exposes THIS driver's numbers so we don't leak fleet peers'
+// scores to a driver. Fleet-median penalty is used as the anchor so the
+// score the driver sees matches what dispatch sees on /drivers.
+//
+// If the score can't be computed (no miles this window) we return
+// safetyScore: null — the app renders a "no ELD miles this month" tile.
+// ─────────────────────────────────────────────────────────────────────────
+
+driver.get("/safety-score", async (c) => {
+  const driverId = c.get("driverId");
+  const orgId    = c.get("orgId");
+
+  const now      = new Date();
+  const days     = 30;
+  const fromIso  = new Date(now.getTime() - days * 24 * 60 * 60 * 1000).toISOString();
+  const toIso    = now.toISOString();
+  const prevFromIso = new Date(now.getTime() - 2 * days * 24 * 60 * 60 * 1000).toISOString();
+  const prevToIso   = fromIso;
+
+  // Load THIS driver's events (both windows) + org-wide events for
+  // fleet median penalty. Attribution: notified > assigned, matching
+  // the dispatch endpoint.
+  const [{ data: myEventsCurr }, { data: myEventsPrev }, { data: allEventsCurr }] = await Promise.all([
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (supabase as any)
+      .from("motive_performance_events")
+      .select("id, event_type, event_time, notified_driver_id, assigned_driver_id, raw")
+      .eq("org_id", orgId)
+      .or(`notified_driver_id.eq.${driverId},assigned_driver_id.eq.${driverId}`)
+      .gte("event_time", fromIso)
+      .lte("event_time", toIso)
+      .limit(2000),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (supabase as any)
+      .from("motive_performance_events")
+      .select("id, event_type, event_time, notified_driver_id, assigned_driver_id, raw")
+      .eq("org_id", orgId)
+      .or(`notified_driver_id.eq.${driverId},assigned_driver_id.eq.${driverId}`)
+      .gte("event_time", prevFromIso)
+      .lte("event_time", prevToIso)
+      .limit(2000),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (supabase as any)
+      .from("motive_performance_events")
+      .select("id, event_type, event_time, notified_driver_id, assigned_driver_id, raw")
+      .eq("org_id", orgId)
+      .gte("event_time", fromIso)
+      .lte("event_time", toIso)
+      .limit(5000),
+  ]);
+
+  // Miles for THIS driver — calendar-attributed, same waterfall as the
+  // dispatch endpoint. We need periods + assets + calendar events.
+  const [{ data: periods }, { data: assetRows }] = await Promise.all([
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (supabase as any)
+      .from("motive_driving_periods")
+      .select("vehicle_id, miles, start_time")
+      .eq("org_id", orgId)
+      .eq("display_eligible", true)
+      .gte("start_time", fromIso)
+      .lte("start_time", toIso)
+      .limit(20_000),
+    supabase
+      .from("assets")
+      .select("id, motive_vehicle_id")
+      .eq("org_id", orgId)
+      .not("motive_vehicle_id", "is", null),
+  ]);
+  const vehicleIdToAssetId = new Map<string, number>();
+  for (const r of (assetRows ?? []) as Array<{ id: number; motive_vehicle_id: number | string | null }>) {
+    if (r.motive_vehicle_id != null) vehicleIdToAssetId.set(String(r.motive_vehicle_id), r.id);
+  }
+  const assetIdsInScope = Array.from(new Set(
+    ((periods ?? []) as Array<{ vehicle_id: number }>)
+      .map(p => vehicleIdToAssetId.get(String(p.vehicle_id)))
+      .filter((x): x is number => x != null),
+  ));
+  interface CalRow { asset_id: number; driver_id: number | null; start: string; end: string }
+  let calRows: CalRow[] = [];
+  if (assetIdsInScope.length > 0) {
+    const rangeStart = utcMsToNaiveDenver(new Date(fromIso).getTime() - 3 * 24 * 60 * 60 * 1000);
+    const rangeEnd   = utcMsToNaiveDenver(new Date(toIso).getTime()   + 3 * 24 * 60 * 60 * 1000);
+    if (rangeStart && rangeEnd) {
+      const { data } = await supabase
+        .from("events")
+        .select("asset_id, driver_id, start, end")
+        .eq("org_id", orgId)
+        .in("asset_id", assetIdsInScope)
+        .not("driver_id", "is", null)
+        .gte("end",   rangeStart)
+        .lte("start", rangeEnd);
+      calRows = (data ?? []) as CalRow[];
+    }
+  }
+  const calByAsset = new Map<number, CalRow[]>();
+  for (const e of calRows) {
+    const arr = calByAsset.get(e.asset_id) ?? [];
+    arr.push(e);
+    calByAsset.set(e.asset_id, arr);
+  }
+  const { data: prefs } = assetIdsInScope.length > 0
+    ? await supabase
+        .from("driver_asset_prefs")
+        .select("asset_id, driver_id")
+        .eq("org_id", orgId)
+        .in("asset_id", assetIdsInScope)
+    : { data: [] };
+  const prefByAsset = new Map<number, number>();
+  for (const p of (prefs ?? []) as Array<{ asset_id: number; driver_id: number }>) {
+    prefByAsset.set(p.asset_id, p.driver_id);
+  }
+
+  // Attribute miles per driver — same logic as the dispatch endpoint.
+  const milesByDriver = new Map<number, number>();
+  for (const p of (periods ?? []) as Array<{ vehicle_id: number; miles: number | null; start_time: string }>) {
+    if (p.miles == null || p.miles <= 0) continue;
+    const assetId = vehicleIdToAssetId.get(String(p.vehicle_id));
+    if (assetId == null) continue;
+    const naive = utcMsToNaiveDenver(Date.parse(p.start_time));
+    if (!naive) continue;
+    const candidates = calByAsset.get(assetId) ?? [];
+    let attribDriverId: number | null = null;
+    let bestActive: CalRow | null = null;
+    for (const e of candidates) {
+      if (e.start <= naive && e.end >= naive) {
+        if (!bestActive || e.end < bestActive.end) bestActive = e;
+      }
+    }
+    if (bestActive) {
+      attribDriverId = bestActive.driver_id;
+    } else {
+      let bestPrior: CalRow | null = null;
+      for (const e of candidates) {
+        if (e.end <= naive) {
+          if (!bestPrior || e.end > bestPrior.end) bestPrior = e;
+        }
+      }
+      if (bestPrior) attribDriverId = bestPrior.driver_id;
+    }
+    if (attribDriverId == null) attribDriverId = prefByAsset.get(assetId) ?? null;
+    if (attribDriverId != null) {
+      milesByDriver.set(attribDriverId, (milesByDriver.get(attribDriverId) ?? 0) + p.miles);
+    }
+  }
+
+  // Score constants — MUST match driver-safety-scoring.ts. If those
+  // constants change, update these too or extract into a shared module.
+  const SEV_WEIGHT: Record<string, number> = { low: 0, moderate: 1, severe: 25 };
+  const TYPE_WEIGHT: Record<string, number> = {
+    tailgating: 1.5, distraction: 1.5, cell_phone: 1.5, drowsiness: 1.5,
+  };
+  const MEDIAN_ANCHOR = 80;
+  const MIN_MILES_FOR_MEDIAN = 500;
+  const FALLBACK_MEDIAN = 6;
+  const MIN_MEDIAN_ELIGIBLE = 3;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  type EventRow = { event_type: string; event_time: string; notified_driver_id: number | null; assigned_driver_id: number | null; raw: any };
+
+  function penaltyFor(events: EventRow[], relTo: number): { total: number; moderate: number; severe: number; totalCount: number } {
+    let total = 0, moderate = 0, severe = 0, totalCount = 0;
+    for (const e of events) {
+      const sev = deriveSeverity(e.raw, e.event_type);
+      const lw = SEV_WEIGHT[sev.level] ?? 0;
+      const tw = TYPE_WEIGHT[e.event_type] ?? 1;
+      const ageDays = Math.max(0, relTo - Date.parse(e.event_time)) / (24 * 60 * 60 * 1000);
+      const rw = Math.max(0.5, Math.min(1, 1 - (ageDays / days) * 0.5));
+      total += lw * (sev.score / 100) * tw * rw;
+      totalCount++;
+      if (sev.level === "moderate") moderate++;
+      if (sev.level === "severe")   severe++;
+    }
+    return { total, moderate, severe, totalCount };
+  }
+
+  const myMiles = milesByDriver.get(driverId) ?? 0;
+  const myCurr = penaltyFor((myEventsCurr ?? []) as EventRow[], now.getTime());
+  const myPrev = penaltyFor((myEventsPrev ?? []) as EventRow[], new Date(fromIso).getTime());
+
+  // Fleet-median penalty from ALL drivers with enough miles this window.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const orgByDriver = new Map<number, { total: number }>();
+  for (const e of ((allEventsCurr ?? []) as EventRow[])) {
+    const dId = e.notified_driver_id ?? e.assigned_driver_id;
+    if (dId == null) continue;
+    const sev = deriveSeverity(e.raw, e.event_type);
+    const lw = SEV_WEIGHT[sev.level] ?? 0;
+    const tw = TYPE_WEIGHT[e.event_type] ?? 1;
+    const ageDays = Math.max(0, now.getTime() - Date.parse(e.event_time)) / (24 * 60 * 60 * 1000);
+    const rw = Math.max(0.5, Math.min(1, 1 - (ageDays / days) * 0.5));
+    const acc = orgByDriver.get(dId) ?? { total: 0 };
+    acc.total += lw * (sev.score / 100) * tw * rw;
+    orgByDriver.set(dId, acc);
+  }
+  const perDriverPenalties: number[] = [];
+  for (const [dId, acc] of orgByDriver) {
+    const miles = milesByDriver.get(dId) ?? 0;
+    if (miles < MIN_MILES_FOR_MEDIAN) continue;
+    perDriverPenalties.push(acc.total / (miles / 1000));
+  }
+  const medianPen = perDriverPenalties.length >= MIN_MEDIAN_ELIGIBLE
+    ? median(perDriverPenalties) ?? FALLBACK_MEDIAN
+    : FALLBACK_MEDIAN;
+
+  function scoreFor(penaltyPer1k: number): number {
+    const m = Math.max(medianPen, 0.5);
+    if (penaltyPer1k <= 0) return 100;
+    if (penaltyPer1k <= m) {
+      return Math.round(Math.max(MEDIAN_ANCHOR, Math.min(100,
+        MEDIAN_ANCHOR + (100 - MEDIAN_ANCHOR) * (m - penaltyPer1k) / m)));
+    }
+    if (penaltyPer1k >= 3 * m) return 0;
+    return Math.round(Math.max(0, Math.min(MEDIAN_ANCHOR,
+      MEDIAN_ANCHOR - MEDIAN_ANCHOR * (penaltyPer1k - m) / (2 * m))));
+  }
+
+  const safetyScore = myMiles > 0
+    ? scoreFor(myCurr.total / (myMiles / 1000))
+    : null;
+  const prevSafetyScore = myMiles > 0
+    ? scoreFor(myPrev.total / (myMiles / 1000))
+    : null;
+  const flagged = safetyScore != null && safetyScore < 60 && myCurr.severe >= 2 && myMiles >= 500;
+
+  return c.json({
+    safetyScore,
+    prevSafetyScore,
+    totalEvents:    myCurr.totalCount,
+    moderateEvents: myCurr.moderate,
+    severeEvents:   myCurr.severe,
+    milesDriven:    Math.round(myMiles * 10) / 10,
+    flagged,
+    days,
+    fromDate: fromIso.slice(0, 10),
+    toDate:   toIso.slice(0, 10),
+  });
+});
+
+// ── Naive-Denver + median helpers (duplicated from driver-safety-scoring
+// intentionally — this route is loaded by the driver JWT, and pulling
+// them from the dispatch route creates a circular import risk. Small
+// enough to keep local.)
+
+function utcMsToNaiveDenver(ms: number): string | null {
+  if (!isFinite(ms)) return null;
+  const d = new Date(ms);
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Denver",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(d).reduce<Record<string, string>>((acc, p) => {
+    if (p.type !== "literal") acc[p.type] = p.value;
+    return acc;
+  }, {});
+  const hour = parts.hour === "24" ? "00" : parts.hour;
+  return `${parts.year}-${parts.month}-${parts.day}T${hour}:${parts.minute}`;
+}
+
+function median(xs: number[]): number | null {
+  if (xs.length === 0) return null;
+  const sorted = [...xs].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? (sorted[mid - 1] + sorted[mid]) / 2
+    : sorted[mid];
+}
+
 export default driver;

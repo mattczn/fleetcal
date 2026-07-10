@@ -269,6 +269,23 @@ export const railway = {
    *  the /safety screens. Message body is included; the app decides
    *  whether to render it based on the surface (list hides, detail
    *  shows). */
+  /** This driver's own 30-day safety score. Fleet-median anchored
+   *  (median = 80) so the number matches what dispatch sees. Never
+   *  exposes other drivers' scores. */
+  getSafetyScore() {
+    return req<{
+      safetyScore:     number | null;
+      prevSafetyScore: number | null;
+      totalEvents:     number;
+      moderateEvents:  number;
+      severeEvents:    number;
+      milesDriven:     number;
+      flagged:         boolean;
+      days:            number;
+      fromDate:        string;
+      toDate:          string;
+    }>("GET", "/v1/driver/safety-score");
+  },
   listSafetyAlerts() {
     return req<{
       alerts: {

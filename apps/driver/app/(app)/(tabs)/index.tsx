@@ -30,7 +30,7 @@ import { useReportDevicePermissions } from "@/lib/useReportDevicePermissions";
 import { railway } from "@/lib/railway";
 import type { Load } from "@/lib/types";
 import { Glass } from "@/components/Glass";
-import { f, SP, RADIUS } from "@/lib/theme";
+import { f, SP, RADIUS, type Colors } from "@/lib/theme";
 import { useTheme } from "@/lib/ThemeProvider";
 import { useModules } from "@/lib/useModules";
 
@@ -67,6 +67,16 @@ export default function LoadsScreen() {
     staleTime: 60_000,
   });
   const safetyAlertsCount = safetyData?.alerts.length ?? 0;
+
+  // 30-day safety score — same number dispatch sees. Failure-tolerant
+  // (won't block the home tab). Refreshed on same 60s cadence as
+  // alerts so the tile stays in sync when new events land.
+  const { data: safetyScore } = useQuery({
+    queryKey: ["driver-safety-score", driver?.driverId],
+    queryFn:  () => railway.getSafetyScore(),
+    enabled:  !!driver,
+    staleTime: 60_000,
+  });
   useLoadsRealtime(driver?.driverId, driver?.orgId);
   // Registers the device for push silently. We intentionally don't surface
   // a "registration failed" banner — it's noise the driver can't action.
@@ -273,6 +283,22 @@ export default function LoadsScreen() {
           </View>
         </View>
 
+        {/* Safety score tile — 30d rolling, fleet-median-anchored.
+            Tap → /safety alert history. Rendered only after the API
+            has resolved; failures leave the header shape unchanged.
+            Hidden when the driver has no miles this month so a new
+            hire doesn't stare at an em-dash. */}
+        {safetyScore && safetyScore.milesDriven > 0 && safetyScore.safetyScore != null && (
+          <SafetyScoreTile
+            score={safetyScore.safetyScore}
+            severeEvents={safetyScore.severeEvents}
+            countedEvents={safetyScore.moderateEvents + safetyScore.severeEvents}
+            flagged={safetyScore.flagged}
+            onPress={() => router.push("/safety" as never)}
+            C={C}
+          />
+        )}
+
         {/* Segmented tabs */}
         <View style={{ flexDirection: "row", gap: 3, marginTop: 16, padding: 4, borderRadius: 14, backgroundColor: C.surfaceSunk }}>
           {TABS.map((tab, i) => {
@@ -409,5 +435,84 @@ export default function LoadsScreen() {
         </SafeAreaProvider>
       </Modal>
     </View>
+  );
+}
+
+// ── Safety score tile ────────────────────────────────────────────────
+//
+// Compact card shown on the loads home tab. Score is server-computed
+// (30-day, fleet-median-anchored, same math dispatch uses). Tap → the
+// /safety alert history. Colored band matches the dispatch drivers page
+// so drivers see the same signal their supervisor does.
+
+function SafetyScoreTile({
+  score, severeEvents, countedEvents, flagged, onPress, C,
+}: {
+  score:          number;
+  severeEvents:   number;
+  countedEvents:  number;
+  flagged:        boolean;
+  onPress:        () => void;
+  C:              Colors;
+}) {
+  const bandColor =
+    flagged      ? "#dc2626" :
+    score >= 85  ? "#137333" :
+    score >= 70  ? "#b06000" :
+                   "#dc2626";
+  const bandBg =
+    flagged      ? "#fef2f2" :
+    score >= 85  ? "#e6f4ea" :
+    score >= 70  ? "#fef3c7" :
+                   "#fef2f2";
+
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      activeOpacity={0.85}
+      style={{
+        marginTop: 12,
+        borderRadius: 14,
+        backgroundColor: C.surface,
+        borderWidth: 1,
+        borderColor: C.border,
+        padding: 12,
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 12,
+      }}
+    >
+      <View style={{
+        width: 52, height: 52, borderRadius: 12,
+        backgroundColor: bandBg,
+        alignItems: "center", justifyContent: "center",
+      }}>
+        <Text style={[f(800), { fontSize: 22, color: bandColor, letterSpacing: -0.5 }]}>
+          {score}
+        </Text>
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={[f(700), { fontSize: 13.5, color: C.t1 }]}>
+          Safety score · 30 days
+        </Text>
+        <Text style={[f(500), { fontSize: 12, color: C.t3, marginTop: 2 }]}>
+          {countedEvents === 0
+            ? "No safety events. Keep it up."
+            : `${countedEvents} event${countedEvents === 1 ? "" : "s"}${severeEvents > 0 ? ` · ${severeEvents} severe` : ""}`}
+        </Text>
+        {flagged && (
+          <Text style={[f(700), { fontSize: 11.5, color: "#dc2626", marginTop: 3 }]}>
+            Flagged — dispatch may reach out.
+          </Text>
+        )}
+      </View>
+      <View style={{
+        width: 26, height: 26, borderRadius: 13,
+        backgroundColor: C.surfaceSunk,
+        alignItems: "center", justifyContent: "center",
+      }}>
+        <Text style={[f(600), { fontSize: 14, color: C.t3 }]}>›</Text>
+      </View>
+    </TouchableOpacity>
   );
 }
