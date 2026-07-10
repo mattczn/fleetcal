@@ -324,7 +324,13 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
               event={selected}
               movements={movements}
               drivers={drivers}
-              onAfterAction={() => void load()}
+              onEventUpdated={(updated) => {
+                // Splice the server's fresh row (already enriched) into
+                // our events array — no full re-fetch. Same row, same
+                // position in the list, only status/driver/notified_*
+                // fields change.
+                setEvents(prev => prev.map(e => e.id === updated.id ? { ...e, ...updated } : e));
+              }}
               onRawRefreshed={(eventId, raw) => {
                 // Persist the refreshed raw payload onto the panel's
                 // events array so clicking away and back keeps the
@@ -346,12 +352,14 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
 // ── Right pane: map + video + actions ──────────────────────────────────
 
 function SafetyDetail({
-  event, movements, drivers, onAfterAction, onRawRefreshed,
+  event, movements, drivers, onEventUpdated, onRawRefreshed,
 }: {
   event:     PanelEvent;
   movements: PerformanceEventMovement[];
   drivers:   Driver[];
-  onAfterAction:  () => void;
+  /** Called with the freshly-enriched row after any mutation. Parent
+   *  splices it into its events array — no full re-fetch. */
+  onEventUpdated: (updated: PerformanceEventRow) => void;
   onRawRefreshed: (eventId: number, raw: MotivePerfRaw | undefined) => void;
 }) {
   const mapContainer = useRef<HTMLDivElement>(null);
@@ -382,12 +390,12 @@ function SafetyDetail({
     if (next === (event.assigned_driver_id ?? null)) return;
     setSavingDriver(true); setActionErr(null);
     try {
-      await railway.updatePerformanceEvent(event.id, { assigned_driver_id: next });
+      const res = await railway.updatePerformanceEvent(event.id, { assigned_driver_id: next });
+      onEventUpdated(res.event);
     } catch (err) {
       setActionErr(errorMessage(err));
     }
     setSavingDriver(false);
-    onAfterAction();
   }
 
   // Render markers/polylines whenever the selected event changes.
@@ -539,8 +547,13 @@ function SafetyDetail({
     if (!driverId) return;
     setBusy(true); setActionErr(null);
     try {
-      await railway.notifyPerformanceEventDriver(event.id, { driverId, message: message.trim() || undefined });
-      onAfterAction();
+      const res = await railway.notifyPerformanceEventDriver(event.id, { driverId, message: message.trim() || undefined });
+      // notify-driver returns { event, warning? } — event is null only
+      // when the DB update failed AFTER the push already fired. Splice
+      // whatever came back.
+      if (res.event) onEventUpdated(res.event);
+      // Clear the message field so the next event doesn't inherit it.
+      setMessage('');
     } catch (err) {
       setActionErr(errorMessage(err));
     }
@@ -550,8 +563,8 @@ function SafetyDetail({
   async function handleDismiss() {
     setBusy(true); setActionErr(null);
     try {
-      await railway.updatePerformanceEvent(event.id, { dispatch_status: 'dismissed' });
-      onAfterAction();
+      const res = await railway.updatePerformanceEvent(event.id, { dispatch_status: 'dismissed' });
+      onEventUpdated(res.event);
     } catch (err) {
       setActionErr(errorMessage(err));
     }
@@ -562,11 +575,11 @@ function SafetyDetail({
     if (!driverId) return;
     setBusy(true); setActionErr(null);
     try {
-      await railway.updatePerformanceEvent(event.id, {
+      const res = await railway.updatePerformanceEvent(event.id, {
         dispatch_status:    'confirmed',
         assigned_driver_id: driverId,
       });
-      onAfterAction();
+      onEventUpdated(res.event);
     } catch (err) {
       setActionErr(errorMessage(err));
     }
