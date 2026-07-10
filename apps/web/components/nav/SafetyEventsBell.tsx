@@ -492,8 +492,14 @@ function EventDetailDrawer({ eventId, onClose }: { eventId: number; onClose: () 
             </div>
 
             {/* Dashcam video — renders nothing when the truck has no
-                AI dashcam or when the clip hasn't uploaded yet. */}
-            <DashcamVideo raw={event.raw} />
+                AI dashcam. Offers a "Load video" button when URLs are
+                missing (older events pre media_required=true, or
+                expired signed URLs). */}
+            <DashcamVideo
+              eventId={event.id}
+              raw={event.raw}
+              onRefreshed={r => setEvent(prev => prev ? { ...prev, raw: r } : prev)}
+            />
 
             <div>
               <div style={{ fontSize: 12, color: 'var(--gc-text-3)', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 4 }}>

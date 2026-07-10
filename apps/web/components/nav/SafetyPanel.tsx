@@ -322,6 +322,12 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
               movements={movements}
               drivers={drivers}
               onAfterAction={() => void load()}
+              onRawRefreshed={(eventId, raw) => {
+                // Persist the refreshed raw payload onto the panel's
+                // events array so clicking away and back keeps the
+                // video visible without hitting Motive again.
+                setEvents(prev => prev.map(e => e.id === eventId ? { ...e, raw } : e));
+              }}
             />
           ) : (
             <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--gc-text-3)', fontSize: 13 }}>
@@ -337,12 +343,13 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
 // ── Right pane: map + video + actions ──────────────────────────────────
 
 function SafetyDetail({
-  event, movements, drivers, onAfterAction,
+  event, movements, drivers, onAfterAction, onRawRefreshed,
 }: {
   event:     PanelEvent;
   movements: PerformanceEventMovement[];
   drivers:   Driver[];
-  onAfterAction: () => void;
+  onAfterAction:  () => void;
+  onRawRefreshed: (eventId: number, raw: MotivePerfRaw | undefined) => void;
 }) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<google.maps.Map | null>(null);
@@ -569,7 +576,11 @@ function SafetyDetail({
             </div>
           </DetailBlock>
 
-          <DashcamVideo raw={event.raw} />
+          <DashcamVideo
+            eventId={event.id}
+            raw={event.raw}
+            onRefreshed={r => onRawRefreshed(event.id, r)}
+          />
 
           <DetailBlock label="Confirm driver">
             {event.resolved_driver_name && (

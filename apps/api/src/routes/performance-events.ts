@@ -32,6 +32,7 @@ import type { AuthVariables } from "../middleware/clerk.js";
 import { requireTruckHistoryOrg, requireModule, requireCapability } from "../middleware/require.js";
 import { supabase } from "../lib/supabase.js";
 import { sendAutoPushToDriver } from "../lib/push.js";
+import { getOrgMotiveKey } from "../lib/motiveIngest.js";
 
 const perf = new Hono<{ Variables: AuthVariables }>();
 
@@ -230,6 +231,97 @@ perf.get("/:id", async (c) => {
   const suggested = await resolveCurrentDriver(orgId, event.asset_id, event.event_time);
 
   return c.json({ event, suggestedDriver: suggested });
+});
+
+// ── POST /v1/performance-events/:id/refresh-media ──────────────────────
+//
+// Re-queries Motive for a single event and refreshes its `raw` payload
+// so `camera_media.downloadable_videos` are populated. Use cases:
+//   • Event was ingested before we started passing media_required=true —
+//     the row has camera_media metadata but no URLs.
+//   • URLs expired (Motive signs them ~48h) and the dispatcher wants to
+//     review an older event.
+//
+// Since v2 has no "single event by id" endpoint, we scope the query as
+// tightly as possible: vehicle_ids[]=X, start/end_date=event day (±1
+// day for TZ edges), media_required=true. The response is capped and
+// we grep by id in memory.
+
+perf.post("/:id/refresh-media", async (c) => {
+  const orgId = c.get("orgId");
+  const id    = Number(c.req.param("id"));
+  if (!Number.isFinite(id)) return c.json({ error: "bad_id" }, 400);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: row } = await (supabase as any)
+    .from("motive_performance_events")
+    .select("id, vehicle_id, event_time")
+    .eq("org_id", orgId)
+    .eq("id", id)
+    .maybeSingle();
+  if (!row) return c.json({ error: "not_found" }, 404);
+  const eventRow = row as { id: number; vehicle_id: number; event_time: string };
+
+  const apiKey = await getOrgMotiveKey(orgId);
+  if (!apiKey) return c.json({ error: "no_motive_key" }, 400);
+
+  const eventDate = new Date(eventRow.event_time);
+  const start = new Date(eventDate.getTime() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const end   = new Date(eventDate.getTime() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+  const params = new URLSearchParams({
+    "vehicle_ids[]": String(eventRow.vehicle_id),
+    start_date:     start,
+    end_date:       end,
+    media_required: "true",
+    per_page:       "100",
+  });
+  const url = `https://api.gomotive.com/v2/driver_performance_events?${params.toString()}`;
+
+  const res = await fetch(url, {
+    headers: { "x-api-key": apiKey, "Accept": "application/json" },
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    console.error("[refresh-media] Motive error:", res.status, body.slice(0, 200));
+    return c.json({ error: "motive_error", status: res.status }, 502);
+  }
+  const body = await res.json().catch(() => null) as
+    | { driver_performance_events?: Array<{ driver_performance_event?: { id?: number } }> }
+    | null;
+
+  // Find the wrapper whose inner event matches our id.
+  const match = (body?.driver_performance_events ?? [])
+    .map(w => w.driver_performance_event)
+    .find(e => e && e.id === id);
+
+  if (!match) {
+    // Event exists on our side but Motive returned nothing for it in
+    // the window. Could be event drifted out of the truck's day-of
+    // set, or the fleet's dashcam plan doesn't back this event type
+    // with video. Return 200 with a diagnostic so the client shows
+    // "no video available".
+    return c.json({ event: null, videoStatus: "not_found_at_motive" });
+  }
+
+  // Update raw + return the enriched row so the client can render
+  // the video immediately without a second round trip.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: updated, error: updErr } = await (supabase as any)
+    .from("motive_performance_events")
+    .update({ raw: match })
+    .eq("org_id", orgId)
+    .eq("id", id)
+    .select(`${SELECT_COLS},raw,vehicle_id`)
+    .maybeSingle();
+  if (updErr) {
+    console.error("[refresh-media] update failed:", updErr);
+    return c.json({ error: "update_failed", detail: updErr.message }, 500);
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const enriched = updated as PerfEventRow & { raw?: any };
+  await enrichEventsBatch(orgId, [enriched]);
+  return c.json({ event: enriched, videoStatus: "refreshed" });
 });
 
 // ── PATCH /v1/performance-events/:id ───────────────────────────────────

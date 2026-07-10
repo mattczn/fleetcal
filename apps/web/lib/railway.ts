@@ -800,6 +800,17 @@ class RailwayClient {
       'POST', `/v1/performance-events/${id}/notify-driver`, body,
     );
   }
+  /** Ask the server to re-query Motive for this event's raw payload with
+   *  media_required=true, so `camera_media.downloadable_videos` come back
+   *  populated. Returns { event, videoStatus: 'refreshed' } on success or
+   *  { event: null, videoStatus: 'not_found_at_motive' } when Motive has
+   *  no video for the event at all. */
+  refreshPerformanceEventMedia(id: number) {
+    return this.req<{
+      event: (PerformanceEventRow & { raw?: MotivePerfRaw }) | null;
+      videoStatus: 'refreshed' | 'not_found_at_motive';
+    }>('POST', `/v1/performance-events/${id}/refresh-media`);
+  }
   createDriver(body: CreateDriverRequest)    { return this.req<CreateDriverResponse>('POST', '/v1/drivers', body); }
   updateDriver(id: number, body: UpdateDriverRequest) {
     return this.req<UpdateDriverResponse>('PATCH', `/v1/drivers/${id}`, body);
