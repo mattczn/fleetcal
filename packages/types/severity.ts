@@ -60,10 +60,12 @@ export interface SeverityInput {
  *  comparison for time-to-hit-style metrics (lower = worse). */
 const SEVERITY_THRESHOLDS: Record<string, { moderate: number; severe: number; inverted: boolean; unitHint?: string }> = {
   // Braking Intensity — Motive scores this as an acceleration-magnitude
-  // metric; typical range for on-highway trucks is 6–20. Panic stop
-  // territory kicks in around 12.
-  hard_brake:  { moderate: 8,   severe: 12,   inverted: false, unitHint: "mph/s" },
-  hard_accel:  { moderate: 8,   severe: 12,   inverted: false, unitHint: "mph/s" },
+  // metric; typical range for on-highway trucks is 6–20. Panic-stop
+  // territory in a loaded OTR reefer starts around 15 mph/s; below that
+  // is firm-but-defensive. 12 was landing every mildly firm highway
+  // brake as red — recalibrated 2026-07-10 based on Curzon fleet data.
+  hard_brake:  { moderate: 8,   severe: 15,   inverted: false, unitHint: "mph/s" },
+  hard_accel:  { moderate: 8,   severe: 15,   inverted: false, unitHint: "mph/s" },
   // Lateral acceleration in g. 0.35g feels aggressive; 0.55g is a
   // near-rollover for a loaded reefer.
   hard_corner: { moderate: 0.4, severe: 0.55, inverted: false, unitHint: "g" },

@@ -3643,28 +3643,30 @@ driver.get("/safety-score", async (c) => {
   // constants change, update these too or extract into a shared module.
   const SEV_WEIGHT: Record<string, number> = { low: 0, moderate: 1, severe: 10 };
   const TYPE_WEIGHT: Record<string, number> = {
-    tailgating: 1.5, distraction: 1.5, cell_phone: 1.5, drowsiness: 1.5,
+    tailgating:          1.5,
+    distraction:         1.5,
+    cell_phone:          1.5,
+    phone_use:           1.5,
+    drowsiness:          1.5,
+    stop_sign_violation: 0.3,
+    seat_belt_violation: 0.5,
+    seatbelt:            0.5,
   };
+  const NON_SCORED_EVENTS = new Set([
+    "camera_obstruction",
+    "driver_facing_cam_obstruction",
+  ]);
   const MEDIAN_ANCHOR = 80;
   const MIN_MILES_FOR_MEDIAN = 500;
   const MIN_MILES_FOR_SCORE  = 200;    // below this → score = null ("insufficient data")
   const FALLBACK_MEDIAN = 6;
   const MIN_MEDIAN_ELIGIBLE = 3;
-  // Bottom floor on the effective median so a clean fleet's tiny
-  // median doesn't crash a driver's score to 0 on their first
-  // moderate event. Must match the dispatch route's constant.
   const MIN_EFFECTIVE_MEDIAN = 3;
-  // Score floor — worst-case driver lands here, never at 0. Must match
-  // the dispatch route's constant.
   const MIN_SCORE_FLOOR = 20;
-  // Bayesian prior: pretend the driver already has this many miles
-  // of clean driving before adding their actual data. Prevents the
-  // per-mile rate from swinging wildly on 300 miles + 2 severe
-  // events. 15,000 mi ≈ a typical active driver's monthly total, so
-  // early-window data doesn't dominate the score. See
-  // driver-safety-scoring.ts for the full rationale; must match that
-  // route's constant so drivers see the same number dispatch does.
-  const PRIOR_MILES = 15000;
+  // Bayesian prior — must match driver-safety-scoring.ts. Sized to
+  // roughly one week of per-truck mileage so a full 30-day window of
+  // actual data dominates the prior.
+  const PRIOR_MILES = 5000;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   type EventRow = { event_type: string; event_time: string; notified_driver_id: number | null; assigned_driver_id: number | null; raw: any };
@@ -3672,6 +3674,7 @@ driver.get("/safety-score", async (c) => {
   function penaltyFor(events: EventRow[], relTo: number): { total: number; moderate: number; severe: number; totalCount: number } {
     let total = 0, moderate = 0, severe = 0, totalCount = 0;
     for (const e of events) {
+      if (NON_SCORED_EVENTS.has(e.event_type)) continue;
       const sev = deriveSeverity(e.raw, e.event_type);
       const lw = SEV_WEIGHT[sev.level] ?? 0;
       const tw = TYPE_WEIGHT[e.event_type] ?? 1;
@@ -3693,6 +3696,7 @@ driver.get("/safety-score", async (c) => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const orgByDriver = new Map<number, { total: number }>();
   for (const e of ((allEventsCurr ?? []) as EventRow[])) {
+    if (NON_SCORED_EVENTS.has(e.event_type)) continue;
     const dId = e.notified_driver_id ?? e.assigned_driver_id;
     if (dId == null) continue;
     const sev = deriveSeverity(e.raw, e.event_type);

@@ -74,12 +74,28 @@ const SEVERITY_LEVEL_WEIGHT: Record<string, number> = {
 };
 
 const EVENT_TYPE_WEIGHT: Record<string, number> = {
-  tailgating:  1.5,
-  distraction: 1.5,
-  cell_phone:  1.5,
-  drowsiness:  1.5,
+  tailgating:          1.5,
+  distraction:         1.5,
+  cell_phone:          1.5,
+  phone_use:           1.5,
+  drowsiness:          1.5,
+  // Rolling stops are constant across the fleet — real signal but
+  // shouldn't dominate the penalty vs actual behavior events.
+  stop_sign_violation: 0.3,
+  // Compliance issue, not driving-behavior — lighter touch.
+  seat_belt_violation: 0.5,
+  seatbelt:            0.5,
 };
 const DEFAULT_EVENT_TYPE_WEIGHT = 1.0;
+
+/** Event types that we surface in the alerts UI but do NOT score.
+ *  Cam obstruction is usually a mount/sun/clothing issue, not a driving
+ *  hazard — dispatch still wants to see it so they can tell the driver
+ *  to fix the camera, but it shouldn't drag anyone's safety score down. */
+const NON_SCORED_EVENTS = new Set([
+  "camera_obstruction",
+  "driver_facing_cam_obstruction",
+]);
 
 // Scoring is FLEET-MEDIAN-normalized so it self-calibrates. The score
 // curve is piecewise linear anchored at the fleet median:
@@ -122,20 +138,17 @@ const MIN_EFFECTIVE_MEDIAN = 3;
 const MIN_SCORE_FLOOR = 20;
 
 /** Bayesian smoothing: prior "clean miles" added to every driver's
- *  denominator. Interpret as "we assume 15,000 miles of clean driving
- *  as prior evidence — roughly a full month at typical fleet pace —
- *  then integrate the actual events into that prior".
+ *  denominator. Interpret as "we assume this many miles of clean
+ *  driving as prior evidence, then integrate the actual events into
+ *  that prior".
  *
- *  This is the constant that determines how much day-1 or low-mile
- *  data can move a driver's score. With 15k prior:
- *  - A driver with 4 severe events on 500 mi lands around 68 (not 0).
- *  - A driver with 10 severe events on 500 mi still lands near 0 —
- *    truly bad behavior isn't washed away.
- *  - A heavy driver with 10k+ actual miles is barely affected by the
- *    prior (5000 raw miles + 15k prior = 3.75x smoothing → nudged
- *    toward the middle by a small amount, dominated by real data).
+ *  Sized to roughly one week of per-truck mileage (Curzon does ~30k
+ *  mi/week fleet-wide across ~15 trucks → ~2k/truck/week; 5k is a
+ *  couple weeks of clean baseline). Bigger than that over-smooths a
+ *  full month of real data toward the middle; smaller than that lets
+ *  one bad day nuke the score.
  */
-const PRIOR_MILES = 15000;
+const PRIOR_MILES = 5000;
 
 /** Auto-flag thresholds. Now keyed off SEVERE events specifically —
  *  a pile of moderate events isn't a flag, but two severe events in
@@ -405,6 +418,7 @@ safetyScoring.get("/", async (c) => {
 
   const nowMs = Date.now();
   for (const rawE of ((currRows ?? []) as EventRow[])) {
+    if (NON_SCORED_EVENTS.has(rawE.event_type)) continue;
     const driverId = driverForEvent(rawE);
     if (driverId == null || !nameById.has(driverId)) continue;
     const sev = deriveSeverity(rawE.raw, rawE.event_type);
@@ -422,6 +436,7 @@ safetyScoring.get("/", async (c) => {
   }
   const prevWindowMs = days * 24 * 60 * 60 * 1000;
   for (const rawE of ((prevRows ?? []) as EventRow[])) {
+    if (NON_SCORED_EVENTS.has(rawE.event_type)) continue;
     const driverId = driverForEvent(rawE);
     if (driverId == null || !nameById.has(driverId)) continue;
     const sev = deriveSeverity(rawE.raw, rawE.event_type);
