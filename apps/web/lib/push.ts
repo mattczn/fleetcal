@@ -170,6 +170,7 @@ async function loadOrgNotificationRules(orgId: string): Promise<NotificationRule
     missingPodReminder:  { ...DEFAULT_NOTIFICATION_RULES.missingPodReminder,  ...(stored.missingPodReminder  ?? {}) },
     loadCancelled:       { ...DEFAULT_NOTIFICATION_RULES.loadCancelled,       ...(stored.loadCancelled       ?? {}) },
     reassignedAway:      { ...DEFAULT_NOTIFICATION_RULES.reassignedAway,      ...(stored.reassignedAway      ?? {}) },
+    safetyAlert:         { ...DEFAULT_NOTIFICATION_RULES.safetyAlert,         ...(stored.safetyAlert         ?? {}) },
   };
 }
 

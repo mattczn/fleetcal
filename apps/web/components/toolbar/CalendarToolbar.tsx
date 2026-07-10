@@ -15,6 +15,7 @@ import TrailerFleetMapPanel from '@/components/calendar/TrailerFleetMapPanel';
 import TruckFleetPanel from '@/components/calendar/TruckFleetPanel';
 import AssetsModal from '@/components/sidebar/AssetsModal';
 import RecentlyDeletedDetailModal from '@/components/calendar/RecentlyDeletedDetailModal';
+import SafetyEventsBell from '@/components/nav/SafetyEventsBell';
 import type { CalendarEvent } from '@/lib/types';
 
 function formatToolbarDate(d: Date, viewMode: 'day' | 'week'): string {
@@ -972,6 +973,11 @@ export default function CalendarToolbar() {
             navigation now lives entirely in the AssetSidebar's
             PageNavSection rail, so the toolbar stays focused on
             calendar-local controls. */}
+
+        {/* Safety-event bell — Motive hard-brake / hard-accel /
+            hard-corner + v2 dashcam events. Only renders when the org
+            has Motive integration + the role has safety.access. */}
+        <SafetyEventsBell />
 
         {/* Org + User — icon-only avatars to save toolbar space */}
         <div className="flex items-center gap-1.5 pl-3" style={{ borderLeft: '1px solid var(--gc-border-light)' }}>

@@ -36,6 +36,7 @@ import driverAssetPrefsRoute from "./routes/driver-asset-prefs.js";
 import savedLocationsRoute from "./routes/saved-locations.js";
 import payrollRoute from "./routes/payroll.js";
 import driverScoringRoute from "./routes/driver-scoring.js";
+import performanceEventsRoute from "./routes/performance-events.js";
 import orgSettingsRoute from "./routes/org-settings.js";
 import invoicesRoute from "./routes/invoices.js";
 import checkCallsRoute from "./routes/check-calls.js";
@@ -66,6 +67,7 @@ import capacityRoute from "./routes/capacity.js";
 import contactSalesRoute from "./routes/contact-sales.js";
 import supportRoute from "./routes/support.js";
 import { syncIncrementalAllOrgs, snapshotOdometersAllOrgs } from "./lib/motiveIngest.js";
+import { syncPerformanceEventsAllOrgs } from "./lib/motivePerformanceIngest.js";
 import { sweepAutoDeliver } from "./lib/autoDeliverSweep.js";
 import { runConfirmReminders } from "./jobs/confirmReminders.js";
 import { runAiUsageSweep } from "./jobs/aiUsageSweep.js";
@@ -228,6 +230,7 @@ authed.route("/driver-asset-prefs", driverAssetPrefsRoute);
 authed.route("/saved-locations", savedLocationsRoute);
 authed.route("/payroll", payrollRoute);
 authed.route("/driver-scoring", driverScoringRoute);
+authed.route("/performance-events", performanceEventsRoute);
 authed.route("/org-settings", orgSettingsRoute);
 authed.route("/invoices", invoicesRoute);
 authed.route("/stops", stopsRoute);
@@ -408,69 +411,82 @@ async function fireConfirmReminders(label: string): Promise<void> {
 setTimeout(() => void fireConfirmReminders("startup pass"), CONFIRM_REMINDERS_STARTUP_DELAY_MS).unref();
 setInterval(() => void fireConfirmReminders("tick"), CONFIRM_REMINDERS_INTERVAL_MS).unref();
 
-// ── Motive driving-periods incremental sync ─────────────────────────────
+// ── Motive unified sync tick ───────────────────────────────────────────
 //
-// Per-org `updated_after`-cursor pull every MOTIVE_SYNC_INTERVAL_MS
-// (default 5 min). Only orgs that have a motive_api_key set get
-// queried. Initial backfill is dispatcher-triggered from settings.
+// One cron for the entire Motive integration. Runs every MOTIVE_SYNC_INTERVAL_MS
+// (default 5 min) and does:
+//   • driving_periods incremental (cursor via motive_sync_state.feed='driving_periods')
+//   • performance_events incremental (cursor via motive_sync_state.feed='performance_events')
+//   • odometer snapshot — but only when >=1h since the last snapshot pass,
+//     because /v1/vehicle_locations is heavier and per-day-idempotent
+//     inside snapshotOdometersAllOrgs.
 //
-// Single-replica caveat applies (same as the other in-process crons):
-// scaling the API horizontally would duplicate the sync. The cadence
-// is conservative enough to make accidental double-runs harmless.
+// Single-replica caveat: same as the other in-process crons. Scaling the
+// API horizontally would duplicate the sync; every sub-step is idempotent
+// (upsert on id / per-day probe on odometer) so double-runs are harmless.
 
-const MOTIVE_SYNC_INTERVAL_MS  = Number(process.env.MOTIVE_SYNC_INTERVAL_MS  ?? 5 * 60 * 1000);
+const MOTIVE_SYNC_INTERVAL_MS   = Number(process.env.MOTIVE_SYNC_INTERVAL_MS  ?? 5 * 60 * 1000);
 const MOTIVE_SYNC_STARTUP_DELAY = Number(process.env.MOTIVE_SYNC_STARTUP_DELAY_MS ?? 60_000);
+const MOTIVE_ODOMETER_MIN_INTERVAL_MS = Number(process.env.ODOMETER_CHECK_INTERVAL_MS ?? 60 * 60 * 1000);
 
-async function fireMovementsSync(label: string): Promise<void> {
+let lastOdometerSnapshotMs = 0;
+
+async function fireMotiveSync(label: string): Promise<void> {
   try {
     await trackCronRun("motive-sync", async () => {
-      const results = await syncIncrementalAllOrgs();
-      if (results.length > 0) {
-        const total = results.reduce((sum, r) => sum + r.rowsUpserted, 0);
-        console.log(`[api] movements sync (${label}): ${results.length} org(s), ${total} rows`);
-        return { meta: { orgs: results.length, rowsUpserted: total } };
+      const startedAt = Date.now();
+
+      // (1) driving periods — needed for movements + current-driver
+      //     resolution used by the safety-bell drawer.
+      const drivingResults = await syncIncrementalAllOrgs();
+      const drivingRows = drivingResults.reduce((sum, r) => sum + r.rowsUpserted, 0);
+
+      // (2) performance events — safety-bell feed. Same 5-min cadence
+      //     as driving so the resolved "who was driving" is fresh when
+      //     dispatch opens a new alert.
+      const perfResults = await syncPerformanceEventsAllOrgs();
+      const perfRows = perfResults.reduce((sum, r) => sum + r.rowsInserted, 0);
+
+      // (3) odometer — heavier hit on /v1/vehicle_locations, so only
+      //     every ~1h. In-memory gate is cheap; the per-org "already
+      //     have today" probe inside snapshotOdometersAllOrgs is the
+      //     durable guardrail across restarts.
+      let odoResults: Awaited<ReturnType<typeof snapshotOdometersAllOrgs>> = [];
+      const shouldSnapshotOdo =
+        startedAt - lastOdometerSnapshotMs >= MOTIVE_ODOMETER_MIN_INTERVAL_MS;
+      if (shouldSnapshotOdo) {
+        lastOdometerSnapshotMs = startedAt;
+        odoResults = await snapshotOdometersAllOrgs();
       }
-      return { meta: { orgs: 0, rowsUpserted: 0 } };
+      const odoInserted = odoResults.reduce((s, r) => s + r.rowsInserted, 0);
+      const odoSkipped  = odoResults.reduce((s, r) => s + r.rowsSkipped,  0);
+
+      if (drivingRows > 0 || perfRows > 0 || odoInserted > 0) {
+        console.log(
+          `[motive-sync] ${label}: ` +
+          `driving{orgs=${drivingResults.length},rows=${drivingRows}} ` +
+          `perf{orgs=${perfResults.length},rows=${perfRows}} ` +
+          (shouldSnapshotOdo
+            ? `odo{orgs=${odoResults.length},inserted=${odoInserted},skipped=${odoSkipped}} `
+            : `odo{skipped:next-in-${Math.round((MOTIVE_ODOMETER_MIN_INTERVAL_MS - (startedAt - lastOdometerSnapshotMs))/60000)}m} `) +
+          `(${Date.now() - startedAt}ms)`,
+        );
+      }
+
+      return { meta: {
+        driving:  { orgs: drivingResults.length, rowsUpserted: drivingRows },
+        perf:     { orgs: perfResults.length,    rowsInserted: perfRows },
+        odometer: shouldSnapshotOdo
+          ? { orgs: odoResults.length, inserted: odoInserted, skipped: odoSkipped }
+          : { skipped: true },
+      } };
     });
   } catch (err) {
-    console.error("[api] movements sync failed:", err);
+    console.error("[motive-sync] failed:", err);
   }
 }
-setTimeout(() => void fireMovementsSync("startup pass"), MOTIVE_SYNC_STARTUP_DELAY).unref();
-setInterval(() => void fireMovementsSync("tick"), MOTIVE_SYNC_INTERVAL_MS).unref();
-
-// ── Daily odometer snapshot ────────────────────────────────────────────
-//
-// Records one row per Motive-linked vehicle per day. The snapshot
-// function itself is idempotent (it skips vehicles that already have
-// a row for today UTC), so we can fire-and-forget every hour and miss
-// at most one hour of accuracy across DST changes / startup timing.
-//
-// Default cadence: every hour, gated by the in-snapshot "did we
-// already capture today" check. We DON'T do a strict 24h interval
-// because container restarts would reset the timer and could skip a
-// day entirely.
-
-const ODOMETER_CHECK_INTERVAL_MS = Number(process.env.ODOMETER_CHECK_INTERVAL_MS ?? 60 * 60 * 1000);
-const ODOMETER_STARTUP_DELAY_MS  = Number(process.env.ODOMETER_STARTUP_DELAY_MS  ?? 90_000);
-
-async function fireOdometerSnapshot(label: string): Promise<void> {
-  try {
-    await trackCronRun("odometer-snapshot", async () => {
-      const results = await snapshotOdometersAllOrgs();
-      const inserted = results.reduce((s, r) => s + r.rowsInserted, 0);
-      const skipped  = results.reduce((s, r) => s + r.rowsSkipped,  0);
-      if (inserted > 0 || results.length > 0) {
-        console.log(`[api] odometer snapshot (${label}): ${results.length} org(s), ${inserted} inserted, ${skipped} skipped (already had today)`);
-      }
-      return { meta: { orgs: results.length, inserted, skipped } };
-    });
-  } catch (err) {
-    console.error("[api] odometer snapshot failed:", err);
-  }
-}
-setTimeout(() => void fireOdometerSnapshot("startup pass"), ODOMETER_STARTUP_DELAY_MS).unref();
-setInterval(() => void fireOdometerSnapshot("hourly tick"), ODOMETER_CHECK_INTERVAL_MS).unref();
+setTimeout(() => void fireMotiveSync("startup pass"), MOTIVE_SYNC_STARTUP_DELAY).unref();
+setInterval(() => void fireMotiveSync("tick"), MOTIVE_SYNC_INTERVAL_MS).unref();
 
 // ── Mudflap Carriers API sync ──────────────────────────────────────────
 //

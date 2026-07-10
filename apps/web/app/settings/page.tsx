@@ -1319,6 +1319,7 @@ function DriverAppPanel({ setActive }: { setActive: (v: NavItem) => void }) {
               missingPodReminder:  { ...DEFAULT_NOTIFICATION_RULES.missingPodReminder,  ...(storedRules.missingPodReminder  ?? {}) },
               loadCancelled:       { ...DEFAULT_NOTIFICATION_RULES.loadCancelled,       ...(storedRules.loadCancelled       ?? {}) },
               reassignedAway:      { ...DEFAULT_NOTIFICATION_RULES.reassignedAway,      ...(storedRules.reassignedAway      ?? {}) },
+              safetyAlert:         { ...DEFAULT_NOTIFICATION_RULES.safetyAlert,         ...(storedRules.safetyAlert         ?? {}) },
             }
           : DEFAULT_NOTIFICATION_RULES);
       })
@@ -1367,6 +1368,7 @@ function DriverAppPanel({ setActive }: { setActive: (v: NavItem) => void }) {
           missingPodReminder:  { ...DEFAULT_NOTIFICATION_RULES.missingPodReminder,  ...(res.settings.notificationRules.missingPodReminder  ?? {}) },
           loadCancelled:       { ...DEFAULT_NOTIFICATION_RULES.loadCancelled,       ...(res.settings.notificationRules.loadCancelled       ?? {}) },
           reassignedAway:      { ...DEFAULT_NOTIFICATION_RULES.reassignedAway,      ...(res.settings.notificationRules.reassignedAway      ?? {}) },
+          safetyAlert:         { ...DEFAULT_NOTIFICATION_RULES.safetyAlert,         ...(res.settings.notificationRules.safetyAlert         ?? {}) },
         });
       }
       setRulesSaveState('saved');

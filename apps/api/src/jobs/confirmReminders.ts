@@ -105,6 +105,7 @@ async function loadOrgRules(orgId: string, cache: Map<string, NotificationRules>
         missingPodReminder:  { ...DEFAULT_NOTIFICATION_RULES.missingPodReminder,  ...(stored.missingPodReminder  ?? {}) },
         loadCancelled:       { ...DEFAULT_NOTIFICATION_RULES.loadCancelled,       ...(stored.loadCancelled       ?? {}) },
         reassignedAway:      { ...DEFAULT_NOTIFICATION_RULES.reassignedAway,      ...(stored.reassignedAway      ?? {}) },
+        safetyAlert:         { ...DEFAULT_NOTIFICATION_RULES.safetyAlert,         ...(stored.safetyAlert         ?? {}) },
       }
     : DEFAULT_NOTIFICATION_RULES;
   cache.set(orgId, resolved);

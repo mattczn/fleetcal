@@ -25,6 +25,7 @@ export const NOTIFICATION_RULE_KEYS = [
   "missing_pod_reminder",
   "load_cancelled",
   "reassigned_away",
+  "safety_alert",
 ] as const;
 export type NotificationRuleKey = typeof NOTIFICATION_RULE_KEYS[number];
 
@@ -76,6 +77,14 @@ export interface ReassignedAwayRule {
    *  loads far out get picked up via the regular schedule view. */
   hoursBeforeStart: number;
 }
+export interface SafetyAlertRule {
+  /** Whether the org allows dispatchers to send safety-event pushes
+   *  (Motive hard-accel / hard-brake / hard-corner + v2 dashcam events)
+   *  to drivers. Dispatcher UI is always visible; this only gates the
+   *  outbound push. Turning it off keeps events in the bell for internal
+   *  triage without notifying drivers. */
+  enabled: boolean;
+}
 
 export interface NotificationRules {
   eveningConfirmSweep: EveningConfirmSweepRule;
@@ -84,6 +93,7 @@ export interface NotificationRules {
   missingPodReminder:  MissingPodReminderRule;
   loadCancelled:       LoadCancelledRule;
   reassignedAway:      ReassignedAwayRule;
+  safetyAlert:         SafetyAlertRule;
 }
 
 /** Defaults applied when the org has no notification_rules row yet
@@ -97,6 +107,7 @@ export const DEFAULT_NOTIFICATION_RULES: NotificationRules = {
   missingPodReminder:  { enabled: false, hoursAfterDelivery: 24 },
   loadCancelled:       { enabled: true,  hoursBeforeStart: 24 },
   reassignedAway:      { enabled: true,  hoursBeforeStart: 24 },
+  safetyAlert:         { enabled: true },
 };
 
 /** UI copy for the four rules — used in both the dispatch web settings
@@ -108,6 +119,7 @@ export const NOTIFICATION_RULE_LABEL: Record<NotificationRuleKey, string> = {
   missing_pod_reminder:  "Missing POD reminder",
   load_cancelled:        "Load cancelled",
   reassigned_away:       "Load reassigned away",
+  safety_alert:          "Safety event alert",
 };
 
 export const NOTIFICATION_RULE_BLURB: Record<NotificationRuleKey, string> = {
@@ -117,6 +129,7 @@ export const NOTIFICATION_RULE_BLURB: Record<NotificationRuleKey, string> = {
   missing_pod_reminder:  "Nudge the driver to upload a POD when one hasn't landed within the configured window after delivery.",
   load_cancelled:        "Push the driver if a load they were assigned gets cancelled within the configured window before pickup.",
   reassigned_away:       "Push the driver if a load they were assigned gets handed to someone else within the configured window before pickup.",
+  safety_alert:          "Dispatcher-triggered push when Motive flags a hard-brake, hard-accel, hard-cornering, or dashcam safety event on the driver's truck.",
 };
 
 /** Map a NotificationRules key (camelCase JSON) to the matching
@@ -130,6 +143,7 @@ export const NOTIFICATION_RULE_KEY_FROM_FIELD: Record<keyof NotificationRules, N
   missingPodReminder:  "missing_pod_reminder",
   loadCancelled:       "load_cancelled",
   reassignedAway:      "reassigned_away",
+  safetyAlert:         "safety_alert",
 };
 export const NOTIFICATION_RULE_FIELD_FROM_KEY: Record<NotificationRuleKey, keyof NotificationRules> = {
   evening_confirm_sweep: "eveningConfirmSweep",
@@ -138,6 +152,7 @@ export const NOTIFICATION_RULE_FIELD_FROM_KEY: Record<NotificationRuleKey, keyof
   missing_pod_reminder:  "missingPodReminder",
   load_cancelled:        "loadCancelled",
   reassigned_away:       "reassignedAway",
+  safety_alert:          "safetyAlert",
 };
 
 /** Per-driver row in driver_notification_prefs. Sparse — only stored

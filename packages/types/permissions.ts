@@ -182,6 +182,12 @@ export type Capability =
   // otherwise manages equipment (e.g. maintenance shouldn't grade drivers).
   | "scorecard.access"
 
+  // Motive safety-event bell + drawer (hard accel/brake/corner + v2 dashcam
+  // events). Distinct from motive_integration module: the module gates the
+  // whole ELD surface at the org level, this cap gates whether a role can
+  // TRIAGE incoming safety alerts. Dispatcher yes, maintenance no.
+  | "safety.access"
+
   // CRM — INTERNAL sales tooling (FMCSA leads, outreach, call queue).
   // Admin-only by default; grant `crm.access` to dispatcher via
   // role_overrides if sales hires shouldn't be full admins. Both caps
@@ -214,6 +220,7 @@ const ALL_CAPS: Capability[] = [
   "fuel.access", "fuel.edit",
   "expenses.access",
   "dashboard.access", "reports.access", "scorecard.access",
+  "safety.access",
   "crm.access", "crm.manage",
 ];
 
@@ -243,6 +250,7 @@ export const ROLE_CAPABILITIES: Record<OrgRole, ReadonlySet<Capability>> = {
     "fuel.access", "fuel.edit",
     "expenses.access",
     "reports.access", "scorecard.access",
+    "safety.access",
   ]),
 
   // Maintenance: equipment-focused. Home turf is the Equipment module
@@ -347,6 +355,7 @@ export const CAPABILITY_CATALOG: CapabilityInfo[] = [
   { cap: "fuel.access",       label: "Fuel",          group: "Module access", hint: "Equipment → Fuel tab: fuel-up reports + card spend." },
   { cap: "expenses.access",   label: "Expenses",      group: "Module access", hint: "Cross-source expenses dashboard (fuel + payroll + card spend rollups). Also gates the Ramp card-transaction board." },
   { cap: "scorecard.access",  label: "Scorecard",     group: "Module access", hint: "Equipment → Scorecard tab: per-driver inspection scores. Off for Maintenance by default." },
+  { cap: "safety.access",     label: "Safety alerts", group: "Module access", hint: "Top-bar safety bell: Motive hard-accel / hard-brake / hard-corner + dashcam events with dispatcher acknowledgement and driver push. Off for Maintenance by default." },
   { cap: "reports.access",    label: "Reports",       group: "Module access", hint: "LoadsReport + future custom-report endpoints." },
   { cap: "drivers.view",      label: "Drivers",       group: "Module access", hint: "Per-driver performance scorecards page. Also gates seeing driver names across the app — turning it off hides them in equipment history too." },
 

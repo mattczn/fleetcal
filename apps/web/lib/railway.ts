@@ -97,6 +97,7 @@ import type {
   CrmLead, CrmActivity, CrmSettings, CrmStats, CrmSyncResult,
   CrmListLeadsQuery, CrmListLeadsResponse, CrmLeadDetailResponse,
   CrmSequence, CrmSequenceStep, CrmEmail, CrmEmailStatus,
+  PerformanceEventRow,
 } from '@fleetcal/types';
 
 const BASE_URL =
@@ -752,6 +753,43 @@ class RailwayClient {
   }
 
   listDrivers()                              { return this.req<ListDriversResponse>('GET', '/v1/drivers'); }
+
+  // ── Motive performance events (safety alert bell) ─────────────────────
+  listPerformanceEvents(status: 'new' | 'all' = 'new', limit = 50) {
+    return this.req<{
+      events:   PerformanceEventRow[];
+      newCount: number;
+    }>('GET', `/v1/performance-events?status=${status}&limit=${limit}`);
+  }
+  getPerformanceEvent(id: number) {
+    return this.req<{
+      event:           PerformanceEventRow;
+      suggestedDriver: {
+        fleetcalDriverId: number | null;
+        displayName:      string | null;
+        /** Where the autofill came from:
+         *   calendar_active — a load event on this asset covers the event time
+         *   calendar_recent — most recent load event that ended before the alert
+         *   asset_default   — driver_asset_prefs default for this truck
+         *   null            — nothing to suggest, dispatcher picks manually */
+        source:           'calendar_active' | 'calendar_recent' | 'asset_default' | null;
+        calendarEventId:  string | null;
+        loadNum:          string | null;
+      } | null;
+    }>('GET', `/v1/performance-events/${id}`);
+  }
+  updatePerformanceEvent(id: number, body: {
+    dispatch_status?:    'confirmed' | 'dismissed';
+    assigned_driver_id?: number | null;
+    dispatch_note?:      string | null;
+  }) {
+    return this.req<{ event: PerformanceEventRow }>('PATCH', `/v1/performance-events/${id}`, body);
+  }
+  notifyPerformanceEventDriver(id: number, body: { driverId: number; message?: string }) {
+    return this.req<{ event: PerformanceEventRow | null; driverName?: string; warning?: string }>(
+      'POST', `/v1/performance-events/${id}/notify-driver`, body,
+    );
+  }
   createDriver(body: CreateDriverRequest)    { return this.req<CreateDriverResponse>('POST', '/v1/drivers', body); }
   updateDriver(id: number, body: UpdateDriverRequest) {
     return this.req<UpdateDriverResponse>('PATCH', `/v1/drivers/${id}`, body);

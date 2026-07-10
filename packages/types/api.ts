@@ -2051,6 +2051,40 @@ export type {
   MaintenanceActionItem, MaintenanceActionItemPhoto, MaintenanceCategory, MaintenancePriority, MaintenanceActionStatus,
 };
 
+// ── /v1/performance-events — Motive safety-event bell ──────────────────
+
+export type PerformanceEventDispatchStatus =
+  | "new"
+  | "confirmed"
+  | "dismissed"
+  | "notified";
+
+export interface PerformanceEventRow {
+  id:                 number;
+  event_type:         string;               // 'hard_accel' | 'hard_brake' | 'hard_corner' | v2 types
+  event_time:         string;               // ISO
+  end_time:           string | null;
+  duration:           number | null;
+  intensity:          string | null;
+  vehicle_id:         number;
+  vehicle_number:     string | null;
+  asset_id:           number | null;
+  driver_id:          number | null;        // Motive driver id (may be stale)
+  driver_first_name:  string | null;
+  driver_last_name:   string | null;
+  lat:                number | null;
+  lon:                number | null;
+  location_label:     string | null;
+  dispatch_status:    PerformanceEventDispatchStatus;
+  assigned_driver_id: number | null;        // fleetcal drivers.id (dispatcher-confirmed)
+  dispatch_note:      string | null;
+  dispatched_at:      string | null;
+  dispatched_by_name: string | null;
+  notified_at:        string | null;
+  notified_driver_id: number | null;
+  notified_message:   string | null;
+}
+
 // ── /v1/reports/loads — load-shaped report endpoint ────────────────────
 //
 // Distinct from /v1/loads (which is actually events-flavored — one row per
