@@ -280,7 +280,15 @@ export async function syncPerformanceEvents(orgId: string): Promise<PerfSyncResu
   const fallback = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
   const effectiveCursor = cursor ?? fallback;
 
-  const params = new URLSearchParams({ updated_after: effectiveCursor });
+  // media_required=true → Motive includes camera_media.downloadable_videos
+  // in the response for events with an AI dashcam clip. URLs are signed
+  // and time-limited (typically ~48h), so we bake them into `raw` at
+  // ingest time; older events with expired links show a "video expired"
+  // placeholder in the drawer.
+  const params = new URLSearchParams({
+    updated_after:  effectiveCursor,
+    media_required: "true",
+  });
   const baseUrl = `https://api.gomotive.com/v2/driver_performance_events?${params.toString()}`;
 
   const vehicleAssetMap = await loadVehicleAssetMap(orgId);

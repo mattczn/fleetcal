@@ -28,7 +28,9 @@ import { AlertTriangle, Bell, X } from 'lucide-react';
 import { usePermissions } from '@/lib/usePermissions';
 import { useModules } from '@/lib/useModules';
 import { railway } from '@/lib/railway';
-import type { PerformanceEventRow } from '@fleetcal/types';
+import type { PerformanceEventRow, MotivePerfRaw } from '@fleetcal/types';
+import SafetyPanel from './SafetyPanel';
+import DashcamVideo from './SafetyDashcamVideo';
 
 const POLL_MS = 60_000;
 
@@ -44,6 +46,7 @@ export default function SafetyEventsBell() {
   const [events,   setEvents]   = useState<PerformanceEventRow[]>([]);
   const [open,     setOpen]     = useState(false);
   const [openId,   setOpenId]   = useState<number | null>(null);
+  const [panelOpen, setPanelOpen] = useState(false);
 
   const load = useMemo(() => async () => {
     if (gated) return;
@@ -118,6 +121,7 @@ export default function SafetyEventsBell() {
           events={events}
           onClose={() => setOpen(false)}
           onOpenEvent={(id) => { setOpen(false); setOpenId(id); }}
+          onSeeAll={() => { setOpen(false); setPanelOpen(true); }}
           onRefresh={load}
         />
       )}
@@ -128,6 +132,10 @@ export default function SafetyEventsBell() {
           onClose={() => { setOpenId(null); void load(); }}
         />
       )}
+
+      {panelOpen && (
+        <SafetyPanel onClose={() => { setPanelOpen(false); void load(); }} />
+      )}
     </>
   );
 }
@@ -135,11 +143,12 @@ export default function SafetyEventsBell() {
 // ── Popover ────────────────────────────────────────────────────────────
 
 function BellPopover({
-  events, onClose, onOpenEvent, onRefresh,
+  events, onClose, onOpenEvent, onSeeAll, onRefresh,
 }: {
   events:      PerformanceEventRow[];
   onClose:     () => void;
   onOpenEvent: (id: number) => void;
+  onSeeAll:    () => void;
   onRefresh:   () => Promise<void>;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -203,7 +212,7 @@ function BellPopover({
         </button>
       </div>
 
-      <div style={{ overflowY: 'auto' }}>
+      <div style={{ overflowY: 'auto', flex: 1 }}>
         {events.length === 0 ? (
           <div style={{ padding: '24px 16px', textAlign: 'center', color: 'var(--gc-text-3)', fontSize: 12 }}>
             No new safety events.
@@ -218,8 +227,12 @@ function BellPopover({
                 display: 'flex',
                 width: '100%',
                 gap: 10,
-                padding: '10px 12px',
+                padding: '10px 12px 10px 9px',
                 borderBottom: '1px solid var(--gc-border-light)',
+                // Asset color as a 3px left accent bar. Falls back to a
+                // neutral gray when the asset was deleted/unlinked so
+                // the row layout stays consistent.
+                borderLeft: `3px solid ${e.asset_color ?? 'var(--gc-border-light)'}`,
                 background: 'transparent',
                 textAlign: 'left',
                 cursor: 'pointer',
@@ -240,13 +253,17 @@ function BellPopover({
                   {eventTypeLabel(e.event_type)}
                   {e.intensity ? ` — ${e.intensity}` : ''}
                 </div>
+                {/* Primary secondary line: truck (fleetcal name) + calendar-resolved
+                    driver. Falls back to Motive's vehicle number only when the
+                    truck hasn't been linked in Equipment yet. */}
                 <div style={{ fontSize: 11.5, color: 'var(--gc-text-2)', marginTop: 2 }}>
-                  Truck {e.vehicle_number ?? e.vehicle_id}
-                  {e.driver_first_name || e.driver_last_name
-                    ? ` · ${[e.driver_first_name, e.driver_last_name].filter(Boolean).join(' ')}`
-                    : ''}
+                  {e.asset_name ?? `Truck ${e.vehicle_number ?? e.vehicle_id}`}
+                  {e.resolved_driver_name ? ` · ${e.resolved_driver_name}` : ' · unassigned'}
                 </div>
+                {/* Load + relative time. Load rendered only when the
+                    resolver found a covering calendar event. */}
                 <div style={{ fontSize: 11, color: 'var(--gc-text-3)', marginTop: 2 }}>
+                  {e.resolved_load_num ? `Load ${e.resolved_load_num} · ` : ''}
                   {relTime(e.event_time)}
                 </div>
               </div>
@@ -254,6 +271,29 @@ function BellPopover({
           ))
         )}
       </div>
+
+      {/* Footer link → full Safety Panel. Triage-heavy days need a
+          bigger surface than a 360×520 popover, so this is the escape
+          hatch. */}
+      <button
+        type="button"
+        onClick={onSeeAll}
+        style={{
+          padding: '10px 12px',
+          borderTop: '1px solid var(--gc-border-light)',
+          background: 'var(--gc-bg)',
+          fontSize: 12,
+          fontWeight: 600,
+          color: 'var(--gc-blue, #1a73e8)',
+          border: 'none',
+          borderBottomLeftRadius: 8,
+          borderBottomRightRadius: 8,
+          cursor: 'pointer',
+          textAlign: 'center',
+        }}
+      >
+        See all safety alerts (24h) →
+      </button>
     </div>
   );
 }
@@ -268,7 +308,7 @@ interface SuggestedDriver {
 }
 
 function EventDetailDrawer({ eventId, onClose }: { eventId: number; onClose: () => void }) {
-  const [event,   setEvent]   = useState<PerformanceEventRow | null>(null);
+  const [event,   setEvent]   = useState<(PerformanceEventRow & { raw?: MotivePerfRaw }) | null>(null);
   const [suggested, setSuggested] = useState<SuggestedDriver | null>(null);
   const [drivers, setDrivers] = useState<Driver[]>([]);
   const [driverId, setDriverId] = useState<number | null>(null);
@@ -406,8 +446,27 @@ function EventDetailDrawer({ eventId, onClose }: { eventId: number; onClose: () 
 
             <div>
               <div style={{ fontSize: 12, color: 'var(--gc-text-3)', textTransform: 'uppercase', letterSpacing: 0.4 }}>Truck</div>
-              <div style={{ fontSize: 13, color: 'var(--gc-text-1)', marginTop: 2 }}>
-                {event.vehicle_number ?? `Vehicle ${event.vehicle_id}`}
+              <div style={{ fontSize: 13, color: 'var(--gc-text-1)', marginTop: 2, display: 'flex', alignItems: 'center', gap: 8 }}>
+                {event.asset_color && (
+                  <span
+                    aria-hidden
+                    style={{
+                      display: 'inline-block',
+                      width: 10,
+                      height: 10,
+                      borderRadius: 2,
+                      background: event.asset_color,
+                      flexShrink: 0,
+                    }}
+                  />
+                )}
+                {event.asset_name ?? event.vehicle_number ?? `Vehicle ${event.vehicle_id}`}
+                {event.asset_unit && (
+                  <span style={{ fontSize: 11.5, color: 'var(--gc-text-3)' }}>#{event.asset_unit}</span>
+                )}
+                {event.resolved_load_num && (
+                  <span style={{ fontSize: 12, color: 'var(--gc-text-2)' }}>· Load {event.resolved_load_num}</span>
+                )}
               </div>
               {event.location_label && (
                 <div style={{ fontSize: 12, color: 'var(--gc-text-2)', marginTop: 2 }}>{event.location_label}</div>
@@ -423,6 +482,10 @@ function EventDetailDrawer({ eventId, onClose }: { eventId: number; onClose: () 
                 </a>
               )}
             </div>
+
+            {/* Dashcam video — renders nothing when the truck has no
+                AI dashcam or when the clip hasn't uploaded yet. */}
+            <DashcamVideo raw={event.raw} />
 
             <div>
               <div style={{ fontSize: 12, color: 'var(--gc-text-3)', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 4 }}>

@@ -97,7 +97,7 @@ import type {
   CrmLead, CrmActivity, CrmSettings, CrmStats, CrmSyncResult,
   CrmListLeadsQuery, CrmListLeadsResponse, CrmLeadDetailResponse,
   CrmSequence, CrmSequenceStep, CrmEmail, CrmEmailStatus,
-  PerformanceEventRow,
+  PerformanceEventRow, MotivePerfRaw, PerformanceEventMovement,
 } from '@fleetcal/types';
 
 const BASE_URL =
@@ -761,9 +761,19 @@ class RailwayClient {
       newCount: number;
     }>('GET', `/v1/performance-events?status=${status}&limit=${limit}`);
   }
+  /** Panel query — trailing window, all statuses, raw payload + movement
+   *  sidecar included so the map can draw the GPS trace + between-load
+   *  movement OD line without a second round trip. */
+  listPerformanceEventsForPanel(hours = 24) {
+    return this.req<{
+      events:    (PerformanceEventRow & { raw?: MotivePerfRaw; vehicle_id?: number })[];
+      movements: PerformanceEventMovement[];
+      newCount:  number;
+    }>('GET', `/v1/performance-events?status=all&limit=500&since=${hours}h&include=raw,movements`);
+  }
   getPerformanceEvent(id: number) {
     return this.req<{
-      event:           PerformanceEventRow;
+      event:           PerformanceEventRow & { raw?: MotivePerfRaw };
       suggestedDriver: {
         fleetcalDriverId: number | null;
         displayName:      string | null;

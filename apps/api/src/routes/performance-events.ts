@@ -52,11 +52,18 @@ interface PerfEventRow {
   duration:           number | null;
   intensity:          string | null;
   vehicle_id:         number;
-  vehicle_number:     string | null;
+  vehicle_number:     string | null;              // Motive-side (kept for drawer diagnostics only)
   asset_id:           number | null;
-  driver_id:          number | null;
+  asset_name:         string | null;              // fleetcal-side truck name — this is what UIs display
+  asset_unit:         string | null;              // fleetcal-side fleet/unit number (e.g. "#2021")
+  asset_color:        string | null;              // resolved from assets.color for bell accent bar
+  driver_id:          number | null;              // Motive-side driver_id (untrusted)
   driver_first_name:  string | null;
   driver_last_name:   string | null;
+  // ── Calendar-resolved (authoritative) — set by the API, NOT stored.
+  resolved_driver_id:   number | null;
+  resolved_driver_name: string | null;
+  resolved_load_num:    string | null;
   lat:                number | null;
   lon:                number | null;
   location_label:     string | null;
@@ -86,16 +93,26 @@ perf.get("/", async (c) => {
   const orgId = c.get("orgId");
   const url   = new URL(c.req.url);
   const status = url.searchParams.get("status") ?? "new";
-  const limit  = Math.min(200, Math.max(1, Number(url.searchParams.get("limit") ?? 50)));
+  const limit  = Math.min(500, Math.max(1, Number(url.searchParams.get("limit") ?? 50)));
+  // `?since=24h|12h|1h` narrows to the trailing window; used by the
+  // Safety Panel to show every alert in the last day (not just unread).
+  const sinceMs = parseWindow(url.searchParams.get("since"));
+  // `?include=raw,movements` — opt-in payload extras for the panel.
+  // Popover doesn't ask for either (raw is multi-KB per row for GPS
+  // arrays; movements need a second query per truck).
+  const include = new Set((url.searchParams.get("include") ?? "").split(",").map(s => s.trim()).filter(Boolean));
+
+  const cols = include.has("raw") ? `${SELECT_COLS},raw,vehicle_id` : SELECT_COLS;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let q = (supabase as any)
     .from("motive_performance_events")
-    .select(SELECT_COLS)
+    .select(cols)
     .eq("org_id", orgId)
     .order("event_time", { ascending: false })
     .limit(limit);
   if (status !== "all") q = q.eq("dispatch_status", status);
+  if (sinceMs != null) q = q.gte("event_time", new Date(Date.now() - sinceMs).toISOString());
 
   const { data, error } = await q;
   if (error) {
@@ -103,8 +120,38 @@ perf.get("/", async (c) => {
     return c.json({ error: "fetch_failed", detail: error.message }, 500);
   }
 
-  // Separate count query so the bell can show unread even when the
-  // list is filtered to all/new — cheap thanks to the partial index.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rows = (data ?? []) as (PerfEventRow & { raw?: any })[];
+
+  // Batch-resolve calendar driver + load + asset color for every event
+  // in the list. 4 queries total regardless of list size.
+  await enrichEventsBatch(orgId, rows);
+
+  // Optional Motive driving_periods sidecar — panel uses this to draw
+  // the between-load movement OD line on the map. Pull the periods for
+  // every distinct vehicle_id in the result, covering the same trailing
+  // window (padded ±2h so a period that started before or ends after
+  // still comes through).
+  let movements: MovementSidecar[] = [];
+  if (include.has("movements") && rows.length > 0) {
+    const vehicleIds = Array.from(new Set(rows.map(r => r.vehicle_id)));
+    const eventTimes = rows.map(r => Date.parse(r.event_time)).filter(Number.isFinite);
+    const windowStart = Math.min(...eventTimes) - 2 * 60 * 60 * 1000;
+    const windowEnd   = Math.max(...eventTimes) + 2 * 60 * 60 * 1000;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: mvts } = await (supabase as any)
+      .from("motive_driving_periods")
+      .select("id, vehicle_id, driver_first_name, driver_last_name, start_time, end_time, origin, destination, origin_lat, origin_lon, destination_lat, destination_lon, miles")
+      .eq("org_id", orgId)
+      .in("vehicle_id", vehicleIds)
+      .gte("start_time", new Date(windowStart).toISOString())
+      .lte("start_time", new Date(windowEnd).toISOString())
+      .order("start_time", { ascending: false });
+    movements = (mvts ?? []) as MovementSidecar[];
+  }
+
+  // Unread count — cheap thanks to the partial index; always returned
+  // so the bell badge stays fresh even when the panel is filtered.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { count } = await (supabase as any)
     .from("motive_performance_events")
@@ -112,11 +159,35 @@ perf.get("/", async (c) => {
     .eq("org_id", orgId)
     .eq("dispatch_status", "new");
 
-  return c.json({
-    events:     (data ?? []) as PerfEventRow[],
-    newCount:   count ?? 0,
-  });
+  return c.json({ events: rows, movements, newCount: count ?? 0 });
 });
+
+interface MovementSidecar {
+  id: number;
+  vehicle_id: number;
+  driver_first_name: string | null;
+  driver_last_name:  string | null;
+  start_time: string;
+  end_time:   string | null;
+  origin:     string | null;
+  destination: string | null;
+  origin_lat: number | null;
+  origin_lon: number | null;
+  destination_lat: number | null;
+  destination_lon: number | null;
+  miles:      number | null;
+}
+
+/** Parse "24h" / "12h" / "1h" / "30m" into milliseconds. Returns null
+ *  when the input is missing or malformed. */
+function parseWindow(s: string | null): number | null {
+  if (!s) return null;
+  const m = s.trim().toLowerCase().match(/^(\d+)([hm])$/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n * (m[2] === "h" ? 3_600_000 : 60_000);
+}
 
 // ── GET /v1/performance-events/:id ─────────────────────────────────────
 //
@@ -131,10 +202,13 @@ perf.get("/:id", async (c) => {
   const id    = Number(c.req.param("id"));
   if (!Number.isFinite(id)) return c.json({ error: "bad_id" }, 400);
 
+  // Drawer needs the raw payload for the dashcam video block, so
+  // detail requests always include it — unlike the popover list, which
+  // never asks for `raw` because it's KB per row.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: eventRow, error } = await (supabase as any)
     .from("motive_performance_events")
-    .select(SELECT_COLS)
+    .select(`${SELECT_COLS},raw,vehicle_id`)
     .eq("org_id", orgId)
     .eq("id", id)
     .maybeSingle();
@@ -144,7 +218,11 @@ perf.get("/:id", async (c) => {
   }
   if (!eventRow) return c.json({ error: "not_found" }, 404);
 
-  const event = eventRow as PerfEventRow;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const event = eventRow as PerfEventRow & { raw?: any };
+
+  // Enrich in place — same resolved_* fields the list handler adds.
+  await enrichEventsBatch(orgId, [event]);
 
   // Autofilled driver comes from the FleetCal calendar — not from Motive.
   // We can't trust Motive's driver attribution (see file header).
@@ -408,6 +486,175 @@ async function resolveCurrentDriver(
   }
 
   return null;
+}
+
+/**
+ * Batched calendar resolver for the bell list. Mutates `rows` in place,
+ * setting `asset_color`, `resolved_driver_id`, `resolved_driver_name`,
+ * and `resolved_load_num`. Same waterfall as resolveCurrentDriver:
+ *   1. calendar_active — load event whose window contains event_time
+ *   2. calendar_recent — most recent load event ending before event_time
+ *   3. asset_default  — driver_asset_prefs default for the asset
+ *
+ * Cost = 4 queries total regardless of row count (assets + events +
+ * driver_asset_prefs + drivers name lookup). Much cheaper than looping
+ * resolveCurrentDriver per row.
+ */
+async function enrichEventsBatch(orgId: string, rows: PerfEventRow[]): Promise<void> {
+  if (rows.length === 0) return;
+
+  // (1) Asset lookup — name/unit/color. Name is what dispatchers see
+  //     in the calendar column header ("CT-2021"); we render that in
+  //     the popover instead of Motive's vehicle.number (which is
+  //     sometimes "C412863" or another Motive-only identifier).
+  const assetIds = Array.from(new Set(
+    rows.map(r => r.asset_id).filter((x): x is number => x != null),
+  ));
+  interface AssetLookup { name: string | null; unit: string | null; color: string | null }
+  const assetById = new Map<number, AssetLookup>();
+  if (assetIds.length > 0) {
+    const { data: assetRows } = await supabase
+      .from("assets")
+      .select("id, name, unit, color")
+      .eq("org_id", orgId)
+      .in("id", assetIds);
+    for (const a of (assetRows ?? []) as Array<{ id: number; name: string | null; unit: string | null; color: string | null }>) {
+      assetById.set(a.id, { name: a.name, unit: a.unit, color: a.color });
+    }
+  }
+
+  // (2) Pull ALL calendar events for these assets whose window overlaps
+  //     any of our event times. We over-pull slightly — 30-day window
+  //     around the min/max event_time — because a bell load only has
+  //     ~50 rows and 30d of events for a handful of trucks is small.
+  const eventTimes = rows
+    .map(r => Date.parse(r.event_time))
+    .filter(Number.isFinite);
+  const minTs = Math.min(...eventTimes);
+  const maxTs = Math.max(...eventTimes);
+  const rangeStart = utcMsToNaiveMt(minTs - 30 * 24 * 60 * 60 * 1000);
+  const rangeEnd   = utcMsToNaiveMt(maxTs + 30 * 24 * 60 * 60 * 1000);
+
+  interface CalEventRow {
+    id: string; asset_id: number;
+    driver_id: number | null; driver_name: string | null;
+    load_num: string | null; start: string; end: string;
+  }
+  let calRows: CalEventRow[] = [];
+  if (assetIds.length > 0 && rangeStart && rangeEnd) {
+    const { data } = await supabase
+      .from("events")
+      .select("id, asset_id, driver_id, driver_name, load_num, start, end")
+      .eq("org_id", orgId)
+      .in("asset_id", assetIds)
+      .not("driver_id", "is", null)
+      .gte("end", rangeStart)
+      .lte("start", rangeEnd);
+    calRows = (data ?? []) as CalEventRow[];
+  }
+  const calByAsset = new Map<number, CalEventRow[]>();
+  for (const e of calRows) {
+    const arr = calByAsset.get(e.asset_id) ?? [];
+    arr.push(e);
+    calByAsset.set(e.asset_id, arr);
+  }
+
+  // (3) driver_asset_prefs fallback — only for assets that had no
+  //     calendar match at all. Fetched lazily below after step 4.
+  const prefByAsset = new Map<number, number>();
+  const needPref = new Set<number>();
+
+  // (4) Match each perf event against its asset's calendar. Prefer any
+  //     event whose window contains event_time; otherwise pick the most
+  //     recent event ending before event_time.
+  for (const row of rows) {
+    const asset = row.asset_id != null ? assetById.get(row.asset_id) : undefined;
+    row.asset_name           = asset?.name  ?? null;
+    row.asset_unit           = asset?.unit  ?? null;
+    row.asset_color          = asset?.color ?? null;
+    row.resolved_driver_id   = null;
+    row.resolved_driver_name = null;
+    row.resolved_load_num    = null;
+    if (row.asset_id == null) continue;
+
+    const naiveMt = utcIsoToNaiveMt(row.event_time);
+    if (!naiveMt) continue;
+
+    const candidates = calByAsset.get(row.asset_id) ?? [];
+    // calendar_active — start <= t <= end. If multiple (relay overlap),
+    // prefer the one ending soonest so the pickup leg wins over a stale
+    // delivery leg.
+    let best: CalEventRow | null = null;
+    for (const e of candidates) {
+      if (e.start <= naiveMt && e.end >= naiveMt) {
+        if (!best || e.end < best.end) best = e;
+      }
+    }
+    // calendar_recent — most recent event that ended before t.
+    if (!best) {
+      for (const e of candidates) {
+        if (e.end <= naiveMt) {
+          if (!best || e.end > best.end) best = e;
+        }
+      }
+    }
+    if (best && best.driver_id != null) {
+      row.resolved_driver_id   = best.driver_id;
+      row.resolved_driver_name = best.driver_name;
+      row.resolved_load_num    = best.load_num;
+    } else {
+      needPref.add(row.asset_id);
+    }
+  }
+
+  // (5) driver_asset_prefs for assets with zero calendar match.
+  if (needPref.size > 0) {
+    const { data: prefs } = await supabase
+      .from("driver_asset_prefs")
+      .select("asset_id, driver_id")
+      .eq("org_id", orgId)
+      .in("asset_id", Array.from(needPref));
+    for (const p of (prefs ?? []) as Array<{ asset_id: number; driver_id: number }>) {
+      prefByAsset.set(p.asset_id, p.driver_id);
+    }
+  }
+
+  // (6) Any row still without a driver name pulls one via driver_asset_prefs.
+  //     Only for rows where the calendar returned nothing — we don't want
+  //     to override a resolved driver just because prefs disagree.
+  const missingNameDriverIds = new Set<number>();
+  for (const row of rows) {
+    if (row.resolved_driver_id != null) continue;
+    if (row.asset_id == null) continue;
+    const prefDriverId = prefByAsset.get(row.asset_id);
+    if (prefDriverId != null) {
+      row.resolved_driver_id = prefDriverId;
+      missingNameDriverIds.add(prefDriverId);
+    }
+  }
+  if (missingNameDriverIds.size > 0) {
+    const { data: drivers } = await supabase
+      .from("drivers")
+      .select("id, name")
+      .eq("org_id", orgId)
+      .in("id", Array.from(missingNameDriverIds));
+    const nameById = new Map<number, string>();
+    for (const d of (drivers ?? []) as Array<{ id: number; name: string }>) {
+      nameById.set(d.id, d.name);
+    }
+    for (const row of rows) {
+      if (row.resolved_driver_name == null && row.resolved_driver_id != null) {
+        row.resolved_driver_name = nameById.get(row.resolved_driver_id) ?? null;
+      }
+    }
+  }
+}
+
+/** UTC epoch ms → naive Mountain-Time "YYYY-MM-DDTHH:mm" for string
+ *  comparison against events.start/end. */
+function utcMsToNaiveMt(ms: number): string | null {
+  if (!isFinite(ms)) return null;
+  return utcIsoToNaiveMt(new Date(ms).toISOString());
 }
 
 async function lookupDriverName(driverId: number): Promise<string | null> {

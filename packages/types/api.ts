@@ -2067,11 +2067,20 @@ export interface PerformanceEventRow {
   duration:           number | null;
   intensity:          string | null;
   vehicle_id:         number;
-  vehicle_number:     string | null;
+  vehicle_number:     string | null;        // Motive-side (drawer diagnostics only — don't display in lists)
   asset_id:           number | null;
+  asset_name:         string | null;        // fleetcal-side display name (assets.name), preferred label
+  asset_unit:         string | null;        // fleetcal-side fleet/unit number (assets.unit)
+  asset_color:        string | null;        // hex from assets.color — bell accent bar
   driver_id:          number | null;        // Motive driver id (may be stale)
   driver_first_name:  string | null;
   driver_last_name:   string | null;
+  // ── Calendar-resolved (authoritative). Populated by the API from the
+  //    covering events row on the asset, NOT stored on the DB row. Null
+  //    means neither the calendar nor driver_asset_prefs had a match.
+  resolved_driver_id:   number | null;
+  resolved_driver_name: string | null;
+  resolved_load_num:    string | null;
   lat:                number | null;
   lon:                number | null;
   location_label:     string | null;
@@ -2083,6 +2092,62 @@ export interface PerformanceEventRow {
   notified_at:        string | null;
   notified_driver_id: number | null;
   notified_message:   string | null;
+}
+
+/** Subset of the Motive v2 driver_performance_events payload we surface
+ *  on `include=raw` requests. Only fields the panel/drawer actually read —
+ *  a full echo of Motive's response is much larger. */
+export interface MotivePerfRaw {
+  /** GPS trace of the event itself — 1Hz samples during the incident.
+   *  Rendered as a polyline on the map. */
+  m_gps_lat?:  number[];
+  m_gps_lon?:  number[];
+  m_gps_spd?:  number[];
+  m_veh_spd?:  number[];
+  max_speed?:  number;
+  min_speed?:  number;
+  coaching_status?: string | null;
+  primary_behavior?: string[];
+  event_intensity?: { name: string; value: number; unit_type: string } | null;
+  time_to_hit_range?: { unit: string; max_time_to_hit_range: number; min_time_to_hit_range: number } | null;
+  camera_media?: {
+    id: number;
+    cam_type: string;
+    duration: number;
+    available: boolean;
+    start_time: string;
+    uploaded_at: string;
+    cam_positions: string[];
+    /** Present only when the sync request asked for `media_required=true`.
+     *  URLs are signed + time-limited (~48h); expect broken links on
+     *  older events. */
+    downloadable_videos?: {
+      front_facing_plain_url?:       string | null;
+      driver_facing_plain_url?:      string | null;
+      front_facing_enhanced_url?:    string | null;
+      dual_facing_enhanced_url?:     string | null;
+      front_facing_enhanced_ai_viz_url?: string | null;
+      dual_facing_enhanced_ai_viz_url?:  string | null;
+    } | null;
+  } | null;
+}
+
+/** Motive driving-period row surfaced in the panel's sidecar. Used to
+ *  draw the between-load movement OD line on the panel map. */
+export interface PerformanceEventMovement {
+  id: number;
+  vehicle_id: number;
+  driver_first_name: string | null;
+  driver_last_name:  string | null;
+  start_time: string;
+  end_time:   string | null;
+  origin:     string | null;
+  destination: string | null;
+  origin_lat: number | null;
+  origin_lon: number | null;
+  destination_lat: number | null;
+  destination_lon: number | null;
+  miles:      number | null;
 }
 
 // ── /v1/reports/loads — load-shaped report endpoint ────────────────────
