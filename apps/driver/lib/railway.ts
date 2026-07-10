@@ -264,6 +264,26 @@ export const railway = {
   getScorecard() {
     return req<import("@fleetcal/types").DriverScorecardResponse>("GET", "/v1/driver/scorecard");
   },
+
+  /** Safety alerts this driver has been notified about — inbox for
+   *  the /safety screens. Message body is included; the app decides
+   *  whether to render it based on the surface (list hides, detail
+   *  shows). */
+  listSafetyAlerts() {
+    return req<{
+      alerts: {
+        id:               number;
+        event_type:       string;
+        event_time:       string;
+        intensity:        string | null;
+        location_label:   string | null;
+        truck_name:       string | null;
+        truck_unit:       string | null;
+        notified_at:      string;
+        notified_message: string | null;
+      }[];
+    }>("GET", "/v1/driver/safety-alerts");
+  },
   listAssets() {
     return req<{
       assets: { id: number; name: string; unit?: string; truck?: string; color: string; type: string }[];

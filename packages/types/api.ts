@@ -2096,6 +2096,10 @@ export interface PerformanceEventRow {
   notified_at:        string | null;
   notified_driver_id: number | null;
   notified_message:   string | null;
+  /** Resolved from drivers.name at read time — reflects the driver who
+   *  ACTUALLY received the push, which can differ from
+   *  resolved_driver_name when the dispatcher reassigned before sending. */
+  notified_driver_name: string | null;
 }
 
 /** Subset of the Motive v2 driver_performance_events payload we surface
@@ -2122,9 +2126,23 @@ export interface MotivePerfRaw {
     start_time: string;
     uploaded_at: string;
     cam_positions: string[];
+    /** Motive stages video in three phases: (1) event fires, JPG stills
+     *  land immediately; (2) raw video sits on Motive's side; (3) MP4
+     *  transcode is triggered on demand or by policy. Most hard-brake
+     *  events never auto-transcode — this field says whether it did. */
+    auto_transcode_status?: string | null;
     /** Present only when the sync request asked for `media_required=true`.
-     *  URLs are signed + time-limited (~48h); expect broken links on
-     *  older events. */
+     *  Signed S3 URLs (~7-day TTL from the header we observed on the
+     *  actual response), so older events may show broken images too —
+     *  same on-demand refresh path handles both. */
+    downloadable_images?: {
+      front_facing_jpg_url?:  string | null;
+      driver_facing_jpg_url?: string | null;
+    } | null;
+    /** Present when Motive transcoded a video for this event. In
+     *  practice: null for most hard_brake/hard_accel unless a fleet
+     *  manager explicitly requested a video recall. Populated for
+     *  higher-severity events (tailgating, distraction, etc.). */
     downloadable_videos?: {
       front_facing_plain_url?:       string | null;
       driver_facing_plain_url?:      string | null;

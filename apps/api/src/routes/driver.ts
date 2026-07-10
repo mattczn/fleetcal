@@ -3332,4 +3332,74 @@ driver.get("/inspections/today", async (c) => {
   return c.json({ inspections: data ?? [] });
 });
 
+// ─────────────────────────────────────────────────────────────────────────
+// Safety alerts — motive_performance_events rows the DISPATCHER notified
+// this driver about. The row itself is created by ingest before any
+// notification happens; only rows with notified_driver_id = <this driver>
+// are visible here. Message body renders only when the driver opens the
+// detail, so the push notification remains a short summary.
+// ─────────────────────────────────────────────────────────────────────────
+
+driver.get("/safety-alerts", async (c) => {
+  const driverId = c.get("driverId");
+  const orgId    = c.get("orgId");
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (supabase as any)
+    .from("motive_performance_events")
+    .select(`
+      id, event_type, event_time, intensity, location_label,
+      asset_id, vehicle_number,
+      notified_at, notified_message, notified_driver_id
+    `)
+    .eq("org_id", orgId)
+    .eq("notified_driver_id", driverId)
+    .order("notified_at", { ascending: false })
+    .limit(100);
+  if (error) {
+    console.error("[GET /v1/driver/safety-alerts]", error);
+    return c.json({ error: "fetch_failed", detail: error.message }, 500);
+  }
+
+  // Resolve fleetcal truck names — dispatchers see "CT-2026" so drivers
+  // should too. Batch fetch to avoid an N+1.
+  const alertRows = (data ?? []) as Array<{ asset_id: number | null }>;
+  const assetIds: number[] = Array.from(new Set(
+    alertRows
+      .map(r => r.asset_id)
+      .filter((x): x is number => x != null),
+  ));
+  const assetById = new Map<number, { name: string | null; unit: string | null }>();
+  if (assetIds.length > 0) {
+    const { data: assets } = await supabase
+      .from("assets")
+      .select("id, name, unit")
+      .eq("org_id", orgId)
+      .in("id", assetIds);
+    for (const a of (assets ?? []) as Array<{ id: number; name: string | null; unit: string | null }>) {
+      assetById.set(a.id, { name: a.name, unit: a.unit });
+    }
+  }
+
+  const alerts = (data ?? []).map((r: {
+    id: number; event_type: string; event_time: string; intensity: string | null;
+    location_label: string | null; asset_id: number | null; vehicle_number: string | null;
+    notified_at: string; notified_message: string | null;
+  }) => ({
+    id:             r.id,
+    event_type:     r.event_type,
+    event_time:     r.event_time,
+    intensity:      r.intensity,
+    location_label: r.location_label,
+    truck_name:     (r.asset_id != null ? assetById.get(r.asset_id)?.name : null) ?? r.vehicle_number ?? null,
+    truck_unit:     r.asset_id != null ? (assetById.get(r.asset_id)?.unit ?? null) : null,
+    notified_at:    r.notified_at,
+    // NOTE: notified_message is intentionally included here — the app
+    // decides whether to render it (list row hides, detail shows).
+    notified_message: r.notified_message,
+  }));
+
+  return c.json({ alerts });
+});
+
 export default driver;

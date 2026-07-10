@@ -31,6 +31,7 @@ import { railway } from '@/lib/railway';
 import type { PerformanceEventRow, MotivePerfRaw } from '@fleetcal/types';
 import SafetyPanel from './SafetyPanel';
 import DashcamVideo from './SafetyDashcamVideo';
+import { fmtDenverLong, relTimeDenver } from '@/lib/safetyTime';
 
 const POLL_MS = 60_000;
 
@@ -264,7 +265,7 @@ function BellPopover({
                     resolver found a covering calendar event. */}
                 <div style={{ fontSize: 11, color: 'var(--gc-text-3)', marginTop: 2 }}>
                   {e.resolved_load_num ? `Load ${e.resolved_load_num} · ` : ''}
-                  {relTime(e.event_time)}
+                  {relTimeDenver(e.event_time)}
                 </div>
                 {e.resolved_load_title && (
                   <div style={{ fontSize: 11, color: 'var(--gc-text-3)', marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -319,6 +320,7 @@ function EventDetailDrawer({ eventId, onClose }: { eventId: number; onClose: () 
   const [driverId, setDriverId] = useState<number | null>(null);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const [savingDriver, setSavingDriver] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -340,13 +342,31 @@ function EventDetailDrawer({ eventId, onClose }: { eventId: number; onClose: () 
             }
           : null);
         setDrivers(driverList.drivers.map(d => ({ id: d.id, name: d.name })));
-        setDriverId(detail.suggestedDriver?.fleetcalDriverId ?? null);
+        // Prefer a saved dispatcher assignment; fall back to the
+        // calendar autofill on untouched events.
+        setDriverId(
+          detail.event.assigned_driver_id ??
+          detail.suggestedDriver?.fleetcalDriverId ??
+          null,
+        );
       } catch (err) {
         if (!cancelled) setError((err as Error).message ?? 'Failed to load event');
       }
     })();
     return () => { cancelled = true; };
   }, [eventId]);
+
+  async function persistDriver(next: number | null) {
+    if (!event || next === (event.assigned_driver_id ?? null)) return;
+    setSavingDriver(true); setError(null);
+    try {
+      const res = await railway.updatePerformanceEvent(event.id, { assigned_driver_id: next });
+      setEvent(prev => prev ? { ...prev, ...res.event } : prev);
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+    setSavingDriver(false);
+  }
 
   async function handleNotify() {
     if (!event || !driverId) return;
@@ -444,7 +464,7 @@ function EventDetailDrawer({ eventId, onClose }: { eventId: number; onClose: () 
                 {event.intensity ? ` — ${event.intensity}` : ''}
               </div>
               <div style={{ fontSize: 12, color: 'var(--gc-text-2)', marginTop: 4 }}>
-                {new Date(event.event_time).toLocaleString()}
+                {fmtDenverLong(event.event_time)}
                 {event.duration ? ` · ${event.duration.toFixed(1)}s` : ''}
               </div>
             </div>
@@ -523,7 +543,14 @@ function EventDetailDrawer({ eventId, onClose }: { eventId: number; onClose: () 
               )}
               <select
                 value={driverId ?? ''}
-                onChange={e => setDriverId(e.target.value ? Number(e.target.value) : null)}
+                onChange={e => {
+                  const next = e.target.value ? Number(e.target.value) : null;
+                  setDriverId(next);
+                  // Auto-save the reassignment so the correction sticks
+                  // even without pressing Notify.
+                  void persistDriver(next);
+                }}
+                disabled={savingDriver}
                 style={{
                   width: '100%',
                   padding: '8px 10px',
@@ -532,6 +559,7 @@ function EventDetailDrawer({ eventId, onClose }: { eventId: number; onClose: () 
                   border: '1px solid var(--gc-border-light)',
                   background: 'var(--gc-bg)',
                   color: 'var(--gc-text-1)',
+                  opacity: savingDriver ? 0.7 : 1,
                 }}
               >
                 <option value="">Select a driver…</option>
@@ -539,6 +567,9 @@ function EventDetailDrawer({ eventId, onClose }: { eventId: number; onClose: () 
                   <option key={d.id} value={d.id}>{d.name}</option>
                 ))}
               </select>
+              {savingDriver && (
+                <div style={{ fontSize: 10.5, color: 'var(--gc-text-3)', marginTop: 4 }}>Saving…</div>
+              )}
             </div>
 
             <div>
@@ -583,7 +614,7 @@ function EventDetailDrawer({ eventId, onClose }: { eventId: number; onClose: () 
                   cursor: busy ? 'wait' : 'pointer',
                 }}
               >
-                Dismiss
+                Ignore
               </button>
               <button
                 type="button"
@@ -657,16 +688,6 @@ function severityColor(intensity: string | null): string {
   if (s.includes('severe')) return '#dc2626';
   if (s.includes('moderate')) return '#f59e0b';
   return 'var(--gc-text-2)';
-}
-
-function relTime(iso: string): string {
-  const t = new Date(iso).getTime();
-  if (!isFinite(t)) return iso;
-  const diffSec = (Date.now() - t) / 1000;
-  if (diffSec < 60)   return 'just now';
-  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
-  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
-  return new Date(iso).toLocaleDateString();
 }
 
 function errorMessage(err: unknown): string {

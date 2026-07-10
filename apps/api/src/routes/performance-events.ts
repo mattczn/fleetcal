@@ -77,6 +77,10 @@ interface PerfEventRow {
   notified_at:        string | null;
   notified_driver_id: number | null;
   notified_message:   string | null;
+  // Computed by enrichEventsBatch from drivers.name — NOT a stored column.
+  // Shows the ACTUAL driver the push went to, which can differ from
+  // resolved_driver_name when the dispatcher reassigned before notifying.
+  notified_driver_name: string | null;
 }
 
 const SELECT_COLS = `
@@ -437,20 +441,27 @@ perf.post("/:id/notify-driver", async (c) => {
   // driver reading a 6 PM Mountain event sees midnight UTC on their
   // phone, which is confusing on a road trip.
   const timeStr = formatEventLocalTime(event.event_time, "America/Denver");
-  const bodyText =
-    body.message?.trim() ||
-    `${label} logged on ${truckLabel} at ${timeStr}. ` +
-    `Please review your driving and reach out to dispatch with any context.`;
+  // Push body is ALWAYS the short summary — event details only. The
+  // dispatcher's custom message (if any) is stored on the row and shown
+  // when the driver taps into the alert detail screen. Keeps push
+  // notifications skimmable and lets the driver decide when to read
+  // the full context.
+  const summary =
+    `${label} logged on ${truckLabel} at ${timeStr}. Tap to review.`;
+  const storedMessage = body.message?.trim() || summary;
 
   const sent = await sendAutoPushToDriver(orgId, body.driverId, "safety_alert", {
     title,
-    body: bodyText,
+    body: summary,
     data: {
       kind:             "safety_alert",
       performanceEventId: id,
       truckLabel,
       eventType:        event.event_type,
       eventTime:        event.event_time,
+      // Deep-link — driver app's useNotificationDeepLink pushes to this
+      // route on tap.
+      url:              `/safety/${id}`,
     },
   });
 
@@ -472,7 +483,7 @@ perf.post("/:id/notify-driver", async (c) => {
       assigned_driver_id: body.driverId,
       notified_at:        now,
       notified_driver_id: body.driverId,
-      notified_message:   bodyText,
+      notified_message:   storedMessage,
     })
     .eq("org_id", orgId)
     .eq("id", id)
@@ -484,7 +495,9 @@ perf.post("/:id/notify-driver", async (c) => {
     // so the client marks the row locally.
     return c.json({ event: null, warning: "push_sent_but_update_failed" }, 200);
   }
-  return c.json({ event: updated as PerfEventRow, driverName: (drv as { name: string }).name });
+  const enriched = updated as PerfEventRow;
+  await enrichEventsBatch(orgId, [enriched]);
+  return c.json({ event: enriched, driverName: (drv as { name: string }).name });
 });
 
 export default perf;
@@ -731,34 +744,45 @@ async function enrichEventsBatch(orgId: string, rows: PerfEventRow[]): Promise<v
     }
   }
 
-  // (6) Any row still without a driver name pulls one via driver_asset_prefs.
-  //     Only for rows where the calendar returned nothing — we don't want
-  //     to override a resolved driver just because prefs disagree.
+  // (6) Names for anything the calendar step didn't resolve — either
+  //     driver_asset_prefs fallbacks, OR the notified_driver_id we want
+  //     to display on the "Notification sent" block. Both queries funnel
+  //     into a single drivers lookup by id.
   const missingNameDriverIds = new Set<number>();
   for (const row of rows) {
-    if (row.resolved_driver_id != null) continue;
-    if (row.asset_id == null) continue;
-    const prefDriverId = prefByAsset.get(row.asset_id);
-    if (prefDriverId != null) {
-      row.resolved_driver_id = prefDriverId;
-      missingNameDriverIds.add(prefDriverId);
+    if (row.resolved_driver_id == null && row.asset_id != null) {
+      const prefDriverId = prefByAsset.get(row.asset_id);
+      if (prefDriverId != null) {
+        row.resolved_driver_id = prefDriverId;
+        missingNameDriverIds.add(prefDriverId);
+      }
+    }
+    // notified_driver_name is a computed field; we always resolve it
+    // from drivers.name when notified_driver_id is set so the record
+    // reflects who ACTUALLY got the push (not the calendar autofill,
+    // which may have been overridden by the dispatcher).
+    if (row.notified_driver_id != null) {
+      missingNameDriverIds.add(row.notified_driver_id);
     }
   }
+  let nameById = new Map<number, string>();
   if (missingNameDriverIds.size > 0) {
     const { data: drivers } = await supabase
       .from("drivers")
       .select("id, name")
       .eq("org_id", orgId)
       .in("id", Array.from(missingNameDriverIds));
-    const nameById = new Map<number, string>();
     for (const d of (drivers ?? []) as Array<{ id: number; name: string }>) {
       nameById.set(d.id, d.name);
     }
-    for (const row of rows) {
-      if (row.resolved_driver_name == null && row.resolved_driver_id != null) {
-        row.resolved_driver_name = nameById.get(row.resolved_driver_id) ?? null;
-      }
+  }
+  for (const row of rows) {
+    if (row.resolved_driver_name == null && row.resolved_driver_id != null) {
+      row.resolved_driver_name = nameById.get(row.resolved_driver_id) ?? null;
     }
+    row.notified_driver_name = row.notified_driver_id != null
+      ? (nameById.get(row.notified_driver_id) ?? null)
+      : null;
   }
 }
 

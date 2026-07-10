@@ -41,6 +41,16 @@ export default function DashcamVideo({ eventId, raw: initialRaw, onRefreshed }: 
 
   const cam = raw?.camera_media;
 
+  // Fallback ladder for what to render:
+  //   1. Video URL (if Motive transcoded a clip)
+  //   2. JPG stills (present on almost every event with a dashcam;
+  //      Motive returns these before video is transcoded)
+  //   3. "Motive hasn't attached video/images yet" — show refresh button
+  //
+  // In practice most hard_brake and hard_accel events never get an MP4
+  // (auto_transcode_status = "not started") so the JPG path is what
+  // dispatchers will actually see day to day.
+
   const doRefresh = useCallback(async () => {
     if (eventId == null) return;
     setRefreshing(true); setRefreshMsg(null);
@@ -66,28 +76,64 @@ export default function DashcamVideo({ eventId, raw: initialRaw, onRefreshed }: 
   // ELD-only truck, no dashcam at all — skip the whole block.
   if (!cam) return null;
 
-  const urls = cam.downloadable_videos ?? null;
-  const front  = urls?.front_facing_enhanced_url ?? urls?.front_facing_plain_url  ?? null;
-  const driver = urls?.driver_facing_plain_url ?? null;
-  const dual   = urls?.dual_facing_enhanced_ai_viz_url ?? urls?.dual_facing_enhanced_url ?? null;
-  const hasAnyUrl = !!(front || driver || dual);
+  const vids = cam.downloadable_videos ?? null;
+  const front  = vids?.front_facing_enhanced_url ?? vids?.front_facing_plain_url  ?? null;
+  const driver = vids?.driver_facing_plain_url ?? null;
+  const dual   = vids?.dual_facing_enhanced_ai_viz_url ?? vids?.dual_facing_enhanced_url ?? null;
+  const hasAnyVideo = !!(front || driver || dual);
+
+  const imgs = cam.downloadable_images ?? null;
+  const frontImg  = imgs?.front_facing_jpg_url  ?? null;
+  const driverImg = imgs?.driver_facing_jpg_url ?? null;
+  const hasAnyImage = !!(frontImg || driverImg);
+
+  // "not started" is the common case for hard-brake/hard-accel — set
+  // this so the copy explains why there's no MP4 without making it
+  // sound like a bug.
+  const transcodeStatus = cam.auto_transcode_status ?? null;
 
   return (
     <div>
       <div style={{ fontSize: 10.5, color: 'var(--gc-text-3)', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 5 }}>
         Dashcam
       </div>
+
       {!cam.available ? (
         <div style={{ fontSize: 12, color: 'var(--gc-text-3)' }}>
           Video not yet uploaded from the truck. Try refreshing in a minute.
         </div>
-      ) : !hasAnyUrl ? (
-        // No URLs on the row yet — offer the refresh button. This is
-        // the common case for events ingested before media_required=true
-        // shipped, and for events older than the URL TTL.
+      ) : hasAnyVideo ? (
+        // Prefer video whenever Motive has one — stitched AI-viz clip
+        // first, then per-camera clips side-by-side.
+        dual ? (
+          <VideoTile src={dual} label="Front + driver (annotated)" onExpired={doRefresh} />
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: front && driver ? '1fr 1fr' : '1fr', gap: 8 }}>
+            {front  && <VideoTile src={front}  label="Forward-facing" onExpired={doRefresh} />}
+            {driver && <VideoTile src={driver} label="Driver-facing"  onExpired={doRefresh} />}
+          </div>
+        )
+      ) : hasAnyImage ? (
+        // No transcoded video — but Motive delivered still frames from
+        // each dashcam angle at the moment of the event. That's the
+        // most useful thing dispatchers have to review, and matches
+        // what Curzon sees in the Motive coaching app.
+        <div>
+          <div style={{ display: 'grid', gridTemplateColumns: frontImg && driverImg ? '1fr 1fr' : '1fr', gap: 8 }}>
+            {frontImg  && <ImageTile src={frontImg}  label="Forward-facing" onExpired={doRefresh} />}
+            {driverImg && <ImageTile src={driverImg} label="Driver-facing"  onExpired={doRefresh} />}
+          </div>
+          <div style={{ fontSize: 10.5, color: 'var(--gc-text-3)', marginTop: 6 }}>
+            Motive didn’t transcode a video clip for this event ({transcodeStatus ?? 'no video'}). Stills above are from the moment of the alert.
+          </div>
+        </div>
+      ) : (
+        // Neither video nor images — either the event landed before
+        // media_required=true went live, or the signed URLs on both
+        // expired. Refresh button re-queries Motive to repopulate.
         <div>
           <div style={{ fontSize: 12, color: 'var(--gc-text-3)', marginBottom: 6 }}>
-            Video URLs aren’t on this event yet. Ask Motive for them:
+            No video or images on this event yet. Ask Motive for them:
           </div>
           {eventId != null && (
             <button
@@ -103,27 +149,63 @@ export default function DashcamVideo({ eventId, raw: initialRaw, onRefreshed }: 
               }}
             >
               <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''} />
-              {refreshing ? 'Loading…' : 'Load video'}
+              {refreshing ? 'Loading…' : 'Load media'}
             </button>
           )}
           {refreshMsg && (
             <div style={{ fontSize: 11, color: 'var(--gc-text-3)', marginTop: 6 }}>{refreshMsg}</div>
           )}
         </div>
-      ) : dual ? (
-        // Prefer the stitched AI-viz clip — one video showing both
-        // cameras with the offending behavior annotated. Best for
-        // dispatcher review since context is on-screen.
-        <VideoTile src={dual} label="Front + driver (annotated)" onExpired={doRefresh} />
-      ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: front && driver ? '1fr 1fr' : '1fr', gap: 8 }}>
-          {front  && <VideoTile src={front}  label="Forward-facing" onExpired={doRefresh} />}
-          {driver && <VideoTile src={driver} label="Driver-facing"  onExpired={doRefresh} />}
-        </div>
       )}
+
       <div style={{ marginTop: 6, fontSize: 10.5, color: 'var(--gc-text-3)' }}>
         Cam {cam.cam_type} · {cam.duration}s
       </div>
+    </div>
+  );
+}
+
+function ImageTile({ src, label, onExpired }: { src: string; label: string; onExpired?: () => void }) {
+  const [broken, setBroken] = useState(false);
+  return (
+    <div>
+      <div style={{ fontSize: 10.5, color: 'var(--gc-text-3)', marginBottom: 3 }}>{label}</div>
+      {broken ? (
+        <div style={{
+          height: 120, borderRadius: 6, background: 'var(--gc-bg)',
+          border: '1px dashed var(--gc-border-light)',
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6,
+          fontSize: 11, color: 'var(--gc-text-3)',
+        }}>
+          Image link expired
+          {onExpired && (
+            <button
+              type="button"
+              onClick={onExpired}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 4,
+                padding: '4px 8px', borderRadius: 5,
+                border: '1px solid var(--gc-border-light)',
+                background: 'var(--gc-surface)', color: 'var(--gc-text-1)',
+                fontSize: 11, cursor: 'pointer',
+              }}
+            >
+              <RefreshCw size={10} /> Refresh link
+            </button>
+          )}
+        </div>
+      ) : (
+        // Signed S3 URLs — <img> can display them directly. `onError`
+        // catches expiries so the placeholder + refresh affordance kicks
+        // in instead of a broken-image icon.
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={src}
+          alt={label}
+          onError={() => setBroken(true)}
+          style={{ width: '100%', borderRadius: 6, background: '#000', display: 'block' }}
+        />
+      )}
     </div>
   );
 }

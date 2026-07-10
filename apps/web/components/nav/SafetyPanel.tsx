@@ -12,7 +12,7 @@
  * plus a motive_driving_periods sidecar for the between-load movement OD
  * lines.
  *
- * Actions (Confirm driver / Notify / Dismiss) mirror the drawer so a
+ * Actions (Acknowledge / Notify / Ignore) mirror the drawer so a
  * dispatcher can act without a second click.
  */
 
@@ -26,6 +26,7 @@ import type {
   MotivePerfRaw,
 } from '@fleetcal/types';
 import DashcamVideo from './SafetyDashcamVideo';
+import { fmtDenverLong, fmtDenverFull, relTimeDenver } from '@/lib/safetyTime';
 
 type PanelEvent = PerformanceEventRow & { raw?: MotivePerfRaw; vehicle_id?: number };
 
@@ -119,18 +120,9 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
 
   const selected = visible.find(e => e.id === selectedId) ?? events.find(e => e.id === selectedId) ?? null;
 
-  // Group by asset for the left rail. Preserves recency ordering within
-  // each truck bucket.
-  const byTruck = useMemo(() => {
-    const map = new Map<string, PanelEvent[]>();
-    for (const e of visible) {
-      const key = e.asset_name ?? e.vehicle_number ?? `Vehicle ${e.vehicle_id}`;
-      const arr = map.get(key) ?? [];
-      arr.push(e);
-      map.set(key, arr);
-    }
-    return Array.from(map.entries());
-  }, [visible]);
+  // Flat chronological list — server already returns events by
+  // event_time DESC. Truck identity still reads at a glance via the
+  // color accent bar + truck name printed on each row.
 
   return (
     <div
@@ -219,9 +211,9 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
               options={[
                 { value: 'all',       label: `Any status (${events.length})` },
                 { value: 'new',       label: `New (${events.filter(e => e.dispatch_status === 'new').length})` },
-                { value: 'confirmed', label: `Confirmed (${events.filter(e => e.dispatch_status === 'confirmed').length})` },
+                { value: 'confirmed', label: `Acknowledged (${events.filter(e => e.dispatch_status === 'confirmed').length})` },
                 { value: 'notified',  label: `Driver notified (${events.filter(e => e.dispatch_status === 'notified').length})` },
-                { value: 'dismissed', label: `Dismissed (${events.filter(e => e.dispatch_status === 'dismissed').length})` },
+                { value: 'dismissed', label: `Ignored (${events.filter(e => e.dispatch_status === 'dismissed').length})` },
               ]}
             />
           </div>
@@ -234,63 +226,57 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
               </div>
             ) : error ? (
               <div style={{ padding: 24, color: '#dc2626', fontSize: 12 }}>{error}</div>
-            ) : byTruck.length === 0 ? (
+            ) : visible.length === 0 ? (
               <div style={{ padding: 24, textAlign: 'center', color: 'var(--gc-text-3)', fontSize: 12 }}>
-                No safety events in the last 24 hours.
+                No safety events in this window.
               </div>
-            ) : byTruck.map(([truckLabel, rows]) => (
-              <div key={truckLabel}>
-                <div style={{
-                  padding: '6px 12px 4px', fontSize: 10.5, fontWeight: 700,
-                  color: 'var(--gc-text-3)', letterSpacing: 0.4, textTransform: 'uppercase',
-                  background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)',
-                  display: 'flex', alignItems: 'center', gap: 6,
-                }}>
-                  <span
-                    aria-hidden
-                    style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 2, background: rows[0].asset_color ?? 'var(--gc-border-light)' }}
-                  />
-                  {truckLabel}
-                  {rows[0].asset_unit ? ` · #${rows[0].asset_unit}` : ''}
-                  <span style={{ marginLeft: 'auto', fontSize: 10.5, color: 'var(--gc-text-3)' }}>{rows.length}</span>
-                </div>
-                {rows.map(e => (
-                  <button
-                    key={e.id}
-                    type="button"
-                    onClick={() => setSelectedId(e.id)}
-                    style={{
-                      display: 'flex', width: '100%', gap: 8,
-                      padding: '9px 12px 9px 9px',
-                      borderBottom: '1px solid var(--gc-border-light)',
-                      borderLeft: `3px solid ${e.asset_color ?? 'var(--gc-border-light)'}`,
-                      background: e.id === selectedId ? 'var(--gc-bg)' : 'transparent',
-                      textAlign: 'left', cursor: 'pointer',
-                    }}
-                    onMouseEnter={ev => { if (e.id !== selectedId) ev.currentTarget.style.background = 'var(--gc-bg)'; }}
-                    onMouseLeave={ev => { if (e.id !== selectedId) ev.currentTarget.style.background = 'transparent'; }}
-                  >
-                    <AlertTriangle size={14} style={{ color: severityColor(e.intensity), flexShrink: 0, marginTop: 2 }} />
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--gc-text-1)' }}>
+            ) : visible.map(e => {
+              const truck = e.asset_name ?? e.vehicle_number ?? `Vehicle ${e.vehicle_id}`;
+              return (
+                <button
+                  key={e.id}
+                  type="button"
+                  onClick={() => setSelectedId(e.id)}
+                  style={{
+                    display: 'flex', width: '100%', gap: 8,
+                    padding: '9px 12px 9px 9px',
+                    borderBottom: '1px solid var(--gc-border-light)',
+                    borderLeft: `3px solid ${e.asset_color ?? 'var(--gc-border-light)'}`,
+                    background: e.id === selectedId ? 'var(--gc-bg)' : 'transparent',
+                    textAlign: 'left', cursor: 'pointer',
+                  }}
+                  onMouseEnter={ev => { if (e.id !== selectedId) ev.currentTarget.style.background = 'var(--gc-bg)'; }}
+                  onMouseLeave={ev => { if (e.id !== selectedId) ev.currentTarget.style.background = 'transparent'; }}
+                >
+                  <AlertTriangle size={14} style={{ color: severityColor(e.intensity), flexShrink: 0, marginTop: 2 }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    {/* Row 1: event type + status chip + time (right-aligned) */}
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                      <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--gc-text-1)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {eventTypeLabel(e.event_type)}
                         {statusChip(e.dispatch_status)}
                       </div>
-                      <div style={{ fontSize: 11.5, color: 'var(--gc-text-2)', marginTop: 2 }}>
-                        {e.resolved_driver_name ?? 'Unassigned'}
-                        {e.resolved_load_num ? ` · Load ${e.resolved_load_num}` : ''}
+                      <div style={{ fontSize: 11, color: 'var(--gc-text-3)', marginLeft: 'auto', flexShrink: 0 }}>
+                        {relTimeDenver(e.event_time)}
                       </div>
-                      {e.resolved_load_title && (
-                        <div style={{ fontSize: 11, color: 'var(--gc-text-3)', marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                          {e.resolved_load_title}
-                        </div>
-                      )}
-                      <div style={{ fontSize: 11, color: 'var(--gc-text-3)', marginTop: 2 }}>{relTime(e.event_time)}</div>
                     </div>
-                  </button>
-                ))}
-              </div>
-            ))}
+                    {/* Row 2: truck (with color dot) + driver */}
+                    <div style={{ fontSize: 11.5, color: 'var(--gc-text-2)', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {truck}
+                      {e.resolved_driver_name ? ` · ${e.resolved_driver_name}` : ' · unassigned'}
+                    </div>
+                    {/* Row 3: load if present */}
+                    {(e.resolved_load_num || e.resolved_load_title) && (
+                      <div style={{ fontSize: 11, color: 'var(--gc-text-3)', marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {e.resolved_load_num ? `Load ${e.resolved_load_num}` : ''}
+                        {e.resolved_load_num && e.resolved_load_title ? ' · ' : ''}
+                        {e.resolved_load_title ?? ''}
+                      </div>
+                    )}
+                  </div>
+                </button>
+              );
+            })}
           </div>
         </div>
 
@@ -313,7 +299,7 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
                   {selected.resolved_load_title ? ` · ${selected.resolved_load_title}` : ''}
                 </div>
                 <div style={{ fontSize: 11, color: 'var(--gc-text-3)', marginLeft: 'auto' }}>
-                  {new Date(selected.event_time).toLocaleString()}
+                  {fmtDenverLong(selected.event_time)}
                 </div>
               </>
             ) : (
@@ -372,16 +358,37 @@ function SafetyDetail({
   const mapRef = useRef<google.maps.Map | null>(null);
   const clearRef = useRef<(() => void) | null>(null);
 
-  const [driverId, setDriverId] = useState<number | null>(event.resolved_driver_id ?? null);
+  const [driverId, setDriverId] = useState<number | null>(event.assigned_driver_id ?? event.resolved_driver_id ?? null);
   const [message, setMessage]   = useState('');
   const [busy, setBusy] = useState(false);
+  const [savingDriver, setSavingDriver] = useState(false);
   const [actionErr, setActionErr] = useState<string | null>(null);
 
   useEffect(() => {
-    setDriverId(event.resolved_driver_id ?? null);
+    // Prefer the dispatcher's saved assignment when present — that's
+    // the "corrected" value. Falls back to the calendar autofill on
+    // events the dispatcher hasn't touched yet.
+    setDriverId(event.assigned_driver_id ?? event.resolved_driver_id ?? null);
     setMessage('');
     setActionErr(null);
-  }, [event.id, event.resolved_driver_id]);
+    setSavingDriver(false);
+  }, [event.id, event.assigned_driver_id, event.resolved_driver_id]);
+
+  // Persist a driver reassignment as soon as the dispatcher picks a
+  // new person from the dropdown — even without pressing Notify. That
+  // way the corrected assignment shows on the row for the next viewer,
+  // and if Notify happens later it goes to whoever is currently saved.
+  async function persistDriver(next: number | null) {
+    if (next === (event.assigned_driver_id ?? null)) return;
+    setSavingDriver(true); setActionErr(null);
+    try {
+      await railway.updatePerformanceEvent(event.id, { assigned_driver_id: next });
+    } catch (err) {
+      setActionErr(errorMessage(err));
+    }
+    setSavingDriver(false);
+    onAfterAction();
+  }
 
   // Render markers/polylines whenever the selected event changes.
   useEffect(() => {
@@ -609,8 +616,8 @@ function SafetyDetail({
             <DetailBlock label="Notification sent">
               <div style={{ fontSize: 12, color: 'var(--gc-text-1)', lineHeight: 1.55 }}>
                 <div style={{ color: 'var(--gc-text-2)' }}>
-                  {new Date(event.notified_at).toLocaleString()}
-                  {event.resolved_driver_name ? ` · ${event.resolved_driver_name}` : ''}
+                  {fmtDenverFull(event.notified_at)}
+                  {event.notified_driver_name ? ` · sent to ${event.notified_driver_name}` : ''}
                 </div>
                 {event.notified_message && (
                   <div style={{ marginTop: 6, padding: 8, borderRadius: 6, background: 'var(--gc-bg)', color: 'var(--gc-text-1)', whiteSpace: 'pre-wrap' }}>
@@ -628,24 +635,40 @@ function SafetyDetail({
           />
 
           <DetailBlock label="Confirm driver">
-            {event.resolved_driver_name && (
+            {event.resolved_driver_name && !event.assigned_driver_id && (
               <div style={{ fontSize: 11.5, color: 'var(--gc-text-2)', marginBottom: 6 }}>
                 Autofilled from the calendar: <b>{event.resolved_driver_name}</b>
-                {event.resolved_load_num ? ` (load ${event.resolved_load_num})` : ''}.
+                {event.resolved_load_num ? ` (load ${event.resolved_load_num})` : ''}. Change below if the system was wrong.
+              </div>
+            )}
+            {event.assigned_driver_id != null && event.assigned_driver_id !== event.resolved_driver_id && (
+              <div style={{ fontSize: 11.5, color: 'var(--gc-text-2)', marginBottom: 6 }}>
+                Manually corrected — this alert is now assigned to the driver below.
               </div>
             )}
             <select
               value={driverId ?? ''}
-              onChange={e => setDriverId(e.target.value ? Number(e.target.value) : null)}
+              onChange={e => {
+                const next = e.target.value ? Number(e.target.value) : null;
+                setDriverId(next);
+                // Persist on change so a correction sticks even if the
+                // dispatcher never presses Notify.
+                void persistDriver(next);
+              }}
+              disabled={savingDriver}
               style={{
                 width: '100%', padding: '7px 9px', fontSize: 13, borderRadius: 6,
                 border: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)',
                 color: 'var(--gc-text-1)',
+                opacity: savingDriver ? 0.7 : 1,
               }}
             >
               <option value="">Select a driver…</option>
               {drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
             </select>
+            {savingDriver && (
+              <div style={{ fontSize: 10.5, color: 'var(--gc-text-3)', marginTop: 4 }}>Saving…</div>
+            )}
           </DetailBlock>
 
           <DetailBlock label="Message (optional)">
@@ -682,7 +705,7 @@ function SafetyDetail({
               cursor: busy ? 'wait' : 'pointer', opacity: busy ? 0.6 : 1,
             }}
           >
-            Dismiss
+            Ignore
           </button>
           <button
             type="button"
@@ -696,7 +719,7 @@ function SafetyDetail({
               opacity: busy || !driverId ? 0.6 : 1,
             }}
           >
-            Confirm
+            Acknowledge
           </button>
           <button
             type="button"
@@ -756,8 +779,12 @@ function DetailBlock({ label, children }: { label: string; children: React.React
 function statusChip(s: PerformanceEventRow['dispatch_status']): React.ReactNode {
   if (s === 'new') return null;
   const map: Record<string, { label: string; color: string }> = {
-    confirmed: { label: 'confirmed', color: '#059669' },
-    dismissed: { label: 'dismissed', color: '#6b7280' },
+    // DB values are still 'confirmed' / 'dismissed' — see notify-driver
+    // route + the status enum in the migration. Only the surface labels
+    // changed, so a future migration renaming the enum values is a UI
+    // no-op.
+    confirmed: { label: 'acknowledged', color: '#059669' },
+    dismissed: { label: 'ignored',      color: '#6b7280' },
     notified:  { label: 'notified',  color: '#dc2626' },
   };
   const c = map[s];
@@ -791,16 +818,6 @@ function severityColor(intensity: string | null): string {
   if (s.includes('severe') || s.includes('high')) return '#dc2626';
   if (s.includes('moderate')) return '#f59e0b';
   return '#3b82f6';
-}
-
-function relTime(iso: string): string {
-  const t = new Date(iso).getTime();
-  if (!isFinite(t)) return iso;
-  const diffSec = (Date.now() - t) / 1000;
-  if (diffSec < 60)   return 'just now';
-  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
-  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
-  return new Date(iso).toLocaleDateString();
 }
 
 function errorMessage(err: unknown): string {
