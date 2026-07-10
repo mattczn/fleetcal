@@ -13,7 +13,7 @@
  * updates the row in-place.
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { railway } from '@/lib/railway';
 import type { MotivePerfRaw } from '@fleetcal/types';
@@ -26,10 +26,18 @@ interface Props {
 
 export default function DashcamVideo({ eventId, raw: initialRaw, onRefreshed }: Props) {
   // Local override so refreshing updates the UI without waiting for a
-  // parent re-fetch. Falls back to the raw prop otherwise.
+  // parent re-fetch. Reset whenever the eventId changes — the useState
+  // initializer only fires on mount, so without this a shared drawer
+  // that re-uses the component across events would keep stale raw.
   const [raw, setRaw] = useState<MotivePerfRaw | undefined | null>(initialRaw);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshMsg, setRefreshMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    setRaw(initialRaw);
+    setRefreshMsg(null);
+    setRefreshing(false);
+  }, [eventId, initialRaw]);
 
   const cam = raw?.camera_media;
 
@@ -45,7 +53,12 @@ export default function DashcamVideo({ eventId, raw: initialRaw, onRefreshed }: 
         setRefreshMsg('Motive has no video attached to this event.');
       }
     } catch (err) {
-      setRefreshMsg((err as Error).message ?? 'Refresh failed. Try again in a minute.');
+      // Show the full error — including status codes from RailwayError —
+      // so a 404 during a Railway rebuild is obvious instead of silent.
+      const e = err as { status?: number; message?: string };
+      const detail = e.status != null ? `HTTP ${e.status}: ${e.message ?? ''}` : (e.message ?? 'Refresh failed.');
+      console.error('[DashcamVideo] refresh failed:', err);
+      setRefreshMsg(detail);
     }
     setRefreshing(false);
   }, [eventId, onRefreshed]);

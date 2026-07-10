@@ -408,6 +408,12 @@ perf.post("/:id/notify-driver", async (c) => {
     return c.json({ error: "already_notified", notifiedAt: event.notified_at }, 409);
   }
 
+  // Enrich in place so we can use asset_name (fleetcal display) and
+  // resolved_load_num when composing the push. Never surface Motive's
+  // vehicle.number — that's an internal identifier drivers don't see
+  // anywhere else in the app.
+  await enrichEventsBatch(orgId, [event]);
+
   // Confirm the driver belongs to this org — prevents a spoofed
   // driverId targeting someone else's driver.
   const { data: drv, error: drvErr } = await supabase
@@ -421,9 +427,19 @@ perf.post("/:id/notify-driver", async (c) => {
 
   const label = formatEventLabel(event.event_type);
   const title = "Safety alert from dispatch";
+  // Prefer asset_name (fleetcal display) → the Motive-side
+  // vehicle_number is never shown to drivers. Fall back to vehicle_number
+  // only when the truck isn't linked to an asset row yet, and finally
+  // to the numeric vehicle_id as a last-ditch identifier.
+  const truckLabel = event.asset_name ?? event.vehicle_number ?? `Vehicle ${event.vehicle_id}`;
+  // Format the event time in the org's dispatch timezone (America/Denver
+  // for Curzon — same TZ the confirmReminders job uses). Otherwise a
+  // driver reading a 6 PM Mountain event sees midnight UTC on their
+  // phone, which is confusing on a road trip.
+  const timeStr = formatEventLocalTime(event.event_time, "America/Denver");
   const bodyText =
     body.message?.trim() ||
-    `${label} logged on truck ${event.vehicle_number ?? event.vehicle_id} at ${formatShortTime(event.event_time)}. ` +
+    `${label} logged on ${truckLabel} at ${timeStr}. ` +
     `Please review your driving and reach out to dispatch with any context.`;
 
   const sent = await sendAutoPushToDriver(orgId, body.driverId, "safety_alert", {
@@ -432,7 +448,7 @@ perf.post("/:id/notify-driver", async (c) => {
     data: {
       kind:             "safety_alert",
       performanceEventId: id,
-      vehicleNumber:    event.vehicle_number,
+      truckLabel,
       eventType:        event.event_type,
       eventTime:        event.event_time,
     },
@@ -793,9 +809,18 @@ function formatEventLabel(eventType: string): string {
   }
 }
 
-function formatShortTime(iso: string): string {
+/** Format an event's UTC timestamp for a driver-facing push. Uses the
+ *  org's dispatch timezone so a hard-brake at 6 PM Mountain reads
+ *  "Jul 10, 6:51 PM MDT" and not the server's UTC clock. */
+function formatEventLocalTime(iso: string, timeZone: string): string {
   const d = new Date(iso);
-  return isFinite(d.getTime())
-    ? d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
-    : iso;
+  if (!isFinite(d.getTime())) return iso;
+  return d.toLocaleString("en-US", {
+    timeZone,
+    month:        "short",
+    day:          "numeric",
+    hour:         "numeric",
+    minute:       "2-digit",
+    timeZoneName: "short",
+  });
 }

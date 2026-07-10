@@ -49,6 +49,7 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
   const [typeFilter,   setTypeFilter]   = useState<string>('all');
   const [truckFilter,  setTruckFilter]  = useState<string>('all');
   const [driverFilter, setDriverFilter] = useState<string>('all');
+  const [statusFilter, setStatusFilter] = useState<string>('all');
   const [windowHours,  setWindowHours]  = useState<number>(24);
 
   const load = useMemo(() => async () => {
@@ -108,12 +109,13 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
   const visible = useMemo(() => events.filter(e => {
     if (typeFilter   !== 'all' && e.event_type !== typeFilter)   return false;
     if (driverFilter !== 'all' && e.resolved_driver_name !== driverFilter) return false;
+    if (statusFilter !== 'all' && e.dispatch_status !== statusFilter) return false;
     if (truckFilter  !== 'all') {
       const label = e.asset_name ?? e.vehicle_number ?? `Vehicle ${e.vehicle_id}`;
       if (label !== truckFilter) return false;
     }
     return true;
-  }), [events, typeFilter, driverFilter, truckFilter]);
+  }), [events, typeFilter, driverFilter, statusFilter, truckFilter]);
 
   const selected = visible.find(e => e.id === selectedId) ?? events.find(e => e.id === selectedId) ?? null;
 
@@ -205,6 +207,21 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
               options={[
                 { value: 'all', label: `All drivers (${driverOptions.length})` },
                 ...driverOptions.map(d => ({ value: d, label: d })),
+              ]}
+            />
+            {/* Dispatch status — picking "Notified" gives a running
+                record of every safety-alert push we sent in the window.
+                Counts derive from the current event set so an empty
+                bucket makes it obvious we sent zero of X. */}
+            <FilterSelect
+              value={statusFilter}
+              onChange={setStatusFilter}
+              options={[
+                { value: 'all',       label: `Any status (${events.length})` },
+                { value: 'new',       label: `New (${events.filter(e => e.dispatch_status === 'new').length})` },
+                { value: 'confirmed', label: `Confirmed (${events.filter(e => e.dispatch_status === 'confirmed').length})` },
+                { value: 'notified',  label: `Driver notified (${events.filter(e => e.dispatch_status === 'notified').length})` },
+                { value: 'dismissed', label: `Dismissed (${events.filter(e => e.dispatch_status === 'dismissed').length})` },
               ]}
             />
           </div>
@@ -575,6 +592,25 @@ function SafetyDetail({
               )}
             </div>
           </DetailBlock>
+
+          {/* Delivery record — only rendered when a push actually went
+              out. Gives the dispatcher an audit trail without opening a
+              separate log. */}
+          {event.notified_at && (
+            <DetailBlock label="Notification sent">
+              <div style={{ fontSize: 12, color: 'var(--gc-text-1)', lineHeight: 1.55 }}>
+                <div style={{ color: 'var(--gc-text-2)' }}>
+                  {new Date(event.notified_at).toLocaleString()}
+                  {event.resolved_driver_name ? ` · ${event.resolved_driver_name}` : ''}
+                </div>
+                {event.notified_message && (
+                  <div style={{ marginTop: 6, padding: 8, borderRadius: 6, background: 'var(--gc-bg)', color: 'var(--gc-text-1)', whiteSpace: 'pre-wrap' }}>
+                    {event.notified_message}
+                  </div>
+                )}
+              </div>
+            </DetailBlock>
+          )}
 
           <DashcamVideo
             eventId={event.id}
