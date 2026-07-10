@@ -1080,11 +1080,9 @@ function SafetyScoreCard({ C }: { C: ReturnType<typeof useTheme>["C"] }) {
       detailLine={detailLine}
       badge={data.flagged ? "Flagged — dispatch may reach out." : null}
       tone={tone}
-      infoTitle="How your safety score works"
+      infoTitle="Safety score"
       infoBody={
-        "Motive records safety events on your truck — hard brakes, tailgating, phone use, and similar. Over the last 30 days these are weighted by severity: severe events count heavily, moderate events count a little, and low-severity events don't count at all.\n\n" +
-        "The score is calibrated against the whole fleet: an average driver lands around 80. Above 85 is green, 70–84 is amber, below 70 is red.\n\n" +
-        "Tap the card to review your events. If something looks wrong — a passenger touched the phone, the alert wasn't yours — tap the alert and file a dispute. If dispatch agrees, it drops from your score."
+        "Dispatch is notified of every safety alert on your truck — speeding, tailgating, hard braking, hard acceleration, distraction, and similar. Please drive safe and reach out to dispatch if you have any issues."
       }
       onPress={() => router.push("/safety" as never)}
       C={C}
@@ -1141,11 +1139,9 @@ function ScorecardCard() {
       tone={tone}
       tipTitle={score >= 85 ? "Keep it up" : "How to improve"}
       tipBody="Complete a pre-trip or post-trip inspection every day you drive, and report any maintenance issues in the app."
-      infoTitle="How your inspection score works"
+      infoTitle="Inspection score"
       infoBody={
-        "Your score is the share of days you were on the road that you also submitted at least one inspection. Doing either a pre-trip or a post-trip covers the day.\n\n" +
-        "Above 85 is green, 60–84 is amber, below 60 is red. Bonus eligibility kicks in at 85+.\n\n" +
-        "Cab cleanliness is handled separately and does not affect this score."
+        "Complete a pre-trip and a post-trip inspection every day you drive, and send any damage to maintenance through the app. Keep the cab clean for the next driver."
       }
       C={C}
     />

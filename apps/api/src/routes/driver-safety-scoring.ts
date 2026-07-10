@@ -115,6 +115,15 @@ const MIN_MEDIAN_ELIGIBLE_DRIVERS = 3;
  *  where the score starts dropping". */
 const MIN_EFFECTIVE_MEDIAN = 3;
 
+/** Bayesian smoothing: prior "clean miles" added to every driver's
+ *  denominator. Without this, a driver with 300 mi + 2 severe events
+ *  looks catastrophic per-mile even though a full month of data would
+ *  wash it out. With PRIOR_MILES=5000, the effective per-mile rate is
+ *  half of raw for a new driver, and barely dented for a driver who
+ *  clocked 10k miles. Interpret as "we assume 5000 miles of clean
+ *  driving as prior evidence, then integrate what we actually saw". */
+const PRIOR_MILES = 5000;
+
 /** Auto-flag thresholds. Now keyed off SEVERE events specifically —
  *  a pile of moderate events isn't a flag, but two severe events in
  *  a month is a pattern worth coaching. */
@@ -424,12 +433,17 @@ safetyScoring.get("/", async (c) => {
     const a = acc.get(d.id) ?? { totalEvents: 0, moderateEvents: 0, severeEvents: 0, penaltyTotal: 0 };
     const pa = prevAcc.get(d.id) ?? { totalEvents: 0, moderateEvents: 0, severeEvents: 0, penaltyTotal: 0 };
     const miles = milesByDriverId.get(d.id) ?? 0;
-    const penaltyPer1kMi = miles > 0 ? a.penaltyTotal / (miles / 1000) : 0;
+    // Bayesian denominator (miles + PRIOR_MILES) — see PRIOR_MILES doc.
+    // Ratio is only meaningful when the driver actually drove; miles=0
+    // stays at 0 penalty (score comes back null via MIN_MILES_FOR_SCORE
+    // check below anyway).
+    const denominator = (miles + PRIOR_MILES) / 1000;
+    const penaltyPer1kMi = miles > 0 ? a.penaltyTotal / denominator : 0;
     // Prev-period trend uses the CURRENT window's miles as a proxy
     // denominator — Motive's miles table would double the query cost
     // to fetch prev-period miles, and the trend is only meaningful when
     // the driver is still active anyway.
-    const prevPenaltyPer1k = miles > 0 ? pa.penaltyTotal / (miles / 1000) : 0;
+    const prevPenaltyPer1k = miles > 0 ? pa.penaltyTotal / denominator : 0;
     return { driver: d, acc: a, prevAcc: pa, miles, penaltyPer1kMi, prevPenaltyPer1k };
   });
 

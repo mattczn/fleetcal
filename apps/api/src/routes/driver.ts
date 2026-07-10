@@ -3654,6 +3654,13 @@ driver.get("/safety-score", async (c) => {
   // median doesn't crash a driver's score to 0 on their first
   // moderate event. Must match the dispatch route's constant.
   const MIN_EFFECTIVE_MEDIAN = 3;
+  // Bayesian prior: pretend the driver already has this many miles
+  // of clean driving before adding their actual data. Prevents the
+  // per-mile rate from swinging wildly on 300 miles + 2 severe
+  // events. See driver-safety-scoring.ts for the full rationale;
+  // must match that route's constant so drivers see the same number
+  // dispatch does.
+  const PRIOR_MILES = 5000;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   type EventRow = { event_type: string; event_time: string; notified_driver_id: number | null; assigned_driver_id: number | null; raw: any };
@@ -3697,7 +3704,10 @@ driver.get("/safety-score", async (c) => {
   for (const [dId, acc] of orgByDriver) {
     const miles = milesByDriver.get(dId) ?? 0;
     if (miles < MIN_MILES_FOR_MEDIAN) continue;
-    perDriverPenalties.push(acc.total / (miles / 1000));
+    // Smoothed rate — matches how individual drivers' scores are
+    // computed. Small effect on high-mile drivers (who qualify for
+    // the median), consistent formula everywhere.
+    perDriverPenalties.push(acc.total / ((miles + PRIOR_MILES) / 1000));
   }
   const medianPen = perDriverPenalties.length >= MIN_MEDIAN_ELIGIBLE
     ? median(perDriverPenalties) ?? FALLBACK_MEDIAN
@@ -3717,11 +3727,12 @@ driver.get("/safety-score", async (c) => {
       MEDIAN_ANCHOR - MEDIAN_ANCHOR * (penaltyPer1k - m) / (2 * m))));
   }
 
+  const myDenominator = (myMiles + PRIOR_MILES) / 1000;
   const safetyScore = myMiles >= MIN_MILES_FOR_SCORE
-    ? scoreFor(myCurr.total / (myMiles / 1000))
+    ? scoreFor(myCurr.total / myDenominator)
     : null;
   const prevSafetyScore = myMiles >= MIN_MILES_FOR_SCORE
-    ? scoreFor(myPrev.total / (myMiles / 1000))
+    ? scoreFor(myPrev.total / myDenominator)
     : null;
   const flagged = safetyScore != null && safetyScore < 60 && myCurr.severe >= 2 && myMiles >= 500;
 
