@@ -3358,6 +3358,8 @@ driver.get("/safety-alerts", async (c) => {
       id, event_type, event_time, intensity, location_label,
       asset_id, vehicle_number,
       notified_at, notified_message, notified_driver_id,
+      dispute_status, disputed_at, dispute_reason,
+      dispute_reviewed_at, dispute_resolution,
       raw
     `)
     .eq("org_id", orgId)
@@ -3393,6 +3395,9 @@ driver.get("/safety-alerts", async (c) => {
     id: number; event_type: string; event_time: string; intensity: string | null;
     location_label: string | null; asset_id: number | null; vehicle_number: string | null;
     notified_at: string; notified_message: string | null;
+    dispute_status: "none" | "pending" | "accepted" | "rejected";
+    disputed_at: string | null; dispute_reason: string | null;
+    dispute_reviewed_at: string | null; dispute_resolution: string | null;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     raw: any;
   }) => {
@@ -3406,18 +3411,77 @@ driver.get("/safety-alerts", async (c) => {
       truck_name:     (r.asset_id != null ? assetById.get(r.asset_id)?.name : null) ?? r.vehicle_number ?? null,
       truck_unit:     r.asset_id != null ? (assetById.get(r.asset_id)?.unit ?? null) : null,
       notified_at:    r.notified_at,
-      // NOTE: notified_message is intentionally included here — the app
-      // decides whether to render it (list row hides, detail shows).
       notified_message:  r.notified_message,
       severity_level:    sev.level,
       severity_score:    sev.score,
       severity_display:  sev.displayValue,
       severity_metric:   sev.metricName,
       severity_inverted: sev.isInverted,
+      dispute_status:      r.dispute_status,
+      disputed_at:         r.disputed_at,
+      dispute_reason:      r.dispute_reason,
+      dispute_reviewed_at: r.dispute_reviewed_at,
+      dispute_resolution:  r.dispute_resolution,
     };
   });
 
   return c.json({ alerts });
+});
+
+// ── POST /v1/driver/safety-alerts/:id/dispute ─────────────────────────
+//
+// Driver opens an alert and challenges it. Requires the event was
+// notified to THIS driver (privacy — a driver can't dispute someone
+// else's alert), and that no dispute exists yet (dispute_status='none').
+// Body: { reason: string }. Reason is required and stored verbatim for
+// the dispatcher to review.
+
+driver.post("/safety-alerts/:id/dispute", async (c) => {
+  const driverId = c.get("driverId");
+  const orgId    = c.get("orgId");
+  const id       = Number(c.req.param("id"));
+  if (!Number.isFinite(id)) return c.json({ error: "bad_id" }, 400);
+
+  const body = await c.req.json().catch(() => null) as { reason?: string } | null;
+  const reason = body?.reason?.trim();
+  if (!reason) return c.json({ error: "reason_required" }, 400);
+  if (reason.length > 1000) return c.json({ error: "reason_too_long" }, 400);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: existing } = await (supabase as any)
+    .from("motive_performance_events")
+    .select("id, notified_driver_id, dispute_status")
+    .eq("org_id", orgId)
+    .eq("id", id)
+    .maybeSingle();
+  if (!existing) return c.json({ error: "not_found" }, 404);
+  const row = existing as { notified_driver_id: number | null; dispute_status: string };
+  if (row.notified_driver_id !== driverId) {
+    // Same 404 (not 403) — don't leak the existence of other drivers'
+    // alerts to a fishing request.
+    return c.json({ error: "not_found" }, 404);
+  }
+  if (row.dispute_status !== "none") {
+    return c.json({ error: "already_disputed", status: row.dispute_status }, 409);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: updated, error: updErr } = await (supabase as any)
+    .from("motive_performance_events")
+    .update({
+      dispute_status: "pending",
+      disputed_at:    new Date().toISOString(),
+      dispute_reason: reason,
+    })
+    .eq("org_id", orgId)
+    .eq("id", id)
+    .select("id, dispute_status, disputed_at, dispute_reason")
+    .maybeSingle();
+  if (updErr) {
+    console.error("[POST /v1/driver/safety-alerts/:id/dispute]", updErr);
+    return c.json({ error: "update_failed", detail: updErr.message }, 500);
+  }
+  return c.json({ ok: true, event: updated });
 });
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -3454,6 +3518,7 @@ driver.get("/safety-score", async (c) => {
       .from("motive_performance_events")
       .select("id, event_type, event_time, notified_driver_id, assigned_driver_id, raw")
       .eq("org_id", orgId)
+      .neq("dispute_status", "accepted")
       .or(`notified_driver_id.eq.${driverId},assigned_driver_id.eq.${driverId}`)
       .gte("event_time", fromIso)
       .lte("event_time", toIso)
@@ -3463,6 +3528,7 @@ driver.get("/safety-score", async (c) => {
       .from("motive_performance_events")
       .select("id, event_type, event_time, notified_driver_id, assigned_driver_id, raw")
       .eq("org_id", orgId)
+      .neq("dispute_status", "accepted")
       .or(`notified_driver_id.eq.${driverId},assigned_driver_id.eq.${driverId}`)
       .gte("event_time", prevFromIso)
       .lte("event_time", prevToIso)
@@ -3472,6 +3538,7 @@ driver.get("/safety-score", async (c) => {
       .from("motive_performance_events")
       .select("id, event_type, event_time, notified_driver_id, assigned_driver_id, raw")
       .eq("org_id", orgId)
+      .neq("dispute_status", "accepted")
       .gte("event_time", fromIso)
       .lte("event_time", toIso)
       .limit(5000),

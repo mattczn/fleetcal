@@ -2100,6 +2100,13 @@ export interface PerformanceEventRow {
    *  ACTUALLY received the push, which can differ from
    *  resolved_driver_name when the dispatcher reassigned before sending. */
   notified_driver_name: string | null;
+  // ── Dispute workflow (driver challenges the alert, dispatcher reviews) ─
+  dispute_status:      "none" | "pending" | "accepted" | "rejected";
+  disputed_at:         string | null;
+  dispute_reason:      string | null;
+  dispute_reviewed_at: string | null;
+  dispute_reviewer_id: string | null;
+  dispute_resolution:  string | null;
   /** Derived from raw.event_intensity + raw.metadata.severity via
    *  deriveSeverity() — computed on every read, not stored. See
    *  packages/types/severity.ts for thresholds. */

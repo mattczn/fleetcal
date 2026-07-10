@@ -170,11 +170,16 @@ safetyScoring.get("/", async (c) => {
     raw:             any;
   }
   const [{ data: currRows, error: eErr }, { data: prevRows, error: eErr2 }] = await Promise.all([
+    // Exclude events with an ACCEPTED dispute — dispatch already
+    // agreed those were misattributed / wrongly flagged, so they
+    // shouldn't hurt anyone's score. Pending disputes still count
+    // (otherwise drivers could dispute everything to game the score).
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (supabase as any)
       .from("motive_performance_events")
       .select("id, event_type, event_time, notified_driver_id, assigned_driver_id, raw")
       .eq("org_id", orgId)
+      .neq("dispute_status", "accepted")
       .gte("event_time", fromIso)
       .lte("event_time", toIso)
       .limit(5000),
@@ -183,6 +188,7 @@ safetyScoring.get("/", async (c) => {
       .from("motive_performance_events")
       .select("id, event_type, event_time, notified_driver_id, assigned_driver_id, raw")
       .eq("org_id", orgId)
+      .neq("dispute_status", "accepted")
       .gte("event_time", prevFrom.toISOString())
       .lte("event_time", prevTo.toISOString())
       .limit(5000),

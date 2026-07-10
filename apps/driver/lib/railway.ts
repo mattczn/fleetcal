@@ -303,8 +303,21 @@ export const railway = {
         severity_display:  string;
         severity_metric:   string;
         severity_inverted: boolean;
+        dispute_status:      'none' | 'pending' | 'accepted' | 'rejected';
+        disputed_at:         string | null;
+        dispute_reason:      string | null;
+        dispute_reviewed_at: string | null;
+        dispute_resolution:  string | null;
       }[];
     }>("GET", "/v1/driver/safety-alerts");
+  },
+  /** File a dispute on a safety alert. Reason is required.
+   *  Idempotent-ish: 409 if this driver already disputed the same
+   *  alert or dispatch already reviewed it. */
+  disputeSafetyAlert(id: number, reason: string) {
+    return req<{ ok: true; event: { id: number; dispute_status: string; disputed_at: string; dispute_reason: string } }>(
+      "POST", `/v1/driver/safety-alerts/${id}/dispute`, { reason },
+    );
   },
   listAssets() {
     return req<{

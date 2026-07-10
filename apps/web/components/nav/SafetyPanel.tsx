@@ -127,7 +127,16 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
   const visible = useMemo(() => events.filter(e => {
     if (typeFilter   !== 'all' && e.event_type !== typeFilter)   return false;
     if (driverFilter !== 'all' && e.resolved_driver_name !== driverFilter) return false;
-    if (statusFilter !== 'all' && e.dispatch_status !== statusFilter) return false;
+    if (statusFilter !== 'all') {
+      // The 'disputed' status is orthogonal to dispatch_status — it
+      // means dispute_status='pending' regardless of what dispatch
+      // did with the alert.
+      if (statusFilter === 'disputed') {
+        if (e.dispute_status !== 'pending') return false;
+      } else if (e.dispatch_status !== statusFilter) {
+        return false;
+      }
+    }
     if (truckFilter  !== 'all') {
       const label = e.asset_name ?? e.vehicle_number ?? `Vehicle ${e.vehicle_id}`;
       if (label !== truckFilter) return false;
@@ -312,6 +321,7 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
                 { value: 'confirmed', label: `Acknowledged (${events.filter(e => e.dispatch_status === 'confirmed').length})` },
                 { value: 'notified',  label: `Driver notified (${events.filter(e => e.dispatch_status === 'notified').length})` },
                 { value: 'dismissed', label: `Ignored (${events.filter(e => e.dispatch_status === 'dismissed').length})` },
+                { value: 'disputed',  label: `Disputed — pending (${events.filter(e => e.dispute_status === 'pending').length})` },
               ]}
             />
           </div>
@@ -352,6 +362,7 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
                       <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--gc-text-1)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {eventTypeLabel(e.event_type)}
                         {statusChip(e.dispatch_status)}
+                        {disputeChip(e.dispute_status)}
                       </div>
                       <div style={{ fontSize: 11, color: 'var(--gc-text-3)', marginLeft: 'auto', flexShrink: 0 }}>
                         {relTimeDenver(e.event_time)}
@@ -757,6 +768,14 @@ function SafetyDetail({
             </div>
           </DetailBlock>
 
+          {/* Driver-filed dispute — surfaces the driver's reason plus
+              Accept / Reject actions when the dispute is pending. If the
+              dispute is already resolved, we render the outcome as an
+              audit record. */}
+          {event.dispute_status !== 'none' && (
+            <DisputeReviewBlock event={event} onEventUpdated={onEventUpdated} />
+          )}
+
           {/* Driver 7-day safety score — shorter-window health check
               alongside the 30-day score on the drivers page. Only
               renders when we have a resolved driver AND a 7d score. */}
@@ -922,6 +941,140 @@ function FilterSelect({
   );
 }
 
+function DisputeReviewBlock({
+  event, onEventUpdated,
+}: {
+  event: PanelEvent;
+  onEventUpdated: (updated: PerformanceEventRow) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [resolution, setResolution] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+
+  async function review(status: 'accepted' | 'rejected') {
+    setBusy(true); setErr(null);
+    try {
+      const res = await railway.updatePerformanceEvent(event.id, {
+        dispute_status:     status,
+        dispute_resolution: resolution.trim() || null,
+      });
+      onEventUpdated(res.event);
+      setResolution('');
+    } catch (e) {
+      setErr(errorMessage(e));
+    }
+    setBusy(false);
+  }
+
+  const isPending = event.dispute_status === 'pending';
+  const isAccepted = event.dispute_status === 'accepted';
+  const label =
+    isPending  ? 'Driver disputed — needs review' :
+    isAccepted ? 'Dispute accepted — dropped from driver score' :
+                 'Dispute rejected — event stands';
+  const labelColor =
+    isPending  ? '#991b1b' :
+    isAccepted ? '#137333' :
+                 '#b06000';
+
+  return (
+    <DetailBlock label={label}>
+      <div style={{ fontSize: 12, color: 'var(--gc-text-1)', lineHeight: 1.55 }}>
+        {event.dispute_reason && (
+          <div>
+            <div style={{ fontSize: 10.5, color: 'var(--gc-text-3)', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 3 }}>
+              Driver's reason
+            </div>
+            <div style={{ padding: 8, borderRadius: 6, background: 'var(--gc-bg)', color: 'var(--gc-text-1)', whiteSpace: 'pre-wrap' }}>
+              {event.dispute_reason}
+            </div>
+            {event.disputed_at && (
+              <div style={{ color: 'var(--gc-text-3)', marginTop: 3, fontSize: 11 }}>
+                Filed {fmtDenverFull(event.disputed_at)}
+              </div>
+            )}
+          </div>
+        )}
+
+        {!isPending && event.dispute_resolution && (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ fontSize: 10.5, color: 'var(--gc-text-3)', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 3 }}>
+              Dispatch response
+            </div>
+            <div style={{ padding: 8, borderRadius: 6, background: 'var(--gc-bg)', color: 'var(--gc-text-1)', whiteSpace: 'pre-wrap' }}>
+              {event.dispute_resolution}
+            </div>
+            {event.dispute_reviewed_at && (
+              <div style={{ color: 'var(--gc-text-3)', marginTop: 3, fontSize: 11 }}>
+                Reviewed {fmtDenverFull(event.dispute_reviewed_at)}
+              </div>
+            )}
+          </div>
+        )}
+
+        {isPending && (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ fontSize: 10.5, color: 'var(--gc-text-3)', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 3 }}>
+              Response (optional)
+            </div>
+            <textarea
+              value={resolution}
+              onChange={e => setResolution(e.target.value)}
+              placeholder="Explain your decision so the driver has context…"
+              rows={2}
+              style={{
+                width: '100%', padding: '7px 9px', fontSize: 12.5, borderRadius: 6,
+                border: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)',
+                color: 'var(--gc-text-1)', resize: 'vertical',
+              }}
+            />
+            {err && (
+              <div style={{ fontSize: 11.5, color: '#dc2626', marginTop: 6 }}>{err}</div>
+            )}
+            <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+              <button
+                type="button"
+                onClick={() => void review('rejected')}
+                disabled={busy}
+                style={{
+                  flex: 1, padding: '8px 10px', borderRadius: 6,
+                  border: '1px solid var(--gc-border-light)',
+                  background: 'var(--gc-surface)',
+                  color: 'var(--gc-text-1)', fontSize: 12.5, fontWeight: 600,
+                  cursor: busy ? 'wait' : 'pointer', opacity: busy ? 0.6 : 1,
+                }}
+              >
+                Reject — event stands
+              </button>
+              <button
+                type="button"
+                onClick={() => void review('accepted')}
+                disabled={busy}
+                style={{
+                  flex: 1, padding: '8px 10px', borderRadius: 6,
+                  border: '1px solid #137333',
+                  background: '#137333',
+                  color: '#fff', fontSize: 12.5, fontWeight: 700,
+                  cursor: busy ? 'wait' : 'pointer', opacity: busy ? 0.6 : 1,
+                }}
+              >
+                Accept — drop from score
+              </button>
+            </div>
+          </div>
+        )}
+        {!isPending && (
+          <div style={{ color: labelColor, fontSize: 11.5, marginTop: 8 }}>
+            {isAccepted
+              ? 'This event no longer counts against the driver\'s safety score.'
+              : 'This event still counts against the driver\'s safety score.'}
+          </div>
+        )}
+      </div>
+    </DetailBlock>
+  );
+}
+
 function DriverScore7dBlock({
   event, driverScores7d, onOpenScorecard,
 }: {
@@ -1013,6 +1166,33 @@ function statusChip(s: PerformanceEventRow['dispatch_status']): React.ReactNode 
       textTransform: 'uppercase', letterSpacing: 0.4,
     }}>
       · {c.label}
+    </span>
+  );
+}
+
+function disputeChip(s: PerformanceEventRow['dispute_status']): React.ReactNode {
+  if (!s || s === 'none') return null;
+  const map: Record<string, { label: string; color: string; bg: string }> = {
+    pending:  { label: 'DISPUTED',       color: '#991b1b', bg: '#fee2e2' },
+    accepted: { label: 'DISPUTE ACCEPT', color: '#137333', bg: '#e6f4ea' },
+    rejected: { label: 'DISPUTE REJECT', color: '#b06000', bg: '#fef3c7' },
+  };
+  const c = map[s];
+  if (!c) return null;
+  return (
+    <span
+      title={
+        s === 'pending' ? 'Driver disputed this alert — needs review'
+        : s === 'accepted' ? 'Dispute accepted — dropped from driver score'
+        : 'Dispute rejected — event stands'
+      }
+      style={{
+        marginLeft: 6, padding: '1px 5px', borderRadius: 3,
+        fontSize: 9, fontWeight: 700, letterSpacing: 0.4,
+        color: c.color, background: c.bg,
+      }}
+    >
+      {c.label}
     </span>
   );
 }

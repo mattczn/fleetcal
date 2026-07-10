@@ -82,6 +82,13 @@ interface PerfEventRow {
   // Shows the ACTUAL driver the push went to, which can differ from
   // resolved_driver_name when the dispatcher reassigned before notifying.
   notified_driver_name: string | null;
+  // Dispute workflow — driver challenges, dispatch reviews.
+  dispute_status:      "none" | "pending" | "accepted" | "rejected";
+  disputed_at:         string | null;
+  dispute_reason:      string | null;
+  dispute_reviewed_at: string | null;
+  dispute_reviewer_id: string | null;
+  dispute_resolution:  string | null;
   // ── Severity (derived from raw.event_intensity + metadata.severity) ──
   severity_level:   SeverityLevel | null;
   severity_score:   number | null;   // 0–100 for the bar meter
@@ -97,7 +104,9 @@ const SELECT_COLS = `
   lat, lon, location_label,
   dispatch_status, assigned_driver_id, dispatch_note,
   dispatched_at, dispatched_by_name,
-  notified_at, notified_driver_id, notified_message
+  notified_at, notified_driver_id, notified_message,
+  dispute_status, disputed_at, dispute_reason,
+  dispute_reviewed_at, dispute_reviewer_id, dispute_resolution
 `.replace(/\s+/g, "");
 
 // ── GET /v1/performance-events ─────────────────────────────────────────
@@ -356,6 +365,11 @@ perf.patch("/:id", async (c) => {
     dispatch_status?:    PerfEventRow["dispatch_status"];
     assigned_driver_id?: number | null;
     dispatch_note?:      string | null;
+    /** Dispute review: 'accepted' | 'rejected'. Requires the event to
+     *  currently be dispute_status='pending' — you can't review a
+     *  dispute that doesn't exist. */
+    dispute_status?:     "accepted" | "rejected";
+    dispute_resolution?: string | null;
   } | null;
   if (!body) return c.json({ error: "bad_body" }, 400);
 
@@ -364,6 +378,9 @@ perf.patch("/:id", async (c) => {
   // visible under 'all' and the bell count doesn't rewind.
   if (body.dispatch_status && !["confirmed", "dismissed"].includes(body.dispatch_status)) {
     return c.json({ error: "bad_status" }, 400);
+  }
+  if (body.dispute_status && !["accepted", "rejected"].includes(body.dispute_status)) {
+    return c.json({ error: "bad_dispute_status" }, 400);
   }
 
   const patch: Record<string, unknown> = {};
@@ -378,6 +395,27 @@ perf.patch("/:id", async (c) => {
   }
   if (body.assigned_driver_id !== undefined) patch.assigned_driver_id = body.assigned_driver_id;
   if (body.dispatch_note      !== undefined) patch.dispatch_note      = body.dispatch_note;
+
+  // Dispute review — verify current dispute_status is 'pending' before
+  // committing, so a dispatcher can't accept/reject an event nobody
+  // disputed.
+  if (body.dispute_status) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: pre } = await (supabase as any)
+      .from("motive_performance_events")
+      .select("dispute_status")
+      .eq("org_id", orgId)
+      .eq("id", id)
+      .maybeSingle();
+    if (!pre) return c.json({ error: "not_found" }, 404);
+    if ((pre as { dispute_status: string }).dispute_status !== "pending") {
+      return c.json({ error: "no_pending_dispute" }, 409);
+    }
+    patch.dispute_status      = body.dispute_status;
+    patch.dispute_reviewed_at = new Date().toISOString();
+    patch.dispute_reviewer_id = c.get("userId") ?? null;
+    patch.dispute_resolution  = body.dispute_resolution ?? null;
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data, error } = await (supabase as any)

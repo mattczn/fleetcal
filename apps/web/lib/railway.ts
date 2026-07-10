@@ -792,6 +792,10 @@ class RailwayClient {
     dispatch_status?:    'confirmed' | 'dismissed';
     assigned_driver_id?: number | null;
     dispatch_note?:      string | null;
+    /** Dispute review — accepted drops the event from scoring, rejected
+     *  lets the event stand. Requires event.dispute_status='pending'. */
+    dispute_status?:     'accepted' | 'rejected';
+    dispute_resolution?: string | null;
   }) {
     return this.req<{ event: PerformanceEventRow }>('PATCH', `/v1/performance-events/${id}`, body);
   }
