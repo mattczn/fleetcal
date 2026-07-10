@@ -28,6 +28,7 @@
  */
 
 import { Hono } from "hono";
+import { deriveSeverity, type SeverityLevel } from "@fleetcal/types";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireTruckHistoryOrg, requireModule, requireCapability } from "../middleware/require.js";
 import { supabase } from "../lib/supabase.js";
@@ -81,6 +82,12 @@ interface PerfEventRow {
   // Shows the ACTUAL driver the push went to, which can differ from
   // resolved_driver_name when the dispatcher reassigned before notifying.
   notified_driver_name: string | null;
+  // ── Severity (derived from raw.event_intensity + metadata.severity) ──
+  severity_level:   SeverityLevel | null;
+  severity_score:   number | null;   // 0–100 for the bar meter
+  severity_display: string | null;   // e.g. "12.2 mph/s"
+  severity_metric:  string | null;   // Motive's metric name — e.g. "Braking intensity"
+  severity_inverted: boolean;        // true when lower = worse (tailgating)
 }
 
 const SELECT_COLS = `
@@ -108,12 +115,15 @@ perf.get("/", async (c) => {
   // arrays; movements need a second query per truck).
   const include = new Set((url.searchParams.get("include") ?? "").split(",").map(s => s.trim()).filter(Boolean));
 
-  const cols = include.has("raw") ? `${SELECT_COLS},raw,vehicle_id` : SELECT_COLS;
-
+  // `raw` is always fetched from the DB so enrichEventsBatch can derive
+  // severity from raw.event_intensity + raw.metadata.severity. We strip
+  // it from the response afterwards unless the caller opted in via
+  // `include=raw` (the panel needs it for the map's GPS trace + the
+  // dashcam block). Popover keeps its lean payload.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let q = (supabase as any)
     .from("motive_performance_events")
-    .select(cols)
+    .select(`${SELECT_COLS},raw,vehicle_id`)
     .eq("org_id", orgId)
     .order("event_time", { ascending: false })
     .limit(limit);
@@ -130,8 +140,15 @@ perf.get("/", async (c) => {
   const rows = (data ?? []) as (PerfEventRow & { raw?: any })[];
 
   // Batch-resolve calendar driver + load + asset color for every event
-  // in the list. 4 queries total regardless of list size.
+  // in the list. 4 queries total regardless of list size. Also derives
+  // severity_* from each row's raw payload.
   await enrichEventsBatch(orgId, rows);
+
+  // Strip raw when the caller didn't ask for it — keeps the popover
+  // response small (raw carries multi-KB GPS arrays per row).
+  if (!include.has("raw")) {
+    for (const r of rows) delete (r as { raw?: unknown }).raw;
+  }
 
   // Optional Motive driving_periods sidecar — panel uses this to draw
   // the between-load movement OD line on the map. Pull the periods for
@@ -430,7 +447,9 @@ perf.post("/:id/notify-driver", async (c) => {
   if (!drv)  return c.json({ error: "driver_not_in_org" }, 400);
 
   const label = formatEventLabel(event.event_type);
-  const title = "Safety alert from dispatch";
+  // "Check-in" not "alert" — the push should feel like a heads-up from
+  // dispatch, not a violation notice. Same content, softer framing.
+  const title = "Safety check-in from dispatch";
   // Prefer asset_name (fleetcal display) → the Motive-side
   // vehicle_number is never shown to drivers. Fall back to vehicle_number
   // only when the truck isn't linked to an asset row yet, and finally
@@ -441,13 +460,10 @@ perf.post("/:id/notify-driver", async (c) => {
   // driver reading a 6 PM Mountain event sees midnight UTC on their
   // phone, which is confusing on a road trip.
   const timeStr = formatEventLocalTime(event.event_time, "America/Denver");
-  // Push body is ALWAYS the short summary — event details only. The
-  // dispatcher's custom message (if any) is stored on the row and shown
-  // when the driver taps into the alert detail screen. Keeps push
-  // notifications skimmable and lets the driver decide when to read
-  // the full context.
+  // Push body: fact line + light, uniform closer. Same wording every
+  // time so drivers know exactly what to expect from a dispatch push.
   const summary =
-    `${label} logged on ${truckLabel} at ${timeStr}. Tap to review.`;
+    `${label} was logged on ${truckLabel} at ${timeStr}. Please drive safe. Tap to review.`;
   const storedMessage = body.message?.trim() || summary;
 
   const sent = await sendAutoPushToDriver(orgId, body.driverId, "safety_alert", {
@@ -783,6 +799,20 @@ async function enrichEventsBatch(orgId: string, rows: PerfEventRow[]): Promise<v
     row.notified_driver_name = row.notified_driver_id != null
       ? (nameById.get(row.notified_driver_id) ?? null)
       : null;
+
+    // (7) Severity — derived from raw.event_intensity + raw.metadata.
+    //     Missing raw yields sane defaults (level=low, score=0) so the
+    //     UI can safely fill/color from these fields without null
+    //     guards. Only stored fields survive to the DB; these are
+    //     computed on every read.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const raw = (row as any).raw;
+    const sev = deriveSeverity(raw, row.event_type);
+    row.severity_level    = sev.level;
+    row.severity_score    = sev.score;
+    row.severity_display  = sev.displayValue;
+    row.severity_metric   = sev.metricName;
+    row.severity_inverted = sev.isInverted;
   }
 }
 

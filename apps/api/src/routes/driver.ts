@@ -23,6 +23,7 @@ import {
 } from "@fleetcal/types";
 
 import { supabase } from "../lib/supabase.js";
+import { deriveSeverity } from "@fleetcal/types";
 import { ensureEventRouteCached } from "../lib/routeGeometry.js";
 import { isTruckHistoryOrg } from "../middleware/require.js";
 import { driverAuth, type DriverAuthVariables } from "../middleware/driverAuth.js";
@@ -3338,19 +3339,26 @@ driver.get("/inspections/today", async (c) => {
 // notification happens; only rows with notified_driver_id = <this driver>
 // are visible here. Message body renders only when the driver opens the
 // detail, so the push notification remains a short summary.
+// Severity is derived from raw.event_intensity + raw.metadata.severity
+// via the shared deriveSeverity helper so the driver-app meter and the
+// dispatch meter agree.
 // ─────────────────────────────────────────────────────────────────────────
 
 driver.get("/safety-alerts", async (c) => {
   const driverId = c.get("driverId");
   const orgId    = c.get("orgId");
 
+  // Fetch raw so we can derive severity server-side. Raw is stripped
+  // before responding — we only expose the small severity fields the
+  // meter needs, not Motive's multi-KB GPS arrays.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data, error } = await (supabase as any)
     .from("motive_performance_events")
     .select(`
       id, event_type, event_time, intensity, location_label,
       asset_id, vehicle_number,
-      notified_at, notified_message, notified_driver_id
+      notified_at, notified_message, notified_driver_id,
+      raw
     `)
     .eq("org_id", orgId)
     .eq("notified_driver_id", driverId)
@@ -3385,19 +3393,29 @@ driver.get("/safety-alerts", async (c) => {
     id: number; event_type: string; event_time: string; intensity: string | null;
     location_label: string | null; asset_id: number | null; vehicle_number: string | null;
     notified_at: string; notified_message: string | null;
-  }) => ({
-    id:             r.id,
-    event_type:     r.event_type,
-    event_time:     r.event_time,
-    intensity:      r.intensity,
-    location_label: r.location_label,
-    truck_name:     (r.asset_id != null ? assetById.get(r.asset_id)?.name : null) ?? r.vehicle_number ?? null,
-    truck_unit:     r.asset_id != null ? (assetById.get(r.asset_id)?.unit ?? null) : null,
-    notified_at:    r.notified_at,
-    // NOTE: notified_message is intentionally included here — the app
-    // decides whether to render it (list row hides, detail shows).
-    notified_message: r.notified_message,
-  }));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    raw: any;
+  }) => {
+    const sev = deriveSeverity(r.raw, r.event_type);
+    return {
+      id:             r.id,
+      event_type:     r.event_type,
+      event_time:     r.event_time,
+      intensity:      r.intensity,
+      location_label: r.location_label,
+      truck_name:     (r.asset_id != null ? assetById.get(r.asset_id)?.name : null) ?? r.vehicle_number ?? null,
+      truck_unit:     r.asset_id != null ? (assetById.get(r.asset_id)?.unit ?? null) : null,
+      notified_at:    r.notified_at,
+      // NOTE: notified_message is intentionally included here — the app
+      // decides whether to render it (list row hides, detail shows).
+      notified_message:  r.notified_message,
+      severity_level:    sev.level,
+      severity_score:    sev.score,
+      severity_display:  sev.displayValue,
+      severity_metric:   sev.metricName,
+      severity_inverted: sev.isInverted,
+    };
+  });
 
   return c.json({ alerts });
 });

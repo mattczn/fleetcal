@@ -80,7 +80,7 @@ export default function SafetyAlertsListScreen() {
                 shadowOffset: { width: 0, height: 1 },
               }}
             >
-              <AlertTriangle size={20} color={severityColor(a.intensity)} />
+              <AlertTriangle size={20} color={severityColorLevel(a.severity_level)} />
               <View style={{ flex: 1 }}>
                 <Text style={[txt(700), { fontSize: 15, color: "#111827" }]}>
                   {eventTypeLabel(a.event_type)}
@@ -116,10 +116,9 @@ function eventTypeLabel(t: string): string {
   }
 }
 
-function severityColor(intensity: string | null): string {
-  const s = (intensity ?? "").toLowerCase();
-  if (s.includes("severe") || s.includes("high")) return "#dc2626";
-  if (s.includes("moderate")) return "#f59e0b";
+function severityColorLevel(level: "low" | "moderate" | "severe"): string {
+  if (level === "severe")   return "#dc2626";
+  if (level === "moderate") return "#f59e0b";
   return "#3b82f6";
 }
 

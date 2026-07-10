@@ -2100,6 +2100,14 @@ export interface PerformanceEventRow {
    *  ACTUALLY received the push, which can differ from
    *  resolved_driver_name when the dispatcher reassigned before sending. */
   notified_driver_name: string | null;
+  /** Derived from raw.event_intensity + raw.metadata.severity via
+   *  deriveSeverity() — computed on every read, not stored. See
+   *  packages/types/severity.ts for thresholds. */
+  severity_level:    "low" | "moderate" | "severe" | null;
+  severity_score:    number | null;   // 0–100 for the bar meter fill
+  severity_display:  string | null;   // e.g. "12.2 mph/s" or "0.6 s"
+  severity_metric:   string | null;   // e.g. "Braking intensity"
+  severity_inverted: boolean;         // true when lower = worse (tailgating)
 }
 
 /** Subset of the Motive v2 driver_performance_events payload we surface

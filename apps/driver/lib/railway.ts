@@ -281,6 +281,11 @@ export const railway = {
         truck_unit:       string | null;
         notified_at:      string;
         notified_message: string | null;
+        severity_level:    'low' | 'moderate' | 'severe';
+        severity_score:    number;
+        severity_display:  string;
+        severity_metric:   string;
+        severity_inverted: boolean;
       }[];
     }>("GET", "/v1/driver/safety-alerts");
   },

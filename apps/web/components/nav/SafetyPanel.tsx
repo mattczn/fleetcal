@@ -26,6 +26,7 @@ import type {
   MotivePerfRaw,
 } from '@fleetcal/types';
 import DashcamVideo from './SafetyDashcamVideo';
+import SeverityMeter, { severityColor as severityLevelColor } from './SeverityMeter';
 import { fmtDenverLong, fmtDenverFull, relTimeDenver } from '@/lib/safetyTime';
 
 type PanelEvent = PerformanceEventRow & { raw?: MotivePerfRaw; vehicle_id?: number };
@@ -248,7 +249,7 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
                   onMouseEnter={ev => { if (e.id !== selectedId) ev.currentTarget.style.background = 'var(--gc-bg)'; }}
                   onMouseLeave={ev => { if (e.id !== selectedId) ev.currentTarget.style.background = 'transparent'; }}
                 >
-                  <AlertTriangle size={14} style={{ color: severityColor(e.intensity), flexShrink: 0, marginTop: 2 }} />
+                  <AlertTriangle size={14} style={{ color: severityLevelColor(e.severity_level), flexShrink: 0, marginTop: 2 }} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     {/* Row 1: event type + status chip + time (right-aligned) */}
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
@@ -453,7 +454,7 @@ function SafetyDetail({
       // (2) Event pin at the reported lat/lon.
       if (event.lat != null && event.lon != null) {
         const el = document.createElement('div');
-        el.style.cssText = `width:22px;height:22px;border-radius:50%;background:${severityColor(event.intensity)};border:2.5px solid white;box-shadow:0 2px 6px rgba(0,0,0,.35);`;
+        el.style.cssText = `width:22px;height:22px;border-radius:50%;background:${severityLevelColor(event.severity_level)};border:2.5px solid white;box-shadow:0 2px 6px rgba(0,0,0,.35);`;
         const marker = new google.maps.marker.AdvancedMarkerElement({
           map, position: { lat: event.lat, lng: event.lon }, content: el,
         });
@@ -616,9 +617,11 @@ function SafetyDetail({
               {event.raw?.max_speed != null && (
                 <div style={{ color: 'var(--gc-text-2)', marginTop: 4 }}>
                   Peak {event.raw.max_speed.toFixed(1)} mph
-                  {event.raw.event_intensity ? ` · ${event.raw.event_intensity.name} ${event.raw.event_intensity.value}${event.raw.event_intensity.unit_type}` : ''}
                 </div>
               )}
+              <div style={{ marginTop: 10 }}>
+                <SeverityMeter event={event} />
+              </div>
             </div>
           </DetailBlock>
 
@@ -824,13 +827,6 @@ function eventTypeLabel(t: string): string {
     case 'seatbelt':     return 'Seatbelt violation';
     default:             return t.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
   }
-}
-
-function severityColor(intensity: string | null): string {
-  const s = (intensity ?? '').toLowerCase();
-  if (s.includes('severe') || s.includes('high')) return '#dc2626';
-  if (s.includes('moderate')) return '#f59e0b';
-  return '#3b82f6';
 }
 
 function errorMessage(err: unknown): string {

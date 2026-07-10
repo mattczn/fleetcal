@@ -31,6 +31,7 @@ import { railway } from '@/lib/railway';
 import type { PerformanceEventRow, MotivePerfRaw } from '@fleetcal/types';
 import SafetyPanel from './SafetyPanel';
 import DashcamVideo from './SafetyDashcamVideo';
+import SeverityMeter, { severityColor as severityLevelColor } from './SeverityMeter';
 import { fmtDenverLong, relTimeDenver } from '@/lib/safetyTime';
 
 const POLL_MS = 60_000;
@@ -244,7 +245,7 @@ function BellPopover({
               <AlertTriangle
                 size={16}
                 style={{
-                  color: severityColor(e.intensity),
+                  color: severityLevelColor(e.severity_level),
                   flexShrink: 0,
                   marginTop: 2,
                 }}
@@ -461,11 +462,13 @@ function EventDetailDrawer({ eventId, onClose }: { eventId: number; onClose: () 
               <div style={{ fontSize: 12, color: 'var(--gc-text-3)', textTransform: 'uppercase', letterSpacing: 0.4 }}>Event</div>
               <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--gc-text-1)', marginTop: 2 }}>
                 {eventTypeLabel(event.event_type)}
-                {event.intensity ? ` — ${event.intensity}` : ''}
               </div>
               <div style={{ fontSize: 12, color: 'var(--gc-text-2)', marginTop: 4 }}>
                 {fmtDenverLong(event.event_time)}
                 {event.duration ? ` · ${event.duration.toFixed(1)}s` : ''}
+              </div>
+              <div style={{ marginTop: 10 }}>
+                <SeverityMeter event={event} />
               </div>
             </div>
 
@@ -681,13 +684,6 @@ function eventTypeLabel(t: string): string {
     case 'seatbelt':     return 'Seatbelt violation';
     default:             return t.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
   }
-}
-
-function severityColor(intensity: string | null): string {
-  const s = (intensity ?? '').toLowerCase();
-  if (s.includes('severe')) return '#dc2626';
-  if (s.includes('moderate')) return '#f59e0b';
-  return 'var(--gc-text-2)';
 }
 
 function errorMessage(err: unknown): string {

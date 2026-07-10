@@ -114,6 +114,10 @@ export * from "./modules";
 
 export * from "./invoicePacket";
 
+// ── Motive perf-event severity derivation (shared web + driver app) ─────
+
+export * from "./severity";
+
 // ── CRM (internal sales tooling) ─────────────────────────────────────────
 
 export * from "./crm";

@@ -6,6 +6,8 @@ import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, AlertTriangle, Truck, MapPin, MessageSquare, Clock } from "lucide-react-native";
 import { railway } from "@/lib/railway";
 
+type SeverityLevel = "low" | "moderate" | "severe";
+
 /**
  * /safety/[id] — detail for one safety alert.
  *
@@ -64,20 +66,43 @@ export default function SafetyAlertDetailScreen() {
             <View style={{ flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 16, padding: 16, backgroundColor: "#fff", borderRadius: 14 }}>
               <View style={{
                 width: 44, height: 44, borderRadius: 22,
-                backgroundColor: severityColor(alert.intensity) + "22",
+                backgroundColor: severityColorLevel(alert.severity_level) + "22",
                 alignItems: "center", justifyContent: "center",
               }}>
-                <AlertTriangle size={24} color={severityColor(alert.intensity)} />
+                <AlertTriangle size={24} color={severityColorLevel(alert.severity_level)} />
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={[txt(800), { fontSize: 20, color: "#111827" }]}>
                   {eventTypeLabel(alert.event_type)}
                 </Text>
-                {alert.intensity && (
-                  <Text style={[txt(500), { fontSize: 13, color: "#6b7280", marginTop: 2 }]}>
-                    Intensity: {alert.intensity}
-                  </Text>
-                )}
+                <Text style={[txt(600), { fontSize: 12, color: severityColorLevel(alert.severity_level), marginTop: 2, textTransform: "uppercase", letterSpacing: 0.6 }]}>
+                  {alert.severity_level}
+                </Text>
+              </View>
+            </View>
+
+            {/* Severity meter — small bar showing where this event sits
+                on Motive's intensity scale for this event type. Same
+                math as the dispatch view. */}
+            <View style={{ backgroundColor: "#fff", borderRadius: 14, padding: 16, marginBottom: 16 }}>
+              <View style={{ flexDirection: "row", alignItems: "baseline", marginBottom: 8 }}>
+                <Text style={[txt(600), { fontSize: 13, color: "#374151" }]}>
+                  {alert.severity_metric}
+                </Text>
+                <Text style={[txt(700), { fontSize: 14, color: severityColorLevel(alert.severity_level), marginLeft: "auto" }]}>
+                  {alert.severity_display}
+                </Text>
+              </View>
+              <View style={{
+                height: 10, borderRadius: 5, backgroundColor: "#f3f4f6",
+                overflow: "hidden", borderWidth: 1, borderColor: "#e5e7eb",
+              }}>
+                <View style={{
+                  height: "100%",
+                  width: `${Math.max(0, Math.min(100, alert.severity_score))}%`,
+                  backgroundColor: severityColorLevel(alert.severity_level),
+                  borderRadius: 4,
+                }} />
               </View>
             </View>
 
@@ -153,10 +178,9 @@ function eventTypeLabel(t: string): string {
   }
 }
 
-function severityColor(intensity: string | null): string {
-  const s = (intensity ?? "").toLowerCase();
-  if (s.includes("severe") || s.includes("high")) return "#dc2626";
-  if (s.includes("moderate")) return "#f59e0b";
+function severityColorLevel(level: SeverityLevel): string {
+  if (level === "severe")   return "#dc2626";
+  if (level === "moderate") return "#f59e0b";
   return "#3b82f6";
 }
 
