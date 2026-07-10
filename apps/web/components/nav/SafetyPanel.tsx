@@ -17,13 +17,15 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, X, MapPin, Truck, Loader2 } from 'lucide-react';
+import { AlertTriangle, X, MapPin, Truck, Loader2, ExternalLink } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 import { loadGoogleMaps, MAP_ID } from '@/lib/googleMaps';
 import { railway } from '@/lib/railway';
 import type {
   PerformanceEventRow,
   PerformanceEventMovement,
   MotivePerfRaw,
+  DriverSafetyScoreRow,
 } from '@fleetcal/types';
 import DashcamVideo from './SafetyDashcamVideo';
 import SeverityMeter, { severityColor as severityLevelColor } from './SeverityMeter';
@@ -42,9 +44,11 @@ const WINDOW_OPTIONS: Array<{ key: '1h' | '6h' | '24h' | '72h' | '168h'; hours: 
 ];
 
 export default function SafetyPanel({ onClose }: { onClose: () => void }) {
+  const router = useRouter();
   const [events,    setEvents]    = useState<PanelEvent[]>([]);
   const [movements, setMovements] = useState<PerformanceEventMovement[]>([]);
   const [drivers,   setDrivers]   = useState<Driver[]>([]);
+  const [driverScores7d, setDriverScores7d] = useState<Map<number, DriverSafetyScoreRow>>(new Map());
   const [loading,   setLoading]   = useState(true);
   const [error,     setError]     = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -57,13 +61,25 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
   const load = useMemo(() => async () => {
     setLoading(true); setError(null);
     try {
-      const [panel, driverList] = await Promise.all([
+      // Three parallel calls: panel events, drivers list, and 7-day
+      // driver safety scores. 7-day scores are used in the detail pane
+      // to show a shorter-window health snapshot for the selected
+      // event's driver. Fetched once per panel open; not re-fetched
+      // when the window filter changes because it's always 7d.
+      const [panel, driverList, safety7d] = await Promise.all([
         railway.listPerformanceEventsForPanel(windowHours),
         railway.listDrivers(),
+        railway.getDriverSafetyScoring(7).catch(err => {
+          console.warn('[SafetyPanel] 7d scores failed:', err);
+          return null;
+        }),
       ]);
       setEvents(panel.events);
       setMovements(panel.movements);
       setDrivers(driverList.drivers.map(d => ({ id: d.id, name: d.name })));
+      if (safety7d) {
+        setDriverScores7d(new Map(safety7d.drivers.map(r => [r.driverId, r])));
+      }
       // Keep the selection if it's still in the new window; otherwise
       // jump to the newest event so the map isn't blank.
       if (panel.events.length > 0) {
@@ -121,6 +137,43 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
 
   const selected = visible.find(e => e.id === selectedId) ?? events.find(e => e.id === selectedId) ?? null;
 
+  // ── Above-fleet-avg severe events in the past 24h ──────────────────
+  //
+  // Compare each driver's severe count in the trailing 24h against the
+  // fleet mean (severe events / drivers who had any events at all).
+  // Flag when the driver is above the mean AND has at least 2 severe
+  // events — noise-immunity against a one-shot bad brake. Whole-panel
+  // computation from already-loaded events (no extra fetch).
+  const severeFlags = useMemo(() => {
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const perDriver = new Map<number, { name: string | null; total: number; severe: number }>();
+    for (const e of events) {
+      if (Date.parse(e.event_time) < cutoff) continue;
+      const driverId = e.resolved_driver_id ?? e.assigned_driver_id ?? null;
+      if (driverId == null) continue;
+      const acc = perDriver.get(driverId) ?? { name: e.resolved_driver_name, total: 0, severe: 0 };
+      acc.name = acc.name ?? e.resolved_driver_name;
+      acc.total++;
+      if (e.severity_level === 'severe') acc.severe++;
+      perDriver.set(driverId, acc);
+    }
+    if (perDriver.size === 0) return { fleetAvgSevere: 0, flagged: [] as Array<{ driverId: number; name: string | null; severe: number }> };
+    const totalSevere = Array.from(perDriver.values()).reduce((s, v) => s + v.severe, 0);
+    const fleetAvgSevere = totalSevere / perDriver.size;
+    const flagged: Array<{ driverId: number; name: string | null; severe: number }> = [];
+    for (const [driverId, v] of perDriver) {
+      if (v.severe >= 2 && v.severe > fleetAvgSevere) {
+        flagged.push({ driverId, name: v.name, severe: v.severe });
+      }
+    }
+    flagged.sort((a, b) => b.severe - a.severe);
+    return { fleetAvgSevere: Math.round(fleetAvgSevere * 10) / 10, flagged };
+  }, [events]);
+  const flaggedDriverIds = useMemo(
+    () => new Set(severeFlags.flagged.map(f => f.driverId)),
+    [severeFlags],
+  );
+
   // Flat chronological list — server already returns events by
   // event_time DESC. Truck identity still reads at a glance via the
   // color accent bar + truck name printed on each row.
@@ -166,6 +219,50 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
                 Refresh
               </button>
             </div>
+            {/* Deep-link to the drivers scorecard so a dispatcher can
+                jump from panel triage to the fleet-wide overview. */}
+            <button
+              type="button"
+              onClick={() => { onClose(); router.push('/drivers'); }}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 4,
+                fontSize: 11, color: 'var(--gc-blue, #1a73e8)',
+                background: 'transparent', border: 'none', cursor: 'pointer',
+                padding: 0, alignSelf: 'flex-start',
+              }}
+            >
+              View driver scorecards <ExternalLink size={11} />
+            </button>
+            {/* Above-fleet-avg severe banner — appears when at least
+                one driver had ≥2 severe events in the last 24h AND was
+                above the fleet mean. Tooltip shows the raw numbers. */}
+            {severeFlags.flagged.length > 0 && (
+              <div
+                style={{
+                  padding: '8px 10px',
+                  borderRadius: 6,
+                  background: '#fef2f2',
+                  border: '1px solid #fecaca',
+                  color: '#991b1b',
+                  fontSize: 11.5,
+                  lineHeight: 1.4,
+                }}
+                title={`Fleet average: ${severeFlags.fleetAvgSevere} severe events per driver in the last 24h.`}
+              >
+                <div style={{ fontWeight: 700, marginBottom: 2 }}>
+                  ⚠ {severeFlags.flagged.length} driver{severeFlags.flagged.length === 1 ? '' : 's'} above fleet avg (24h)
+                </div>
+                <div>
+                  {severeFlags.flagged.slice(0, 4).map(f => (
+                    <span key={f.driverId}>
+                      {f.name ?? `Driver ${f.driverId}`} ({f.severe})
+                      {' · '}
+                    </span>
+                  ))}
+                  {severeFlags.flagged.length > 4 && `+${severeFlags.flagged.length - 4} more`}
+                </div>
+              </div>
+            )}
             {/* Time window — server-side re-fetches when changed. */}
             <FilterSelect
               value={String(windowHours)}
@@ -260,10 +357,26 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
                         {relTimeDenver(e.event_time)}
                       </div>
                     </div>
-                    {/* Row 2: truck (with color dot) + driver */}
+                    {/* Row 2: truck (with color dot) + driver + 24h severe flag */}
                     <div style={{ fontSize: 11.5, color: 'var(--gc-text-2)', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {truck}
                       {e.resolved_driver_name ? ` · ${e.resolved_driver_name}` : ' · unassigned'}
+                      {(() => {
+                        const drvId = e.resolved_driver_id ?? e.assigned_driver_id;
+                        if (drvId == null || !flaggedDriverIds.has(drvId)) return null;
+                        return (
+                          <span
+                            title="This driver is above the fleet average for severe events in the last 24h"
+                            style={{
+                              marginLeft: 6, padding: '1px 5px', borderRadius: 3,
+                              background: '#fef2f2', color: '#991b1b',
+                              fontSize: 9.5, fontWeight: 700, letterSpacing: 0.3,
+                            }}
+                          >
+                            ⚠ 24H
+                          </span>
+                        );
+                      })()}
                     </div>
                     {/* Row 3: load if present */}
                     {(e.resolved_load_num || e.resolved_load_title) && (
@@ -336,6 +449,8 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
               event={selected}
               movements={movements}
               drivers={drivers}
+              driverScores7d={driverScores7d}
+              onOpenScorecard={() => { onClose(); router.push('/drivers'); }}
               onEventUpdated={(updated) => {
                 // Splice the server's fresh row (already enriched) into
                 // our events array — no full re-fetch. Same row, same
@@ -364,15 +479,21 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
 // ── Right pane: map + video + actions ──────────────────────────────────
 
 function SafetyDetail({
-  event, movements, drivers, onEventUpdated, onRawRefreshed,
+  event, movements, drivers, driverScores7d, onOpenScorecard, onEventUpdated, onRawRefreshed,
 }: {
   event:     PanelEvent;
   movements: PerformanceEventMovement[];
   drivers:   Driver[];
+  /** 7-day safety scores keyed by fleetcal driver id. Used to show
+   *  the selected event's driver's short-window health snapshot. */
+  driverScores7d: Map<number, DriverSafetyScoreRow>;
   /** Called with the freshly-enriched row after any mutation. Parent
    *  splices it into its events array — no full re-fetch. */
   onEventUpdated: (updated: PerformanceEventRow) => void;
   onRawRefreshed: (eventId: number, raw: MotivePerfRaw | undefined) => void;
+  /** Fires when the dispatcher clicks the "See full scorecard" link
+   *  next to the 7-day score. Panel navigates to /drivers. */
+  onOpenScorecard: () => void;
 }) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<google.maps.Map | null>(null);
@@ -636,6 +757,15 @@ function SafetyDetail({
             </div>
           </DetailBlock>
 
+          {/* Driver 7-day safety score — shorter-window health check
+              alongside the 30-day score on the drivers page. Only
+              renders when we have a resolved driver AND a 7d score. */}
+          <DriverScore7dBlock
+            event={event}
+            driverScores7d={driverScores7d}
+            onOpenScorecard={onOpenScorecard}
+          />
+
           {/* Delivery record — only rendered when a push actually went
               out. Gives the dispatcher an audit trail without opening a
               separate log. */}
@@ -789,6 +919,67 @@ function FilterSelect({
     >
       {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
     </select>
+  );
+}
+
+function DriverScore7dBlock({
+  event, driverScores7d, onOpenScorecard,
+}: {
+  event: PanelEvent;
+  driverScores7d: Map<number, DriverSafetyScoreRow>;
+  onOpenScorecard: () => void;
+}) {
+  const driverId = event.resolved_driver_id ?? event.assigned_driver_id;
+  if (driverId == null) return null;
+  const score = driverScores7d.get(driverId);
+  if (!score) return null;
+  // Same score bands as the SafetyScoreCell on the drivers page.
+  const color =
+    score.safetyScore == null ? 'var(--gc-text-3)' :
+    score.safetyScore >= 85    ? '#137333' :
+    score.safetyScore >= 70    ? '#b06000' :
+                                 '#c5221f';
+  return (
+    <DetailBlock label="Driver — last 7 days">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+        <div style={{ textAlign: 'center', minWidth: 60 }}>
+          <div className="tabular-nums" style={{ fontSize: 26, fontWeight: 800, color, lineHeight: 1 }}>
+            {score.safetyScore ?? '—'}
+          </div>
+          <div style={{ fontSize: 9.5, color: 'var(--gc-text-3)', textTransform: 'uppercase', letterSpacing: 0.6, marginTop: 3 }}>
+            Safety score
+          </div>
+        </div>
+        <div style={{ flex: 1, fontSize: 12, color: 'var(--gc-text-2)', lineHeight: 1.5 }}>
+          <div className="tabular-nums" style={{ color: 'var(--gc-text-1)' }}>
+            <span style={{ fontWeight: 600 }}>{score.moderateEvents + score.severeEvents}</span> event
+            {score.moderateEvents + score.severeEvents === 1 ? '' : 's'}
+            {score.severeEvents > 0 && (
+              <> · <span style={{ color: '#c5221f', fontWeight: 600 }}>{score.severeEvents} severe</span></>
+            )}
+          </div>
+          <div className="tabular-nums" style={{ color: 'var(--gc-text-3)', marginTop: 2 }}>
+            {score.milesDriven.toLocaleString()} mi
+            {score.flagged && (
+              <span style={{ color: '#c5221f', marginLeft: 6, fontWeight: 700 }}>· flagged</span>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={onOpenScorecard}
+            style={{
+              marginTop: 6,
+              padding: 0, border: 'none', background: 'transparent',
+              color: 'var(--gc-blue, #1a73e8)',
+              fontSize: 11, cursor: 'pointer',
+              display: 'inline-flex', alignItems: 'center', gap: 3,
+            }}
+          >
+            See full scorecard <ExternalLink size={11} />
+          </button>
+        </div>
+      </div>
+    </DetailBlock>
   );
 }
 

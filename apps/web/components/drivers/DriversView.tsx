@@ -20,6 +20,7 @@ import { PeriodSelector } from '@/components/ui/PeriodSelector';
 import { OpsTable, type OpsColumn } from '@/components/ui/OpsTable';
 import { type Period, getPeriodRange, defaultCustomRangeISO } from '@/lib/periodRange';
 import DriverDetailPanel from './DriverDetailPanel';
+import InspectionScorecardSection from './InspectionScorecardSection';
 import type { Driver } from '@/lib/types';
 import type {
   LoadSummary, FuelReport, MaintenanceReport,
@@ -63,8 +64,13 @@ export interface DriverScorecardRow {
   // selector). Populated from /v1/driver-safety-scoring; null when
   // the driver doesn't appear in that endpoint's response.
   safetyScore:      number | null;
-  safetyEvents:     number;
+  safetyEvents:     number;             // raw total across ALL severity levels
+  safetyModerateEvents: number;
   safetySevereEvents: number;
+  /** moderate + severe — what the score actually reflects (low is
+   *  weight 0). Shown in the Events column so the number matches what
+   *  affects the score. */
+  safetyCountedEvents: number;
   safetyMiles30d:   number;
   safetyPrevScore:  number | null;
   safetyFlagged:    boolean;
@@ -76,6 +82,36 @@ export interface DriverScorecardRow {
 // is the natural starting view — they can widen to 30d / month
 // from the period selector when they need to see further back.
 const DEFAULT_PERIOD: Period = 'week';
+
+// ── Module-level cache ──────────────────────────────────────────────
+//
+// The page fetches 6 endpoints on every mount. Without a cache the
+// dispatcher sees a full spinner each time they open /drivers, even if
+// they just closed a driver detail modal 5 seconds ago. Cache below
+// keeps the last result per period-range so re-opens use stale data
+// immediately while a background refetch runs. Fresh data replaces
+// stale as soon as it arrives — no spinner blink.
+//
+// TTL: 60s for period data, 5min for the 30-day safety score. The
+// safety window is fixed 30d so it doesn't shift when the period
+// selector moves — cache it independently to survive period toggles.
+interface CachedPeriodData {
+  drivers: Driver[];
+  loads: LoadSummary[];
+  inspections: Array<{ id: string; driverId: number; submittedAt: string; hasDefects: boolean; inspectionDate: string }>;
+  fuels: FuelReport[];
+  maintenance: MaintenanceReport[];
+  cachedAt: number;
+}
+interface CachedSafety {
+  byDriver: Map<number, DriverSafetyScoreRow>;
+  fleet: DriverSafetyFleetSummary | null;
+  cachedAt: number;
+}
+const PERIOD_TTL_MS = 60 * 1000;
+const SAFETY_TTL_MS = 5 * 60 * 1000;
+const periodCache = new Map<string, CachedPeriodData>();
+let safetyCache: CachedSafety | null = null;
 
 export default function DriversView() {
   const [period, setPeriod] = useState<Period>(DEFAULT_PERIOD);
@@ -95,71 +131,113 @@ export default function DriversView() {
   // Driver list is unscoped (it's the universe of who exists, not
   // who was active); the active-in-window filter happens at the row
   // build below.
-  const [drivers, setDrivers] = useState<Driver[]>([]);
-  const [loads, setLoads] = useState<LoadSummary[]>([]);
-  const [inspections, setInspections] = useState<Array<{ id: string; driverId: number; submittedAt: string; hasDefects: boolean; inspectionDate: string }>>([]);
-  const [fuels, setFuels] = useState<FuelReport[]>([]);
-  const [maintenance, setMaintenance] = useState<MaintenanceReport[]>([]);
-  const [safetyByDriver, setSafetyByDriver] = useState<Map<number, DriverSafetyScoreRow>>(new Map());
-  const [safetyFleet, setSafetyFleet] = useState<DriverSafetyFleetSummary | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Seed from cache so the first render already has data when the
+  // dispatcher opens/re-opens the page within the TTL window.
+  const cacheKey = `${range.start}|${range.end}`;
+  const seededPeriod = periodCache.get(cacheKey);
+  const [drivers, setDrivers] = useState<Driver[]>(seededPeriod?.drivers ?? []);
+  const [loads, setLoads] = useState<LoadSummary[]>(seededPeriod?.loads ?? []);
+  const [inspections, setInspections] = useState<Array<{ id: string; driverId: number; submittedAt: string; hasDefects: boolean; inspectionDate: string }>>(seededPeriod?.inspections ?? []);
+  const [fuels, setFuels] = useState<FuelReport[]>(seededPeriod?.fuels ?? []);
+  const [maintenance, setMaintenance] = useState<MaintenanceReport[]>(seededPeriod?.maintenance ?? []);
+  const [safetyByDriver, setSafetyByDriver] = useState<Map<number, DriverSafetyScoreRow>>(safetyCache?.byDriver ?? new Map());
+  const [safetyFleet, setSafetyFleet] = useState<DriverSafetyFleetSummary | null>(safetyCache?.fleet ?? null);
+  // Only show the full-screen loading state when we truly have NO data
+  // to render — with cache-seeded state, this is false on the second
+  // open within TTL and the user sees stale rows while the refetch runs.
+  const [loading, setLoading] = useState(!seededPeriod);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
+    const cachedPeriod = periodCache.get(cacheKey);
+    const periodStale = !cachedPeriod || (Date.now() - cachedPeriod.cachedAt) > PERIOD_TTL_MS;
+    const safetyStale = !safetyCache || (Date.now() - safetyCache.cachedAt) > SAFETY_TTL_MS;
+
+    // Nothing to refetch — cache is fresh on both axes.
+    if (!periodStale && !safetyStale) {
+      setLoading(false);
+      return;
+    }
+
+    // Only flash the spinner when we have absolutely no data. Otherwise
+    // the fetch runs silently under the current rows.
+    if (drivers.length === 0) setLoading(true);
     setError(null);
+
     Promise.all([
-      railway.listDrivers(),
-      // Pickup ∈ window. Server filters by pickup-leg start.
-      railway.listLoadSummaries({
+      // Period-scoped queries — skipped when the cache is fresh so we
+      // never re-hit the API when just changing tabs.
+      periodStale ? railway.listDrivers() : Promise.resolve({ drivers: cachedPeriod!.drivers }),
+      periodStale ? railway.listLoadSummaries({
         pickupFrom: range.start,
         pickupTo:   range.end,
         limit:      '5000',
-      }),
-      railway.listInspectionReports({
+      }) : Promise.resolve({ loads: cachedPeriod!.loads }),
+      periodStale ? railway.listInspectionReports({
         from:  range.start,
         to:    range.end,
         limit: 2000,
-      }),
-      railway.listFuelReports({
+      }) : Promise.resolve({ inspections: cachedPeriod!.inspections.map(r => ({ ...r })) }),
+      periodStale ? railway.listFuelReports({
         from:  range.start,
         to:    range.end,
         limit: 2000,
-      }),
-      railway.listMaintenanceReports({
+      }) : Promise.resolve({ fuelReports: cachedPeriod!.fuels }),
+      periodStale ? railway.listMaintenanceReports({
         from:  range.start,
         to:    range.end,
         limit: 2000,
-      }),
+      }) : Promise.resolve({ reports: cachedPeriod!.maintenance }),
       // Safety scoring — always 30-day rolling per product spec. Fetched
       // alongside the period-scoped queries but doesn't move when the
       // period selector changes. Failures don't fail the whole page;
       // the safety columns just render blanks.
-      railway.getDriverSafetyScoring(30).catch(err => {
-        console.warn('[drivers] safety scoring failed:', err);
-        return null;
-      }),
+      safetyStale
+        ? railway.getDriverSafetyScoring(30).catch(err => {
+            console.warn('[drivers] safety scoring failed:', err);
+            return null;
+          })
+        : Promise.resolve({ drivers: Array.from(safetyCache!.byDriver.values()), fleet: safetyCache!.fleet }),
     ])
       .then(([driverRes, loadRes, inspRes, fuelRes, maintRes, safetyRes]) => {
         if (cancelled) return;
-        setDrivers(driverRes.drivers);
-        setLoads(loadRes.loads);
-        setInspections(inspRes.inspections.map(r => ({
+        const nextInspections = inspRes.inspections.map(r => ({
           id:             r.id,
           driverId:       r.driverId,
           submittedAt:    r.submittedAt,
           hasDefects:     r.hasDefects,
           inspectionDate: r.inspectionDate,
-        })));
+        }));
+        setDrivers(driverRes.drivers);
+        setLoads(loadRes.loads);
+        setInspections(nextInspections);
         setFuels(fuelRes.fuelReports);
         setMaintenance(maintRes.reports);
         if (safetyRes) {
-          setSafetyByDriver(new Map(safetyRes.drivers.map(r => [r.driverId, r])));
+          const byDriver = new Map(safetyRes.drivers.map(r => [r.driverId, r]));
+          setSafetyByDriver(byDriver);
           setSafetyFleet(safetyRes.fleet);
-        } else {
-          setSafetyByDriver(new Map());
-          setSafetyFleet(null);
+          if (safetyStale) {
+            safetyCache = { byDriver, fleet: safetyRes.fleet, cachedAt: Date.now() };
+          }
+        } else if (safetyStale) {
+          // Preserve prior cache on a network failure — better a
+          // slightly stale score than a blank one.
+          setSafetyByDriver(safetyCache?.byDriver ?? new Map());
+          setSafetyFleet(safetyCache?.fleet ?? null);
+        }
+        // Write cache only when we actually refetched — reusing cached
+        // data doesn't count as a refresh.
+        if (periodStale) {
+          periodCache.set(cacheKey, {
+            drivers:     driverRes.drivers,
+            loads:       loadRes.loads,
+            inspections: nextInspections,
+            fuels:       fuelRes.fuelReports,
+            maintenance: maintRes.reports,
+            cachedAt:    Date.now(),
+          });
         }
       })
       .catch(err => {
@@ -334,12 +412,14 @@ export default function DriversView() {
         // stays visible even for drivers with no activity in the
         // page's period so a dispatcher can spot bad drivers who
         // "didn't drive much recently".
-        safetyScore:        safety?.safetyScore ?? null,
-        safetyEvents:       safety?.totalEvents ?? 0,
-        safetySevereEvents: safety?.severeEvents ?? 0,
-        safetyMiles30d:     safety?.milesDriven ?? 0,
-        safetyPrevScore:    safety?.prevSafetyScore ?? null,
-        safetyFlagged:      safety?.flagged ?? false,
+        safetyScore:          safety?.safetyScore ?? null,
+        safetyEvents:         safety?.totalEvents ?? 0,
+        safetyModerateEvents: safety?.moderateEvents ?? 0,
+        safetySevereEvents:   safety?.severeEvents ?? 0,
+        safetyCountedEvents:  (safety?.moderateEvents ?? 0) + (safety?.severeEvents ?? 0),
+        safetyMiles30d:       safety?.milesDriven ?? 0,
+        safetyPrevScore:      safety?.prevSafetyScore ?? null,
+        safetyFlagged:        safety?.flagged ?? false,
       });
     }
 
@@ -452,17 +532,18 @@ export default function DriversView() {
       // doesn't rank alongside dangerous drivers.
       sortValue: r => r.safetyScore ?? -1,
       headerTooltip:
-        'Safety score over the trailing 30 days — INDEPENDENT of the period selector above. Miles-normalized penalty from Motive safety events, weighted by severity and event type. 100 = best.',
+        'Safety score over the trailing 30 days — INDEPENDENT of the period selector above. Miles-normalized penalty from Motive safety events, weighted so severe events dominate the score. Fleet median lands at 80.',
       render: r => <SafetyScoreCell row={r} />,
     },
     {
-      key: 'safetyEvents', header: 'Events', width: 80, align: 'center',
+      key: 'safetyCountedEvents', header: 'Events', width: 80, align: 'center',
       sortable: true,
+      sortValue: r => r.safetyCountedEvents,
       headerTooltip:
-        'Count of Motive safety events attributed to this driver in the trailing 30 days. Severe events shown as a sub-count when > 0.',
+        'Moderate + severe Motive safety events attributed to this driver in the trailing 30 days. Low-severity events are ignored — they don\'t affect the score, so they don\'t clutter the count.',
       render: r => (
         <div>
-          <div className="tabular-nums font-semibold">{r.safetyEvents}</div>
+          <div className="tabular-nums font-semibold">{r.safetyCountedEvents}</div>
           {r.safetySevereEvents > 0 && (
             <div className="text-[10.5px] tabular-nums" style={{ color: '#dc2626' }}>
               {r.safetySevereEvents} severe
@@ -498,15 +579,22 @@ export default function DriversView() {
             </div>
           </div>
 
-          {/* Safety score chart — 30-day rolling, sits above the table
-              so a dispatcher sees the safety landscape before scanning
-              the compliance columns. Independent of the period selector. */}
+          {/* Dual-score chart — inspection + safety per active driver
+              in the period. First thing dispatchers see so problem
+              drivers surface immediately. */}
           {!loading && rows.length > 0 && (
-            <SafetyScoreChart
+            <DriverScoresChart
               rows={rows}
               fleet={safetyFleet}
               onRowClick={setOpenDriverId}
             />
+          )}
+
+          {/* Inspection scorecard — the compact per-driver bonus view
+              that used to live in Equipment. Monthly picker + own
+              cache (5min TTL) so it doesn't re-fetch on every open. */}
+          {!loading && (
+            <InspectionScorecardSection />
           )}
 
           {/* Body */}
@@ -615,25 +703,37 @@ export function SafetyScoreCell({ row }: {
   );
 }
 
-// ── Bar chart — driver safety scores ─────────────────────────────────
+// ── Dual bar chart — inspection + safety per driver ─────────────────
 
-/** Horizontal bar chart of safety scores, sorted worst → best.
- *  Fleet median rendered as a vertical reference line so a dispatcher
- *  can see who's below the middle at a glance. Truncated at 20 rows
- *  so a big fleet doesn't blow out the header — the full ranking
- *  lives in the table below. */
-export function SafetyScoreChart({
+const INSPECTION_COLOR = '#137333'; // green
+const SAFETY_COLOR     = '#7c3aed'; // purple
+
+/** Two horizontal bars per driver — inspection compliance % and safety
+ *  score. Both 0–100 axis. Fleet median tick rendered on the safety bar
+ *  so a dispatcher can see who's below the middle at a glance. Only
+ *  active-in-period drivers are shown (loads OR inspections in the
+ *  window). Sorted by min(insp, safety) ascending — the worst-of-two
+ *  surfaces at the top so problem drivers can't hide behind a strong
+ *  score on the other dimension.  Truncated at 25 rows so a big fleet
+ *  doesn't blow out the header — full ranking is in the table below. */
+export function DriverScoresChart({
   rows, fleet, onRowClick,
 }: {
   rows: DriverScorecardRow[];
   fleet: DriverSafetyFleetSummary | null;
   onRowClick: (driverId: number) => void;
 }) {
-  const scored = rows
-    .filter(r => r.safetyScore != null)
-    .sort((a, b) => (a.safetyScore ?? 0) - (b.safetyScore ?? 0));
-  if (scored.length === 0) return null;
-  const shown = scored.slice(0, 20);
+  const active = rows
+    .filter(r => r.loads > 0 || r.inspections > 0)
+    .filter(r => r.safetyScore != null || r.inspectionCompliancePct != null)
+    // worst-of-two ascending; nulls sink
+    .sort((a, b) => {
+      const aMin = Math.min(a.safetyScore ?? 100, a.inspectionCompliancePct ?? 100);
+      const bMin = Math.min(b.safetyScore ?? 100, b.inspectionCompliancePct ?? 100);
+      return aMin - bMin;
+    });
+  if (active.length === 0) return null;
+  const shown = active.slice(0, 25);
   const median = fleet?.fleetMedian;
 
   return (
@@ -646,17 +746,29 @@ export function SafetyScoreChart({
         marginBottom: 14,
       }}
     >
-      <div className="flex items-center justify-between" style={{ marginBottom: 12 }}>
+      <div className="flex items-center justify-between" style={{ marginBottom: 10 }}>
         <div>
           <div className="font-semibold" style={{ fontSize: 14, color: 'var(--gc-text-1)' }}>
-            Safety scores · trailing 30 days
+            Driver scores
           </div>
           <div style={{ fontSize: 12, color: 'var(--gc-text-3)', marginTop: 2 }}>
-            {fleet?.driverCount ?? scored.length} drivers ·{' '}
-            {fleet?.fleetEvents ?? 0} events ·{' '}
-            {fleet?.fleetMiles != null ? `${Math.round(fleet.fleetMiles).toLocaleString()} mi` : '—'}
-            {median != null && ` · fleet median ${median}`}
+            <span style={{ color: INSPECTION_COLOR, fontWeight: 600 }}>Inspection</span>{' '}
+            based on the selected period · {' '}
+            <span style={{ color: SAFETY_COLOR, fontWeight: 600 }}>Safety</span>{' '}
+            trailing 30 days, median-anchored at 80.
           </div>
+          {fleet && (
+            <div style={{ fontSize: 11, color: 'var(--gc-text-3)', marginTop: 2 }}>
+              {fleet.driverCount} drivers · {fleet.fleetEvents} events ·{' '}
+              {Math.round(fleet.fleetMiles).toLocaleString()} mi
+              {median != null && ` · fleet median ${median}`}
+              {fleet.medianIsFallback && (
+                <span title="Fewer than 3 drivers with ≥500mi this window — using a hardcoded reference median. Score is less precise until more drivers accrue miles.">
+                  {' '}(calibrating…)
+                </span>
+              )}
+            </div>
+          )}
         </div>
         {rows.some(r => r.safetyFlagged) && (
           <div style={{ fontSize: 12, color: '#c5221f', display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -665,91 +777,140 @@ export function SafetyScoreChart({
         )}
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, position: 'relative' }}>
-        {shown.map(r => {
-          const score = r.safetyScore ?? 0;
-          const barColor =
-            score >= 85 ? '#137333' :
-            score >= 70 ? '#b06000' :
-                          '#c5221f';
-          return (
-            <button
-              key={r.driverId}
-              type="button"
-              onClick={() => onRowClick(r.driverId)}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {shown.map(r => (
+          <button
+            key={r.driverId}
+            type="button"
+            onClick={() => onRowClick(r.driverId)}
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '160px 1fr 60px',
+              alignItems: 'center',
+              gap: 10,
+              padding: '4px 6px',
+              border: 'none',
+              background: 'transparent',
+              cursor: 'pointer',
+              textAlign: 'left',
+              borderRadius: 4,
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-bg)'; }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+          >
+            <span
               style={{
-                display: 'grid',
-                gridTemplateColumns: '160px 1fr 60px',
-                alignItems: 'center',
-                gap: 8,
-                padding: '4px 6px',
-                border: 'none',
-                background: 'transparent',
-                cursor: 'pointer',
-                textAlign: 'left',
-                borderRadius: 4,
+                fontSize: 12.5,
+                color: 'var(--gc-text-1)',
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
               }}
-              onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-bg)'; }}
-              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
             >
-              <span
-                style={{
-                  fontSize: 12.5,
-                  color: 'var(--gc-text-1)',
-                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                }}
-              >
-                {r.safetyFlagged && <span style={{ color: '#c5221f', marginRight: 4 }}>⚠</span>}
-                {r.driverName}
-              </span>
-              <div
-                style={{
-                  position: 'relative',
-                  height: 12, borderRadius: 3,
-                  background: 'var(--gc-bg)',
-                  border: '1px solid var(--gc-border-light)',
-                  overflow: 'hidden',
-                }}
-              >
-                <div
-                  style={{
-                    position: 'absolute', inset: 0,
-                    width: `${score}%`,
-                    background: barColor,
-                    transition: 'width 200ms',
-                  }}
-                />
-                {median != null && (
-                  <div
-                    aria-hidden
-                    style={{
-                      position: 'absolute',
-                      top: -2, bottom: -2,
-                      left: `${median}%`,
-                      width: 2,
-                      background: 'var(--gc-text-2)',
-                      opacity: 0.6,
-                    }}
-                  />
-                )}
-              </div>
+              {r.safetyFlagged && <span style={{ color: '#c5221f', marginRight: 4 }}>⚠</span>}
+              {r.driverName}
+            </span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+              <ScoreBar
+                label="Insp"
+                value={r.inspectionCompliancePct}
+                color={INSPECTION_COLOR}
+              />
+              <ScoreBar
+                label="Safety"
+                value={r.safetyScore}
+                color={SAFETY_COLOR}
+                median={median}
+              />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 1, textAlign: 'right' }}>
               <span
                 className="tabular-nums font-semibold"
-                style={{ fontSize: 12.5, color: barColor, textAlign: 'right' }}
+                style={{ fontSize: 12, color: INSPECTION_COLOR }}
               >
-                {score}
+                {r.inspectionCompliancePct ?? '—'}
               </span>
-            </button>
-          );
-        })}
+              <span
+                className="tabular-nums font-semibold"
+                style={{ fontSize: 12, color: SAFETY_COLOR }}
+              >
+                {r.safetyScore ?? '—'}
+              </span>
+            </div>
+          </button>
+        ))}
       </div>
 
-      {median != null && (
-        <div style={{ fontSize: 10.5, color: 'var(--gc-text-3)', marginTop: 8 }}>
-          Vertical line = fleet median ({median}). Drivers left of the line score below the middle of the fleet.
-          {scored.length > shown.length && ` Showing worst ${shown.length} of ${scored.length}.`}
-        </div>
-      )}
+      <div style={{ fontSize: 10.5, color: 'var(--gc-text-3)', marginTop: 8, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+        {median != null && (
+          <span>Vertical mark on the safety bar = fleet median ({median}).</span>
+        )}
+        <span>
+          Worst-of-two sorted first; showing {shown.length}
+          {active.length > shown.length && ` of ${active.length}`} active driver{active.length === 1 ? '' : 's'} in the period.
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function ScoreBar({
+  label, value, color, median,
+}: {
+  label: string;
+  value: number | null;
+  color: string;
+  /** Optional fleet-median tick, rendered as a subtle vertical line. */
+  median?: number | null;
+}) {
+  const width = value ?? 0;
+  const isMissing = value == null;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <span
+        style={{
+          fontSize: 9.5,
+          color: 'var(--gc-text-3)',
+          minWidth: 30,
+          textTransform: 'uppercase',
+          letterSpacing: 0.4,
+        }}
+      >
+        {label}
+      </span>
+      <div
+        style={{
+          position: 'relative',
+          height: 10, borderRadius: 3,
+          background: 'var(--gc-bg)',
+          border: '1px solid var(--gc-border-light)',
+          overflow: 'hidden',
+          flex: 1,
+        }}
+      >
+        {!isMissing && (
+          <div
+            style={{
+              position: 'absolute', inset: 0,
+              width: `${width}%`,
+              background: color,
+              transition: 'width 200ms',
+            }}
+          />
+        )}
+        {median != null && (
+          <div
+            aria-hidden
+            title={`Fleet median ${median}`}
+            style={{
+              position: 'absolute',
+              top: -2, bottom: -2,
+              left: `${median}%`,
+              width: 2,
+              background: 'var(--gc-text-2)',
+              opacity: 0.55,
+            }}
+          />
+        )}
+      </div>
     </div>
   );
 }

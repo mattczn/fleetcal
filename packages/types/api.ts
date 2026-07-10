@@ -2119,11 +2119,15 @@ export interface PerformanceEventRow {
 export interface DriverSafetyScoreRow {
   driverId:      number;
   driverName:    string;
-  /** 0–100. Higher = safer. Null when a driver had zero recorded miles
+  /** 0–100. Higher = safer. Anchored to fleet median = 80 so the
+   *  fleet-average driver always lands near 80 regardless of how event-
+   *  heavy the fleet is. Null when a driver had zero recorded miles
    *  in the window (score would be undefined). */
   safetyScore:   number | null;
   /** Total safety events attributed to this driver in the window. */
   totalEvents:   number;
+  /** Count of severity_level = 'moderate' events. */
+  moderateEvents: number;
   /** Count of severity_level = 'severe' events — surfaced as a chip on
    *  the drivers page even for drivers whose score is fine overall. */
   severeEvents:  number;
@@ -2155,6 +2159,13 @@ export interface DriverSafetyFleetSummary {
   fleetMiles:    number;
   /** Total events across the whole fleet for the window. */
   fleetEvents:   number;
+  /** Fleet median penalty-per-1000-miles — the anchor the score curve
+   *  uses. Rendered in the header tooltip so the number is auditable. */
+  fleetMedianPenalty: number;
+  /** True when the fleet had fewer than 3 drivers meeting the min-miles
+   *  threshold, so we used a hardcoded reference penalty instead of a
+   *  computed median. Small-fleet honesty flag. */
+  medianIsFallback: boolean;
   /** Window covered — echoed back so the client can show the range in
    *  a subtitle without recomputing dates. */
   fromDate:      string; // YYYY-MM-DD
