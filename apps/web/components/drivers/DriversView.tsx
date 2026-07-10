@@ -21,7 +21,10 @@ import { OpsTable, type OpsColumn } from '@/components/ui/OpsTable';
 import { type Period, getPeriodRange, defaultCustomRangeISO } from '@/lib/periodRange';
 import DriverDetailPanel from './DriverDetailPanel';
 import type { Driver } from '@/lib/types';
-import type { LoadSummary, FuelReport, MaintenanceReport } from '@fleetcal/types';
+import type {
+  LoadSummary, FuelReport, MaintenanceReport,
+  DriverSafetyScoreRow, DriverSafetyFleetSummary,
+} from '@fleetcal/types';
 
 // ── Row shape ─────────────────────────────────────────────────────────
 //
@@ -55,6 +58,16 @@ export interface DriverScorecardRow {
   stopCheckInOf: number;
   // Trailer-on-load: % of loads where a trailer was reported
   trailerReportedPct: number | null;
+  // Safety (30d rolling — INDEPENDENT of the page period, so this
+  // number stays stable when a dispatcher widens/narrows the period
+  // selector). Populated from /v1/driver-safety-scoring; null when
+  // the driver doesn't appear in that endpoint's response.
+  safetyScore:      number | null;
+  safetyEvents:     number;
+  safetySevereEvents: number;
+  safetyMiles30d:   number;
+  safetyPrevScore:  number | null;
+  safetyFlagged:    boolean;
 }
 
 // Default period: "This week" (Saturday → Friday, matches the rest
@@ -87,6 +100,8 @@ export default function DriversView() {
   const [inspections, setInspections] = useState<Array<{ id: string; driverId: number; submittedAt: string; hasDefects: boolean; inspectionDate: string }>>([]);
   const [fuels, setFuels] = useState<FuelReport[]>([]);
   const [maintenance, setMaintenance] = useState<MaintenanceReport[]>([]);
+  const [safetyByDriver, setSafetyByDriver] = useState<Map<number, DriverSafetyScoreRow>>(new Map());
+  const [safetyFleet, setSafetyFleet] = useState<DriverSafetyFleetSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -117,8 +132,16 @@ export default function DriversView() {
         to:    range.end,
         limit: 2000,
       }),
+      // Safety scoring — always 30-day rolling per product spec. Fetched
+      // alongside the period-scoped queries but doesn't move when the
+      // period selector changes. Failures don't fail the whole page;
+      // the safety columns just render blanks.
+      railway.getDriverSafetyScoring(30).catch(err => {
+        console.warn('[drivers] safety scoring failed:', err);
+        return null;
+      }),
     ])
-      .then(([driverRes, loadRes, inspRes, fuelRes, maintRes]) => {
+      .then(([driverRes, loadRes, inspRes, fuelRes, maintRes, safetyRes]) => {
         if (cancelled) return;
         setDrivers(driverRes.drivers);
         setLoads(loadRes.loads);
@@ -131,6 +154,13 @@ export default function DriversView() {
         })));
         setFuels(fuelRes.fuelReports);
         setMaintenance(maintRes.reports);
+        if (safetyRes) {
+          setSafetyByDriver(new Map(safetyRes.drivers.map(r => [r.driverId, r])));
+          setSafetyFleet(safetyRes.fleet);
+        } else {
+          setSafetyByDriver(new Map());
+          setSafetyFleet(null);
+        }
       })
       .catch(err => {
         if (cancelled) return;
@@ -283,6 +313,7 @@ export default function DriversView() {
 
       const insWithDefects = driverInsps.filter(r => r.hasDefects).length;
 
+      const safety = safetyByDriver.get(driverId);
       out.push({
         driverId,
         driverName: driver.name,
@@ -299,6 +330,16 @@ export default function DriversView() {
         stopCheckInPct,
         stopCheckInOf,
         trailerReportedPct,
+        // Safety — 30d rolling from /v1/driver-safety-scoring. Score
+        // stays visible even for drivers with no activity in the
+        // page's period so a dispatcher can spot bad drivers who
+        // "didn't drive much recently".
+        safetyScore:        safety?.safetyScore ?? null,
+        safetyEvents:       safety?.totalEvents ?? 0,
+        safetySevereEvents: safety?.severeEvents ?? 0,
+        safetyMiles30d:     safety?.milesDriven ?? 0,
+        safetyPrevScore:    safety?.prevSafetyScore ?? null,
+        safetyFlagged:      safety?.flagged ?? false,
       });
     }
 
@@ -306,7 +347,7 @@ export default function DriversView() {
     // dispatchers can re-rank by inspection compliance or POD on time.
     out.sort((a, b) => b.loads - a.loads);
     return out;
-  }, [drivers, loads, inspections, fuels, maintenance]);
+  }, [drivers, loads, inspections, fuels, maintenance, safetyByDriver]);
 
   // ── Columns ─────────────────────────────────────────────────────
   // Every numeric / percent column is centered (both header AND cell)
@@ -404,6 +445,32 @@ export default function DriversView() {
         'Count of maintenance reports submitted by this driver in the period.',
       render: r => <span className="tabular-nums">{r.maintenanceReports}</span>,
     },
+    {
+      key: 'safetyScore', header: 'Safety', width: 90, align: 'center',
+      sortable: true,
+      // Nulls (no miles) sort BELOW zero so the "not driving" bucket
+      // doesn't rank alongside dangerous drivers.
+      sortValue: r => r.safetyScore ?? -1,
+      headerTooltip:
+        'Safety score over the trailing 30 days — INDEPENDENT of the period selector above. Miles-normalized penalty from Motive safety events, weighted by severity and event type. 100 = best.',
+      render: r => <SafetyScoreCell row={r} />,
+    },
+    {
+      key: 'safetyEvents', header: 'Events', width: 80, align: 'center',
+      sortable: true,
+      headerTooltip:
+        'Count of Motive safety events attributed to this driver in the trailing 30 days. Severe events shown as a sub-count when > 0.',
+      render: r => (
+        <div>
+          <div className="tabular-nums font-semibold">{r.safetyEvents}</div>
+          {r.safetySevereEvents > 0 && (
+            <div className="text-[10.5px] tabular-nums" style={{ color: '#dc2626' }}>
+              {r.safetySevereEvents} severe
+            </div>
+          )}
+        </div>
+      ),
+    },
   ], []);
 
   const periodLabel = period === 'custom'
@@ -430,6 +497,17 @@ export default function DriversView() {
               {periodLabel} · {rows.length} {rows.length === 1 ? 'driver' : 'drivers'} active
             </div>
           </div>
+
+          {/* Safety score chart — 30-day rolling, sits above the table
+              so a dispatcher sees the safety landscape before scanning
+              the compliance columns. Independent of the period selector. */}
+          {!loading && rows.length > 0 && (
+            <SafetyScoreChart
+              rows={rows}
+              fleet={safetyFleet}
+              onRowClick={setOpenDriverId}
+            />
+          )}
 
           {/* Body */}
           {error ? (
@@ -499,5 +577,179 @@ function PctCell({
     <span className="font-semibold tabular-nums" style={{ color }}>
       {value}%{suffix && <span className="font-normal" style={{ color: 'var(--gc-text-3)' }}> {suffix}</span>}
     </span>
+  );
+}
+
+/** Safety-score cell — same threshold philosophy as PctCell but with
+ *  a trend arrow next to the number and a flag icon before it when
+ *  the row was auto-flagged. Null → em-dash + subtle "no miles" hint. */
+export function SafetyScoreCell({ row }: {
+  row: {
+    safetyScore: number | null;
+    safetyPrevScore: number | null;
+    safetyFlagged: boolean;
+    safetyMiles30d: number;
+  };
+}) {
+  if (row.safetyScore == null) {
+    return (
+      <span style={{ color: 'var(--gc-text-3)' }}>
+        —
+        <span className="text-[10px] block" style={{ marginTop: -2 }}>no miles</span>
+      </span>
+    );
+  }
+  const color =
+    row.safetyScore >= 85 ? '#137333' :
+    row.safetyScore >= 70 ? '#b06000' :
+                            '#c5221f';
+  const delta = row.safetyPrevScore != null ? row.safetyScore - row.safetyPrevScore : 0;
+  const trendArrow = delta > 2 ? '↑' : delta < -2 ? '↓' : '';
+  const trendColor = delta > 2 ? '#137333' : delta < -2 ? '#c5221f' : 'var(--gc-text-3)';
+  return (
+    <span className="font-semibold tabular-nums inline-flex items-center gap-1" style={{ color }}>
+      {row.safetyFlagged && <span title="Auto-flagged for review" style={{ color: '#c5221f' }}>⚠</span>}
+      {row.safetyScore}
+      {trendArrow && <span style={{ color: trendColor, fontSize: 11 }}>{trendArrow}</span>}
+    </span>
+  );
+}
+
+// ── Bar chart — driver safety scores ─────────────────────────────────
+
+/** Horizontal bar chart of safety scores, sorted worst → best.
+ *  Fleet median rendered as a vertical reference line so a dispatcher
+ *  can see who's below the middle at a glance. Truncated at 20 rows
+ *  so a big fleet doesn't blow out the header — the full ranking
+ *  lives in the table below. */
+export function SafetyScoreChart({
+  rows, fleet, onRowClick,
+}: {
+  rows: DriverScorecardRow[];
+  fleet: DriverSafetyFleetSummary | null;
+  onRowClick: (driverId: number) => void;
+}) {
+  const scored = rows
+    .filter(r => r.safetyScore != null)
+    .sort((a, b) => (a.safetyScore ?? 0) - (b.safetyScore ?? 0));
+  if (scored.length === 0) return null;
+  const shown = scored.slice(0, 20);
+  const median = fleet?.fleetMedian;
+
+  return (
+    <div
+      style={{
+        border: '1px solid var(--gc-border-light)',
+        borderRadius: 10,
+        background: 'var(--gc-surface)',
+        padding: '14px 16px',
+        marginBottom: 14,
+      }}
+    >
+      <div className="flex items-center justify-between" style={{ marginBottom: 12 }}>
+        <div>
+          <div className="font-semibold" style={{ fontSize: 14, color: 'var(--gc-text-1)' }}>
+            Safety scores · trailing 30 days
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--gc-text-3)', marginTop: 2 }}>
+            {fleet?.driverCount ?? scored.length} drivers ·{' '}
+            {fleet?.fleetEvents ?? 0} events ·{' '}
+            {fleet?.fleetMiles != null ? `${Math.round(fleet.fleetMiles).toLocaleString()} mi` : '—'}
+            {median != null && ` · fleet median ${median}`}
+          </div>
+        </div>
+        {rows.some(r => r.safetyFlagged) && (
+          <div style={{ fontSize: 12, color: '#c5221f', display: 'flex', alignItems: 'center', gap: 4 }}>
+            ⚠ {rows.filter(r => r.safetyFlagged).length} flagged
+          </div>
+        )}
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, position: 'relative' }}>
+        {shown.map(r => {
+          const score = r.safetyScore ?? 0;
+          const barColor =
+            score >= 85 ? '#137333' :
+            score >= 70 ? '#b06000' :
+                          '#c5221f';
+          return (
+            <button
+              key={r.driverId}
+              type="button"
+              onClick={() => onRowClick(r.driverId)}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '160px 1fr 60px',
+                alignItems: 'center',
+                gap: 8,
+                padding: '4px 6px',
+                border: 'none',
+                background: 'transparent',
+                cursor: 'pointer',
+                textAlign: 'left',
+                borderRadius: 4,
+              }}
+              onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-bg)'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+            >
+              <span
+                style={{
+                  fontSize: 12.5,
+                  color: 'var(--gc-text-1)',
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                }}
+              >
+                {r.safetyFlagged && <span style={{ color: '#c5221f', marginRight: 4 }}>⚠</span>}
+                {r.driverName}
+              </span>
+              <div
+                style={{
+                  position: 'relative',
+                  height: 12, borderRadius: 3,
+                  background: 'var(--gc-bg)',
+                  border: '1px solid var(--gc-border-light)',
+                  overflow: 'hidden',
+                }}
+              >
+                <div
+                  style={{
+                    position: 'absolute', inset: 0,
+                    width: `${score}%`,
+                    background: barColor,
+                    transition: 'width 200ms',
+                  }}
+                />
+                {median != null && (
+                  <div
+                    aria-hidden
+                    style={{
+                      position: 'absolute',
+                      top: -2, bottom: -2,
+                      left: `${median}%`,
+                      width: 2,
+                      background: 'var(--gc-text-2)',
+                      opacity: 0.6,
+                    }}
+                  />
+                )}
+              </div>
+              <span
+                className="tabular-nums font-semibold"
+                style={{ fontSize: 12.5, color: barColor, textAlign: 'right' }}
+              >
+                {score}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      {median != null && (
+        <div style={{ fontSize: 10.5, color: 'var(--gc-text-3)', marginTop: 8 }}>
+          Vertical line = fleet median ({median}). Drivers left of the line score below the middle of the fleet.
+          {scored.length > shown.length && ` Showing worst ${shown.length} of ${scored.length}.`}
+        </div>
+      )}
+    </div>
   );
 }

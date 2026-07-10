@@ -49,7 +49,7 @@ import type {
   UpdateSavedLocationRequest, UpdateSavedLocationResponse,
   ListPayrollAdjustmentsResponse, CreatePayrollAdjustmentRequest, CreatePayrollAdjustmentResponse,
   ListPayrollRecordsResponse, UpsertPayrollRecordRequest, UpsertPayrollRecordResponse,
-  ListDriverScoresResponse,
+  ListDriverScoresResponse, ListDriverSafetyScoresResponse,
   GetOrgSettingsResponse, UpdateOrgSettingsRequest, UpdateOrgSettingsResponse,
   CreateInvoiceRequest, CreateInvoiceResponse,
   ListInvoicesResponse, GetInvoiceResponse,
@@ -950,6 +950,14 @@ class RailwayClient {
     if (query.to)   qs.set('to',   query.to);
     const s = qs.toString();
     return this.req<ListDriverScoresResponse>('GET', `/v1/driver-scoring${s ? `?${s}` : ''}`);
+  }
+  /** Per-driver safety scorecard — miles-normalized 30-day rolling
+   *  window derived from motive_performance_events. Fleet median +
+   *  auto-flag come back in one payload so no follow-up call needed. */
+  getDriverSafetyScoring(days = 30) {
+    return this.req<ListDriverSafetyScoresResponse>(
+      'GET', `/v1/driver-safety-scoring?days=${days}`,
+    );
   }
   createPayrollAdjustment(body: CreatePayrollAdjustmentRequest) {
     return this.req<CreatePayrollAdjustmentResponse>('POST', '/v1/payroll/adjustments', body);

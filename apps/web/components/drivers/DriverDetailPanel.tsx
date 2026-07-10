@@ -16,7 +16,7 @@
 import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
-import { X, Truck, ClipboardCheck, Fuel as FuelIcon, Wrench, MapPin, FileCheck2 } from 'lucide-react';
+import { X, Truck, ClipboardCheck, Fuel as FuelIcon, Wrench, MapPin, FileCheck2, ShieldAlert } from 'lucide-react';
 import type { LoadSummary } from '@fleetcal/types';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import type { DriverScorecardRow } from './DriversView';
@@ -172,6 +172,57 @@ export default function DriverDetailPanel({ row, loads, inspections, period, onC
             )}
           </Section>
 
+          {/* Safety — 30d rolling snapshot from the safety scoring
+              endpoint. Score + events sit on `row` already; this block
+              re-frames them so a dispatcher can see the driver's safety
+              picture without having to interpret the tiny table cell. */}
+          <Section title="Safety · trailing 30 days" emptyText="No safety data — driver has no ELD miles in the last 30 days.">
+            {row.safetyMiles30d > 0 && (
+              <div
+                style={{
+                  border: '1px solid var(--gc-border-light)',
+                  borderRadius: 10,
+                  padding: 14,
+                  background: 'var(--gc-surface)',
+                  display: 'flex',
+                  gap: 20,
+                  alignItems: 'center',
+                }}
+              >
+                <SafetyScoreBadge
+                  score={row.safetyScore}
+                  prevScore={row.safetyPrevScore}
+                  flagged={row.safetyFlagged}
+                />
+                <div className="flex-1 flex flex-col gap-1" style={{ fontSize: 12.5, color: 'var(--gc-text-2)' }}>
+                  <div>
+                    <span className="font-semibold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>
+                      {row.safetyEvents}
+                    </span>{' '}
+                    total event{row.safetyEvents === 1 ? '' : 's'}
+                    {row.safetySevereEvents > 0 && (
+                      <>
+                        {' · '}
+                        <span className="font-semibold" style={{ color: '#c5221f' }}>
+                          {row.safetySevereEvents} severe
+                        </span>
+                      </>
+                    )}
+                  </div>
+                  <div className="tabular-nums" style={{ color: 'var(--gc-text-3)' }}>
+                    {row.safetyMiles30d.toLocaleString()} mi driven
+                  </div>
+                  {row.safetyFlagged && (
+                    <div style={{ color: '#c5221f', fontSize: 11.5, marginTop: 2 }}>
+                      <ShieldAlert size={12} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 3 }} />
+                      Auto-flagged for coaching — score below 60 with multiple events and enough miles to matter.
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </Section>
+
           {/* Inspections list */}
           <Section title={`Inspections (${inspections.length})`} emptyText="No inspections submitted in this period.">
             {inspections.length > 0 && (
@@ -226,6 +277,47 @@ export default function DriverDetailPanel({ row, loads, inspections, period, onC
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
+
+function SafetyScoreBadge({
+  score, prevScore, flagged,
+}: {
+  score: number | null;
+  prevScore: number | null;
+  flagged: boolean;
+}) {
+  if (score == null) {
+    return (
+      <div style={{ fontSize: 32, color: 'var(--gc-text-3)', minWidth: 80, textAlign: 'center' }}>
+        —
+      </div>
+    );
+  }
+  const color =
+    score >= 85 ? '#137333' :
+    score >= 70 ? '#b06000' :
+                  '#c5221f';
+  const delta = prevScore != null ? score - prevScore : 0;
+  return (
+    <div style={{ minWidth: 80, textAlign: 'center' }}>
+      <div className="tabular-nums" style={{ fontSize: 34, fontWeight: 800, color, lineHeight: 1 }}>
+        {score}
+      </div>
+      <div style={{ fontSize: 10.5, color: 'var(--gc-text-3)', textTransform: 'uppercase', letterSpacing: 0.6, marginTop: 4 }}>
+        Safety score
+      </div>
+      {prevScore != null && Math.abs(delta) >= 3 && (
+        <div style={{ fontSize: 11, color: delta > 0 ? '#137333' : '#c5221f', marginTop: 3 }}>
+          {delta > 0 ? '↑' : '↓'} {Math.abs(delta)} vs prev 30d
+        </div>
+      )}
+      {flagged && (
+        <div style={{ fontSize: 9.5, fontWeight: 700, color: '#c5221f', textTransform: 'uppercase', letterSpacing: 0.6, marginTop: 4 }}>
+          Flagged
+        </div>
+      )}
+    </div>
+  );
+}
 
 function pct(v: number | null): string {
   return v == null ? '—' : `${v}%`;

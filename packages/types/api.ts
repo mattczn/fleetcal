@@ -2110,6 +2110,63 @@ export interface PerformanceEventRow {
   severity_inverted: boolean;         // true when lower = worse (tailgating)
 }
 
+// ── /v1/driver-safety-scoring — 30-day rolling safety score ────────────
+//
+// Miles-normalized penalty using severity + event-type weights, with a
+// linear recency falloff inside the window. See apps/api/src/routes/
+// driver-safety-scoring.ts for the formula.
+
+export interface DriverSafetyScoreRow {
+  driverId:      number;
+  driverName:    string;
+  /** 0–100. Higher = safer. Null when a driver had zero recorded miles
+   *  in the window (score would be undefined). */
+  safetyScore:   number | null;
+  /** Total safety events attributed to this driver in the window. */
+  totalEvents:   number;
+  /** Count of severity_level = 'severe' events — surfaced as a chip on
+   *  the drivers page even for drivers whose score is fine overall. */
+  severeEvents:  number;
+  /** Miles driven in the window per motive_driving_periods.miles,
+   *  filtered to display_eligible periods (matches how movements are
+   *  used elsewhere). Denominator of the penalty. */
+  milesDriven:   number;
+  /** Raw penalty magnitude (severity-weighted events per 1000 miles).
+   *  Useful for tooltips + debugging without exposing the K constant. */
+  penaltyPer1kMi: number;
+  /** True when the auto-flag rule triggers. See endpoint doc for
+   *  criteria — dispatcher-facing "needs coaching" signal. */
+  flagged:       boolean;
+  /** Same score for the prior 30-day window (day -60 to day -30) so we
+   *  can render a trend indicator. Null when no data. */
+  prevSafetyScore:  number | null;
+  /** How this driver ranks 1..N against peers by safety score
+   *  (1 = best, N = worst). Ties get the same rank. Null when
+   *  safetyScore is null. */
+  rank:          number | null;
+}
+
+export interface DriverSafetyFleetSummary {
+  driverCount:   number;
+  fleetMedian:   number | null;
+  fleetMean:     number | null;
+  /** Total miles across the whole fleet for the window. Shown in the
+   *  page-header tile alongside "N drivers · X.Y M miles". */
+  fleetMiles:    number;
+  /** Total events across the whole fleet for the window. */
+  fleetEvents:   number;
+  /** Window covered — echoed back so the client can show the range in
+   *  a subtitle without recomputing dates. */
+  fromDate:      string; // YYYY-MM-DD
+  toDate:        string; // YYYY-MM-DD
+  days:          number;
+}
+
+export interface ListDriverSafetyScoresResponse {
+  drivers: DriverSafetyScoreRow[];
+  fleet:   DriverSafetyFleetSummary;
+}
+
 /** Subset of the Motive v2 driver_performance_events payload we surface
  *  on `include=raw` requests. Only fields the panel/drawer actually read —
  *  a full echo of Motive's response is much larger. */

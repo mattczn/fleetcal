@@ -77,7 +77,7 @@ type InspectionRow = {
   signedBy: string;
 };
 
-type Tab = 'maintenance' | 'inspections' | 'fuel' | 'history' | 'scorecard';
+type Tab = 'maintenance' | 'inspections' | 'fuel' | 'history';
 
 // MediaList — every photo for the currently-open report, grouped by
 // source (defect item, general, etc.) so the side-panel can show
@@ -135,10 +135,16 @@ function EquipmentPageInner() {
   const legacyRedirectRouter = useRouter();
   // Legacy deep link: /equipment?tab=cardspend was retired when Card
   // Spend moved to /expenses/cards. Bounce anything landing here from
-  // an old bookmark before the tab-init logic runs.
+  // an old bookmark before the tab-init logic runs. Scorecard moved
+  // to /drivers in the same spirit — driver-performance signals live
+  // under the Drivers page now (safety score + inspection compliance
+  // both live there).
   useEffect(() => {
-    if (searchParams?.get('tab') === 'cardspend') {
+    const t = searchParams?.get('tab');
+    if (t === 'cardspend') {
       legacyRedirectRouter.replace('/expenses/cards');
+    } else if (t === 'scorecard') {
+      legacyRedirectRouter.replace('/drivers');
     }
   }, [searchParams, legacyRedirectRouter]);
   // Internal-org gate for the Curzon-only "Truck History" module — same
@@ -156,14 +162,13 @@ function EquipmentPageInner() {
       case 'inspections': return can('inspections.access');
       case 'fuel':        return can('fuel.access');
       case 'history':     return showHistory;
-      case 'scorecard':   return showHistory && can('scorecard.access');
       default:            return false;
     }
   }, [can, showHistory]);
   const initialTab = (() => {
     const t = searchParams?.get('tab');
     if (t === 'fuel' || t === 'maintenance' || t === 'inspections') return t;
-    if ((t === 'history' || t === 'scorecard') && showHistory) return t;
+    if (t === 'history' && showHistory) return t;
     return 'maintenance';
   })();
   const [tab, setTab] = useState<Tab>(initialTab);
@@ -177,16 +182,16 @@ function EquipmentPageInner() {
     const t = searchParams?.get('tab');
     if (t === 'fuel' || t === 'maintenance' || t === 'inspections') {
       setTab(t);
-    } else if ((t === 'history' || t === 'scorecard') && showHistory) {
+    } else if (t === 'history' && showHistory) {
       setTab(t);
     }
   }, [searchParams, showHistory]);
 
-  // If the active tab isn't allowed for this role (e.g. a maintenance user
-  // deep-linking ?tab=scorecard), bounce to the first tab they can see.
+  // If the active tab isn't allowed for this role, bounce to the first
+  // tab they can see.
   useEffect(() => {
     if (permsLoading || tabAllowed(tab)) return;
-    const order: Tab[] = ['maintenance', 'inspections', 'fuel', 'history', 'scorecard'];
+    const order: Tab[] = ['maintenance', 'inspections', 'fuel', 'history'];
     const first = order.find(tabAllowed);
     if (first) setTab(first);
   }, [tab, permsLoading, tabAllowed]);
@@ -386,9 +391,6 @@ function EquipmentPageInner() {
             {tabAllowed('history') && (
               <TabButton active={tab === 'history'} onClick={() => setTab('history')} icon={<HistoryIcon size={15} />} label="History" />
             )}
-            {tabAllowed('scorecard') && (
-              <TabButton active={tab === 'scorecard'} onClick={() => setTab('scorecard')} icon={<Trophy size={15} />} label="Scorecard" />
-            )}
           </div>
         </div>
       </div>
@@ -442,9 +444,6 @@ function EquipmentPageInner() {
             onOpenReport={(r) => setPanel({ kind: 'maintenance', id: r.id, report: r })}
             onOpenInspection={(r) => setPanel({ kind: 'inspection', id: r.id, row: r })}
           />
-        )}
-        {tab === 'scorecard' && tabAllowed('scorecard') && (
-          <ScorecardTabContent />
         )}
         </div>
       </div>
