@@ -1542,6 +1542,11 @@ export interface ExpenseEntry {
 
 // ── Ramp category rules (user-editable auto-map) ────────────────────────
 
+/** Extra condition on an auto-file rule: what the memo matcher must
+ *  have resolved on the txn for the rule to fire. 'any' ignores the
+ *  asset link (default); 'none' fires only when NO unit was matched. */
+export type RampRuleAssetScope = 'any' | 'truck' | 'trailer' | 'none';
+
 export interface RampCategoryRule {
   id:          string;
   orgId:       string;
@@ -1549,6 +1554,7 @@ export interface RampCategoryRule {
   isRegex:     boolean;
   bucketId:    string;
   bucketName?: string;
+  assetScope:  RampRuleAssetScope;
   priority:    number;
   notes?:      string;
   createdAt:   string;

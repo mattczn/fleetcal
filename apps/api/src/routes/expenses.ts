@@ -493,6 +493,8 @@ expenses.get("/ledger", async (c) => {
         bucketId: tx.bucketId ?? null,
         bucketName: tx.bucketId ? (bucketName.get(tx.bucketId) ?? null) : null,
         bucketEditable: true,
+        assetId: tx.assetId,
+        trailerId: tx.trailerId,
         ramp: tx,
       });
     }
@@ -514,6 +516,7 @@ expenses.get("/ledger", async (c) => {
         bucketId: mudflapBucket?.id ?? null,
         bucketName: mudflapBucket?.name ?? null,
         bucketEditable: false,
+        assetId: f.asset_id ?? undefined,
         mudflap: {
           location: f.location,
           driverName: f.driver_name,

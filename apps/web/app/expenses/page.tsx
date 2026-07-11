@@ -293,6 +293,25 @@ function ExpensesPageInner() {
     }
   }, [reload]);
 
+  // Unit labels for the tag chip — trucks by assets.name, trailers by
+  // #trailerNumber. Comes from the memo matcher's asset link.
+  const assetLabelById = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const a of assets) m.set(a.id, a.name);
+    return m;
+  }, [assets]);
+  const trailerLabelById = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const t of trailers) m.set(t.id, t.trailerNumber ? `#${t.trailerNumber}` : t.name);
+    return m;
+  }, [trailers]);
+
+  const unitTag = useCallback((r: LedgerRow): string | null => {
+    if (r.assetId != null)   return assetLabelById.get(r.assetId)     ?? `Truck ${r.assetId}`;
+    if (r.trailerId != null) return trailerLabelById.get(r.trailerId) ?? `Trailer ${r.trailerId}`;
+    return null;
+  }, [assetLabelById, trailerLabelById]);
+
   // ── ledger columns ────────────────────────────────────────────────
   const columns: OpsColumn<LedgerRow>[] = useMemo(() => [
     {
@@ -303,7 +322,24 @@ function ExpensesPageInner() {
     {
       key: 'description', header: 'Description',
       sortable: true, sortValue: r => r.description,
-      render: r => <span className="font-medium" style={{ color: 'var(--gc-text-1)' }}>{r.description}</span>,
+      render: r => {
+        const tag = unitTag(r);
+        return (
+          <span className="inline-flex items-center gap-1.5 min-w-0">
+            <span className="font-medium truncate" style={{ color: 'var(--gc-text-1)' }}>{r.description}</span>
+            {tag && (
+              <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-bold tabular-nums whitespace-nowrap"
+                    style={{
+                      background: r.trailerId != null ? '#ede9fe' : '#e0f2fe',
+                      color:      r.trailerId != null ? '#6d28d9' : '#0369a1',
+                    }}
+                    title={r.trailerId != null ? 'Trailer (from memo match)' : 'Truck (from memo match)'}>
+                {tag}
+              </span>
+            )}
+          </span>
+        );
+      },
       subRender: r => r.sub
         ? <span style={{ color: 'var(--gc-text-3)' }}>{r.sub}</span>
         : null,
@@ -340,7 +376,7 @@ function ExpensesPageInner() {
         </span>
       ),
     },
-  ], [changeRowBucket]);
+  ], [changeRowBucket, unitTag]);
 
   const filters: OpsFilter<LedgerRow>[] = useMemo(() => [
     {

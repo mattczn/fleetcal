@@ -17,26 +17,35 @@ import RequireCap from '@/components/auth/RequireCap';
 import AppShell from '@/components/nav/AppShell';
 import { StyledSelect } from '@/components/ui/StyledSelect';
 import { railway } from '@/lib/railway';
-import type { RampCategoryRule } from '@fleetcal/types';
+import type { RampCategoryRule, RampRuleAssetScope } from '@fleetcal/types';
 import BucketSelect, { invalidateBucketCache } from '../BucketSelect';
 
+const SCOPE_LABELS: Record<RampRuleAssetScope, string> = {
+  any:     'Any txn',
+  truck:   'Truck matched in memo',
+  trailer: 'Trailer matched in memo',
+  none:    'No unit matched',
+};
+
 interface DraftForm {
-  pattern:  string;
-  isRegex:  boolean;
-  bucketId: string;
-  priority: string;
-  notes:    string;
+  pattern:    string;
+  isRegex:    boolean;
+  bucketId:   string;
+  assetScope: RampRuleAssetScope;
+  priority:   string;
+  notes:      string;
 }
 const EMPTY_DRAFT: DraftForm = {
-  pattern: '', isRegex: true, bucketId: '', priority: '100', notes: '',
+  pattern: '', isRegex: true, bucketId: '', assetScope: 'any', priority: '100', notes: '',
 };
 function draftFrom(r: RampCategoryRule): DraftForm {
   return {
-    pattern:  r.pattern,
-    isRegex:  r.isRegex,
-    bucketId: r.bucketId,
-    priority: String(r.priority),
-    notes:    r.notes ?? '',
+    pattern:    r.pattern,
+    isRegex:    r.isRegex,
+    bucketId:   r.bucketId,
+    assetScope: r.assetScope ?? 'any',
+    priority:   String(r.priority),
+    notes:      r.notes ?? '',
   };
 }
 
@@ -80,19 +89,21 @@ function RulesPageInner() {
       if (!draft.bucketId) { alert('Pick a bucket.'); return; }
       if (editingId === 'new') {
         await railway.createRampCategoryRule({
-          pattern:  draft.pattern.trim(),
-          isRegex:  draft.isRegex,
-          bucketId: draft.bucketId,
+          pattern:    draft.pattern.trim(),
+          isRegex:    draft.isRegex,
+          bucketId:   draft.bucketId,
+          assetScope: draft.assetScope,
           priority,
-          notes:    draft.notes.trim() || undefined,
+          notes:      draft.notes.trim() || undefined,
         });
       } else if (editingId) {
         await railway.updateRampCategoryRule(editingId, {
-          pattern:  draft.pattern.trim(),
-          isRegex:  draft.isRegex,
-          bucketId: draft.bucketId,
+          pattern:    draft.pattern.trim(),
+          isRegex:    draft.isRegex,
+          bucketId:   draft.bucketId,
+          assetScope: draft.assetScope,
           priority,
-          notes:    draft.notes.trim() || null,
+          notes:      draft.notes.trim() || null,
         });
       }
       setEditingId(null);
@@ -213,6 +224,9 @@ function RulesPageInner() {
                       </div>
                       <div className="text-xs mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
                         → {rule.bucketName ?? '(unknown bucket)'}
+                        {rule.assetScope && rule.assetScope !== 'any'
+                          ? ` · when ${SCOPE_LABELS[rule.assetScope].toLowerCase()}`
+                          : ''}
                         {rule.notes ? ` · ${rule.notes}` : ''}
                       </div>
                     </div>
@@ -287,7 +301,7 @@ function RuleEditor({
             className="w-full px-3 py-1.5 rounded border text-sm tabular-nums"
             style={{ borderColor: 'var(--gc-border)', background: 'var(--gc-surface)' }} />
         </div>
-        <div className="col-span-2">
+        <div>
           <label className="text-[11px] font-bold uppercase tracking-wider block mb-1"
                  style={{ color: 'var(--gc-text-3)' }}>Assign to bucket</label>
           <BucketSelect
@@ -295,6 +309,18 @@ function RuleEditor({
             onChange={id => setDraft({ ...draft, bucketId: id })}
             style={{ width: '100%' }}
           />
+        </div>
+        <div>
+          <label className="text-[11px] font-bold uppercase tracking-wider block mb-1"
+                 style={{ color: 'var(--gc-text-3)' }}>Only when</label>
+          <StyledSelect
+            value={draft.assetScope}
+            onChange={e => setDraft({ ...draft, assetScope: e.target.value as RampRuleAssetScope })}
+            style={{ width: '100%' }}>
+            {(Object.keys(SCOPE_LABELS) as RampRuleAssetScope[]).map(s => (
+              <option key={s} value={s}>{SCOPE_LABELS[s]}</option>
+            ))}
+          </StyledSelect>
         </div>
         <div className="col-span-2">
           <label className="text-[11px] font-bold uppercase tracking-wider block mb-1"

@@ -49,15 +49,27 @@ export const DEFAULT_RAMP_RULES: RampRule[] = [
     isRegex: true, bucketKey: "insurance_claims", priority: 100 },
 ];
 
+export type MatchedAssetKind = "truck" | "trailer" | null;
+
 /** Match a single Ramp sk_category_name against a set of rules. Returns
- *  the first matching rule's bucket_id by ascending priority, or null. */
+ *  the first matching rule's bucket_id by ascending priority, or null.
+ *
+ *  `assetKind` is what the memo matcher resolved on the txn — rules
+ *  with an asset_scope other than 'any' only fire when it agrees, so
+ *  the same category pattern can route to different sub-buckets based
+ *  on whether the memo named a truck, a trailer, or nothing. */
 export function matchRuleAgainst(
   skCategoryName: string | null | undefined,
-  rules: Array<{ pattern: string; is_regex: boolean; bucket_id: string; priority: number }>,
+  rules: Array<{ pattern: string; is_regex: boolean; bucket_id: string; priority: number; asset_scope?: string }>,
+  assetKind: MatchedAssetKind = null,
 ): string | null {
   if (!skCategoryName) return null;
   const sorted = [...rules].sort((a, b) => a.priority - b.priority);
   for (const r of sorted) {
+    const scope = r.asset_scope ?? "any";
+    if (scope === "truck"   && assetKind !== "truck")   continue;
+    if (scope === "trailer" && assetKind !== "trailer") continue;
+    if (scope === "none"    && assetKind !== null)      continue;
     let matched = false;
     if (r.is_regex) {
       try {

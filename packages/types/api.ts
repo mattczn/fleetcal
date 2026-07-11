@@ -1660,6 +1660,10 @@ export interface LedgerRow {
    *  (ramp txns + manual entries). Payroll/fuel route via system_role;
    *  recurring postings change via their rule. */
   bucketEditable: boolean;
+  /** Matched unit from the memo matcher (ramp) or the fuel card link
+   *  (mudflap). Labels resolve client-side from the fixtures. */
+  assetId?:    number;
+  trailerId?:  number;
 
   // Source payloads for the detail panel (exactly one is set):
   ramp?:      import('./domain').RampTransaction;
@@ -1765,6 +1769,7 @@ export interface CreateRampCategoryRuleRequest {
   pattern:  string;
   isRegex?: boolean;
   bucketId: string;
+  assetScope?: import('./domain').RampRuleAssetScope;   // default 'any'
   priority?: number;
   notes?:    string;
 }
@@ -1772,6 +1777,7 @@ export interface UpdateRampCategoryRuleRequest {
   pattern?:  string;
   isRegex?:  boolean;
   bucketId?: string;
+  assetScope?: import('./domain').RampRuleAssetScope;
   priority?: number;
   notes?:    string | null;
 }

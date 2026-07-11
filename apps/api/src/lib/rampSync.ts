@@ -139,17 +139,18 @@ export interface RampSyncResult {
 }
 
 interface CategoryRuleRow {
-  pattern:   string;
-  is_regex:  boolean;
-  bucket_id: string;
-  priority:  number;
+  pattern:     string;
+  is_regex:    boolean;
+  bucket_id:   string;
+  priority:    number;
+  asset_scope: string;
 }
 
 async function loadCategoryRules(orgId: string): Promise<CategoryRuleRow[]> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data, error } = await (supabase as any)
     .from("ramp_category_rules")
-    .select("pattern, is_regex, bucket_id, priority")
+    .select("pattern, is_regex, bucket_id, priority, asset_scope")
     .eq("org_id", orgId)
     .is("deleted_at", null);
   if (error) {
@@ -172,7 +173,12 @@ function buildRow(
       .filter(Boolean).join(" ").trim() || null;
   // Auto-derive bucket_id from ramp_category_rules (DB, user-editable).
   // NULL when no rule matches — surfaces on the "Uncategorized" tile.
-  const bucketId = matchRuleAgainst(tx.sk_category_name ?? null, rules);
+  // The memo matcher's verdict feeds asset-scoped rules, so the same
+  // category pattern can split truck vs trailer vs untagged spend.
+  const assetKind = match.asset_id != null ? "truck" as const
+                  : match.trailer_id != null ? "trailer" as const
+                  : null;
+  const bucketId = matchRuleAgainst(tx.sk_category_name ?? null, rules, assetKind);
   return {
     row: {
       org_id: orgId,
