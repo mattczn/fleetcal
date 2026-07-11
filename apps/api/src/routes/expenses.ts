@@ -20,6 +20,11 @@ import type {
   ExpenseBucketSummary,
   ExpensesActivityResponse,
   ExpenseEvent,
+  ExpensesLedgerResponse,
+  LedgerRow,
+  RecurringExpense,
+  RecurringExpenseCadence,
+  ExpenseEntry,
   ApiErrorResponse,
 } from "@fleetcal/types";
 import { UNCATEGORIZED_BUCKET_ID } from "@fleetcal/types";
@@ -27,6 +32,7 @@ import { UNCATEGORIZED_BUCKET_ID } from "@fleetcal/types";
 import { supabase as supabaseTyped } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability, requireModule } from "../middleware/require.js";
+import { TX_COLS, rowToTx, type RampTransactionRow } from "./ramp-transactions.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const supabase = supabaseTyped as any;
@@ -368,6 +374,278 @@ expenses.get("/summary", async (c) => {
     const detail = err instanceof Error ? err.message : String(err);
     console.error("[GET /v1/expenses/summary]", detail);
     return c.json({ error: "summary_failed", detail } satisfies ApiErrorResponse, 500);
+  }
+});
+
+// ── /ledger ─────────────────────────────────────────────────────────────
+//
+// Every expense event in the window, normalized to one row shape:
+//   ramp       — one row per card transaction
+//   mudflap    — one row per fuel_transactions row
+//   payroll    — one row per driver per Sat–Fri week (driver_pay from
+//                events + payroll_adjustments merged by name+week)
+//   entry      — one row per one-time expense entry
+//   recurring  — one prorated posting row per active rule
+//
+// The client does search/sort/filter/pagination locally — a week is a
+// few hundred rows at most; the 2000-row safeguard covers YTD pulls.
+
+/** Saturday (YYYY-MM-DD) of the Sat–Fri week containing `dateIso`. */
+function satOfWeek(dateIso: string): string {
+  const d = new Date(`${dateIso.slice(0, 10)}T00:00:00Z`);
+  const daysSinceSat = (d.getUTCDay() + 1) % 7;
+  d.setUTCDate(d.getUTCDate() - daysSinceSat);
+  return d.toISOString().slice(0, 10);
+}
+
+expenses.get("/ledger", async (c) => {
+  const orgId = c.get("orgId");
+  const url   = new URL(c.req.url);
+  const w     = parseWindow(url);
+  const limit = Math.min(Math.max(Number(url.searchParams.get("limit") ?? "2000"), 1), 5000);
+
+  try {
+    const [bucketsRes, rampRes, fuelRes, evQ1, evQ2, adjRes, entriesRes, rulesRes] = await Promise.all([
+      supabase
+        .from("expense_buckets")
+        .select("id, name, system_role")
+        .eq("org_id", orgId)
+        .is("deleted_at", null),
+      supabase
+        .from("ramp_transactions")
+        .select(TX_COLS)
+        .eq("org_id", orgId)
+        .is("deleted_at", null)
+        .gte("transacted_at", w.fromTs)
+        .lte("transacted_at", w.toTs),
+      supabase
+        .from("fuel_transactions")
+        .select("id, transaction_date, total_charged, location, driver_name, diesel_gallons, asset_id")
+        .eq("org_id", orgId)
+        .is("deleted_at", null)
+        .gte("transaction_date", w.from)
+        .lte("transaction_date", w.to),
+      supabase
+        .from("events")
+        .select("driver_pay, driver_name, start")
+        .eq("org_id", orgId)
+        .is("deleted_at", null)
+        .not("driver_pay", "is", null)
+        .is("deferred_to_week", null)
+        .gte("start", w.from)
+        .lte("start", `${w.to}T23:59:59`),
+      supabase
+        .from("events")
+        .select("driver_pay, driver_name, deferred_to_week")
+        .eq("org_id", orgId)
+        .is("deleted_at", null)
+        .not("driver_pay", "is", null)
+        .not("deferred_to_week", "is", null)
+        .gte("deferred_to_week", w.from)
+        .lte("deferred_to_week", w.to),
+      supabase
+        .from("payroll_adjustments")
+        .select("driver_name, week_start, amount")
+        .eq("org_id", orgId)
+        .gte("week_start", w.from)
+        .lte("week_start", w.to),
+      supabase
+        .from("expense_entries")
+        .select("id, org_id, bucket_id, kind, date, amount, label, notes, created_at, updated_at")
+        .eq("org_id", orgId)
+        .is("deleted_at", null)
+        .gte("date", w.from)
+        .lte("date", w.to),
+      supabase
+        .from("recurring_expenses")
+        .select("id, org_id, bucket_id, kind, label, amount, cadence, effective_from, effective_to, notes, created_at, updated_at")
+        .eq("org_id", orgId)
+        .is("deleted_at", null)
+        .lte("effective_from", w.to)
+        .or(`effective_to.is.null,effective_to.gte.${w.from}`),
+    ]);
+    for (const [label, res] of [
+      ["buckets", bucketsRes], ["ramp", rampRes], ["fuel", fuelRes],
+      ["events", evQ1], ["events-deferred", evQ2], ["adjustments", adjRes],
+      ["entries", entriesRes], ["rules", rulesRes],
+    ] as const) {
+      if (res.error) throw new Error(`${label}: ${res.error.message}`);
+    }
+
+    const bucketRows = (bucketsRes.data ?? []) as Array<{ id: string; name: string; system_role: string | null }>;
+    const bucketName = new Map(bucketRows.map(b => [b.id, b.name]));
+    const driverPayBucket   = bucketRows.find(b => b.system_role === "driver_pay") ?? null;
+    const mudflapBucket     = bucketRows.find(b => b.system_role === "mudflap_fuel") ?? null;
+
+    const rows: LedgerRow[] = [];
+
+    // Ramp card transactions
+    for (const raw of (rampRes.data ?? []) as unknown as RampTransactionRow[]) {
+      const tx = rowToTx(raw);
+      rows.push({
+        rowKey: `ramp:${tx.id}`,
+        source: "ramp",
+        refId:  tx.id,
+        date:   tx.transactedAt.slice(0, 10),
+        description: tx.merchantName ?? "Card purchase",
+        sub: [tx.memo, tx.cardholderName].filter(Boolean).join(" · ") || undefined,
+        amount: tx.amount,
+        bucketId: tx.bucketId ?? null,
+        bucketName: tx.bucketId ? (bucketName.get(tx.bucketId) ?? null) : null,
+        bucketEditable: true,
+        ramp: tx,
+      });
+    }
+
+    // Mudflap fuel
+    for (const f of (fuelRes.data ?? []) as Array<{
+      id: string; transaction_date: string; total_charged: string | number | null;
+      location: string | null; driver_name: string | null;
+      diesel_gallons: string | number | null; asset_id: number | null;
+    }>) {
+      rows.push({
+        rowKey: `mudflap:${f.id}`,
+        source: "mudflap",
+        refId:  f.id,
+        date:   f.transaction_date,
+        description: f.location ?? "Fuel purchase",
+        sub: f.driver_name ?? undefined,
+        amount: Number(f.total_charged ?? 0),
+        bucketId: mudflapBucket?.id ?? null,
+        bucketName: mudflapBucket?.name ?? null,
+        bucketEditable: false,
+        mudflap: {
+          location: f.location,
+          driverName: f.driver_name,
+          gallons: f.diesel_gallons != null ? Number(f.diesel_gallons) : null,
+          assetId: f.asset_id,
+        },
+      });
+    }
+
+    // Payroll — one row per driver per Sat–Fri week
+    interface WeekAgg { driverName: string; weekStart: string; loadPay: number; adjustments: number; loadCount: number; }
+    const weekly = new Map<string, WeekAgg>();
+    const bump = (name: string | null, weekStart: string, pay: number, isLoad: boolean) => {
+      const display = name?.trim() || "(No driver)";
+      const key = `${display.toLowerCase()}|${weekStart}`;
+      const agg = weekly.get(key) ?? { driverName: display, weekStart, loadPay: 0, adjustments: 0, loadCount: 0 };
+      if (isLoad) { agg.loadPay += pay; agg.loadCount += 1; }
+      else        { agg.adjustments += pay; }
+      weekly.set(key, agg);
+    };
+    for (const e of (evQ1.data ?? []) as Array<{ driver_pay: string | number | null; driver_name: string | null; start: string }>) {
+      bump(e.driver_name, satOfWeek(e.start), Number(e.driver_pay ?? 0), true);
+    }
+    for (const e of (evQ2.data ?? []) as Array<{ driver_pay: string | number | null; driver_name: string | null; deferred_to_week: string }>) {
+      bump(e.driver_name, e.deferred_to_week, Number(e.driver_pay ?? 0), true);
+    }
+    for (const a of (adjRes.data ?? []) as Array<{ driver_name: string; week_start: string; amount: string | number | null }>) {
+      bump(a.driver_name, a.week_start, Number(a.amount ?? 0), false);
+    }
+    const fmtAdj = (n: number) =>
+      `${n >= 0 ? "+" : "−"}$${Math.abs(n).toLocaleString("en-US", { maximumFractionDigits: 0 })} adj`;
+    for (const agg of weekly.values()) {
+      const subParts = [
+        `wk of ${agg.weekStart}`,
+        agg.loadCount ? `${agg.loadCount} load${agg.loadCount === 1 ? "" : "s"}` : null,
+        agg.adjustments !== 0 ? fmtAdj(agg.adjustments) : null,
+      ].filter(Boolean);
+      rows.push({
+        rowKey: `payroll:${agg.driverName.toLowerCase()}|${agg.weekStart}`,
+        source: "payroll",
+        refId:  agg.weekStart,
+        date:   agg.weekStart,
+        description: `Weekly pay · ${agg.driverName}`,
+        sub: subParts.join(" · "),
+        amount: agg.loadPay + agg.adjustments,
+        bucketId: driverPayBucket?.id ?? null,
+        bucketName: driverPayBucket?.name ?? null,
+        bucketEditable: false,
+        payroll: agg,
+      });
+    }
+
+    // One-time entries
+    for (const e of (entriesRes.data ?? []) as Array<{
+      id: string; org_id: string; bucket_id: string; kind: string | null;
+      date: string; amount: string | number; label: string; notes: string | null;
+      created_at: string; updated_at: string;
+    }>) {
+      const entry: ExpenseEntry = {
+        id: e.id, orgId: e.org_id, bucketId: e.bucket_id,
+        bucketName: bucketName.get(e.bucket_id) ?? undefined,
+        kind: e.kind ?? undefined, date: e.date, amount: Number(e.amount),
+        label: e.label, notes: e.notes ?? undefined,
+        createdAt: e.created_at, updatedAt: e.updated_at,
+      };
+      rows.push({
+        rowKey: `entry:${entry.id}`,
+        source: "entry",
+        refId:  entry.id,
+        date:   entry.date,
+        description: entry.label,
+        sub: [entry.kind, entry.notes].filter(Boolean).join(" · ") || undefined,
+        amount: entry.amount,
+        bucketId: entry.bucketId,
+        bucketName: entry.bucketName ?? null,
+        bucketEditable: true,
+        entry,
+      });
+    }
+
+    // Recurring rules → one prorated posting per rule for the window
+    for (const r of (rulesRes.data ?? []) as Array<{
+      id: string; org_id: string; bucket_id: string; kind: string | null;
+      label: string; amount: string | number; cadence: string;
+      effective_from: string; effective_to: string | null; notes: string | null;
+      created_at: string; updated_at: string;
+    }>) {
+      const prorated = prorate(
+        { bucket_id: r.bucket_id, amount: r.amount, cadence: r.cadence,
+          effective_from: r.effective_from, effective_to: r.effective_to },
+        w,
+      );
+      if (prorated <= 0) continue;
+      const rule: RecurringExpense = {
+        id: r.id, orgId: r.org_id, bucketId: r.bucket_id,
+        bucketName: bucketName.get(r.bucket_id) ?? undefined,
+        kind: r.kind ?? undefined, label: r.label, amount: Number(r.amount),
+        cadence: r.cadence as RecurringExpenseCadence,
+        effectiveFrom: r.effective_from, effectiveTo: r.effective_to ?? undefined,
+        notes: r.notes ?? undefined, createdAt: r.created_at, updatedAt: r.updated_at,
+      };
+      const periodDays  = r.cadence === "weekly" ? 7 : 30.4375;
+      const overlapDays = Math.round((prorated / Number(r.amount)) * periodDays);
+      rows.push({
+        rowKey: `recurring:${r.id}`,
+        source: "recurring",
+        refId:  r.id,
+        date:   w.from,
+        description: rule.label,
+        sub: `recurring · $${Number(r.amount).toLocaleString("en-US")} / ${r.cadence === "weekly" ? "wk" : "mo"} → prorated for this period`,
+        amount: prorated,
+        bucketId: rule.bucketId,
+        bucketName: rule.bucketName ?? null,
+        bucketEditable: false,
+        recurring: { ...rule, prorated, overlapDays },
+      });
+    }
+
+    rows.sort((a, b) =>
+      a.date < b.date ? 1 : a.date > b.date ? -1 :
+      a.description.localeCompare(b.description));
+
+    const res: ExpensesLedgerResponse = {
+      period: { from: w.from, to: w.to },
+      rows:   rows.slice(0, limit),
+      total:  rows.length,
+    };
+    return c.json(res);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    console.error("[GET /v1/expenses/ledger]", detail);
+    return c.json({ error: "ledger_failed", detail } satisfies ApiErrorResponse, 500);
   }
 });
 

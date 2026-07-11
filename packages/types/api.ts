@@ -1633,6 +1633,49 @@ export interface ExpensesActivityResponse {
   events: ExpenseEvent[];
 }
 
+// ── Unified expense ledger ──────────────────────────────────────────────
+//
+// One normalized row shape for every dollar out, across all sources.
+// Powers the /expenses workspace's main table. Source-specific payloads
+// ride along so the detail panel never needs a second fetch.
+
+export type LedgerSource = 'ramp' | 'mudflap' | 'payroll' | 'entry' | 'recurring';
+
+export interface LedgerRow {
+  /** Unique across sources: "<source>:<ref>" — stable within a window. */
+  rowKey:      string;
+  source:      LedgerSource;
+  /** Underlying record id (ramp txn uuid, entry uuid, rule uuid, …). */
+  refId:       string;
+  /** YYYY-MM-DD display date. Payroll rows use the week's Saturday;
+   *  recurring postings use the window start. */
+  date:        string;
+  description: string;
+  /** Secondary line — memo, kind tag, proration math, load counts. */
+  sub?:        string;
+  amount:      number;
+  bucketId:    string | null;   // null = uncategorized (ramp only)
+  bucketName:  string | null;
+  /** True when the bucket can be reassigned directly from the row
+   *  (ramp txns + manual entries). Payroll/fuel route via system_role;
+   *  recurring postings change via their rule. */
+  bucketEditable: boolean;
+
+  // Source payloads for the detail panel (exactly one is set):
+  ramp?:      import('./domain').RampTransaction;
+  entry?:     import('./domain').ExpenseEntry;
+  recurring?: import('./domain').RecurringExpense & { prorated: number; overlapDays: number };
+  payroll?:   { driverName: string; weekStart: string; loadPay: number; adjustments: number; loadCount: number };
+  mudflap?:   { location: string | null; driverName: string | null; gallons: number | null; assetId: number | null };
+}
+
+export interface ExpensesLedgerResponse {
+  period: { from: string; to: string };
+  rows:   LedgerRow[];
+  /** Row count before the limit safeguard was applied. */
+  total:  number;
+}
+
 // ── Recurring expenses CRUD ─────────────────────────────────────────────
 
 import type {

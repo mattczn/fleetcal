@@ -30,7 +30,7 @@ import { runRampSyncSweep } from "../jobs/rampSyncSweep.js";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const supabase = supabaseTyped as any;
 
-const TX_COLS = [
+export const TX_COLS = [
   "id", "org_id", "provider", "provider_transaction_id",
   "transacted_at", "amount", "currency",
   "merchant_name", "merchant_category_code", "sk_category_name",
@@ -44,7 +44,7 @@ const TX_COLS = [
   "created_at", "updated_at",
 ].join(", ");
 
-interface RampTransactionRow {
+export interface RampTransactionRow {
   id:                       string;
   org_id:                   string;
   provider:                 string;
@@ -77,7 +77,7 @@ interface RampTransactionRow {
   updated_at:               string | null;
 }
 
-function rowToTx(r: RampTransactionRow): RampTransaction {
+export function rowToTx(r: RampTransactionRow): RampTransaction {
   return {
     id:                     r.id,
     orgId:                  r.org_id,

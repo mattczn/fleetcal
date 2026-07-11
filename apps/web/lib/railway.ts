@@ -85,6 +85,7 @@ import type {
   ListExpenseBucketsResponse, CreateExpenseBucketRequest,
   UpdateExpenseBucketRequest, ExpenseBucketResponse,
   ReorderExpenseBucketsRequest,
+  ExpensesLedgerResponse,
   ListMaintenanceReportsQuery, ListMaintenanceReportsResponse,
   GetMaintenanceReportResponse,
   UpdateMaintenanceReportRequest, UpdateMaintenanceReportResponse,
@@ -1562,6 +1563,15 @@ class RailwayClient {
     if (query.to)   qs.set('to',   query.to);
     const s = qs.toString();
     return this.req<ExpensesSummaryResponse>('GET', `/v1/expenses/summary${s ? `?${s}` : ''}`);
+  }
+
+  getExpensesLedger(query: { from?: string; to?: string; limit?: number } = {}) {
+    const qs = new URLSearchParams();
+    if (query.from)          qs.set('from',  query.from);
+    if (query.to)            qs.set('to',    query.to);
+    if (query.limit != null) qs.set('limit', String(query.limit));
+    const s = qs.toString();
+    return this.req<ExpensesLedgerResponse>('GET', `/v1/expenses/ledger${s ? `?${s}` : ''}`);
   }
 
   getExpensesActivity(query: { from?: string; to?: string; limit?: number } = {}) {
