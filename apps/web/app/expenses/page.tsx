@@ -31,6 +31,7 @@ import {
 } from '@/lib/periodRange';
 import { OpsTable, OpsDate, type OpsColumn, type OpsFilter } from '@/components/ui/OpsTable';
 import { CostBar } from '@/components/ui/CostBar';
+import { PieChart } from '@/components/ui/PieChart';
 import { railway } from '@/lib/railway';
 import BucketSelect, { invalidateBucketCache } from './BucketSelect';
 import ExpenseDetailPanel, { type PanelMode } from './ExpenseDetailPanel';
@@ -277,15 +278,25 @@ function ExpensesPageInner() {
     return m;
   }, [realBuckets]);
 
-  // Bar segments — one per top-level bucket, colors fixed per entity
-  // (assigned by rail position, then zero-amount buckets drop out so a
-  // quiet week doesn't repaint the survivors). Buckets past the palette
-  // fold into a neutral "Other".
+  // One color per top-level bucket, fixed by rail position so a bucket
+  // keeps its color as others come and go. A user-set bucket.color
+  // always wins; buckets past the palette get the neutral fold color.
+  const bucketColorById = useMemo(() => {
+    const m = new Map<string, string>();
+    realBuckets.forEach((b, i) => {
+      m.set(b.bucketId as string, b.color || BUCKET_BAR_PALETTE[i] || OTHER_SEGMENT_COLOR);
+    });
+    return m;
+  }, [realBuckets]);
+
+  // Bar segments — one per top-level bucket; zero-amount buckets drop
+  // out after color assignment so a quiet week doesn't repaint the
+  // survivors. Buckets past the palette fold into "Other".
   const barSegments = useMemo(() => {
     const colored = realBuckets.map((b, i) => ({
       label:  b.name,
       amount: b.total,
-      color:  b.color || BUCKET_BAR_PALETTE[i] || OTHER_SEGMENT_COLOR,
+      color:  bucketColorById.get(b.bucketId as string) ?? OTHER_SEGMENT_COLOR,
       overflow: i >= BUCKET_BAR_PALETTE.length && !b.color,
     }));
     const kept  = colored.filter(s => !s.overflow && s.amount > 0);
@@ -299,7 +310,51 @@ function ExpensesPageInner() {
       });
     }
     return kept.map(({ label, amount, color }) => ({ label, amount, color }));
-  }, [realBuckets]);
+  }, [realBuckets, bucketColorById]);
+
+  // Pie slices — same entities + colors as the bar, ranked descending
+  // so the donut reads largest-first from 12 o'clock.
+  const pieSlices = useMemo(() =>
+    realBuckets
+      .filter(b => b.total > 0)
+      .map(b => ({
+        bucketId: b.bucketId as string,
+        label:    b.name,
+        value:    b.total,
+        color:    bucketColorById.get(b.bucketId as string) ?? OTHER_SEGMENT_COLOR,
+      }))
+      .sort((a, b) => b.value - a.value),
+  [realBuckets, bucketColorById]);
+
+  // Top expense categories — leaf-level spend so nothing double-counts:
+  // every sub-bucket is a category, and a parent's spend NOT in any
+  // sub-bucket appears once under the parent's own name. Colored by the
+  // parent bucket so identity matches the bar/pie/rail.
+  const topCategories = useMemo(() => {
+    const rows: Array<{ bucketId: string; label: string; title: string; amount: number; color: string }> = [];
+    for (const top of realBuckets) {
+      const color = bucketColorById.get(top.bucketId as string) ?? OTHER_SEGMENT_COLOR;
+      const kids = top.children ?? [];
+      const kidsTotal = kids.reduce((s, k) => s + k.total, 0);
+      const self = top.total - kidsTotal;
+      if (self > 0) {
+        rows.push({
+          bucketId: top.bucketId as string,
+          label: top.name, title: top.name,
+          amount: self, color,
+        });
+      }
+      for (const k of kids) {
+        if (k.total <= 0) continue;
+        rows.push({
+          bucketId: k.bucketId as string,
+          label: k.name, title: `${top.name} → ${k.name}`,
+          amount: k.total, color,
+        });
+      }
+    }
+    return rows.sort((a, b) => b.amount - a.amount).slice(0, 10);
+  }, [realBuckets, bucketColorById]);
 
   const selectedSummary = useMemo(() => {
     if (selected === 'all' || selected === 'uncategorized') return null;
@@ -621,6 +676,95 @@ function ExpensesPageInner() {
                   Revenue vs expenses — this period
                 </div>
                 <CostBar revenue={revenue} segments={barSegments} />
+              </div>
+            )}
+
+            {pieSlices.length > 0 && (
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-5">
+                {/* Expenses by bucket — donut + ranked list, same idiom
+                    (and same component) as the dashboard's Revenue by
+                    Customer card. Rows click through to the rail filter. */}
+                <div className="rounded-lg border p-5"
+                     style={{ borderColor: 'var(--gc-border)', background: 'var(--gc-surface)' }}>
+                  <h2 className="text-sm font-semibold mb-4" style={{ color: 'var(--gc-text-1)' }}>
+                    Expenses by Bucket
+                  </h2>
+                  <div className="flex gap-6 items-center">
+                    <div className="shrink-0" style={{ overflow: 'visible' }}>
+                      <PieChart
+                        size={190}
+                        slices={pieSlices.map(s => ({ value: s.value, color: s.color, label: s.label }))}
+                      />
+                    </div>
+                    <div className="space-y-2 flex-1 min-w-0">
+                      {pieSlices.map((s, i) => (
+                        <div key={s.bucketId}
+                          className="flex items-center gap-2 rounded-lg px-1.5 py-0.5 -mx-1.5 transition-colors cursor-pointer"
+                          title={`Filter ledger to ${s.label}`}
+                          onClick={() => setSelected(s.bucketId)}
+                          onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover, rgba(0,0,0,0.04))'; }}
+                          onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
+                          <span className="text-[11px] font-medium shrink-0 w-4 text-right" style={{ color: 'var(--gc-text-3)' }}>
+                            {i + 1}
+                          </span>
+                          <div className="w-2 h-2 rounded-full shrink-0" style={{ background: s.color }} />
+                          <span className="text-[13px] truncate flex-1 min-w-0" style={{ color: 'var(--gc-text-2)' }}>
+                            {s.label}
+                          </span>
+                          <span className="text-[13px] font-semibold shrink-0 tabular-nums" style={{ color: 'var(--gc-text-1)' }}>
+                            {fmtMoney0(s.value)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Top expense categories — ranked label|bar|value rows,
+                    same idiom as the dashboard's Revenue by Truck card.
+                    Leaf-level amounts (sub-buckets + each parent's own
+                    unbucketed spend) so nothing double-counts. */}
+                <div className="rounded-lg border p-5"
+                     style={{ borderColor: 'var(--gc-border)', background: 'var(--gc-surface)' }}>
+                  <h2 className="text-sm font-semibold mb-4" style={{ color: 'var(--gc-text-1)' }}>
+                    Top Expense Categories
+                  </h2>
+                  {topCategories.length === 0 ? (
+                    <div className="flex items-center justify-center py-8 text-sm" style={{ color: 'var(--gc-text-3)' }}>
+                      No expenses in this period
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {topCategories.map(cat => {
+                        const max = topCategories[0].amount;
+                        const pct = max > 0 ? (cat.amount / max) * 100 : 0;
+                        return (
+                          <div key={cat.bucketId}
+                            className="flex items-center gap-3 cursor-pointer"
+                            title={`${cat.title} — filter ledger`}
+                            onClick={() => setSelected(cat.bucketId)}>
+                            <div className="w-[130px] shrink-0 text-[13px] truncate font-medium"
+                                 style={{ color: 'var(--gc-text-1)' }}>
+                              {cat.label}
+                            </div>
+                            <div className="flex-1 h-5 relative flex items-center">
+                              <div style={{
+                                width: `${Math.max(pct, 1)}%`,
+                                height: 7,
+                                background: cat.color,
+                                borderRadius: 3,
+                              }} />
+                            </div>
+                            <div className="w-[80px] shrink-0 text-right text-[13px] font-semibold tabular-nums"
+                                 style={{ color: 'var(--gc-text-1)' }}>
+                              {fmtMoney0(cat.amount)}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
