@@ -229,7 +229,7 @@ function BucketsPageInner() {
                           {editingId === child.id && draft ? (
                             <div className="p-2">
                               <BucketEditor draft={draft} setDraft={setDraft} onSave={save} onCancel={cancelEdit}
-                                            saving={saving} title="Edit sub-bucket" />
+                                            saving={saving} title="Edit sub-bucket" allowSystemRole />
                             </div>
                           ) : (
                             <BucketRow
@@ -248,7 +248,7 @@ function BucketsPageInner() {
                   {addingChildTo === node.bucket.id && draft && (
                     <div className="p-2" style={{ background: 'var(--gc-surface-2, #f9fafb)' }}>
                       <BucketEditor draft={draft} setDraft={setDraft} onSave={save} onCancel={cancelEdit}
-                                    saving={saving} title={`New sub-bucket under ${node.bucket.name}`} />
+                                    saving={saving} title={`New sub-bucket under ${node.bucket.name}`} allowSystemRole />
                     </div>
                   )}
                 </div>

@@ -1562,10 +1562,11 @@ export interface RampCategoryRule {
 // sub-buckets show up in drill-in views. Users add/rename/reorder/
 // delete freely.
 
-/** Auto-injection markers. Only top-level buckets can carry one. The
- *  API routes driver_pay + payroll_adjustments into whichever bucket
- *  has 'driver_pay', and fuel_transactions into whichever has
- *  'mudflap_fuel'. Reassign by editing the bucket. */
+/** Auto-injection markers. Any bucket (top-level or sub) can carry
+ *  one — sub-bucket amounts roll up into the parent tile. The API
+ *  routes driver_pay + payroll_adjustments into whichever bucket has
+ *  'driver_pay', and fuel_transactions into whichever has
+ *  'mudflap_fuel'. Assigning a role moves it off the previous holder. */
 export type ExpenseBucketSystemRole = 'driver_pay' | 'mudflap_fuel';
 
 export const EXPENSE_BUCKET_SYSTEM_ROLES: readonly ExpenseBucketSystemRole[] = [

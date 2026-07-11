@@ -3,9 +3,9 @@
  * the /expenses dashboard tiles.
  *
  * Two-level depth enforced at API layer: a bucket with a parentBucketId
- * cannot itself have children. system_role can only be set on top-level
- * buckets; the DB CHECK enforces this too, but we return a nicer error
- * from here.
+ * cannot itself have children. system_role may sit on any bucket
+ * (sub-bucket amounts roll up into the parent tile); assigning a role
+ * steals it from whichever bucket previously held it — one per org.
  *
  * DELETE is blocked when the bucket still has expense refs (recurring
  * rules, one-time entries, uncategorized Ramp txns, category rules, or
@@ -130,10 +130,18 @@ buckets.post("/", requireCapability("org.settings.edit"), async (c) => {
     if ((parent as { parent_id: string | null }).parent_id) {
       return c.json({ error: "bad_request", detail: "sub-buckets cannot have their own children (2-level max)" }, 400);
     }
-    // Sub-buckets can't hold a system_role.
-    if (body.systemRole) {
-      return c.json({ error: "bad_request", detail: "only top-level buckets can carry a systemRole" }, 400);
-    }
+  }
+
+  // Assigning a system role steals it from whichever bucket held it —
+  // matches the UI copy ("moves it off any other bucket") and beats a
+  // unique-violation error the user has to untangle by hand.
+  if (body.systemRole) {
+    await supabase
+      .from("expense_buckets")
+      .update({ system_role: null })
+      .eq("org_id", orgId)
+      .eq("system_role", body.systemRole)
+      .is("deleted_at", null);
   }
 
   const row = {
@@ -190,8 +198,14 @@ buckets.patch("/:id", requireCapability("org.settings.edit"), async (c) => {
     if (body.systemRole && !VALID_SYSTEM_ROLES.has(body.systemRole)) {
       return c.json({ error: "bad_request", detail: `invalid systemRole: ${body.systemRole}` }, 400);
     }
-    if (body.systemRole && cur.parent_id) {
-      return c.json({ error: "bad_request", detail: "only top-level buckets can carry a systemRole" }, 400);
+    // Steal the role from whichever bucket currently holds it (see POST).
+    if (body.systemRole) {
+      await supabase
+        .from("expense_buckets")
+        .update({ system_role: null })
+        .eq("org_id", orgId)
+        .eq("system_role", body.systemRole)
+        .is("deleted_at", null);
     }
     update.system_role = body.systemRole;
   }
@@ -210,11 +224,10 @@ buckets.patch("/:id", requireCapability("org.settings.edit"), async (c) => {
       if ((parent as { parent_id: string | null }).parent_id) {
         return c.json({ error: "bad_request", detail: "sub-buckets cannot have their own children (2-level max)" }, 400);
       }
-      // Moving a top-level bucket under another means it loses any
-      // system_role it held.
-      if (cur.system_role) update.system_role = null;
-      // Also can't move a bucket that has children — that would make it
-      // a 3-level tree.
+      // System roles survive a move — sub-buckets may carry them (the
+      // auto-fed amount rolls up into the new parent's total).
+      // Can't move a bucket that has children though — that would make
+      // it a 3-level tree.
       const { count } = await supabase
         .from("expense_buckets")
         .select("id", { count: "exact", head: true })
