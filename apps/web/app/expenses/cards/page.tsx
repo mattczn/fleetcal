@@ -27,7 +27,10 @@ interface Trailer { id: number; name: string; trailerNumber?: string; category: 
 
 function CardsPageInner() {
   const searchParams = useSearchParams();
-  const initialCategory = searchParams?.get('category') ?? undefined;
+  // Tiles link with ?bucketId=<uuid>; the Uncategorized CTA still uses
+  // ?category=uncategorized. Accept both.
+  const initialCategory =
+    searchParams?.get('bucketId') ?? searchParams?.get('category') ?? undefined;
   const [assets, setAssets]     = useState<Asset[]>([]);
   const [trailers, setTrailers] = useState<Trailer[]>([]);
   const [err, setErr]           = useState<string | null>(null);
