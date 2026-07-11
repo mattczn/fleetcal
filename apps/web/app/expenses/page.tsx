@@ -30,11 +30,12 @@ import {
   currentWeekStartISO, getPeriodRange, type Period,
 } from '@/lib/periodRange';
 import { OpsTable, OpsDate, type OpsColumn, type OpsFilter } from '@/components/ui/OpsTable';
+import { CostBar } from '@/components/ui/CostBar';
 import { railway } from '@/lib/railway';
 import BucketSelect, { invalidateBucketCache } from './BucketSelect';
 import ExpenseDetailPanel, { type PanelMode } from './ExpenseDetailPanel';
 import type {
-  ExpenseBucketSummary, LedgerRow, LedgerSource,
+  ExpenseBucketSummary, LedgerRow, LedgerSource, LoadSummary,
 } from '@fleetcal/types';
 import { UNCATEGORIZED_BUCKET_ID } from '@fleetcal/types';
 import type { Asset } from '@/lib/types';
@@ -50,6 +51,18 @@ const fmtMoney2 = (n: number) =>
   new Intl.NumberFormat('en-US', {
     style: 'currency', currency: 'USD', maximumFractionDigits: 2,
   }).format(n);
+
+// Segment colors for the revenue bar, assigned to top-level buckets in
+// rail order (fixed per entity — a bucket keeps its color as others
+// come and go). Validated for lightness/chroma/CVD separation against
+// the light surface; margin green + deficit red are reserved by
+// CostBar and deliberately absent here. Buckets past the 8th fold
+// into a neutral "Other".
+const BUCKET_BAR_PALETTE = [
+  '#1a73e8', '#e8710a', '#8e24aa', '#00897b',
+  '#c2185b', '#3949ab', '#9e6a03', '#00acc1',
+] as const;
+const OTHER_SEGMENT_COLOR = '#5f6368';
 
 const SOURCE_META: Record<LedgerSource, { label: string; color: string }> = {
   ramp:      { label: 'Card',      color: '#059669' },
@@ -195,6 +208,37 @@ function ExpensesPageInner() {
   }, [fromIso, toIso]);
   useEffect(() => { void reload(); }, [reload]);
 
+  // Period revenue — same endpoint + same reduction the dashboard uses
+  // (total_billable per load, relay-deduped + report exclusions applied
+  // server-side), so this bar and the dashboard always agree. Null while
+  // loading / on error → the bar hides rather than showing a wrong zero.
+  const [revenue, setRevenue] = useState<number | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setRevenue(null);
+    (async () => {
+      try {
+        const { loads } = await railway.listLoadSummaries({
+          pickupFrom: `${fromIso}T00:00`,
+          pickupTo:   `${toIso}T23:59`,
+          limit:      '10000',
+        });
+        if (cancelled) return;
+        const total = (loads as LoadSummary[]).reduce((s, l) => {
+          if (l.totalBillable != null) return s + l.totalBillable;
+          const accessorials = (l.accessorials ?? [])
+            .reduce((acc, a) => acc + (a.billable ? (a.amount ?? 0) : 0), 0);
+          return s + (l.loadPrice ?? 0) + accessorials;
+        }, 0);
+        setRevenue(total);
+      } catch (e) {
+        console.error('[expenses] revenue fetch failed:', e);
+        if (!cancelled) setRevenue(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [fromIso, toIso]);
+
   // Equipment fixtures for the detail panel's asset dropdown — once.
   useEffect(() => {
     let cancelled = false;
@@ -231,6 +275,30 @@ function ExpensesPageInner() {
       for (const c of top.children ?? []) m.set(c.bucketId as string, new Set([c.bucketId as string]));
     }
     return m;
+  }, [realBuckets]);
+
+  // Bar segments — one per top-level bucket, colors fixed per entity
+  // (assigned by rail position, then zero-amount buckets drop out so a
+  // quiet week doesn't repaint the survivors). Buckets past the palette
+  // fold into a neutral "Other".
+  const barSegments = useMemo(() => {
+    const colored = realBuckets.map((b, i) => ({
+      label:  b.name,
+      amount: b.total,
+      color:  b.color || BUCKET_BAR_PALETTE[i] || OTHER_SEGMENT_COLOR,
+      overflow: i >= BUCKET_BAR_PALETTE.length && !b.color,
+    }));
+    const kept  = colored.filter(s => !s.overflow && s.amount > 0);
+    const other = colored.filter(s => s.overflow && s.amount > 0);
+    if (other.length) {
+      kept.push({
+        label:  'Other',
+        amount: other.reduce((s, x) => s + x.amount, 0),
+        color:  OTHER_SEGMENT_COLOR,
+        overflow: false,
+      });
+    }
+    return kept.map(({ label, amount, color }) => ({ label, amount, color }));
   }, [realBuckets]);
 
   const selectedSummary = useMemo(() => {
@@ -542,6 +610,17 @@ function ExpensesPageInner() {
               <div className="rounded-lg border p-4 mb-4 text-sm"
                    style={{ borderColor: '#ef4444', background: '#fef2f2', color: '#991b1b' }}>
                 {err}
+              </div>
+            )}
+
+            {revenue != null && revenue > 0 && barSegments.length > 0 && (
+              <div className="rounded-lg border px-4 pt-3 pb-4 mb-5"
+                   style={{ borderColor: 'var(--gc-border)', background: 'var(--gc-surface)' }}>
+                <div className="text-[11px] font-bold uppercase tracking-wider mb-3"
+                     style={{ color: 'var(--gc-text-3)' }}>
+                  Revenue vs expenses — this period
+                </div>
+                <CostBar revenue={revenue} segments={barSegments} />
               </div>
             )}
 
