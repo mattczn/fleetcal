@@ -75,7 +75,14 @@ export default function BucketSelect({
       disabled={disabled || loading}
       style={style}
     >
-      {includeUncategorized && <option value="">— Uncategorized —</option>}
+      {includeUncategorized
+        ? <option value="">— Uncategorized —</option>
+        // Without an explicit empty option a controlled select whose
+        // value is '' silently DISPLAYS the first real option while the
+        // form state stays empty — the user sees a bucket "selected"
+        // and then gets told to pick one. Render an inert placeholder
+        // so empty looks empty.
+        : <option value="" disabled>Select a bucket…</option>}
       {tree.map(node => (
         <optgroup key={node.bucket.id} label={node.bucket.name}>
           <option value={node.bucket.id}>{node.bucket.name}</option>
