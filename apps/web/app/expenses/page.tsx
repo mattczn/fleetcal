@@ -214,9 +214,11 @@ function ExpensesPageInner() {
   // server-side), so this bar and the dashboard always agree. Null while
   // loading / on error → the bar hides rather than showing a wrong zero.
   const [revenue, setRevenue] = useState<number | null>(null);
+  const [revenueLoading, setRevenueLoading] = useState(true);
   useEffect(() => {
     let cancelled = false;
     setRevenue(null);
+    setRevenueLoading(true);
     (async () => {
       try {
         const { loads } = await railway.listLoadSummaries({
@@ -235,6 +237,8 @@ function ExpensesPageInner() {
       } catch (e) {
         console.error('[expenses] revenue fetch failed:', e);
         if (!cancelled) setRevenue(null);
+      } finally {
+        if (!cancelled) setRevenueLoading(false);
       }
     })();
     return () => { cancelled = true; };
@@ -668,7 +672,9 @@ function ExpensesPageInner() {
               </div>
             )}
 
-            {revenue != null && revenue > 0 && barSegments.length > 0 && (
+            {revenueLoading || (loading && buckets.length === 0) ? (
+              <MeterSkeleton />
+            ) : revenue != null && revenue > 0 && barSegments.length > 0 ? (
               <div className="rounded-lg border px-4 pt-3 pb-4 mb-5"
                    style={{ borderColor: 'var(--gc-border)', background: 'var(--gc-surface)' }}>
                 <div className="text-[11px] font-bold uppercase tracking-wider mb-3"
@@ -677,9 +683,11 @@ function ExpensesPageInner() {
                 </div>
                 <CostBar revenue={revenue} segments={barSegments} />
               </div>
-            )}
+            ) : null}
 
-            {pieSlices.length > 0 && (
+            {loading && buckets.length === 0 ? (
+              <ChartsSkeleton />
+            ) : pieSlices.length > 0 && (
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-5">
                 {/* Expenses by bucket — donut + ranked list, same idiom
                     (and same component) as the dashboard's Revenue by
@@ -797,6 +805,61 @@ function ExpensesPageInner() {
         />
       )}
     </AppShell>
+  );
+}
+
+// ── loading skeletons ───────────────────────────────────────────────────
+//
+// Shape-matched placeholders so the analytics band doesn't pop in late
+// and shove the ledger down — especially the revenue meter, whose data
+// (the loads report) is the slowest fetch on the page.
+
+const skeletonBlock = { background: 'var(--gc-surface-2, #f3f4f6)' } as const;
+
+function MeterSkeleton() {
+  return (
+    <div className="rounded-lg border px-4 pt-3 pb-4 mb-5 animate-pulse"
+         style={{ borderColor: 'var(--gc-border)', background: 'var(--gc-surface)' }}>
+      <div className="h-3 w-56 rounded mb-3" style={skeletonBlock} />
+      <div className="h-12 rounded-md" style={skeletonBlock} />
+      <div className="mt-3 flex items-center gap-5">
+        {[0, 1, 2, 3].map(i => (
+          <div key={i} className="h-3 rounded" style={{ ...skeletonBlock, width: 90 }} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ChartsSkeleton() {
+  return (
+    <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-5 animate-pulse">
+      <div className="rounded-lg border p-5"
+           style={{ borderColor: 'var(--gc-border)', background: 'var(--gc-surface)' }}>
+        <div className="h-3 w-40 rounded mb-4" style={skeletonBlock} />
+        <div className="flex gap-6 items-center">
+          <div className="shrink-0 rounded-full" style={{ ...skeletonBlock, width: 190, height: 190 }} />
+          <div className="flex-1 space-y-2.5">
+            {[0, 1, 2, 3, 4, 5].map(i => (
+              <div key={i} className="h-3.5 rounded" style={skeletonBlock} />
+            ))}
+          </div>
+        </div>
+      </div>
+      <div className="rounded-lg border p-5"
+           style={{ borderColor: 'var(--gc-border)', background: 'var(--gc-surface)' }}>
+        <div className="h-3 w-44 rounded mb-4" style={skeletonBlock} />
+        <div className="space-y-3">
+          {[0, 1, 2, 3, 4, 5, 6, 7].map(i => (
+            <div key={i} className="flex items-center gap-3">
+              <div className="h-3.5 rounded shrink-0" style={{ ...skeletonBlock, width: 130 }} />
+              <div className="h-2 rounded flex-1" style={skeletonBlock} />
+              <div className="h-3.5 rounded shrink-0" style={{ ...skeletonBlock, width: 60 }} />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }
 
