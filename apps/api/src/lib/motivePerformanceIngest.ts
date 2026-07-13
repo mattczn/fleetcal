@@ -98,7 +98,6 @@ async function motiveFetch(url: string, apiKey: string): Promise<unknown> {
 
 async function* paginate(baseUrl: string, apiKey: string): AsyncGenerator<MotivePerfEventsPage> {
   let pageNo = 1;
-  let totalSeen = 0;
   while (true) {
     const url = new URL(baseUrl);
     url.searchParams.set("per_page", String(PER_PAGE));
@@ -106,9 +105,12 @@ async function* paginate(baseUrl: string, apiKey: string): AsyncGenerator<Motive
     const body = await motiveFetch(url.toString(), apiKey) as MotivePerfEventsPage;
     const items = body.driver_performance_events ?? [];
     yield body;
-    totalSeen += items.length;
-    const total = body.pagination?.total ?? totalSeen;
-    if (totalSeen >= total || items.length === 0) return;
+    // v2 driver_performance_events doesn't populate pagination.total, so
+    // we can't rely on "totalSeen >= total" to know we've drained the
+    // feed. Terminate when Motive gives us fewer rows than requested
+    // (last page), OR when a page is empty. Falling back to totalSeen
+    // caused a page-1 bailout that silently stopped ingest at 100 rows.
+    if (items.length === 0 || items.length < PER_PAGE) return;
     pageNo++;
     if (pageNo > 200) {
       console.warn("[perfIngest] pagination exceeded 200 pages; stopping defensively");
@@ -307,8 +309,14 @@ export async function syncPerformanceEvents(orgId: string): Promise<PerfSyncResu
         const r = rowFromMotive(inner, orgId, vehicleAssetMap);
         if (r) {
           rows.push(r);
-          if (r.motive_updated_at && r.motive_updated_at > (maxUpdatedAt ?? "")) {
-            maxUpdatedAt = r.motive_updated_at;
+          // Motive stopped populating updated_at on v2 perf events at
+          // some point, so relying on it alone froze the cursor. Fall
+          // back to event_time — the feed is served in ascending order
+          // and updated_after treats start_time-based bookmarks fine
+          // for events that don't get post-hoc edited.
+          const bookmark = r.motive_updated_at ?? r.event_time;
+          if (bookmark && bookmark > (maxUpdatedAt ?? "")) {
+            maxUpdatedAt = bookmark;
           }
         } else {
           skipped++;
