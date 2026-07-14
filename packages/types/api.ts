@@ -1673,20 +1673,6 @@ export interface LedgerRow {
   mudflap?:   { location: string | null; driverName: string | null; gallons: number | null; assetId: number | null };
 }
 
-/** Manual revenue for periods the loads calendar doesn't cover (the
- *  pre-system weeks of early 2026). Folded into the /expenses meter's
- *  revenue; never into per-load reports. */
-export interface RevenueAdjustment {
-  id:     string;
-  date:   string;   // YYYY-MM-DD
-  amount: number;
-  note?:  string;
-}
-export interface ListRevenueAdjustmentsResponse {
-  adjustments: RevenueAdjustment[];
-  total:       number;
-}
-
 export interface ExpensesLedgerResponse {
   period: { from: string; to: string };
   rows:   LedgerRow[];
