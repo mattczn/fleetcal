@@ -21,7 +21,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Plus, Settings2, ArrowUpRight, ArrowDownRight, ArrowRight,
-  ChevronDown, CornerDownRight, RefreshCw, FolderTree, Wand2,
+  ChevronDown, CornerDownRight, RefreshCw, FolderTree, Wand2, Repeat,
 } from 'lucide-react';
 import RequireCap from '@/components/auth/RequireCap';
 import AppShell from '@/components/nav/AppShell';
@@ -577,6 +577,8 @@ function ExpensesPageInner() {
                        }}>
                     <MenuItem icon={<FolderTree size={14} />} label="Manage buckets"
                               onClick={() => { setMenuOpen(false); router.push('/expenses/buckets'); }} />
+                    <MenuItem icon={<Repeat size={14} />} label="Recurring rules"
+                              onClick={() => { setMenuOpen(false); router.push('/expenses/recurring'); }} />
                     <MenuItem icon={<Wand2 size={14} />} label="Card auto-file rules"
                               onClick={() => { setMenuOpen(false); router.push('/expenses/rules'); }} />
                     <MenuItem icon={<RefreshCw size={14} />}
