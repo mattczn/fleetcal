@@ -40,27 +40,62 @@ export default function Reveal({
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    // Already visible on first paint (above the fold) — flip immediately
-    // so the user doesn't see a delayed reveal on the hero.
-    const rect = el.getBoundingClientRect();
-    if (rect.top < window.innerHeight * 0.96) {
-      const t = window.setTimeout(() => setShown(true), delay);
-      return () => window.clearTimeout(t);
-    }
-    const observer = new IntersectionObserver(
-      entries => {
-        for (const entry of entries) {
-          if (entry.isIntersecting) {
-            const t = window.setTimeout(() => setShown(true), delay);
-            observer.disconnect();
-            return () => window.clearTimeout(t);
+    let cancelled = false;
+    let observer: IntersectionObserver | null = null;
+    const show = () => {
+      window.setTimeout(() => { if (!cancelled) setShown(true); }, delay);
+    };
+
+    const arm = () => {
+      if (cancelled || !el) return;
+      const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+      const rect = el.getBoundingClientRect();
+      // Above the fold, or a viewport we cannot measure yet: reveal now so
+      // hero content never sits blank waiting on an observer that may not fire.
+      if (!vh || rect.top < vh * 0.96) {
+        show();
+        return;
+      }
+      observer = new IntersectionObserver(
+        entries => {
+          for (const entry of entries) {
+            if (entry.isIntersecting) {
+              show();
+              observer?.disconnect();
+              return;
+            }
           }
+        },
+        { threshold: 0.12, rootMargin: '0px 0px -8% 0px' },
+      );
+      observer.observe(el);
+    };
+
+    // A link opened from an email frequently hydrates in a hidden/background
+    // tab, where layout and IntersectionObserver are unreliable and above-the-
+    // fold content can get stuck at opacity 0 (the blank-hero bug). Wait until
+    // the tab is actually visible before arming the reveal.
+    if (document.visibilityState === 'visible') {
+      arm();
+    } else {
+      const onVisible = () => {
+        if (document.visibilityState === 'visible') {
+          document.removeEventListener('visibilitychange', onVisible);
+          arm();
         }
-      },
-      { threshold: 0.12, rootMargin: '0px 0px -8% 0px' },
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
+      };
+      document.addEventListener('visibilitychange', onVisible);
+      return () => {
+        cancelled = true;
+        document.removeEventListener('visibilitychange', onVisible);
+        observer?.disconnect();
+      };
+    }
+
+    return () => {
+      cancelled = true;
+      observer?.disconnect();
+    };
   }, [delay]);
 
   return (
