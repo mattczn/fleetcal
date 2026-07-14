@@ -106,6 +106,27 @@ function prorate(rule: RecurringRow, w: Window): number {
   return Number(rule.amount) * (overlapDays / periodDays);
 }
 
+/**
+ * PostgREST silently caps every response at 1000 rows. A half-year
+ * window has ~3k imported entries and ~1.4k driver-pay events, so any
+ * unranged query here undercounts — arbitrarily, by physical row order.
+ * This helper pages through the full result set. `build` must return a
+ * FRESH query each call (PostgREST builders are single-use).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function fetchAll<T>(label: string, build: () => any): Promise<T[]> {
+  const PAGE = 1000;
+  const out: T[] = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await build().range(from, from + PAGE - 1);
+    if (error) throw new Error(`${label}: ${error.message}`);
+    const rows = (data ?? []) as T[];
+    out.push(...rows);
+    if (rows.length < PAGE) break;
+  }
+  return out;
+}
+
 interface BucketRow {
   id:          string;
   parent_id:   string | null;
@@ -131,51 +152,42 @@ async function snapshot(orgId: string, w: Window, bucketIds: Set<string>): Promi
     perBucket.set(id, cur);
   };
 
-  const [rulesRes, entriesRes, rampCategRes, rampUncatRes] = await Promise.all([
-    supabase
+  const [rules, entries, rampCateg, uncatRows] = await Promise.all([
+    fetchAll<RecurringRow>("recurring", () => supabase
       .from("recurring_expenses")
       .select("bucket_id, amount, cadence, effective_from, effective_to")
       .eq("org_id", orgId)
       .is("deleted_at", null)
       .lte("effective_from", w.to)
-      .or(`effective_to.is.null,effective_to.gte.${w.from}`),
-    supabase
+      .or(`effective_to.is.null,effective_to.gte.${w.from}`)),
+    fetchAll<{ bucket_id: string; amount: string | number | null }>("entries", () => supabase
       .from("expense_entries")
       .select("bucket_id, amount")
       .eq("org_id", orgId)
       .is("deleted_at", null)
       .gte("date", w.from)
-      .lte("date", w.to),
-    supabase
+      .lte("date", w.to)),
+    fetchAll<{ bucket_id: string; amount: string | number | null }>("ramp categ", () => supabase
       .from("ramp_transactions")
       .select("bucket_id, amount")
       .eq("org_id", orgId)
       .is("deleted_at", null)
       .not("bucket_id", "is", null)
       .gte("transacted_at", w.fromTs)
-      .lte("transacted_at", w.toTs),
-    supabase
+      .lte("transacted_at", w.toTs)),
+    fetchAll<{ amount: string | number | null }>("ramp uncat", () => supabase
       .from("ramp_transactions")
       .select("amount")
       .eq("org_id", orgId)
       .is("deleted_at", null)
       .is("bucket_id", null)
       .gte("transacted_at", w.fromTs)
-      .lte("transacted_at", w.toTs),
+      .lte("transacted_at", w.toTs)),
   ]);
-  if (rulesRes.error)     throw new Error(`recurring: ${rulesRes.error.message}`);
-  if (entriesRes.error)   throw new Error(`entries: ${entriesRes.error.message}`);
-  if (rampCategRes.error) throw new Error(`ramp categ: ${rampCategRes.error.message}`);
-  if (rampUncatRes.error) throw new Error(`ramp uncat: ${rampUncatRes.error.message}`);
 
-  for (const r of (rulesRes.data ?? []) as RecurringRow[]) add(r.bucket_id, prorate(r, w));
-  for (const e of (entriesRes.data ?? []) as Array<{ bucket_id: string; amount: string | number | null }>) {
-    add(e.bucket_id, Number(e.amount ?? 0));
-  }
-  for (const t of (rampCategRes.data ?? []) as Array<{ bucket_id: string; amount: string | number | null }>) {
-    add(t.bucket_id, Number(t.amount ?? 0));
-  }
-  const uncatRows = (rampUncatRes.data ?? []) as Array<{ amount: string | number | null }>;
+  for (const r of rules) add(r.bucket_id, prorate(r, w));
+  for (const e of entries) add(e.bucket_id, Number(e.amount ?? 0));
+  for (const t of rampCateg) add(t.bucket_id, Number(t.amount ?? 0));
   const uncat = {
     total: uncatRows.reduce((s, r) => s + Number(r.amount ?? 0), 0),
     count: uncatRows.length,
@@ -185,7 +197,7 @@ async function snapshot(orgId: string, w: Window, bucketIds: Set<string>): Promi
 
 async function payrollDriverAndAdjustments(orgId: string, w: Window): Promise<{ total: number; count: number }> {
   const [q1, q2, adj] = await Promise.all([
-    supabase
+    fetchAll<{ driver_pay: string | number | null }>("events (q1)", () => supabase
       .from("events")
       .select("driver_pay")
       .eq("org_id", orgId)
@@ -193,8 +205,8 @@ async function payrollDriverAndAdjustments(orgId: string, w: Window): Promise<{ 
       .not("driver_pay", "is", null)
       .is("deferred_to_week", null)
       .gte("start", w.from)
-      .lte("start", `${w.to}T23:59:59`),
-    supabase
+      .lte("start", `${w.to}T23:59:59`)),
+    fetchAll<{ driver_pay: string | number | null }>("events (q2)", () => supabase
       .from("events")
       .select("driver_pay")
       .eq("org_id", orgId)
@@ -202,37 +214,28 @@ async function payrollDriverAndAdjustments(orgId: string, w: Window): Promise<{ 
       .not("driver_pay", "is", null)
       .not("deferred_to_week", "is", null)
       .gte("deferred_to_week", w.from)
-      .lte("deferred_to_week", w.to),
-    supabase
+      .lte("deferred_to_week", w.to)),
+    fetchAll<{ amount: string | number | null }>("payroll_adjustments", () => supabase
       .from("payroll_adjustments")
       .select("amount")
       .eq("org_id", orgId)
       .gte("week_start", w.from)
-      .lte("week_start", w.to),
+      .lte("week_start", w.to)),
   ]);
-  if (q1.error)  throw new Error(`events (q1): ${q1.error.message}`);
-  if (q2.error)  throw new Error(`events (q2): ${q2.error.message}`);
-  if (adj.error) throw new Error(`payroll_adjustments: ${adj.error.message}`);
-  const rows = [
-    ...((q1.data ?? []) as Array<{ driver_pay: string | number | null }>),
-    ...((q2.data ?? []) as Array<{ driver_pay: string | number | null }>),
-  ];
+  const rows = [...q1, ...q2];
   const loadPay = rows.reduce((s, r) => s + Number(r.driver_pay ?? 0), 0);
-  const adjSum  = ((adj.data ?? []) as Array<{ amount: string | number | null }>)
-    .reduce((s, r) => s + Number(r.amount ?? 0), 0);
+  const adjSum  = adj.reduce((s, r) => s + Number(r.amount ?? 0), 0);
   return { total: loadPay + adjSum, count: rows.length };
 }
 
 async function mudflapFuel(orgId: string, w: Window): Promise<{ total: number; count: number }> {
-  const { data, error } = await supabase
+  const rows = await fetchAll<{ total_charged: string | number | null }>("fuel_transactions", () => supabase
     .from("fuel_transactions")
     .select("total_charged")
     .eq("org_id", orgId)
     .is("deleted_at", null)
     .gte("transaction_date", w.from)
-    .lte("transaction_date", w.to);
-  if (error) throw new Error(`fuel_transactions: ${error.message}`);
-  const rows = (data ?? []) as Array<{ total_charged: string | number | null }>;
+    .lte("transaction_date", w.to));
   return {
     total: rows.reduce((s, r) => s + Number(r.total_charged ?? 0), 0),
     count: rows.length,
@@ -410,27 +413,31 @@ expenses.get("/ledger", async (c) => {
   const limit = Math.min(Math.max(Number(url.searchParams.get("limit") ?? "10000"), 1), 20000);
 
   try {
-    const [bucketsRes, rampRes, fuelRes, evQ1, evQ2, adjRes, entriesRes, rulesRes] = await Promise.all([
-      supabase
+    const [bucketRows, rampRaw, fuelRaw, evQ1, evQ2, adjRaw, entriesRaw, rulesRaw] = await Promise.all([
+      fetchAll<{ id: string; name: string; system_role: string | null }>("buckets", () => supabase
         .from("expense_buckets")
         .select("id, name, system_role")
         .eq("org_id", orgId)
-        .is("deleted_at", null),
-      supabase
+        .is("deleted_at", null)),
+      fetchAll<RampTransactionRow>("ramp", () => supabase
         .from("ramp_transactions")
         .select(TX_COLS)
         .eq("org_id", orgId)
         .is("deleted_at", null)
         .gte("transacted_at", w.fromTs)
-        .lte("transacted_at", w.toTs),
-      supabase
+        .lte("transacted_at", w.toTs)),
+      fetchAll<{
+        id: string; transaction_date: string; total_charged: string | number | null;
+        location: string | null; driver_name: string | null;
+        diesel_gallons: string | number | null; asset_id: number | null;
+      }>("fuel", () => supabase
         .from("fuel_transactions")
         .select("id, transaction_date, total_charged, location, driver_name, diesel_gallons, asset_id")
         .eq("org_id", orgId)
         .is("deleted_at", null)
         .gte("transaction_date", w.from)
-        .lte("transaction_date", w.to),
-      supabase
+        .lte("transaction_date", w.to)),
+      fetchAll<{ driver_pay: string | number | null; driver_name: string | null; start: string }>("events", () => supabase
         .from("events")
         .select("driver_pay, driver_name, start")
         .eq("org_id", orgId)
@@ -438,8 +445,8 @@ expenses.get("/ledger", async (c) => {
         .not("driver_pay", "is", null)
         .is("deferred_to_week", null)
         .gte("start", w.from)
-        .lte("start", `${w.to}T23:59:59`),
-      supabase
+        .lte("start", `${w.to}T23:59:59`)),
+      fetchAll<{ driver_pay: string | number | null; driver_name: string | null; deferred_to_week: string }>("events-deferred", () => supabase
         .from("events")
         .select("driver_pay, driver_name, deferred_to_week")
         .eq("org_id", orgId)
@@ -447,37 +454,37 @@ expenses.get("/ledger", async (c) => {
         .not("driver_pay", "is", null)
         .not("deferred_to_week", "is", null)
         .gte("deferred_to_week", w.from)
-        .lte("deferred_to_week", w.to),
-      supabase
+        .lte("deferred_to_week", w.to)),
+      fetchAll<{ driver_name: string; week_start: string; amount: string | number | null }>("adjustments", () => supabase
         .from("payroll_adjustments")
         .select("driver_name, week_start, amount")
         .eq("org_id", orgId)
         .gte("week_start", w.from)
-        .lte("week_start", w.to),
-      supabase
+        .lte("week_start", w.to)),
+      fetchAll<{
+        id: string; org_id: string; bucket_id: string; kind: string | null;
+        date: string; amount: string | number; label: string; notes: string | null;
+        created_at: string; updated_at: string;
+      }>("entries", () => supabase
         .from("expense_entries")
         .select("id, org_id, bucket_id, kind, date, amount, label, notes, created_at, updated_at")
         .eq("org_id", orgId)
         .is("deleted_at", null)
         .gte("date", w.from)
-        .lte("date", w.to),
-      supabase
+        .lte("date", w.to)),
+      fetchAll<{
+        id: string; org_id: string; bucket_id: string; kind: string | null;
+        label: string; amount: string | number; cadence: string;
+        effective_from: string; effective_to: string | null; notes: string | null;
+        created_at: string; updated_at: string;
+      }>("rules", () => supabase
         .from("recurring_expenses")
         .select("id, org_id, bucket_id, kind, label, amount, cadence, effective_from, effective_to, notes, created_at, updated_at")
         .eq("org_id", orgId)
         .is("deleted_at", null)
         .lte("effective_from", w.to)
-        .or(`effective_to.is.null,effective_to.gte.${w.from}`),
+        .or(`effective_to.is.null,effective_to.gte.${w.from}`)),
     ]);
-    for (const [label, res] of [
-      ["buckets", bucketsRes], ["ramp", rampRes], ["fuel", fuelRes],
-      ["events", evQ1], ["events-deferred", evQ2], ["adjustments", adjRes],
-      ["entries", entriesRes], ["rules", rulesRes],
-    ] as const) {
-      if (res.error) throw new Error(`${label}: ${res.error.message}`);
-    }
-
-    const bucketRows = (bucketsRes.data ?? []) as Array<{ id: string; name: string; system_role: string | null }>;
     const bucketName = new Map(bucketRows.map(b => [b.id, b.name]));
     const driverPayBucket   = bucketRows.find(b => b.system_role === "driver_pay") ?? null;
     const mudflapBucket     = bucketRows.find(b => b.system_role === "mudflap_fuel") ?? null;
@@ -485,7 +492,7 @@ expenses.get("/ledger", async (c) => {
     const rows: LedgerRow[] = [];
 
     // Ramp card transactions
-    for (const raw of (rampRes.data ?? []) as unknown as RampTransactionRow[]) {
+    for (const raw of rampRaw) {
       const tx = rowToTx(raw);
       rows.push({
         rowKey: `ramp:${tx.id}`,
@@ -505,11 +512,7 @@ expenses.get("/ledger", async (c) => {
     }
 
     // Mudflap fuel
-    for (const f of (fuelRes.data ?? []) as Array<{
-      id: string; transaction_date: string; total_charged: string | number | null;
-      location: string | null; driver_name: string | null;
-      diesel_gallons: string | number | null; asset_id: number | null;
-    }>) {
+    for (const f of fuelRaw) {
       rows.push({
         rowKey: `mudflap:${f.id}`,
         source: "mudflap",
@@ -542,13 +545,13 @@ expenses.get("/ledger", async (c) => {
       else        { agg.adjustments += pay; }
       weekly.set(key, agg);
     };
-    for (const e of (evQ1.data ?? []) as Array<{ driver_pay: string | number | null; driver_name: string | null; start: string }>) {
+    for (const e of evQ1) {
       bump(e.driver_name, satOfWeek(e.start), Number(e.driver_pay ?? 0), true);
     }
-    for (const e of (evQ2.data ?? []) as Array<{ driver_pay: string | number | null; driver_name: string | null; deferred_to_week: string }>) {
+    for (const e of evQ2) {
       bump(e.driver_name, e.deferred_to_week, Number(e.driver_pay ?? 0), true);
     }
-    for (const a of (adjRes.data ?? []) as Array<{ driver_name: string; week_start: string; amount: string | number | null }>) {
+    for (const a of adjRaw) {
       bump(a.driver_name, a.week_start, Number(a.amount ?? 0), false);
     }
     const fmtAdj = (n: number) =>
@@ -575,11 +578,7 @@ expenses.get("/ledger", async (c) => {
     }
 
     // One-time entries
-    for (const e of (entriesRes.data ?? []) as Array<{
-      id: string; org_id: string; bucket_id: string; kind: string | null;
-      date: string; amount: string | number; label: string; notes: string | null;
-      created_at: string; updated_at: string;
-    }>) {
+    for (const e of entriesRaw) {
       const entry: ExpenseEntry = {
         id: e.id, orgId: e.org_id, bucketId: e.bucket_id,
         bucketName: bucketName.get(e.bucket_id) ?? undefined,
@@ -603,12 +602,7 @@ expenses.get("/ledger", async (c) => {
     }
 
     // Recurring rules → one prorated posting per rule for the window
-    for (const r of (rulesRes.data ?? []) as Array<{
-      id: string; org_id: string; bucket_id: string; kind: string | null;
-      label: string; amount: string | number; cadence: string;
-      effective_from: string; effective_to: string | null; notes: string | null;
-      created_at: string; updated_at: string;
-    }>) {
+    for (const r of rulesRaw) {
       const prorated = prorate(
         { bucket_id: r.bucket_id, amount: r.amount, cadence: r.cadence,
           effective_from: r.effective_from, effective_to: r.effective_to },
