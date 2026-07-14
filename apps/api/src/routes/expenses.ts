@@ -402,7 +402,12 @@ expenses.get("/ledger", async (c) => {
   const orgId = c.get("orgId");
   const url   = new URL(c.req.url);
   const w     = parseWindow(url);
-  const limit = Math.min(Math.max(Number(url.searchParams.get("limit") ?? "2000"), 1), 5000);
+  // Post-backfill, a half-year window runs ~5-6k rows; the old 2000-row
+  // cap silently dropped the OLDEST rows (sort is date-desc), which read
+  // as "history missing" on long windows. Cap stays as a runaway guard
+  // only; the response includes `total` so the client can surface
+  // truncation instead of hiding it.
+  const limit = Math.min(Math.max(Number(url.searchParams.get("limit") ?? "10000"), 1), 20000);
 
   try {
     const [bucketsRes, rampRes, fuelRes, evQ1, evQ2, adjRes, entriesRes, rulesRes] = await Promise.all([

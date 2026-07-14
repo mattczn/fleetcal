@@ -170,6 +170,8 @@ function ExpensesPageInner() {
   // Data
   const [buckets, setBuckets] = useState<ExpenseBucketSummary[]>([]);
   const [rows, setRows]       = useState<LedgerRow[]>([]);
+  // Non-null when the server truncated the window (value = true row count).
+  const [truncatedTotal, setTruncatedTotal] = useState<number | null>(null);
   const [assets, setAssets]   = useState<Asset[]>([]);
   const [trailers, setTrailers] = useState<Trailer[]>([]);
   const [loading, setLoading] = useState(true);
@@ -196,10 +198,11 @@ function ExpensesPageInner() {
       invalidateBucketCache();
       const [summary, ledger] = await Promise.all([
         railway.getExpensesSummary({ from: fromIso, to: toIso }),
-        railway.getExpensesLedger({ from: fromIso, to: toIso }),
+        railway.getExpensesLedger({ from: fromIso, to: toIso, limit: 20000 }),
       ]);
       setBuckets(summary.buckets);
       setRows(ledger.rows);
+      setTruncatedTotal(ledger.total > ledger.rows.length ? ledger.total : null);
     } catch (e) {
       console.error('[expenses] load failed:', e);
       setErr('Failed to load expenses.');
@@ -669,6 +672,16 @@ function ExpensesPageInner() {
               <div className="rounded-lg border p-4 mb-4 text-sm"
                    style={{ borderColor: '#ef4444', background: '#fef2f2', color: '#991b1b' }}>
                 {err}
+              </div>
+            )}
+
+            {truncatedTotal != null && (
+              <div className="rounded-lg border p-3 mb-4 text-sm"
+                   style={{ borderColor: '#f59e0b', background: '#fffbeb', color: '#92400e' }}>
+                This period has {truncatedTotal.toLocaleString()} expenses — showing the most
+                recent {rows.length.toLocaleString()}. Older rows are hidden; narrow the period
+                to see everything. (Bucket totals above are NOT affected — they always cover
+                the full period.)
               </div>
             )}
 
