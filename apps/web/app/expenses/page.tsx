@@ -224,11 +224,16 @@ function ExpensesPageInner() {
     setRevenueLoading(true);
     (async () => {
       try {
-        const { loads } = await railway.listLoadSummaries({
-          pickupFrom: `${fromIso}T00:00`,
-          pickupTo:   `${toIso}T23:59`,
-          limit:      '10000',
-        });
+        // Loads-report revenue + manual pre-system adjustments (the
+        // January 2026 spreadsheet backfill weeks).
+        const [{ loads }, adj] = await Promise.all([
+          railway.listLoadSummaries({
+            pickupFrom: `${fromIso}T00:00`,
+            pickupTo:   `${toIso}T23:59`,
+            limit:      '10000',
+          }),
+          railway.getRevenueAdjustments({ from: fromIso, to: toIso }),
+        ]);
         if (cancelled) return;
         const total = (loads as LoadSummary[]).reduce((s, l) => {
           if (l.totalBillable != null) return s + l.totalBillable;
@@ -236,7 +241,7 @@ function ExpensesPageInner() {
             .reduce((acc, a) => acc + (a.billable ? (a.amount ?? 0) : 0), 0);
           return s + (l.loadPrice ?? 0) + accessorials;
         }, 0);
-        setRevenue(total);
+        setRevenue(total + adj.total);
       } catch (e) {
         console.error('[expenses] revenue fetch failed:', e);
         if (!cancelled) setRevenue(null);

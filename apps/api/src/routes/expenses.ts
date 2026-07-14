@@ -25,6 +25,8 @@ import type {
   RecurringExpense,
   RecurringExpenseCadence,
   ExpenseEntry,
+  RevenueAdjustment,
+  ListRevenueAdjustmentsResponse,
   ApiErrorResponse,
 } from "@fleetcal/types";
 import { UNCATEGORIZED_BUCKET_ID } from "@fleetcal/types";
@@ -648,6 +650,40 @@ expenses.get("/ledger", async (c) => {
     const detail = err instanceof Error ? err.message : String(err);
     console.error("[GET /v1/expenses/ledger]", detail);
     return c.json({ error: "ledger_failed", detail } satisfies ApiErrorResponse, 500);
+  }
+});
+
+// ── /revenue-adjustments ────────────────────────────────────────────────
+//
+// Manual revenue for pre-system periods (the January 2026 spreadsheet
+// backfill). The workspace adds this to the loads-report revenue in
+// the meter. Read-only endpoint — rows are managed via SQL for now;
+// they change roughly never.
+
+expenses.get("/revenue-adjustments", async (c) => {
+  const orgId = c.get("orgId");
+  const w = parseWindow(new URL(c.req.url));
+  try {
+    const rows = await fetchAll<{ id: string; date: string; amount: string | number; note: string | null }>(
+      "revenue_adjustments", () => supabase
+        .from("revenue_adjustments")
+        .select("id, date, amount, note")
+        .eq("org_id", orgId)
+        .is("deleted_at", null)
+        .gte("date", w.from)
+        .lte("date", w.to));
+    const adjustments: RevenueAdjustment[] = rows.map(r => ({
+      id: r.id, date: r.date, amount: Number(r.amount), note: r.note ?? undefined,
+    }));
+    const res: ListRevenueAdjustmentsResponse = {
+      adjustments,
+      total: adjustments.reduce((s, a) => s + a.amount, 0),
+    };
+    return c.json(res);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    console.error("[GET /v1/expenses/revenue-adjustments]", detail);
+    return c.json({ error: "revenue_adjustments_failed", detail } satisfies ApiErrorResponse, 500);
   }
 });
 

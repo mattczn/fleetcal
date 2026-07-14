@@ -86,6 +86,7 @@ import type {
   UpdateExpenseBucketRequest, ExpenseBucketResponse,
   ReorderExpenseBucketsRequest,
   ExpensesLedgerResponse,
+  ListRevenueAdjustmentsResponse,
   ListMaintenanceReportsQuery, ListMaintenanceReportsResponse,
   GetMaintenanceReportResponse,
   UpdateMaintenanceReportRequest, UpdateMaintenanceReportResponse,
@@ -1563,6 +1564,14 @@ class RailwayClient {
     if (query.to)   qs.set('to',   query.to);
     const s = qs.toString();
     return this.req<ExpensesSummaryResponse>('GET', `/v1/expenses/summary${s ? `?${s}` : ''}`);
+  }
+
+  getRevenueAdjustments(query: { from?: string; to?: string } = {}) {
+    const qs = new URLSearchParams();
+    if (query.from) qs.set('from', query.from);
+    if (query.to)   qs.set('to',   query.to);
+    const s = qs.toString();
+    return this.req<ListRevenueAdjustmentsResponse>('GET', `/v1/expenses/revenue-adjustments${s ? `?${s}` : ''}`);
   }
 
   getExpensesLedger(query: { from?: string; to?: string; limit?: number } = {}) {
