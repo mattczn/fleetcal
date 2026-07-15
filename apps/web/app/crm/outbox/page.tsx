@@ -17,7 +17,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
   Target, ArrowLeft, Loader2, RefreshCw, CheckCheck, RotateCcw, XCircle,
-  ChevronDown, ChevronRight, Eye, EyeOff,
+  ChevronDown, ChevronRight, Eye, EyeOff, MousePointerClick,
 } from 'lucide-react';
 import AppShell from '@/components/nav/AppShell';
 import RequireCap from '@/components/auth/RequireCap';
@@ -206,8 +206,9 @@ function CrmOutboxPageInner() {
   const showRetry  = tab === 'failed' && canManage;
   const showError  = tab === 'failed' || tab === 'bounced' || tab === 'suppressed' || tab === 'cancelled';
   const showOpens  = tab === 'sent';
+  const showClicks = tab === 'sent';
   const dateLabel  = tab === 'sent' || tab === 'bounced' ? 'Sent' : 'Created';
-  const colCount   = 4 + (showError ? 1 : 0) + (showOpens ? 1 : 0) + (showCancel || showRetry ? 1 : 0);
+  const colCount   = 4 + (showError ? 1 : 0) + (showOpens ? 1 : 0) + (showClicks ? 1 : 0) + (showCancel || showRetry ? 1 : 0);
 
   return (
     <AppShell title="CRM outbox" icon={Target} noPageScroll>
@@ -324,6 +325,7 @@ function CrmOutboxPageInner() {
                     <Th>Subject</Th>
                     {showError && <Th>Error</Th>}
                     {showOpens && <Th>Opens</Th>}
+                    {showClicks && <Th>Clicks</Th>}
                     <Th>{dateLabel}</Th>
                     {(showCancel || showRetry) && <Th align="right">Actions</Th>}
                   </tr>
@@ -381,6 +383,11 @@ function CrmOutboxPageInner() {
                           {showOpens && (
                             <Td>
                               <OpenIndicator email={em} />
+                            </Td>
+                          )}
+                          {showClicks && (
+                            <Td>
+                              <ClickIndicator email={em} />
                             </Td>
                           )}
                           <Td>
@@ -488,6 +495,41 @@ function OpenIndicator({ email }: { email: CrmEmail }) {
       className="inline-flex items-center gap-1 text-[11.5px] font-semibold"
       style={{ color: '#188038' }}>
       <Eye size={12} /> {count}{rel && <span className="font-normal" style={{ color: 'var(--gc-text-3)' }}>· {rel}</span>}
+    </span>
+  );
+}
+
+/**
+ * Show click activity for a sent email. Fires when a recipient clicks
+ * ANY link in the email body — the fleetcal.app signature link,
+ * the unsubscribe link, or anything else. Unlike opens, clicks are
+ * unambiguously real intent (Apple MPP doesn't pre-click). This is
+ * the ground-truth attribution signal we care about, and Resend
+ * captures it via the links.fleetcalendar.app tracking subdomain
+ * without needing any Vercel Analytics tier.
+ *
+ * Caveat: an unsubscribe click also counts here. If clicks correlate
+ * to a matching lead flip to `unsubscribed`, it was the unsubscribe.
+ * Everything else is genuine site interest.
+ */
+function ClickIndicator({ email }: { email: CrmEmail }) {
+  const count = email.clickCount ?? 0;
+  if (count === 0) {
+    return (
+      <span title="No clicks yet."
+        className="inline-flex items-center gap-1 text-[11.5px]"
+        style={{ color: 'var(--gc-text-3)' }}>
+        —
+      </span>
+    );
+  }
+  const last = email.lastClickedAt ? new Date(email.lastClickedAt) : null;
+  const rel = last ? fmtRelTime(last) : '';
+  return (
+    <span title={`${count} click${count === 1 ? '' : 's'}${email.firstClickedAt ? ` · first ${fmtRelTime(new Date(email.firstClickedAt))}` : ''}${rel ? ` · last ${rel}` : ''}. Note: an unsubscribe click also counts here.`}
+      className="inline-flex items-center gap-1 text-[11.5px] font-semibold"
+      style={{ color: '#1a73e8' }}>
+      <MousePointerClick size={12} /> {count}{rel && <span className="font-normal" style={{ color: 'var(--gc-text-3)' }}>· {rel}</span>}
     </span>
   );
 }
