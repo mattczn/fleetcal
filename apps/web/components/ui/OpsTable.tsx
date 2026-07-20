@@ -659,7 +659,13 @@ export function OpsTable<T>({
   const widthOfCol = useCallback((c: OpsColumn<T>): string => {
     if (c.width == null)             return 'minmax(120px, 1fr)';
     if (typeof c.width === 'number') return `${c.width}px`;
-    return c.width;
+    // A bare fraction ("2fr") has no minimum track size, so on a narrow
+    // viewport it collapses toward zero and clips its content. Give it the
+    // same 120px floor an undeclared column gets. Explicit minmax()/px/other
+    // widths pass through untouched.
+    const w = c.width.trim();
+    if (/^[0-9.]+fr$/.test(w)) return `minmax(120px, ${w})`;
+    return w;
   }, []);
 
   // Compute pixel offsets for sticky positioning. Pinned left cols
@@ -970,11 +976,11 @@ export function OpsTable<T>({
           className="grid items-center"
           style={{
             gridTemplateColumns: gridTemplate,
-            // Match the body rows — sized to intrinsic content width
-            // on narrow screens so the header's bottom border stays
-            // aligned with the data cells across the entire scroll
-            // range.
-            minWidth: 'max-content',
+            // Match the body rows. The floor is the sum of the fixed-px
+            // tracks (NOT max-content) so flexible columns split the same
+            // leftover width on every row and the header border stays
+            // aligned with the data cells across the scroll range.
+            minWidth: fixedTracksSum,
             background: 'var(--gc-surface)',
             borderBottom: '1px solid var(--gc-border-light)',
             minHeight: 44,
@@ -1147,24 +1153,21 @@ export function OpsTable<T>({
                 className="grid items-stretch transition-colors"
                 style={{
                   gridTemplateColumns: gridTemplate,
-                  // Force the row's CSS box to span at least its
-                  // intrinsic content width. Without this, on a small
-                  // screen where the grid template's fixed widths
-                  // exceed the scroll container, the row's `width:
-                  // auto` resolves to the container's content width
-                  // (e.g. 1500px) while the grid tracks still total
-                  // their intrinsic 2304px — the grid items overflow
-                  // and scroll correctly, but the row's
-                  // `background: rowBg` only paints inside the row's
-                  // box (the 1500px), leaving the scrolled-into
-                  // region painting the card's white bg instead of
-                  // the priority tint.
+                  // Row box floor = sum of the fixed-px track widths.
+                  // This replaced `max-content`, which grew each row to
+                  // ITS OWN content — so a flexible column (Driver /
+                  // Location) resolved to a different width per row and
+                  // every column after it drifted out of alignment. With
+                  // a fixed floor, every row splits the same leftover
+                  // container width, so column edges line up and long
+                  // cells truncate instead of stretching the row.
                   //
-                  // `min-width: max-content` grows the row's box to
-                  // intrinsic content width whenever that exceeds
-                  // the parent. The 1fr filler absorbs the leftover
-                  // on wide screens.
-                  minWidth: 'max-content',
+                  // Horizontal scroll + bg cover still work: when the
+                  // fixed tracks exceed the viewport the grid tracks
+                  // enforce their own minimums (tracks total >= this
+                  // floor), so the row still spans the scrolled width and
+                  // `background: rowBg` covers it.
+                  minWidth: fixedTracksSum,
                   minHeight: rowHeightPx,
                   borderTop: '1px solid #f1f3f4',
                   cursor: onRowClick ? 'pointer' : 'default',

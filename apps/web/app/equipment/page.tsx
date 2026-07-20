@@ -3583,7 +3583,7 @@ function MaintenanceList({
       render: r => r._driverLabel },
     { key: '_equipmentLabel', header: 'Equipment', sortable: true,
       render: r => r._equipmentLabel },
-    { key: 'description', header: 'Description', width: '2fr',
+    { key: 'description', header: 'Description', width: 'minmax(200px, 2fr)',
       render: r => (
         <span className="inline-flex items-center gap-1.5">
           {r.source === 'inspection' && <OpsPill color="purple">From inspection</OpsPill>}
@@ -5205,7 +5205,7 @@ function FuelTabContent({
       render: r => r.driverLabel || <OpsMuted /> },
     { key: 'assetLabel',   header: 'Truck',      width: 140, sortable: true,
       render: r => r.assetLabel || <OpsMuted /> },
-    { key: 'location',     header: 'Location',   width: '1.4fr',
+    { key: 'location',     header: 'Location',   width: 'minmax(180px, 1.4fr)',
       render: r => r.location
         ? <span title={r.location}>{r.location}</span>
         : <OpsMuted /> },
