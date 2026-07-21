@@ -3544,98 +3544,25 @@ driver.get("/safety-score", async (c) => {
       .limit(5000),
   ]);
 
-  // Miles for THIS driver — calendar-attributed, same waterfall as the
-  // dispatch endpoint. We need periods + assets + calendar events.
-  const [{ data: periods }, { data: assetRows }] = await Promise.all([
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (supabase as any)
-      .from("motive_driving_periods")
-      .select("vehicle_id, miles, start_time")
-      .eq("org_id", orgId)
-      .eq("display_eligible", true)
-      .gte("start_time", fromIso)
-      .lte("start_time", toIso)
-      .limit(20_000),
-    supabase
-      .from("assets")
-      .select("id, motive_vehicle_id")
-      .eq("org_id", orgId)
-      .not("motive_vehicle_id", "is", null),
-  ]);
-  const vehicleIdToAssetId = new Map<string, number>();
-  for (const r of (assetRows ?? []) as Array<{ id: number; motive_vehicle_id: number | string | null }>) {
-    if (r.motive_vehicle_id != null) vehicleIdToAssetId.set(String(r.motive_vehicle_id), r.id);
-  }
-  const assetIdsInScope = Array.from(new Set(
-    ((periods ?? []) as Array<{ vehicle_id: number }>)
-      .map(p => vehicleIdToAssetId.get(String(p.vehicle_id)))
-      .filter((x): x is number => x != null),
-  ));
-  interface CalRow { asset_id: number; driver_id: number | null; start: string; end: string }
-  let calRows: CalRow[] = [];
-  if (assetIdsInScope.length > 0) {
-    const rangeStart = utcMsToNaiveDenver(new Date(fromIso).getTime() - 3 * 24 * 60 * 60 * 1000);
-    const rangeEnd   = utcMsToNaiveDenver(new Date(toIso).getTime()   + 3 * 24 * 60 * 60 * 1000);
-    if (rangeStart && rangeEnd) {
-      const { data } = await supabase
-        .from("events")
-        .select("asset_id, driver_id, start, end")
-        .eq("org_id", orgId)
-        .in("asset_id", assetIdsInScope)
-        .not("driver_id", "is", null)
-        .gte("end",   rangeStart)
-        .lte("start", rangeEnd);
-      calRows = (data ?? []) as CalRow[];
-    }
-  }
-  const calByAsset = new Map<number, CalRow[]>();
-  for (const e of calRows) {
-    const arr = calByAsset.get(e.asset_id) ?? [];
-    arr.push(e);
-    calByAsset.set(e.asset_id, arr);
-  }
-  const { data: prefs } = assetIdsInScope.length > 0
-    ? await supabase
-        .from("driver_asset_prefs")
-        .select("asset_id, driver_id")
-        .eq("org_id", orgId)
-        .in("asset_id", assetIdsInScope)
-    : { data: [] };
-  const prefByAsset = new Map<number, number>();
-  for (const p of (prefs ?? []) as Array<{ asset_id: number; driver_id: number }>) {
-    prefByAsset.set(p.asset_id, p.driver_id);
-  }
-
-  // Attribute miles per driver — same logic as the dispatch endpoint.
+  // Miles per driver — sum of loaded_miles on their loads in the
+  // window. Dispatch-authoritative and matches the dispatch endpoint's
+  // approach. See driver-safety-scoring.ts for the full rationale on
+  // why we don't walk motive_driving_periods here.
+  const rangeStart = utcMsToNaiveDenver(new Date(fromIso).getTime() - 3 * 24 * 60 * 60 * 1000);
+  const rangeEnd   = utcMsToNaiveDenver(new Date(toIso).getTime()   + 3 * 24 * 60 * 60 * 1000);
   const milesByDriver = new Map<number, number>();
-  for (const p of (periods ?? []) as Array<{ vehicle_id: number; miles: number | null; start_time: string }>) {
-    if (p.miles == null || p.miles <= 0) continue;
-    const assetId = vehicleIdToAssetId.get(String(p.vehicle_id));
-    if (assetId == null) continue;
-    const naive = utcMsToNaiveDenver(Date.parse(p.start_time));
-    if (!naive) continue;
-    const candidates = calByAsset.get(assetId) ?? [];
-    let attribDriverId: number | null = null;
-    let bestActive: CalRow | null = null;
-    for (const e of candidates) {
-      if (e.start <= naive && e.end >= naive) {
-        if (!bestActive || e.end < bestActive.end) bestActive = e;
-      }
-    }
-    if (bestActive) {
-      attribDriverId = bestActive.driver_id;
-    } else {
-      let bestPrior: CalRow | null = null;
-      for (const e of candidates) {
-        if (e.end <= naive) {
-          if (!bestPrior || e.end > bestPrior.end) bestPrior = e;
-        }
-      }
-      if (bestPrior) attribDriverId = bestPrior.driver_id;
-    }
-    if (attribDriverId == null) attribDriverId = prefByAsset.get(assetId) ?? null;
-    if (attribDriverId != null) {
-      milesByDriver.set(attribDriverId, (milesByDriver.get(attribDriverId) ?? 0) + p.miles);
+  if (rangeStart && rangeEnd) {
+    const { data: loadRows } = await supabase
+      .from("events")
+      .select("driver_id, loaded_miles")
+      .eq("org_id", orgId)
+      .not("driver_id",    "is", null)
+      .not("loaded_miles", "is", null)
+      .gte("end",   rangeStart)
+      .lte("start", rangeEnd);
+    for (const r of (loadRows ?? []) as Array<{ driver_id: number | null; loaded_miles: number | null }>) {
+      if (r.driver_id == null || r.loaded_miles == null || r.loaded_miles <= 0) continue;
+      milesByDriver.set(r.driver_id, (milesByDriver.get(r.driver_id) ?? 0) + r.loaded_miles);
     }
   }
 

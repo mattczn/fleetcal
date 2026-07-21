@@ -245,141 +245,41 @@ safetyScoring.get("/", async (c) => {
     return c.json({ error: "fetch_failed", detail: (eErr ?? eErr2)!.message } satisfies ApiErrorResponse, 500);
   }
 
-  // ── (3) Miles per driver — CALENDAR-attributed, not Motive ─────────
-  // Same waterfall as safety-event attribution: for each driving_period
-  // find the fleetcal calendar event covering that period's start_time
-  // on the SAME asset and credit the miles to that event's driver_id.
-  // Motive's driver_first_name/last_name is intentionally NOT used —
-  // it's the same untrusted signal we reject on the event side (Motive
-  // lags on shift changes, misattributes on shared trucks, and drops
-  // to null on unidentified driving).
+  // ── (3) Miles per driver — sum of loaded_miles on their loads ──────
+  // Dispatch-authoritative: each load's driver_id gets that load's
+  // loaded_miles credited to their safety-score denominator. Simpler
+  // and correct for team drivers / relief drivers / shared trucks —
+  // the driver on the load is the driver who drove it, regardless of
+  // whose ELD login was active in Motive at any specific moment.
   //
-  // Waterfall:
-  //   1. Covering event (start ≤ period.start_time ≤ end) → event.driver_id
-  //   2. Most recent event ending ≤ period.start_time on that asset
-  //      → covers deadhead + between-load gaps
-  //   3. driver_asset_prefs default for the asset → truck's usual driver
-  //   4. Drop the miles (unattributed → don't inflate any denominator)
+  // Previous approach walked motive_driving_periods and back-attributed
+  // via calendar waterfall, which shortchanged team/relief drivers when
+  // another driver's calendar block covered the same truck-day (their
+  // periods lost the tug-of-war and they showed "no data" despite
+  // having safety events).
   //
-  // Fetch periods + assets + calendar events in parallel to keep the
-  // handler under a second.
-
-  const [{ data: periodRows, error: pErr }, { data: assetRows, error: aErr }] = await Promise.all([
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (supabase as any)
-      .from("motive_driving_periods")
-      .select("vehicle_id, miles, start_time")
-      .eq("org_id", orgId)
-      .eq("display_eligible", true)
-      .gte("start_time", fromIso)
-      .lte("start_time", toIso)
-      .limit(50_000),
-    supabase
-      .from("assets")
-      .select("id, motive_vehicle_id")
-      .eq("org_id", orgId)
-      .not("motive_vehicle_id", "is", null),
-  ]);
-  if (pErr || aErr) {
-    console.error("[GET /v1/driver-safety-scoring] periods/assets failed:", pErr ?? aErr);
-    return c.json({ error: "fetch_failed", detail: (pErr ?? aErr)!.message } satisfies ApiErrorResponse, 500);
-  }
-  const periods = (periodRows ?? []) as Array<{
-    vehicle_id: number;
-    miles: number | null;
-    start_time: string;
-  }>;
-
-  // motive_vehicle_id → fleetcal asset.id. Stringify both sides — the
-  // column has been observed as string vs number depending on when the
-  // row was written (see motiveIngest.ts for the same defensive cast).
-  const vehicleIdToAssetId = new Map<string, number>();
-  for (const r of (assetRows ?? []) as Array<{ id: number; motive_vehicle_id: number | string | null }>) {
-    if (r.motive_vehicle_id != null) vehicleIdToAssetId.set(String(r.motive_vehicle_id), r.id);
-  }
-
-  // Batch-fetch calendar events for the ASSETS in scope over the
-  // window (padded ±3 days to catch cross-window loads). Same pattern
-  // as enrichEventsBatch — one query, in-memory match afterwards.
-  const assetIdsInScope = Array.from(new Set(
-    periods.map(p => vehicleIdToAssetId.get(String(p.vehicle_id))).filter((x): x is number => x != null),
-  ));
-  interface CalEventRow {
-    id: string; asset_id: number;
-    driver_id: number | null; start: string; end: string;
-  }
-  let calRows: CalEventRow[] = [];
-  if (assetIdsInScope.length > 0) {
-    const rangeStart = utcMsToNaiveMt(from.getTime() - 3 * 24 * 60 * 60 * 1000);
-    const rangeEnd   = utcMsToNaiveMt(to.getTime()   + 3 * 24 * 60 * 60 * 1000);
-    if (rangeStart && rangeEnd) {
-      const { data } = await supabase
-        .from("events")
-        .select("id, asset_id, driver_id, start, end")
-        .eq("org_id", orgId)
-        .in("asset_id", assetIdsInScope)
-        .not("driver_id", "is", null)
-        .gte("end",   rangeStart)
-        .lte("start", rangeEnd);
-      calRows = (data ?? []) as CalEventRow[];
-    }
-  }
-  const calByAsset = new Map<number, CalEventRow[]>();
-  for (const e of calRows) {
-    const arr = calByAsset.get(e.asset_id) ?? [];
-    arr.push(e);
-    calByAsset.set(e.asset_id, arr);
-  }
-
-  // driver_asset_prefs fallback — one query for every asset in scope.
-  const prefByAsset = new Map<number, number>();
-  if (assetIdsInScope.length > 0) {
-    const { data: prefs } = await supabase
-      .from("driver_asset_prefs")
-      .select("asset_id, driver_id")
-      .eq("org_id", orgId)
-      .in("asset_id", assetIdsInScope);
-    for (const p of (prefs ?? []) as Array<{ asset_id: number; driver_id: number }>) {
-      prefByAsset.set(p.asset_id, p.driver_id);
-    }
-  }
-
+  // loaded_miles is a lazy Mapbox cache — null on events without a
+  // route yet (non-revenue blocks, in-progress loads). Skipped here;
+  // over the trailing 30 days most revenue loads have a route cached.
+  const rangeStart = utcMsToNaiveMt(from.getTime() - 3 * 24 * 60 * 60 * 1000);
+  const rangeEnd   = utcMsToNaiveMt(to.getTime()   + 3 * 24 * 60 * 60 * 1000);
   const milesByDriverId = new Map<number, number>();
-  let milesUnattributed = 0;
-  for (const p of periods) {
-    if (p.miles == null || p.miles <= 0) continue;
-    const assetId = vehicleIdToAssetId.get(String(p.vehicle_id));
-    if (assetId == null) { milesUnattributed += p.miles; continue; }
-
-    const naiveMt = utcIsoToNaiveMt(p.start_time);
-    if (!naiveMt) { milesUnattributed += p.miles; continue; }
-
-    // Waterfall: covering → most-recent-ending → asset default.
-    const candidates = calByAsset.get(assetId) ?? [];
-    let driverId: number | null = null;
-    let bestActive: CalEventRow | null = null;
-    for (const e of candidates) {
-      if (e.start <= naiveMt && e.end >= naiveMt) {
-        if (!bestActive || e.end < bestActive.end) bestActive = e;
-      }
+  if (rangeStart && rangeEnd && drivers.length > 0) {
+    const { data: loadRows, error: lErr } = await supabase
+      .from("events")
+      .select("driver_id, loaded_miles")
+      .eq("org_id", orgId)
+      .in("driver_id", drivers.map(d => d.id))
+      .not("loaded_miles", "is", null)
+      .gte("end",   rangeStart)
+      .lte("start", rangeEnd);
+    if (lErr) {
+      console.error("[GET /v1/driver-safety-scoring] loaded_miles failed:", lErr);
+      return c.json({ error: "fetch_failed", detail: lErr.message } satisfies ApiErrorResponse, 500);
     }
-    if (bestActive) {
-      driverId = bestActive.driver_id;
-    } else {
-      let bestPrior: CalEventRow | null = null;
-      for (const e of candidates) {
-        if (e.end <= naiveMt) {
-          if (!bestPrior || e.end > bestPrior.end) bestPrior = e;
-        }
-      }
-      if (bestPrior) driverId = bestPrior.driver_id;
-    }
-    if (driverId == null) driverId = prefByAsset.get(assetId) ?? null;
-
-    if (driverId != null && nameById.has(driverId)) {
-      milesByDriverId.set(driverId, (milesByDriverId.get(driverId) ?? 0) + p.miles);
-    } else {
-      milesUnattributed += p.miles;
+    for (const r of (loadRows ?? []) as Array<{ driver_id: number | null; loaded_miles: number | null }>) {
+      if (r.driver_id == null || r.loaded_miles == null || r.loaded_miles <= 0) continue;
+      milesByDriverId.set(r.driver_id, (milesByDriverId.get(r.driver_id) ?? 0) + r.loaded_miles);
     }
   }
 
