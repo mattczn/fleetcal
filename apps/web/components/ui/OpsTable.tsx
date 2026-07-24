@@ -611,6 +611,10 @@ export function OpsTable<T>({
     getSortedRowModel: getSortedRowModel(),
     getPaginationRowModel: paginated ? getPaginationRowModel() : undefined,
     initialState: { pagination: { pageSize: paginated ? pageSize : Number.MAX_SAFE_INTEGER } },
+    // Data refreshes (silent reloads, inline edits) must not yank the
+    // user back to page 1 — only filter changes reset, via the effect
+    // below.
+    autoResetPageIndex: false,
   });
 
   // Reset to page 0 whenever the filter set changes — otherwise the
@@ -619,6 +623,16 @@ export function OpsTable<T>({
     if (paginated) table.setPageIndex(0);
     /* eslint-disable-next-line react-hooks/exhaustive-deps */
   }, [filterState, paginated]);
+
+  // With autoResetPageIndex off, a shrinking data set can strand the
+  // user past the last page — clamp instead of resetting.
+  useEffect(() => {
+    if (!paginated) return;
+    const pageCount = table.getPageCount();
+    const pageIndex = table.getState().pagination.pageIndex;
+    if (pageCount > 0 && pageIndex > pageCount - 1) table.setPageIndex(pageCount - 1);
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [filtered.length, paginated]);
 
   // ── Priority row pinning ──────────────────────────────────────────
   // After TanStack has done sort + pagination we pull the resulting

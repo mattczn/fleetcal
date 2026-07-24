@@ -393,6 +393,18 @@ function ExpensesPageInner() {
     : selectedSummary?.name ?? 'Bucket';
 
   // ── inline bucket change from the ledger ──────────────────────────
+  // Patches the row in place and refreshes only the rail summary —
+  // replacing the whole rows array would bounce OpsTable's pagination
+  // and scroll position on every re-bucket.
+  const bucketNameById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const top of buckets) {
+      m.set(top.bucketId as string, top.name);
+      for (const c of top.children ?? []) m.set(c.bucketId as string, c.name);
+    }
+    return m;
+  }, [buckets]);
+
   const changeRowBucket = useCallback(async (row: LedgerRow, bucketId: string) => {
     try {
       if (row.source === 'ramp') {
@@ -401,11 +413,15 @@ function ExpensesPageInner() {
         if (!bucketId) return; // entries must have a bucket
         await railway.updateExpenseEntry(row.refId, { bucketId });
       }
-      await reload({ silent: true });
+      setRows(prev => prev.map(x => x.rowKey === row.rowKey
+        ? { ...x, bucketId: bucketId || null, bucketName: bucketNameById.get(bucketId) ?? null }
+        : x));
+      const summary = await railway.getExpensesSummary({ from: fromIso, to: toIso });
+      setBuckets(summary.buckets);
     } catch {
       alert('Failed to update bucket.');
     }
-  }, [reload]);
+  }, [bucketNameById, fromIso, toIso]);
 
   const runSync = useCallback(async () => {
     setSyncBusy(true);
