@@ -319,7 +319,13 @@ export default function LeadDetailDrawer({ leadId, onClose, onLeadUpdated }: Pro
                       phone={lead.phone}
                       cellPhone={lead.cellPhone}
                       email={lead.email}
-                      onLogged={(updated) => { onLeadUpdated?.(updated); void refetch(); }}
+                      onLogged={(updated, outcome) => {
+                        // Stamp the contact indicator so the leads list row
+                        // updates instantly (the endpoint's lead has fresh
+                        // attempts/status but not the derived last-contacted).
+                        onLeadUpdated?.({ ...updated, lastContactedAt: new Date().toISOString(), lastCallOutcome: outcome });
+                        void refetch();
+                      }}
                     />
                     <SendIntroButton leadId={lead.id} email={lead.email} />
                   </div>

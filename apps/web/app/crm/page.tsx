@@ -253,7 +253,18 @@ function CrmPageInner() {
   // ── Detail drawer ───────────────────────────────────────────────────
   const [openLeadId, setOpenLeadId] = useState<string | null>(null);
   const handleLeadUpdated = useCallback((updated: CrmLead) => {
-    setLeads(prev => prev.map(l => (l.id === updated.id ? updated : l)));
+    // Merge in place, preserving list-only enrichment (email opens; and
+    // last-contacted/outcome for edits that don't carry them) so a drawer
+    // edit or call-log updates the row instantly without blanking the
+    // Opens / Contact columns.
+    setLeads(prev => prev.map(l => (l.id === updated.id
+      ? {
+          ...updated,
+          emailOpens:      updated.emailOpens      ?? l.emailOpens,
+          lastContactedAt: updated.lastContactedAt ?? l.lastContactedAt,
+          lastCallOutcome: updated.lastCallOutcome ?? l.lastCallOutcome,
+        }
+      : l)));
     void fetchStats();
   }, [fetchStats]);
 

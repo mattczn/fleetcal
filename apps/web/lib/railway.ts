@@ -1866,10 +1866,15 @@ class RailwayClient {
   crmLogCall(id: string, body: CrmLogCallRequest) {
     return this.req<CrmLogCallResponse>('POST', `/v1/crm/leads/${id}/call-outcome`, body);
   }
-  /** Send the one-off intro email to a lead immediately (template from
-   *  crm_settings). Records it in the outbox as sent + logs the activity. */
-  crmSendIntro(id: string) {
-    return this.req<{ messageId: string }>('POST', `/v1/crm/leads/${id}/send-intro`, {});
+  /** Render the intro email template for a lead (no send) so it can be
+   *  reviewed and edited in the modal before sending. */
+  crmIntroPreview(id: string) {
+    return this.req<{ subject: string; body: string }>('POST', `/v1/crm/leads/${id}/send-intro`, { preview: true });
+  }
+  /** Send the (possibly edited) intro email to a lead immediately. Records
+   *  it in the outbox as sent + logs the activity. */
+  crmSendIntro(id: string, edited: { subject: string; body: string }) {
+    return this.req<{ messageId: string }>('POST', `/v1/crm/leads/${id}/send-intro`, edited);
   }
   crmGetStats() {
     return this.req<{ stats: CrmStats }>('GET', '/v1/crm/stats');

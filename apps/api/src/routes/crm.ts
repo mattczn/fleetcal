@@ -529,6 +529,9 @@ crm.post("/leads/:id/send-intro", async (c) => {
   const orgId = c.get("orgId");
   const userId = c.get("userId");
   const id = c.req.param("id");
+  const reqBody = await c.req
+    .json<{ preview?: boolean; subject?: string; body?: string }>()
+    .catch<{ preview?: boolean; subject?: string; body?: string }>(() => ({}));
 
   const { data: leadRow } = await supabase
     .from("crm_leads")
@@ -545,26 +548,9 @@ crm.post("/leads/:id/send-intro", async (c) => {
   if (!lr.email) {
     return c.json({ error: "validation_failed", errors: ["lead has no email address"] } satisfies ApiErrorResponse, 400);
   }
-  if ((SEND_BLOCKED_STATUSES as readonly string[]).includes(lr.status)) {
-    return c.json({ error: "validation_failed", errors: [`lead is ${lr.status}; not sending`] } satisfies ApiErrorResponse, 400);
-  }
-  const { data: suppressed } = await supabase
-    .from("crm_suppressions")
-    .select("id")
-    .eq("org_id", orgId)
-    .eq("email", lr.email.toLowerCase())
-    .maybeSingle();
-  if (suppressed) {
-    return c.json({ error: "validation_failed", errors: ["this email is on the suppression list"] } satisfies ApiErrorResponse, 400);
-  }
-
   const { data: settingsRow } = await supabase
     .from("org_settings").select("crm_settings").eq("org_id", orgId).maybeSingle();
   const settings = resolveCrmSettings((settingsRow as { crm_settings?: unknown } | null)?.crm_settings);
-  const configError = outreachConfigError(settings);
-  if (configError) {
-    return c.json({ error: "outreach_not_configured", detail: configError } satisfies ApiErrorResponse, 400);
-  }
 
   const leadForRender: CrmLead = {
     id: lr.id, source: "manual", legalName: lr.legal_name,
@@ -573,8 +559,35 @@ crm.post("/leads/:id/send-intro", async (c) => {
     powerUnits: lr.power_units ?? undefined,
     status: lr.status, statusChangedAt: "", callAttempts: 0, createdAt: "", updatedAt: "",
   };
-  const subject = renderForLead(settings.introSubject, leadForRender, lr.unsubscribe_token);
-  const bodyText = renderForLead(settings.introBody, leadForRender, lr.unsubscribe_token);
+  const renderedSubject = renderForLead(settings.introSubject, leadForRender, lr.unsubscribe_token);
+  const renderedBody = renderForLead(settings.introBody, leadForRender, lr.unsubscribe_token);
+
+  // Preview: return the rendered template for the review/edit modal — no
+  // send, and none of the send-time guards below (they only gate sending).
+  if (reqBody.preview) {
+    return c.json({ subject: renderedSubject, body: renderedBody });
+  }
+
+  // Send path — full guards.
+  if ((SEND_BLOCKED_STATUSES as readonly string[]).includes(lr.status)) {
+    return c.json({ error: "validation_failed", errors: [`lead is ${lr.status}; not sending`] } satisfies ApiErrorResponse, 400);
+  }
+  const { data: suppressed } = await supabase
+    .from("crm_suppressions").select("id").eq("org_id", orgId).eq("email", lr.email.toLowerCase()).maybeSingle();
+  if (suppressed) {
+    return c.json({ error: "validation_failed", errors: ["this email is on the suppression list"] } satisfies ApiErrorResponse, 400);
+  }
+  const configError = outreachConfigError(settings);
+  if (configError) {
+    return c.json({ error: "outreach_not_configured", detail: configError } satisfies ApiErrorResponse, 400);
+  }
+
+  // Use the operator's edited text when provided; otherwise the template.
+  const subject = (reqBody.subject ?? renderedSubject).trim();
+  const bodyText = reqBody.body ?? renderedBody;
+  if (!subject || !bodyText.trim()) {
+    return c.json({ error: "validation_failed", errors: ["subject and body required"] } satisfies ApiErrorResponse, 400);
+  }
 
   let messageId: string;
   try {
