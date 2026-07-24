@@ -373,8 +373,8 @@ function RecurringBody({ row, onMutated, onClose }: { row: LedgerRow; onMutated:
       <div className="px-5 pb-4">
         <div className="rounded-lg border px-3 py-2 mb-4 text-xs"
              style={{ borderColor: 'var(--gc-border)', color: 'var(--gc-text-3)' }}>
-          {fmtMoney(r.amount)} / {r.cadence === 'weekly' ? 'week' : 'month'} · {r.overlapDays} day{r.overlapDays === 1 ? '' : 's'} in
-          this period → <span className="tabular-nums font-semibold" style={{ color: 'var(--gc-text-1)' }}>{fmtMoney(r.prorated)}</span> prorated
+          {fmtMoney(r.amount)} / {r.cadence === 'weekly' ? 'week' : 'month'} · posts {r.cadence === 'weekly' ? 'every 7 days' : 'monthly'} from{' '}
+          {r.effectiveFrom} · this posting: <span className="tabular-nums font-semibold" style={{ color: 'var(--gc-text-1)' }}>{fmtMoney(r.prorated)}</span> on {row.date}
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div><FieldLabel>Bucket</FieldLabel>

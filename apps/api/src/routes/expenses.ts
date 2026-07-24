@@ -91,19 +91,39 @@ interface RecurringRow {
   effective_from: string;
   effective_to:   string | null;
 }
-function prorate(rule: RecurringRow, w: Window): number {
-  const ruleStart = new Date(`${rule.effective_from}T00:00:00Z`);
-  const ruleEnd   = rule.effective_to
-    ? new Date(`${rule.effective_to}T00:00:00Z`)
-    : new Date(w.toTs);
-  const winStart  = new Date(w.fromTs);
-  const winEnd    = new Date(w.toTs);
-  const overlapStart = ruleStart > winStart ? ruleStart : winStart;
-  const overlapEnd   = ruleEnd   < winEnd   ? ruleEnd   : winEnd;
-  if (overlapEnd < overlapStart) return 0;
-  const overlapDays = Math.floor((overlapEnd.getTime() - overlapStart.getTime()) / 86_400_000) + 1;
-  const periodDays  = rule.cadence === "weekly" ? 7 : 30.4375;
-  return Number(rule.amount) * (overlapDays / periodDays);
+/**
+ * A recurring rule posts on a schedule anchored to effective_from —
+ * weekly rules every 7 days, monthly rules on that day-of-month
+ * (clamped for short months). This returns the posting dates that fall
+ * inside the window ∩ the rule's effective range. Totals are therefore
+ * occurrence-count × amount (matching what actually leaves the bank),
+ * never a window-shaped fraction — day-proration made a rule look like
+ * one lump dated at the window start and leaked outside effective_from.
+ */
+function occurrenceDates(rule: RecurringRow, w: Window): string[] {
+  const DAY = 86_400_000;
+  const start   = Date.parse(`${rule.effective_from}T00:00:00Z`);
+  const winFrom = Date.parse(`${w.from}T00:00:00Z`);
+  const winTo   = Date.parse(`${w.to}T00:00:00Z`);
+  const ruleEnd = rule.effective_to ? Date.parse(`${rule.effective_to}T00:00:00Z`) : Infinity;
+  const lastTs  = Math.min(ruleEnd, winTo);
+  if (Number.isNaN(start) || start > lastTs) return [];
+  const out: string[] = [];
+  if (rule.cadence === "weekly") {
+    let t = start;
+    if (winFrom > t) t += Math.ceil((winFrom - t) / (7 * DAY)) * 7 * DAY;
+    for (; t <= lastTs; t += 7 * DAY) out.push(new Date(t).toISOString().slice(0, 10));
+  } else {
+    const s = new Date(start);
+    const anchorDay = s.getUTCDate();
+    for (let k = 0; ; k++) {
+      const daysInMonth = new Date(Date.UTC(s.getUTCFullYear(), s.getUTCMonth() + k + 1, 0)).getUTCDate();
+      const t = Date.UTC(s.getUTCFullYear(), s.getUTCMonth() + k, Math.min(anchorDay, daysInMonth));
+      if (t > lastTs) break;
+      if (t >= winFrom) out.push(new Date(t).toISOString().slice(0, 10));
+    }
+  }
+  return out;
 }
 
 /**
@@ -191,7 +211,7 @@ async function snapshot(orgId: string, w: Window, bucketIds: Set<string>): Promi
       .lte("transacted_at", w.toTs)),
   ]);
 
-  for (const r of rules) add(r.bucket_id, prorate(r, w));
+  for (const r of rules) add(r.bucket_id, occurrenceDates(r, w).length * Number(r.amount));
   for (const e of entries) add(e.bucket_id, Number(e.amount ?? 0));
   for (const t of rampCateg) add(t.bucket_id, Number(t.amount ?? 0));
   const uncat = {
@@ -394,7 +414,7 @@ expenses.get("/summary", async (c) => {
 //   payroll    — one row per driver per Sat–Fri week (driver_pay from
 //                events + payroll_adjustments merged by name+week)
 //   entry      — one row per one-time expense entry
-//   recurring  — one prorated posting row per active rule
+//   recurring  — one posting row per scheduled occurrence per rule
 //
 // The client does search/sort/filter/pagination locally — a week is a
 // few hundred rows at most; the 2000-row safeguard covers YTD pulls.
@@ -607,14 +627,16 @@ expenses.get("/ledger", async (c) => {
       });
     }
 
-    // Recurring rules → one prorated posting per rule for the window
+    // Recurring rules → one posting row per scheduled occurrence in the
+    // window (weekly every 7 days from effective_from, monthly on its
+    // day-of-month), each at the full rule amount.
     for (const r of rulesRaw) {
-      const prorated = prorate(
+      const dates = occurrenceDates(
         { bucket_id: r.bucket_id, amount: r.amount, cadence: r.cadence,
           effective_from: r.effective_from, effective_to: r.effective_to },
         w,
       );
-      if (prorated <= 0) continue;
+      if (!dates.length) continue;
       const rule: RecurringExpense = {
         id: r.id, orgId: r.org_id, bucketId: r.bucket_id,
         bucketName: bucketName.get(r.bucket_id) ?? undefined,
@@ -623,21 +645,21 @@ expenses.get("/ledger", async (c) => {
         effectiveFrom: r.effective_from, effectiveTo: r.effective_to ?? undefined,
         notes: r.notes ?? undefined, createdAt: r.created_at, updatedAt: r.updated_at,
       };
-      const periodDays  = r.cadence === "weekly" ? 7 : 30.4375;
-      const overlapDays = Math.round((prorated / Number(r.amount)) * periodDays);
-      rows.push({
-        rowKey: `recurring:${r.id}`,
-        source: "recurring",
-        refId:  r.id,
-        date:   w.from,
-        description: rule.label,
-        sub: `recurring · $${Number(r.amount).toLocaleString("en-US")} / ${r.cadence === "weekly" ? "wk" : "mo"} → prorated for this period`,
-        amount: prorated,
-        bucketId: rule.bucketId,
-        bucketName: rule.bucketName ?? null,
-        bucketEditable: false,
-        recurring: { ...rule, prorated, overlapDays },
-      });
+      for (const date of dates) {
+        rows.push({
+          rowKey: `recurring:${r.id}:${date}`,
+          source: "recurring",
+          refId:  r.id,
+          date,
+          description: rule.label,
+          sub: `recurring · $${Number(r.amount).toLocaleString("en-US")} / ${r.cadence === "weekly" ? "wk" : "mo"}`,
+          amount: Number(r.amount),
+          bucketId: rule.bucketId,
+          bucketName: rule.bucketName ?? null,
+          bucketEditable: false,
+          recurring: { ...rule, prorated: Number(r.amount) },
+        });
+      }
     }
 
     // rowKey must be unique — duplicates break React list reconciliation

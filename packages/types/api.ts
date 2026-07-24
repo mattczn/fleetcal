@@ -1668,7 +1668,9 @@ export interface LedgerRow {
   // Source payloads for the detail panel (exactly one is set):
   ramp?:      import('./domain').RampTransaction;
   entry?:     import('./domain').ExpenseEntry;
-  recurring?: import('./domain').RecurringExpense & { prorated: number; overlapDays: number };
+  /** For recurring rows `prorated` is the posting amount (one full
+   *  occurrence — the ledger emits one row per scheduled date). */
+  recurring?: import('./domain').RecurringExpense & { prorated: number };
   payroll?:   { driverName: string; weekStart: string; loadPay: number; adjustments: number; loadCount: number };
   mudflap?:   { location: string | null; driverName: string | null; gallons: number | null; assetId: number | null };
 }
