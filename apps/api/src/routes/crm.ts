@@ -520,6 +520,89 @@ crm.post("/leads/:id/call-outcome", async (c) => {
   });
 });
 
+/** Send the one-off intro email to a lead, immediately (not queued). The
+ *  template lives in crm_settings (introSubject / introBody) so it's
+ *  editable. Guards email presence, send-blocked status, and suppression;
+ *  records the send in crm_emails (status 'sent') so open tracking still
+ *  flows through the Resend webhook and shows up in the lead's Opens. */
+crm.post("/leads/:id/send-intro", async (c) => {
+  const orgId = c.get("orgId");
+  const userId = c.get("userId");
+  const id = c.req.param("id");
+
+  const { data: leadRow } = await supabase
+    .from("crm_leads")
+    .select("id,legal_name,dba_name,email,phy_city,phy_state,power_units,status,unsubscribe_token")
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (!leadRow) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+  const lr = leadRow as {
+    id: string; legal_name: string; dba_name: string | null; email: string | null;
+    phy_city: string | null; phy_state: string | null; power_units: number | null;
+    status: CrmLeadStatus; unsubscribe_token: string;
+  };
+  if (!lr.email) {
+    return c.json({ error: "validation_failed", errors: ["lead has no email address"] } satisfies ApiErrorResponse, 400);
+  }
+  if ((SEND_BLOCKED_STATUSES as readonly string[]).includes(lr.status)) {
+    return c.json({ error: "validation_failed", errors: [`lead is ${lr.status}; not sending`] } satisfies ApiErrorResponse, 400);
+  }
+  const { data: suppressed } = await supabase
+    .from("crm_suppressions")
+    .select("id")
+    .eq("org_id", orgId)
+    .eq("email", lr.email.toLowerCase())
+    .maybeSingle();
+  if (suppressed) {
+    return c.json({ error: "validation_failed", errors: ["this email is on the suppression list"] } satisfies ApiErrorResponse, 400);
+  }
+
+  const { data: settingsRow } = await supabase
+    .from("org_settings").select("crm_settings").eq("org_id", orgId).maybeSingle();
+  const settings = resolveCrmSettings((settingsRow as { crm_settings?: unknown } | null)?.crm_settings);
+  const configError = outreachConfigError(settings);
+  if (configError) {
+    return c.json({ error: "outreach_not_configured", detail: configError } satisfies ApiErrorResponse, 400);
+  }
+
+  const leadForRender: CrmLead = {
+    id: lr.id, source: "manual", legalName: lr.legal_name,
+    dbaName: lr.dba_name ?? undefined, email: lr.email,
+    phyCity: lr.phy_city ?? undefined, phyState: lr.phy_state ?? undefined,
+    powerUnits: lr.power_units ?? undefined,
+    status: lr.status, statusChangedAt: "", callAttempts: 0, createdAt: "", updatedAt: "",
+  };
+  const subject = renderForLead(settings.introSubject, leadForRender, lr.unsubscribe_token);
+  const bodyText = renderForLead(settings.introBody, leadForRender, lr.unsubscribe_token);
+
+  let messageId: string;
+  try {
+    const res = await sendOutreachEmail({ to: lr.email, subject, body: bodyText, unsubToken: lr.unsubscribe_token, settings });
+    messageId = res.messageId;
+  } catch (err) {
+    return c.json({ error: "send_failed", detail: err instanceof Error ? err.message : String(err) } satisfies ApiErrorResponse, 502);
+  }
+
+  // Record it as a sent email (no enrollment/step — it's a one-off) so the
+  // Resend open webhook can correlate it and it shows in the lead's Opens.
+  await supabase.from("crm_emails").insert({
+    org_id: orgId, lead_id: id, to_email: lr.email,
+    subject, body: bodyText, status: "sent",
+    sent_at: new Date().toISOString(), resend_message_id: messageId,
+  });
+  await logActivity(orgId, id, "email_sent", {
+    body: subject, meta: { intro: true, resendMessageId: messageId }, actorUserId: userId,
+  });
+  // Nudge raw-ingest leads into the emailing pipeline so they read as worked.
+  if (lr.status === "new" || lr.status === "enriched") {
+    await supabase.from("crm_leads")
+      .update({ status: "emailing", status_changed_at: new Date().toISOString() })
+      .eq("id", id).eq("org_id", orgId).in("status", ["new", "enriched"]);
+  }
+  return c.json({ messageId });
+});
+
 // ── Stats ───────────────────────────────────────────────────────────────
 
 crm.get("/stats", async (c) => {

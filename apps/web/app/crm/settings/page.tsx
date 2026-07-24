@@ -75,6 +75,8 @@ function CrmSettingsPageInner() {
   const [fromName,     setFromName]     = useState('');
   const [replyTo,      setReplyTo]      = useState('');
   const [addressFooter, setAddressFooter] = useState('');
+  const [introSubject, setIntroSubject] = useState('');
+  const [introBody,    setIntroBody]    = useState('');
   const [outreachSaving, setOutreachSaving] = useState(false);
   const [outreachMsg,    setOutreachMsg]    = useState<string | null>(null);
 
@@ -104,6 +106,8 @@ function CrmSettingsPageInner() {
         setFromName(s.fromName);
         setReplyTo(s.replyTo);
         setAddressFooter(s.physicalAddressFooter);
+        setIntroSubject(s.introSubject);
+        setIntroBody(s.introBody);
       } catch (e) {
         if (!cancelled) {
           setError(e instanceof RailwayError ? `Failed to load settings (${e.status})` : 'Failed to load settings.');
@@ -198,6 +202,8 @@ function CrmSettingsPageInner() {
         fromName: fromName.trim(),
         replyTo:  replyTo.trim(),
         physicalAddressFooter: addressFooter.trim(),
+        introSubject: introSubject.trim(),
+        introBody,
       });
       setSettings(next);
       setOutreachMsg('Saved.');
@@ -617,6 +623,29 @@ function CrmSettingsPageInner() {
                     style={{ color: addressFooter.trim() ? 'var(--gc-text-3)' : '#c5221f' }}>
                     Required — sends refuse while this is empty (CAN-SPAM). Appended to every
                     outreach email alongside the unsubscribe link.
+                  </div>
+                </div>
+              </div>
+
+              {/* Intro email template — the manual "Send intro email" button. */}
+              <div className="flex items-start gap-3">
+                <label className="text-[12.5px] font-semibold w-36 shrink-0 pt-1.5" style={{ color: 'var(--gc-text-2)' }}>
+                  Intro email
+                </label>
+                <div className="flex-1 min-w-0">
+                  <input type="text" value={introSubject} disabled={!canManage}
+                    onChange={e => setIntroSubject(e.target.value)}
+                    placeholder="Following up: FleetCal for {{dba_or_legal_name}}"
+                    className="w-full rounded-lg px-2.5 py-1.5 text-[13px] outline-none disabled:opacity-60 mb-2"
+                    style={inputStyle} />
+                  <textarea rows={9} value={introBody} disabled={!canManage}
+                    onChange={e => setIntroBody(e.target.value)}
+                    className="w-full rounded-lg px-2.5 py-1.5 text-[12.5px] leading-[1.5] outline-none resize-y disabled:opacity-60"
+                    style={inputStyle} />
+                  <div className="text-[11px] mt-1 font-medium" style={{ color: 'var(--gc-text-3)' }}>
+                    Sent one-off from a lead via the "Send intro email" button, typically right after a
+                    call. Merge vars: {'{{dba_or_legal_name}} {{legal_name}} {{city}} {{state}} {{power_units}}'}.
+                    Your signature, website line, and CAN-SPAM/unsubscribe footer are appended automatically.
                   </div>
                 </div>
               </div>

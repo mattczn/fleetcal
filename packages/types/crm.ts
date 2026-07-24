@@ -222,6 +222,12 @@ export interface CrmSettings {
   physicalAddressFooter: string;
   /** Markdown talk track shown in the call-queue panel. */
   talkTrack: string;
+  /** Manual "send intro email" template. A one-off, sent immediately from a
+   *  lead (the drawer + the log-call popover), typically right after a call.
+   *  Merge vars: {{legal_name}} {{dba_or_legal_name}} {{city}} {{state}}
+   *  {{power_units}} {{unsubscribe_url}}. */
+  introSubject: string;
+  introBody: string;
   /** First-run FMCSA cursor seed: ingest starts above this DOT number.
    *  Unset = seeded to the dataset max at first sync (only genuinely
    *  new carriers from then on). */
@@ -257,6 +263,22 @@ export const CRM_SETTINGS_DEFAULTS: CrmSettings = {
   replyTo: "",
   physicalAddressFooter: "",
   talkTrack: "",
+  introSubject: "Following up: FleetCal for {{dba_or_legal_name}}",
+  introBody: [
+    "Hi {{dba_or_legal_name}},",
+    "",
+    "Thanks for taking my call. FleetCal is dispatch software built by a carrier, for carriers, with everything on one calendar from the load to the invoice:",
+    "",
+    "- Dispatch calendar: one column per truck, drag and drop loads, AI reads your rate cons",
+    "- Driver app: loads, navigation, and POD scanning in the driver's pocket",
+    "- Paperwork and billing: verify PODs, then batch a week of invoices in one pass",
+    "- Payroll and insights: driver pay auto-fills from delivered loads; see revenue by truck and lane",
+    "",
+    "Take a look: https://fleetcal.app",
+    "Book a quick demo: https://fleetcal.app/contact-sales",
+    "",
+    "Happy to show you around whenever works for you.",
+  ].join("\n"),
 };
 
 /** Deep-merge stored (partial, never trusted) settings over defaults. */

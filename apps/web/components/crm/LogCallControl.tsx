@@ -17,6 +17,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { Phone, Loader2, ChevronDown } from 'lucide-react';
 import { railway } from '@/lib/railway';
 import { OUTCOME_META } from './crmMeta';
+import SendIntroButton from './SendIntroButton';
 import { CRM_CALL_OUTCOMES, type CrmCallOutcome, type CrmLead } from '@fleetcal/types';
 
 const WIDTH = 262;
@@ -25,12 +26,14 @@ export default function LogCallControl({
   leadId,
   phone,
   cellPhone,
+  email,
   onLogged,
   compact = false,
 }: {
   leadId: string;
   phone?: string;
   cellPhone?: string;
+  email?: string;
   /** Fired with the server's updated lead + the outcome just logged, so
    *  the caller can update its row without a full refetch. */
   onLogged?: (lead: CrmLead, outcome: CrmCallOutcome) => void;
@@ -176,6 +179,11 @@ export default function LogCallControl({
               style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border-light)', color: 'var(--gc-text-1)' }}
             />
           </label>
+          {email && (
+            <div className="mt-2 pt-2" style={{ borderTop: '1px solid var(--gc-border-light)' }}>
+              <SendIntroButton leadId={leadId} email={email} />
+            </div>
+          )}
         </div>
       )}
     </>

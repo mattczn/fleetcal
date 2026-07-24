@@ -639,7 +639,7 @@ function CrmPageInner() {
                             ) : (
                               <span className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>Not called</span>
                             )}
-                            <LogCallControl leadId={l.id} phone={l.phone} cellPhone={l.cellPhone} onLogged={onLeadLogged} compact />
+                            <LogCallControl leadId={l.id} phone={l.phone} cellPhone={l.cellPhone} email={l.email} onLogged={onLeadLogged} compact />
                           </div>
                         </Td>
                         <Td><StatusChip status={l.status} /></Td>

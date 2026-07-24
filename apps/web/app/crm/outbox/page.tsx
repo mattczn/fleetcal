@@ -368,7 +368,7 @@ function CrmOutboxPageInner() {
                                       className="text-[11.5px] tabular-nums hover:underline whitespace-nowrap" style={{ color: '#1a73e8' }}>
                                       {em.leadPhone || em.leadCellPhone}
                                     </a>
-                                    <LogCallControl leadId={em.leadId} phone={em.leadPhone} cellPhone={em.leadCellPhone} compact />
+                                    <LogCallControl leadId={em.leadId} phone={em.leadPhone} cellPhone={em.leadCellPhone} email={em.toEmail} compact />
                                   </div>
                                 )}
                               </div>

@@ -31,6 +31,7 @@ import { railway, RailwayError } from '@/lib/railway';
 import { StyledSelect } from '@/components/ui/StyledSelect';
 import { STATUS_META, StatusChip, OPERATION_CLASS_LABELS, isLocalLead, fmtRelativeTime } from './crmMeta';
 import LogCallControl from './LogCallControl';
+import SendIntroButton from './SendIntroButton';
 
 interface Props {
   leadId: string;
@@ -312,13 +313,15 @@ export default function LeadDetailDrawer({ leadId, onClose, onLeadUpdated }: Pro
                   <LabeledInput label="Email" type="email" value={email} onChange={setEmail} placeholder="none on file" />
                   <LabeledInput label="Phone" type="tel" value={phone} onChange={setPhone} placeholder="none on file" />
                   <LabeledInput label="Cell"  type="tel" value={cell}  onChange={setCell}  placeholder="none on file" />
-                  <div className="pt-0.5">
+                  <div className="pt-0.5 flex items-center gap-2 flex-wrap">
                     <LogCallControl
                       leadId={lead.id}
                       phone={lead.phone}
                       cellPhone={lead.cellPhone}
+                      email={lead.email}
                       onLogged={(updated) => { onLeadUpdated?.(updated); void refetch(); }}
                     />
+                    <SendIntroButton leadId={lead.id} email={lead.email} />
                   </div>
                   {contactDirty && (
                     <div className="flex justify-end">
