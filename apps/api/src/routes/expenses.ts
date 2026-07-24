@@ -30,6 +30,7 @@ import type {
 import { UNCATEGORIZED_BUCKET_ID } from "@fleetcal/types";
 
 import { supabase as supabaseTyped } from "../lib/supabase.js";
+import { loadExcludedDrivers } from "../lib/reportExclusions.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability, requireModule } from "../middleware/require.js";
 import { TX_COLS, rowToTx, type RampTransactionRow } from "./ramp-transactions.js";
@@ -222,35 +223,44 @@ async function snapshot(orgId: string, w: Window, bucketIds: Set<string>): Promi
 }
 
 async function payrollDriverAndAdjustments(orgId: string, w: Window): Promise<{ total: number; count: number }> {
-  const [q1, q2, adj] = await Promise.all([
-    fetchAll<{ driver_pay: string | number | null }>("events (q1)", () => supabase
+  // Owner-operators (drivers.exclude_from_reports) are paid as vendors
+  // — their per-load driver_pay must not flow into the Driver Pay
+  // bucket, or they'd double-count against the invoice payments in
+  // their own bucket. Same exclusion the payroll and reports pages use.
+  const [excluded, q1, q2, adj] = await Promise.all([
+    loadExcludedDrivers(orgId),
+    fetchAll<{ driver_pay: string | number | null; driver_id: number | null; driver_name: string | null }>("events (q1)", () => supabase
       .from("events")
-      .select("driver_pay")
+      .select("driver_pay, driver_id, driver_name")
       .eq("org_id", orgId)
       .is("deleted_at", null)
       .not("driver_pay", "is", null)
       .is("deferred_to_week", null)
       .gte("start", w.from)
       .lte("start", `${w.to}T23:59:59`)),
-    fetchAll<{ driver_pay: string | number | null }>("events (q2)", () => supabase
+    fetchAll<{ driver_pay: string | number | null; driver_id: number | null; driver_name: string | null }>("events (q2)", () => supabase
       .from("events")
-      .select("driver_pay")
+      .select("driver_pay, driver_id, driver_name")
       .eq("org_id", orgId)
       .is("deleted_at", null)
       .not("driver_pay", "is", null)
       .not("deferred_to_week", "is", null)
       .gte("deferred_to_week", w.from)
       .lte("deferred_to_week", w.to)),
-    fetchAll<{ amount: string | number | null }>("payroll_adjustments", () => supabase
+    fetchAll<{ amount: string | number | null; driver_name: string | null }>("payroll_adjustments", () => supabase
       .from("payroll_adjustments")
-      .select("amount")
+      .select("amount, driver_name")
       .eq("org_id", orgId)
       .gte("week_start", w.from)
       .lte("week_start", w.to)),
   ]);
-  const rows = [...q1, ...q2];
+  const keep = (r: { driver_id?: number | null; driver_name: string | null }) =>
+    !(r.driver_id != null && excluded.idSet.has(r.driver_id)) &&
+    !(r.driver_name && excluded.nameSet.has(r.driver_name.trim()));
+  const rows = [...q1, ...q2].filter(keep);
   const loadPay = rows.reduce((s, r) => s + Number(r.driver_pay ?? 0), 0);
-  const adjSum  = adj.reduce((s, r) => s + Number(r.amount ?? 0), 0);
+  // adjustments carry only driver_name (no id column) — name filter only
+  const adjSum  = adj.filter(keep).reduce((s, r) => s + Number(r.amount ?? 0), 0);
   return { total: loadPay + adjSum, count: rows.length };
 }
 
@@ -439,7 +449,8 @@ expenses.get("/ledger", async (c) => {
   const limit = Math.min(Math.max(Number(url.searchParams.get("limit") ?? "10000"), 1), 20000);
 
   try {
-    const [bucketRows, rampRaw, fuelRaw, evQ1, evQ2, adjRaw, entriesRaw, rulesRaw] = await Promise.all([
+    const [excludedDrivers, bucketRows, rampRaw, fuelRaw, evQ1Raw, evQ2Raw, adjRawAll, entriesRaw, rulesRaw] = await Promise.all([
+      loadExcludedDrivers(orgId),
       fetchAll<{ id: string; name: string; system_role: string | null }>("buckets", () => supabase
         .from("expense_buckets")
         .select("id, name, system_role")
@@ -463,18 +474,18 @@ expenses.get("/ledger", async (c) => {
         .is("deleted_at", null)
         .gte("transaction_date", w.from)
         .lte("transaction_date", w.to)),
-      fetchAll<{ driver_pay: string | number | null; driver_name: string | null; start: string }>("events", () => supabase
+      fetchAll<{ driver_pay: string | number | null; driver_id: number | null; driver_name: string | null; start: string }>("events", () => supabase
         .from("events")
-        .select("driver_pay, driver_name, start")
+        .select("driver_pay, driver_id, driver_name, start")
         .eq("org_id", orgId)
         .is("deleted_at", null)
         .not("driver_pay", "is", null)
         .is("deferred_to_week", null)
         .gte("start", w.from)
         .lte("start", `${w.to}T23:59:59`)),
-      fetchAll<{ driver_pay: string | number | null; driver_name: string | null; deferred_to_week: string }>("events-deferred", () => supabase
+      fetchAll<{ driver_pay: string | number | null; driver_id: number | null; driver_name: string | null; deferred_to_week: string }>("events-deferred", () => supabase
         .from("events")
-        .select("driver_pay, driver_name, deferred_to_week")
+        .select("driver_pay, driver_id, driver_name, deferred_to_week")
         .eq("org_id", orgId)
         .is("deleted_at", null)
         .not("driver_pay", "is", null)
@@ -571,6 +582,15 @@ expenses.get("/ledger", async (c) => {
       else        { agg.adjustments += pay; }
       weekly.set(key, agg);
     };
+    // Owner-operators (drivers.exclude_from_reports) are paid as
+    // vendors through their own bucket — drop their per-load pay here
+    // like the payroll and reports pages do.
+    const keepDriver = (r: { driver_id?: number | null; driver_name: string | null }) =>
+      !(r.driver_id != null && excludedDrivers.idSet.has(r.driver_id)) &&
+      !(r.driver_name && excludedDrivers.nameSet.has(r.driver_name.trim()));
+    const evQ1   = evQ1Raw.filter(keepDriver);
+    const evQ2   = evQ2Raw.filter(keepDriver);
+    const adjRaw = adjRawAll.filter(keepDriver);
     for (const e of evQ1) {
       bump(e.driver_name, satOfWeek(e.start), Number(e.driver_pay ?? 0), true);
     }
