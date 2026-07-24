@@ -97,6 +97,7 @@ import type {
   UploadMaintenanceActionItemPhotoResponse, DeleteMaintenanceActionItemPhotoResponse,
   CrmLead, CrmActivity, CrmSettings, CrmStats, CrmSyncResult,
   CrmListLeadsQuery, CrmListLeadsResponse, CrmLeadDetailResponse,
+  CrmLogCallRequest, CrmLogCallResponse,
   CrmSequence, CrmSequenceStep, CrmEmail, CrmEmailStatus,
   PerformanceEventRow, MotivePerfRaw, PerformanceEventMovement,
 } from '@fleetcal/types';
@@ -1858,6 +1859,12 @@ class RailwayClient {
   /** Append a manual note to the lead's activity timeline. */
   crmAddNote(id: string, body: string) {
     return this.req<{ activity: CrmActivity }>('POST', `/v1/crm/leads/${id}/activities`, { body });
+  }
+  /** Log a structured call outcome (No answer / Voicemail / Bad number /
+   *  Not interested / Interested / Demo scheduled). Records a `call`
+   *  activity, bumps attempts, applies the outcome→status mapping. */
+  crmLogCall(id: string, body: CrmLogCallRequest) {
+    return this.req<CrmLogCallResponse>('POST', `/v1/crm/leads/${id}/call-outcome`, body);
   }
   crmGetStats() {
     return this.req<{ stats: CrmStats }>('GET', '/v1/crm/stats');

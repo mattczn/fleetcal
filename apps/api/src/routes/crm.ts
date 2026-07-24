@@ -19,15 +19,18 @@
 
 import { Hono } from "hono";
 import {
+  CRM_CALL_OUTCOMES,
   CRM_EMAIL_STATUSES,
   CRM_LEAD_STATUSES,
   SEND_BLOCKED_STATUSES,
   resolveCrmSettings,
   type ApiErrorResponse,
   type CrmActivity,
+  type CrmCallOutcome,
   type CrmEmail,
   type CrmLead,
   type CrmLeadStatus,
+  type CrmLogCallRequest,
   type CrmSequence,
   type CrmSequenceStep,
   type CrmSettings,
@@ -132,6 +135,42 @@ async function logActivity(
   });
 }
 
+/** Attach last-contacted / last-call-outcome (from crm_activities kind
+ *  'call') and total email opens (from crm_emails) to a page of leads.
+ *  Both aggregate from existing tables for just these lead ids — no new
+ *  columns — so the list can show "already contacted" + engagement. */
+async function enrichLeadsContact(orgId: string, leads: CrmLead[]): Promise<void> {
+  const ids = leads.map((l) => l.id);
+  if (ids.length === 0) return;
+  const { data: calls } = await supabase
+    .from("crm_activities")
+    .select("lead_id,meta,created_at")
+    .eq("org_id", orgId)
+    .eq("kind", "call")
+    .in("lead_id", ids)
+    .order("created_at", { ascending: false });
+  const lastCall = new Map<string, { at: string; outcome?: CrmCallOutcome }>();
+  for (const row of (calls ?? []) as Array<{ lead_id: string; meta: Record<string, unknown> | null; created_at: string }>) {
+    if (lastCall.has(row.lead_id)) continue; // desc order → first seen is latest
+    lastCall.set(row.lead_id, { at: row.created_at, outcome: row.meta?.outcome as CrmCallOutcome | undefined });
+  }
+  const { data: emailRows } = await supabase
+    .from("crm_emails")
+    .select("lead_id,open_count")
+    .eq("org_id", orgId)
+    .in("lead_id", ids);
+  const opens = new Map<string, number>();
+  for (const row of (emailRows ?? []) as Array<{ lead_id: string; open_count: number | null }>) {
+    opens.set(row.lead_id, (opens.get(row.lead_id) ?? 0) + (row.open_count ?? 0));
+  }
+  for (const l of leads) {
+    const lc = lastCall.get(l.id);
+    if (lc) { l.lastContactedAt = lc.at; l.lastCallOutcome = lc.outcome; }
+    const o = opens.get(l.id);
+    if (o) l.emailOpens = o;
+  }
+}
+
 // ── Leads ───────────────────────────────────────────────────────────────
 
 crm.get("/leads", async (c) => {
@@ -171,11 +210,26 @@ crm.get("/leads", async (c) => {
       .or("intrastate_beyond_100.is.null,intrastate_beyond_100.eq.0");
   }
   if (q) {
-    const like = `%${q.replaceAll("%", "").replaceAll(",", "")}%`;
-    const asDot = Number(q);
-    query = Number.isInteger(asDot) && asDot > 0
-      ? query.or(`legal_name.ilike.${like},dba_name.ilike.${like},dot_number.eq.${asDot}`)
-      : query.or(`legal_name.ilike.${like},dba_name.ilike.${like}`);
+    // Match name, DBA, email, and phone/cell — so an inbound caller's
+    // number or email finds them instantly. Phone also matches a
+    // digits-only variant so "(555) 123-4567" and "5551234567" both hit a
+    // stored 5551234567. Strip PostgREST-significant chars (%,() ,) first.
+    const clean = q.replace(/[%,()]/g, "").trim();
+    const like = `%${clean}%`;
+    const terms = [
+      `legal_name.ilike.${like}`,
+      `dba_name.ilike.${like}`,
+      `email.ilike.${like}`,
+      `phone.ilike.${like}`,
+      `cell_phone.ilike.${like}`,
+    ];
+    const digits = clean.replace(/\D/g, "");
+    if (digits.length >= 7 && digits !== clean) {
+      terms.push(`phone.ilike.%${digits}%`, `cell_phone.ilike.%${digits}%`);
+    }
+    const asDot = Number(clean);
+    if (Number.isInteger(asDot) && asDot > 0) terms.push(`dot_number.eq.${asDot}`);
+    query = query.or(terms.join(","));
   }
 
   const { data, count, error } = await query
@@ -184,7 +238,9 @@ crm.get("/leads", async (c) => {
   if (error) {
     return c.json({ error: "list_failed", detail: error.message } satisfies ApiErrorResponse, 500);
   }
-  return c.json({ leads: ((data ?? []) as unknown as LeadRow[]).map(rowToLead), total: count ?? 0 });
+  const leads = ((data ?? []) as unknown as LeadRow[]).map(rowToLead);
+  await enrichLeadsContact(orgId, leads);
+  return c.json({ leads, total: count ?? 0 });
 });
 
 crm.post("/leads", async (c) => {
@@ -383,6 +439,85 @@ crm.post("/leads/:id/activities", async (c) => {
     return c.json({ error: "insert_failed", detail: error?.message } satisfies ApiErrorResponse, 500);
   }
   return c.json({ activity: rowToActivity(data as Record<string, unknown>) }, 201);
+});
+
+/** Log a structured call outcome. Records a `call` activity with
+ *  meta.outcome, bumps call_attempts, optionally sets a callback time, and
+ *  maps the outcome onto pipeline status: No answer / Voicemail keep the
+ *  lead in place (just a logged attempt); the rest advance or retire it.
+ *  This is what makes "contacted, no result" a first-class, visible state. */
+crm.post("/leads/:id/call-outcome", async (c) => {
+  const orgId = c.get("orgId");
+  const userId = c.get("userId");
+  const id = c.req.param("id");
+  const body = await c.req.json<CrmLogCallRequest>();
+  if (!body.outcome || !(CRM_CALL_OUTCOMES as readonly string[]).includes(body.outcome)) {
+    return c.json({ error: "validation_failed", errors: ["valid outcome required"] } satisfies ApiErrorResponse, 400);
+  }
+  const { data: leadRow } = await supabase
+    .from("crm_leads")
+    .select("id,status,call_attempts")
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (!leadRow) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+  const cur = leadRow as { id: string; status: CrmLeadStatus; call_attempts: number };
+
+  const { data: actData, error: actErr } = await supabase
+    .from("crm_activities")
+    .insert({
+      org_id: orgId,
+      lead_id: id,
+      kind: "call",
+      body: body.note?.trim() || null,
+      meta: { outcome: body.outcome } as Json,
+      actor_user_id: userId,
+    })
+    .select("id,lead_id,kind,body,meta,actor_user_id,created_at")
+    .single();
+  if (actErr || !actData) {
+    return c.json({ error: "insert_failed", detail: actErr?.message } satisfies ApiErrorResponse, 500);
+  }
+
+  // Outcome → status. No-answer/voicemail don't move status; the rest
+  // advance or retire. Never resurrect a send-blocked lead (won/lost/unsub).
+  const OUTCOME_STATUS: Partial<Record<CrmCallOutcome, CrmLeadStatus>> = {
+    interested:     "interested",
+    demo_scheduled: "demo_scheduled",
+    bad_number:     "disqualified",
+    not_interested: "lost",
+  };
+  const nextStatus = OUTCOME_STATUS[body.outcome];
+  const statusChanging =
+    nextStatus != null && nextStatus !== cur.status && !SEND_BLOCKED_STATUSES.includes(cur.status);
+
+  const update: CrmLeadUpdate = { call_attempts: (cur.call_attempts ?? 0) + 1 };
+  if ("nextActionAt" in body) update.next_action_at = body.nextActionAt ?? null;
+  if (statusChanging) {
+    update.status = nextStatus;
+    update.status_changed_at = new Date().toISOString();
+  }
+
+  const { data: updated, error: updErr } = await supabase
+    .from("crm_leads")
+    .update(update)
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .select(LEAD_COLS)
+    .single();
+  if (updErr || !updated) {
+    return c.json({ error: "update_failed", detail: updErr?.message } satisfies ApiErrorResponse, 500);
+  }
+  if (statusChanging) {
+    await logActivity(orgId, id, "status_change", {
+      meta: { from: cur.status, to: nextStatus, via: "call_outcome" },
+      actorUserId: userId,
+    });
+  }
+  return c.json({
+    lead: rowToLead(updated as unknown as LeadRow),
+    activity: rowToActivity(actData as Record<string, unknown>),
+  });
 });
 
 // ── Stats ───────────────────────────────────────────────────────────────
@@ -1175,7 +1310,10 @@ const EMAIL_COLS =
   "open_count,first_opened_at,last_opened_at," +
   "click_count,first_clicked_at,last_clicked_at";
 
-function rowToEmail(r: Record<string, unknown>, leadName?: string): CrmEmail {
+function rowToEmail(
+  r: Record<string, unknown>,
+  lead?: { name?: string; phone?: string; cellPhone?: string; status?: CrmLeadStatus },
+): CrmEmail {
   return {
     id:              r.id as string,
     leadId:          r.lead_id as string,
@@ -1197,7 +1335,10 @@ function rowToEmail(r: Record<string, unknown>, leadName?: string): CrmEmail {
     clickCount:      (r.click_count as number | null) ?? undefined,
     firstClickedAt:  (r.first_clicked_at as string | null) ?? undefined,
     lastClickedAt:   (r.last_clicked_at as string | null) ?? undefined,
-    leadName,
+    leadName:      lead?.name,
+    leadPhone:     lead?.phone,
+    leadCellPhone: lead?.cellPhone,
+    leadStatus:    lead?.status,
   };
 }
 
@@ -1223,19 +1364,24 @@ crm.get("/emails", async (c) => {
   const rows = (data ?? []) as unknown as Record<string, unknown>[];
   // Join lead names for display (one IN query).
   const leadIds = [...new Set(rows.map((r) => r.lead_id as string))];
-  const nameById = new Map<string, string>();
+  const leadById = new Map<string, { name: string; phone?: string; cellPhone?: string; status: CrmLeadStatus }>();
   if (leadIds.length > 0) {
     const { data: leadRows } = await supabase
       .from("crm_leads")
-      .select("id,legal_name,dba_name")
+      .select("id,legal_name,dba_name,phone,cell_phone,status")
       .eq("org_id", orgId)
       .in("id", leadIds);
-    for (const l of (leadRows ?? []) as Array<{ id: string; legal_name: string; dba_name: string | null }>) {
-      nameById.set(l.id, l.dba_name || l.legal_name);
+    for (const l of (leadRows ?? []) as Array<{ id: string; legal_name: string; dba_name: string | null; phone: string | null; cell_phone: string | null; status: CrmLeadStatus }>) {
+      leadById.set(l.id, {
+        name: l.dba_name || l.legal_name,
+        phone: l.phone ?? undefined,
+        cellPhone: l.cell_phone ?? undefined,
+        status: l.status,
+      });
     }
   }
   return c.json({
-    emails: rows.map((r) => rowToEmail(r, nameById.get(r.lead_id as string))),
+    emails: rows.map((r) => rowToEmail(r, leadById.get(r.lead_id as string))),
     total: count ?? 0,
   });
 });

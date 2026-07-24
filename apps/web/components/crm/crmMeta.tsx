@@ -10,7 +10,7 @@
  * light tint for chip backgrounds.
  */
 
-import type { CrmEmailVerificationStatus, CrmLead, CrmLeadStatus } from '@fleetcal/types';
+import type { CrmCallOutcome, CrmEmailVerificationStatus, CrmLead, CrmLeadStatus } from '@fleetcal/types';
 import { ShieldCheck, ShieldAlert, ShieldOff, HelpCircle } from 'lucide-react';
 import { FastTooltip } from '@/components/queue/QueueTablePrimitives';
 
@@ -68,6 +68,30 @@ export function VerificationBadge({
   };
   const meta = map[status];
   return <FastTooltip text={meta.label}>{meta.icon}</FastTooltip>;
+}
+
+/** Call-outcome palette + labels, mirroring STATUS_META's tint family.
+ *  `short` is used in the tight leads-list Contact column. */
+export const OUTCOME_META: Record<CrmCallOutcome, { label: string; short: string; tint: string; tintLight: string }> = {
+  no_answer:      { label: 'No answer',      short: 'No answer',  tint: '#5f6368', tintLight: '#f1f3f4' },
+  voicemail:      { label: 'Voicemail',      short: 'Voicemail',  tint: '#1a73e8', tintLight: '#e8f0fe' },
+  bad_number:     { label: 'Bad number',     short: 'Bad #',      tint: '#c5221f', tintLight: '#fee2e2' },
+  not_interested: { label: 'Not interested', short: 'Not int.',   tint: '#9a3412', tintLight: '#fed7aa' },
+  interested:     { label: 'Interested',     short: 'Interested', tint: '#188038', tintLight: '#e6f4ea' },
+  demo_scheduled: { label: 'Demo scheduled', short: 'Demo',       tint: '#c2185b', tintLight: '#fce4ec' },
+};
+
+/** Compact badge for a logged call outcome (leads-list Contact column,
+ *  drawer timeline). */
+export function OutcomeBadge({ outcome }: { outcome: CrmCallOutcome }) {
+  const m = OUTCOME_META[outcome];
+  if (!m) return null;
+  return (
+    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold whitespace-nowrap"
+      style={{ background: m.tintLight, color: m.tint }}>
+      {m.short}
+    </span>
+  );
 }
 
 /** MCS-150 operation-class labels. A/B/C per the census spec. */

@@ -18,19 +18,20 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Target, Search, X, Loader2, ChevronLeft, ChevronRight, RefreshCw,
-  Mail, MailX, Settings as SettingsIcon, ListOrdered, Inbox, ShieldCheck,
+  Mail, MailX, Settings as SettingsIcon, ListOrdered, Inbox, ShieldCheck, Eye,
 } from 'lucide-react';
 import Link from 'next/link';
 import AppShell from '@/components/nav/AppShell';
 import RequireCap from '@/components/auth/RequireCap';
 import RequireInternalOrg from '@/components/crm/RequireInternalOrg';
 import LeadDetailDrawer from '@/components/crm/LeadDetailDrawer';
-import { STATUS_META, StatusChip, VerificationBadge, isLocalLead } from '@/components/crm/crmMeta';
+import { STATUS_META, StatusChip, VerificationBadge, isLocalLead, OutcomeBadge, fmtRelativeTime } from '@/components/crm/crmMeta';
+import LogCallControl from '@/components/crm/LogCallControl';
 import { Th, Td, fmtShortDate, FastTooltip } from '@/components/queue/QueueTablePrimitives';
 import { StyledSelect } from '@/components/ui/StyledSelect';
 import { usePermissions } from '@/lib/usePermissions';
 import { railway, RailwayError } from '@/lib/railway';
-import type { CrmLead, CrmLeadStatus, CrmStats } from '@fleetcal/types';
+import type { CrmCallOutcome, CrmLead, CrmLeadStatus, CrmStats } from '@fleetcal/types';
 import { CRM_LEAD_STATUSES } from '@fleetcal/types';
 
 const PAGE_SIZE = 50;
@@ -124,6 +125,16 @@ function CrmPageInner() {
       if (id === fetchId.current) setLoading(false);
     }
   }, [status, hasEmail, verification, localOnly, debounced, page]);
+
+  // Fold a just-logged call into its row without a full refetch. The
+  // endpoint returns the fresh lead (attempts / status), but list-only
+  // enrichment (emailOpens) isn't in that response — preserve it from the
+  // current row and stamp the contact indicator locally.
+  const onLeadLogged = useCallback((lead: CrmLead, outcome: CrmCallOutcome) => {
+    setLeads(ls => ls.map(l => (l.id === lead.id
+      ? { ...lead, emailOpens: l.emailOpens, lastContactedAt: new Date().toISOString(), lastCallOutcome: outcome }
+      : l)));
+  }, []);
 
   const fetchStats = useCallback(async () => {
     try {
@@ -358,7 +369,7 @@ function CrmPageInner() {
             <div className="relative">
               <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: 'var(--gc-text-3)' }} />
               <input type="text"
-                placeholder="Search name, DBA, DOT#…"
+                placeholder="Search name, DBA, DOT#, phone, email…"
                 value={search}
                 onChange={e => setSearch(e.target.value)}
                 className="text-[13px] pl-8 pr-7 py-1.5 rounded-lg outline-none"
@@ -514,7 +525,10 @@ function CrmPageInner() {
                       <Th align="right">PU</Th>
                       <Th align="right">Drivers</Th>
                       <Th>Radius</Th>
+                      <Th>Phone</Th>
                       <Th>Email</Th>
+                      <Th align="right">Opens</Th>
+                      <Th>Contact</Th>
                       <Th>Status</Th>
                       <Th>Added</Th>
                     </tr>
@@ -522,13 +536,13 @@ function CrmPageInner() {
                   <tbody>
                     {loading && leads.length === 0 ? (
                       <tr>
-                        <td colSpan={10} className="py-16 text-center" style={{ color: 'var(--gc-text-3)' }}>
+                        <td colSpan={13} className="py-16 text-center" style={{ color: 'var(--gc-text-3)' }}>
                           <Loader2 size={18} className="animate-spin inline" />
                         </td>
                       </tr>
                     ) : leads.length === 0 ? (
                       <tr>
-                        <td colSpan={10} className="py-16 text-center text-[13px]" style={{ color: 'var(--gc-text-3)' }}>
+                        <td colSpan={13} className="py-16 text-center text-[13px]" style={{ color: 'var(--gc-text-3)' }}>
                           No leads match the current filters.
                         </td>
                       </tr>
@@ -576,6 +590,18 @@ function CrmPageInner() {
                           )}
                         </Td>
                         <Td>
+                          {l.phone || l.cellPhone ? (
+                            <a href={`tel:${l.phone || l.cellPhone}`}
+                              onClick={e => e.stopPropagation()}
+                              className="tabular-nums whitespace-nowrap hover:underline"
+                              style={{ color: 'var(--gc-text-1)' }}>
+                              {l.phone || l.cellPhone}
+                            </a>
+                          ) : (
+                            <span style={{ color: 'var(--gc-text-3)' }}>—</span>
+                          )}
+                        </Td>
+                        <Td>
                           {l.email ? (
                             <div className="inline-flex items-center gap-1.5">
                               <FastTooltip text={l.email}>
@@ -588,6 +614,33 @@ function CrmPageInner() {
                               <MailX size={14} style={{ color: 'var(--gc-text-3)', opacity: 0.5 }} />
                             </FastTooltip>
                           )}
+                        </Td>
+                        <Td align="right">
+                          {l.emailOpens ? (
+                            <FastTooltip text={`Opened your emails ${l.emailOpens} time${l.emailOpens === 1 ? '' : 's'}`}>
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-lg text-[11px] font-bold tabular-nums"
+                                style={{ background: '#fff7ed', color: '#c2410c' }}>
+                                <Eye size={11} /> {l.emailOpens}
+                              </span>
+                            </FastTooltip>
+                          ) : (
+                            <span style={{ color: 'var(--gc-text-3)' }}>—</span>
+                          )}
+                        </Td>
+                        <Td>
+                          <div className="flex items-center gap-1.5 whitespace-nowrap">
+                            {l.lastContactedAt ? (
+                              <>
+                                {l.lastCallOutcome && <OutcomeBadge outcome={l.lastCallOutcome} />}
+                                <span className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
+                                  {fmtRelativeTime(l.lastContactedAt)}{l.callAttempts > 1 ? ` · ${l.callAttempts}×` : ''}
+                                </span>
+                              </>
+                            ) : (
+                              <span className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>Not called</span>
+                            )}
+                            <LogCallControl leadId={l.id} phone={l.phone} cellPhone={l.cellPhone} onLogged={onLeadLogged} compact />
+                          </div>
                         </Td>
                         <Td><StatusChip status={l.status} /></Td>
                         <Td>

@@ -30,6 +30,7 @@ import { CRM_LEAD_STATUSES, SEND_BLOCKED_STATUSES } from '@fleetcal/types';
 import { railway, RailwayError } from '@/lib/railway';
 import { StyledSelect } from '@/components/ui/StyledSelect';
 import { STATUS_META, StatusChip, OPERATION_CLASS_LABELS, isLocalLead, fmtRelativeTime } from './crmMeta';
+import LogCallControl from './LogCallControl';
 
 interface Props {
   leadId: string;
@@ -311,6 +312,14 @@ export default function LeadDetailDrawer({ leadId, onClose, onLeadUpdated }: Pro
                   <LabeledInput label="Email" type="email" value={email} onChange={setEmail} placeholder="none on file" />
                   <LabeledInput label="Phone" type="tel" value={phone} onChange={setPhone} placeholder="none on file" />
                   <LabeledInput label="Cell"  type="tel" value={cell}  onChange={setCell}  placeholder="none on file" />
+                  <div className="pt-0.5">
+                    <LogCallControl
+                      leadId={lead.id}
+                      phone={lead.phone}
+                      cellPhone={lead.cellPhone}
+                      onLogged={(updated) => { onLeadUpdated?.(updated); void refetch(); }}
+                    />
+                  </div>
                   {contactDirty && (
                     <div className="flex justify-end">
                       <button onClick={() => void saveContact()} disabled={contactSaving}

@@ -23,6 +23,7 @@ import AppShell from '@/components/nav/AppShell';
 import RequireCap from '@/components/auth/RequireCap';
 import RequireInternalOrg from '@/components/crm/RequireInternalOrg';
 import { Th, Td, fmtShortDate } from '@/components/queue/QueueTablePrimitives';
+import LogCallControl from '@/components/crm/LogCallControl';
 import { usePermissions } from '@/lib/usePermissions';
 import { railway, RailwayError } from '@/lib/railway';
 import type { CrmEmail, CrmEmailStatus, CrmSettings } from '@fleetcal/types';
@@ -353,13 +354,24 @@ function CrmOutboxPageInner() {
                           className="cursor-pointer transition-colors hover:bg-[var(--gc-hover)]"
                           style={{ borderTop: '1px solid var(--gc-border-light)' }}>
                           <Td>
-                            <div className="flex items-center gap-1.5">
+                            <div className="flex items-start gap-1.5">
                               {expanded
-                                ? <ChevronDown size={13} style={{ color: 'var(--gc-text-3)', flex: 'none' }} />
-                                : <ChevronRight size={13} style={{ color: 'var(--gc-text-3)', flex: 'none' }} />}
-                              <span className="font-semibold truncate max-w-[220px]" style={{ color: 'var(--gc-text-1)' }}>
-                                {em.leadName ?? '—'}
-                              </span>
+                                ? <ChevronDown size={13} style={{ color: 'var(--gc-text-3)', flex: 'none', marginTop: 2 }} />
+                                : <ChevronRight size={13} style={{ color: 'var(--gc-text-3)', flex: 'none', marginTop: 2 }} />}
+                              <div className="min-w-0">
+                                <span className="font-semibold truncate max-w-[220px] block" style={{ color: 'var(--gc-text-1)' }}>
+                                  {em.leadName ?? '—'}
+                                </span>
+                                {(em.leadPhone || em.leadCellPhone) && (
+                                  <div className="flex items-center gap-2 mt-0.5" onClick={e => e.stopPropagation()}>
+                                    <a href={`tel:${em.leadPhone || em.leadCellPhone}`}
+                                      className="text-[11.5px] tabular-nums hover:underline whitespace-nowrap" style={{ color: '#1a73e8' }}>
+                                      {em.leadPhone || em.leadCellPhone}
+                                    </a>
+                                    <LogCallControl leadId={em.leadId} phone={em.leadPhone} cellPhone={em.leadCellPhone} compact />
+                                  </div>
+                                )}
+                              </div>
                             </div>
                           </Td>
                           <Td>

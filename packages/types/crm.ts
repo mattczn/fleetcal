@@ -138,6 +138,11 @@ export interface CrmLead {
   ownerUserId?: string;
   nextActionAt?: string;
   callAttempts: number;
+  /** Latest human-call activity (derived from crm_activities kind='call'). */
+  lastContactedAt?: string;
+  lastCallOutcome?: CrmCallOutcome;
+  /** Total email opens across every email sent to this lead (engagement). */
+  emailOpens?: number;
   emailVerificationStatus?: CrmEmailVerificationStatus;
   emailVerifiedAt?: string;
   emailVerificationProvider?: string;
@@ -349,8 +354,11 @@ export interface CrmEmail {
   clickCount?: number;
   firstClickedAt?: string;
   lastClickedAt?: string;
-  /** Joined for outbox display. */
+  /** Joined for outbox display + calling from the send queue. */
   leadName?: string;
+  leadPhone?: string;
+  leadCellPhone?: string;
+  leadStatus?: CrmLeadStatus;
 }
 
 // ── API request/response shapes ──────────────────────────────────────
@@ -378,6 +386,20 @@ export interface CrmListLeadsResponse {
 export interface CrmLeadDetailResponse {
   lead: CrmLead;
   activities: CrmActivity[];
+}
+
+export interface CrmLogCallRequest {
+  outcome: CrmCallOutcome;
+  /** Optional free-text note stored on the call activity. */
+  note?: string;
+  /** Optional "call back on" time (ISO). Sets the lead's nextActionAt;
+   *  pass null to clear, omit to leave it unchanged. */
+  nextActionAt?: string | null;
+}
+
+export interface CrmLogCallResponse {
+  lead: CrmLead;
+  activity: CrmActivity;
 }
 
 export interface CrmSyncResult {
