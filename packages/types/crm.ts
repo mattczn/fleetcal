@@ -95,6 +95,7 @@ export type CrmActivityKind = (typeof CRM_ACTIVITY_KINDS)[number];
 export const CRM_CALL_OUTCOMES = [
   "no_answer",
   "voicemail",
+  "follow_up",       // connected or callback scheduled; still in play
   "bad_number",
   "not_interested",
   "interested",

@@ -75,6 +75,7 @@ export function VerificationBadge({
 export const OUTCOME_META: Record<CrmCallOutcome, { label: string; short: string; tint: string; tintLight: string }> = {
   no_answer:      { label: 'No answer',      short: 'No answer',  tint: '#5f6368', tintLight: '#f1f3f4' },
   voicemail:      { label: 'Voicemail',      short: 'Voicemail',  tint: '#1a73e8', tintLight: '#e8f0fe' },
+  follow_up:      { label: 'Follow up',      short: 'Follow up',  tint: '#e37400', tintLight: '#fef3e2' },
   bad_number:     { label: 'Bad number',     short: 'Bad #',      tint: '#c5221f', tintLight: '#fee2e2' },
   not_interested: { label: 'Not interested', short: 'Not int.',   tint: '#9a3412', tintLight: '#fed7aa' },
   interested:     { label: 'Interested',     short: 'Interested', tint: '#188038', tintLight: '#e6f4ea' },
