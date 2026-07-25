@@ -2292,6 +2292,18 @@ export default function EventModal() {
    *  NEVER be handed to a leg created later — remove-then-add is
    *  exactly the sequence that reattached the wrong driver. */
   const [releasedEventIds, setReleasedEventIds] = useState<string[]>([]);
+  /** Stable keys for plan slots that have no persisted leg to adopt.
+   *  Minted ONCE per slot and reused across refits — an index-derived
+   *  key (`seg:i`) changes whenever the plan is refitted, which orphans
+   *  that leg's entry in legEdits/legPays and silently reverts the
+   *  dispatcher's driver/truck to the persisted (often empty) value.
+   *  Index is not identity — the same mistake class as the original
+   *  positional-leg bug. */
+  const padKeysRef = useRef<string[]>([]);
+  /** Fields the dispatcher explicitly cleared this session, keyed by
+   *  eventId. Distinguishes "I chose — No driver —" (honour it) from
+   *  "the buffer went missing" (never write the clear). */
+  const [explicitClears, setExplicitClears] = useState<Record<string, { driver?: boolean }>>({});
 
   const isExistingRelayLeg = isEdit && !!relayRole;
 
@@ -2338,8 +2350,11 @@ export default function EventModal() {
    * appended. Nothing here ever blocks a save: an out-of-shape load
    * heals by pressing Save, which is what Matt asked for.
    *
-   * Padded entries use deterministic `seg:i` keys so React keys and the
-   * per-leg edit buffers stay stable across renders.
+   * Padded entries draw their key from padKeysRef — minted once per
+   * slot and reused across refits. They were keyed by array index
+   * (`seg:i`), which orphaned a slot's edit buffer the moment the plan
+   * refitted and silently wrote nulls over an assignment on save. Index
+   * is not identity here either.
    */
   const effectivePlan = useMemo<PlannedLeg[]>(() => {
     if (!isLegBuilder) return [];
@@ -2355,7 +2370,29 @@ export default function EventModal() {
       return p;
     });
     const out = cleaned.slice(0, derivedLegCount);
-    for (let i = out.length; i < derivedLegCount; i++) out.push({ key: `seg:${i}` });
+    // Short plan → pad. Adopt any still-unclaimed persisted leg in leg
+    // order FIRST (the same convergent adoption the server does), so a
+    // padded slot arrives with its driver, truck, pay and eventId
+    // intact. Only when nothing is left to adopt do we mint a genuinely
+    // new leg. Blank padding is what left Matt's delivery leg
+    // unassigned after a merge — and an assetId-less leg is exactly
+    // what the server 400s on.
+    const unclaimed = relayLegs.filter(l => !claimed.has(l.id) && !releasedEventIds.includes(l.id));
+    let next = 0;
+    for (let i = out.length; i < derivedLegCount; i++) {
+      const adopt = unclaimed[next];
+      if (adopt) {
+        next++;
+        claimed.add(adopt.id);
+        out.push({ key: adopt.id, eventId: adopt.id });
+      } else {
+        // Nothing left to adopt — a genuinely new slot. Its key must
+        // survive refits, so mint once and reuse.
+        const nth = out.filter(p => !p.eventId && p.key.startsWith('pad:')).length;
+        padKeysRef.current[nth] ??= `pad:${crypto.randomUUID()}`;
+        out.push({ key: padKeysRef.current[nth] });
+      }
+    }
     return out;
   }, [isLegBuilder, legPlan, relayLegs, releasedEventIds, derivedLegCount]);
   /** True when the form's start/end describe ONE LEG of a multi-leg
@@ -2605,7 +2642,7 @@ export default function EventModal() {
   };
 
   useEffect(() => {
-    if (!modalOpen) { setConfirmDel(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setRateConOriginal(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setOtherLegMiles({}); setShowDriverSummary(false); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setLoadInvoices([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); setInternalNotes([]); setOriginalInternalNotes([]); setNoteComposer(''); setNoteComposerOpen(false); setPendingNewBroker(null); setLegPays({}); setLegEdits({}); setDraftLegs([]); setPendingSplitStopId(null); setPendingSplitTargetId(null); pendingSplitLockRef.current = false; setLegPlan([]); setReleasedEventIds([]); setSuggestAssetSwap(null); setSuggestDriverSwap(null); return; }
+    if (!modalOpen) { setConfirmDel(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setRateConOriginal(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setOtherLegMiles({}); setShowDriverSummary(false); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setLoadInvoices([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); setInternalNotes([]); setOriginalInternalNotes([]); setNoteComposer(''); setNoteComposerOpen(false); setPendingNewBroker(null); setLegPays({}); setLegEdits({}); setDraftLegs([]); setPendingSplitStopId(null); setPendingSplitTargetId(null); pendingSplitLockRef.current = false; setLegPlan([]); setReleasedEventIds([]); setExplicitClears({}); padKeysRef.current = []; setSuggestAssetSwap(null); setSuggestDriverSwap(null); return; }
     setParseState('idle'); setParseError('');
     setRateConPdf(undefined); setRateConOriginal(undefined); setShowPdfViewer(false); setShowMapPanel(modalShowMap);
     setIsDirty(false); setShowSavePrompt(false);
@@ -2614,7 +2651,8 @@ export default function EventModal() {
     pendingSplitLockRef.current = false;
     reinstatingRef.current = false;
     unsplittingRef.current = false;
-    setLegPlan([]); setReleasedEventIds([]);
+    setLegPlan([]); setReleasedEventIds([]); setExplicitClears({});
+    padKeysRef.current = [];
     setAccessorials([]);
     // Internal notes are scoped to a single load — never carry across
     // duplicate / +1 Week / drag-create transitions. The edit branch
@@ -3996,6 +4034,31 @@ export default function EventModal() {
         if (dropped.eventId) {
           setReleasedEventIds(ids => ids.includes(dropped.eventId!) ? ids : [...ids, dropped.eventId!]);
         }
+        // Identity follows the SURVIVOR (base[handoffIdx]), but the
+        // assignment shouldn't evaporate: if the survivor has no driver
+        // or truck and the leg being absorbed does, carry those forward.
+        // Otherwise removing a handoff could leave the delivery leg
+        // "unassigned" even though a driver was already on it.
+        const survivor = base[handoffIdx];
+        const survivorLeg = survivor.eventId ? relayLegs.find(l => l.id === survivor.eventId) : undefined;
+        const droppedLeg = dropped.eventId ? relayLegs.find(l => l.id === dropped.eventId) : undefined;
+        const survivorDriver = legEdits[survivor.key]?.driverName
+          ?? (survivorLeg ? resolveDriverNameForEvent(survivorLeg) : undefined);
+        const survivorAsset = legEdits[survivor.key]?.assetId ?? survivorLeg?.assetId;
+        const droppedDriver = legEdits[dropped.key]?.driverName
+          ?? (droppedLeg ? resolveDriverNameForEvent(droppedLeg) : undefined);
+        const droppedAsset = legEdits[dropped.key]?.assetId ?? droppedLeg?.assetId;
+        const inherit: { driverName?: string; assetId?: number } = {};
+        if (!survivorDriver && droppedDriver) inherit.driverName = droppedDriver;
+        if (!survivorAsset  && droppedAsset)  inherit.assetId    = droppedAsset;
+        const survivorPay = legPays[survivor.key];
+        const droppedPay  = legPays[dropped.key] ?? droppedLeg?.driverPay;
+        if ((survivorPay === '' || survivorPay == null) && droppedPay != null && droppedPay !== '') {
+          setLegPays(p => ({ ...p, [survivor.key]: droppedPay as number }));
+        }
+        if (Object.keys(inherit).length > 0) {
+          setLegEdits(e => ({ ...e, [survivor.key]: { ...e[survivor.key], ...inherit } }));
+        }
         // Drop the merged-away leg's edit buffers so a later add can't
         // inherit its driver/pay through a recycled key.
         setLegEdits(e => { const n = { ...e }; delete n[dropped.key]; return n; });
@@ -4221,7 +4284,18 @@ export default function EventModal() {
           ? { ...d, driverName: name, ...(prefAid != null ? { assetId: prefAid } : {}) }
           : d));
       } else {
-        setLegEdits(prev => ({ ...prev, [key]: { ...prev[key], driverName: name } }));
+        // Picking a driver also pulls that driver's truck across, and
+        // an empty pick is an EXPLICIT clear — recorded so the payload
+        // safety net can tell it apart from a lost buffer.
+        const prefAid = preferredAssetForDriverName(name);
+        setLegEdits(prev => ({
+          ...prev,
+          [key]: { ...prev[key], driverName: name, ...(prefAid != null ? { assetId: prefAid } : {}) },
+        }));
+        const evId = relayLegViews.find(v => v.key === key)?.eventId;
+        if (evId) {
+          setExplicitClears(prev => ({ ...prev, [evId]: { ...prev[evId], driver: !name.trim() } }));
+        }
       }
     }
     if (patch.assetId !== undefined) {
@@ -4234,7 +4308,20 @@ export default function EventModal() {
           ? { ...d, assetId: aid, ...(suggested ? { driverName: suggested } : {}) }
           : d));
       } else {
-        setLegEdits(prev => ({ ...prev, [key]: { ...prev[key], assetId: aid } }));
+        // Driver-preference autofill applies to ANY leg without a
+        // driver — including a persisted-but-unassigned one, which
+        // previously fell through to the stored (empty) name and so
+        // never picked up the truck's preferred driver.
+        const view = relayLegViews.find(v => v.key === key);
+        const currentDriver = (legEdits[key]?.driverName ?? view?.driverName ?? '').trim();
+        const suggested = preferredDriverName(aid);
+        const evId = view?.eventId;
+        const clearedOnPurpose = !!(evId && explicitClears[evId]?.driver);
+        const fillDriver = !currentDriver && !clearedOnPurpose && suggested;
+        setLegEdits(prev => ({
+          ...prev,
+          [key]: { ...prev[key], assetId: aid, ...(fillDriver ? { driverName: suggested } : {}) },
+        }));
       }
     }
   };
@@ -4377,9 +4464,26 @@ export default function EventModal() {
     if (boundaryIdxs.includes(0) || boundaryIdxs.includes(stops.length - 1)) {
       return 'The first and last stop cannot be handoffs — a handoff needs a leg on each side.';
     }
-    const noTruck = relayLegViews.findIndex(l => !l.assetId || !assets.some(a => a.id === l.assetId));
-    if (noTruck >= 0) {
-      return `${legLabel(noTruck, relayLegViews.length) || `Leg ${noTruck + 1}`} needs a truck before these legs can be saved.`;
+    // ── Payload audit: every field the server validates ─────────────
+    // Catch these here with the leg named, rather than letting the API
+    // 400 with an index the dispatcher can't map to anything on screen.
+    const nameOf = (i: number) => legLabel(i, relayLegViews.length) || `Leg ${i + 1}`;
+    const isNaiveIso = (v: string | undefined): v is string =>
+      !!v && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(v);
+    for (let i = 0; i < relayLegViews.length; i++) {
+      const l = relayLegViews[i];
+      // assetId must be a real number that exists in the asset list.
+      if (!l.assetId || !Number.isFinite(l.assetId) || !assets.some(a => a.id === l.assetId)) {
+        return `${nameOf(i)} needs a truck before these legs can be saved.`;
+      }
+      // start / end must be present, well-formed and correctly ordered.
+      const t = legBoundaryTimes(i);
+      if (!isNaiveIso(t.start) || !isNaiveIso(t.end)) {
+        return `${nameOf(i)} is missing a start or end time. Set the load's pickup and delivery times, and a drop time on each handoff.`;
+      }
+      if (t.start > t.end) {
+        return `${nameOf(i)} ends before it starts. Check the handoff times around it.`;
+      }
     }
     for (let i = 0; i < boundaryIdxs.length; i++) {
       const t = handoffTimesOf(stops[boundaryIdxs[i]]);
@@ -4406,7 +4510,7 @@ export default function EventModal() {
     return !!leg.driverName || !!leg.driverId || (leg.driverPay ?? 0) > 0 || beyondAssigned || hasDocs;
   };
 
-  const [legRemovalConfirm, setLegRemovalConfirm] = useState<{ message: string } | null>(null);
+  const [legRemovalConfirm, setLegRemovalConfirm] = useState<{ message: string; surplus?: boolean } | null>(null);
   const legRemovalResolver = useRef<((ok: boolean) => void) | null>(null);
   /** Describe exactly what a destructive save is about to drop, then
    *  wait for the dispatcher. Resolves false on cancel. */
@@ -4422,12 +4526,21 @@ export default function EventModal() {
       ].filter(Boolean);
       return `${label} (${bits.join(', ')})`;
     };
+    // Two very different situations wear the same dialog, so say which
+    // one this is. A leg the dispatcher just merged away is expected;
+    // surplus legs that match no route segment are damaged data (the
+    // duplicate-save bug) and reappear on every save until cleared —
+    // alarming unless we name it.
+    const surplusCount = Math.max(0, relayLegs.length - derivedLegCount);
+    const removedIsSurplus = surplusCount > 0 && removed.length <= surplusCount
+      && releasedEventIds.length === 0;
     const list = removed.map(describe).join(' and ');
+    const message = removedIsSurplus
+      ? `This load has ${removed.length} extra leg${removed.length === 1 ? '' : 's'} that ${removed.length === 1 ? "isn't" : "aren't"} part of its route (left behind by an earlier failed save): ${list}. Saving removes ${removed.length === 1 ? 'it' : 'them'} and leaves the ${derivedLegCount} leg${derivedLegCount === 1 ? '' : 's'} the route actually has. Continue?`
+      : `Saving removes ${list}. Its pay and paperwork will be detached from the load. Continue?`;
     return new Promise<boolean>(resolve => {
       legRemovalResolver.current = resolve;
-      setLegRemovalConfirm({
-        message: `Saving removes ${list}. Its pay and paperwork will be detached from the load. Continue?`,
-      });
+      setLegRemovalConfirm({ message, surplus: removedIsSurplus });
     });
   };
 
@@ -4458,12 +4571,29 @@ export default function EventModal() {
         legs: relayLegViews.map((l, i) => {
           const times = legBoundaryTimes(i);
           const payVal = legPays[l.key];
+          // ── Never silently downgrade an assigned leg ───────────────
+          // If this leg exists server-side and the payload would send a
+          // BLANK driver/truck/pay while the stored row has one, that is
+          // a lost edit buffer, not an intent — keep the stored value.
+          // An explicit "— No driver —" pick is recorded separately and
+          // still clears. Without this, a key that changed between
+          // assigning and saving wrote null over the assignment and the
+          // save reported success.
+          const persisted = l.eventId ? relayLegs.find(e => e.id === l.eventId) : undefined;
+          const clearedDriver = !!(l.eventId && explicitClears[l.eventId]?.driver);
+          const driverName = l.driverName?.trim()
+            ? l.driverName
+            : (clearedDriver ? null : (persisted?.driverName ?? null));
+          const assetId = l.assetId || persisted?.assetId;
+          const driverPay = payVal === '' || payVal == null
+            ? (persisted?.driverPay ?? null)
+            : payVal;
           return {
             ...(l.eventId ? { eventId: l.eventId } : {}),
-            assetId: l.assetId,
-            driverId: findDriverByName(l.driverName)?.id ?? null,
-            driverName: l.driverName || null,
-            driverPay: payVal === '' || payVal == null ? null : payVal,
+            assetId: assetId as number,
+            driverId: findDriverByName(driverName ?? undefined)?.id ?? null,
+            driverName: driverName || null,
+            driverPay,
             start: times.start,
             end:   times.end,
             status: l.isViewed ? status : undefined,
@@ -5069,13 +5199,28 @@ export default function EventModal() {
         const prevAssetId = i > 0
           ? ((prevKey ? legEdits[prevKey]?.assetId : undefined) ?? prevExisting?.assetId ?? assetId)
           : assetId;
-        const fallbackAsset = existing?.assetId
+        const prevDriver = i > 0
+          ? ((prevKey ? legEdits[prevKey]?.driverName : undefined)
+              ?? (prevExisting ? resolveDriverNameForEvent(prevExisting) : undefined))
+          : driverName;
+        // A leg must ALWAYS end up with a real truck — the server
+        // rejects a leg without one, and a blank card reads as
+        // "unassigned" to the dispatcher. Order of preference: the
+        // persisted leg's own truck, then a truck other than the
+        // previous leg's, then the previous leg's, then the form's.
+        const candidateAsset = existing?.assetId
           ?? assets.find(a => a.id !== prevAssetId)?.id
+          ?? prevAssetId
           ?? assetId;
+        const fallbackAsset = assets.some(a => a.id === candidateAsset)
+          ? candidateAsset
+          : (assets[0]?.id ?? candidateAsset);
         const resolvedAsset = edits.assetId ?? (isViewed ? assetId : fallbackAsset);
+        // Driver: the leg's own, else that truck's preferred driver,
+        // else carry the previous leg's driver rather than blanking.
         const fallbackDriver = existing
           ? resolveDriverNameForEvent(existing)
-          : preferredDriverName(resolvedAsset);
+          : (preferredDriverName(resolvedAsset) || prevDriver || '');
         return {
           key,
           eventId: existing?.id,
@@ -7601,10 +7746,10 @@ export default function EventModal() {
         `force: true` on the PUT. */}
     {legRemovalConfirm && (
       <ConfirmDialog
-        title="Remove a leg from this load?"
+        title={legRemovalConfirm.surplus ? 'Clear extra legs from this load?' : 'Remove a leg from this load?'}
         message={legRemovalConfirm.message}
-        confirmLabel="Remove leg and save"
-        cancelLabel="Keep the leg"
+        confirmLabel={legRemovalConfirm.surplus ? 'Clear extra legs and save' : 'Remove leg and save'}
+        cancelLabel={legRemovalConfirm.surplus ? "Leave them for now" : "Keep the leg"}
         destructive
         zIndex={240}
         onCancel={() => { setLegRemovalConfirm(null); legRemovalResolver.current?.(false); legRemovalResolver.current = null; }}
