@@ -2196,24 +2196,16 @@ loads.put("/:id/legs", requireCapability("loads.edit"), async (c) => {
       return badRequest(c, [`legs[${i}]: eventId does not belong to this load`]);
     }
   }
-  // Optimistic concurrency. Two reconciles fired before either finished
-  // both read this same pre-save leg list, and every payload entry
-  // without an eventId means "create a leg" — so without this check a
-  // double-click multiplies legs (observed: three impatient clicks on a
-  // slow save turned a 3-leg load into a 7-leg one, all sharing the
-  // original handoff). Comparing what the client believed exists against
-  // what actually exists makes the second writer lose.
-  if (Array.isArray(body.expectedEventIds)) {
-    const actual   = new Set(existing.map((e) => e.id));
-    const expected = new Set(body.expectedEventIds);
-    const same = actual.size === expected.size && [...actual].every((id) => expected.has(id));
-    if (!same) {
-      return c.json({
-        error:  "legs_stale",
-        detail: "This load's legs changed while you were editing (another save may have just landed). Reopen the load and redo the change.",
-      } satisfies ApiErrorResponse, 409);
-    }
-  }
+  // `expectedEventIds` used to hard-reject a payload whose leg set had
+  // drifted. That guarded against the double-submit multiplication —
+  // which the reuse-pool below now prevents at the source — while
+  // creating a worse failure: a client whose cache was stale sent the
+  // same wrong set on every retry and could never save at all, with no
+  // way out of the loop. Reconciling is convergent by design (the stop
+  // list is the truth and the legs are made to match it), so a drifted
+  // view is something to converge, not something to refuse. The field
+  // is accepted and ignored for wire compatibility.
+  void body.expectedEventIds;
 
   const keptIds = new Set(body.legs.map((l) => l.eventId).filter(Boolean) as string[]);
   if (new Set(body.legs.filter(l => l.eventId).map(l => l.eventId)).size !== keptIds.size) {
@@ -2243,6 +2235,18 @@ loads.put("/:id/legs", requireCapability("loads.edit"), async (c) => {
   const template = existing[0];
 
   // ── 1. Update / create each leg in order ──────────────────────────────
+  //
+  // Payload entries without an eventId mean "this segment has no event
+  // yet". They do NOT mean "insert unconditionally": an entry that
+  // inserts every time makes the endpoint non-idempotent, so re-sending
+  // the same payload (a retry, a double-click, a stale tab) multiplies
+  // legs instead of converging. Un-identified entries therefore consume
+  // any still-unclaimed existing leg, in order, before creating one.
+  // Re-applying the same payload then lands on the same rows.
+  const claimed = new Set(body.legs.map((l) => l.eventId).filter(Boolean) as string[]);
+  const reusePool = existing.map((e) => e.id).filter((id) => !claimed.has(id));
+  let reuseAt = 0;
+
   const legIds: string[] = [];
   for (const [i, leg] of body.legs.entries()) {
     const shared = {
@@ -2257,17 +2261,19 @@ loads.put("/:id/legs", requireCapability("loads.edit"), async (c) => {
       ...(leg.trailerId   !== undefined ? { trailer_id:   leg.trailerId }   : {}),
       ...(leg.trailerType !== undefined ? { trailer_type: leg.trailerType } : {}),
     };
-    if (leg.eventId) {
+    // Named leg, or an unnamed one adopting a leftover existing leg.
+    const targetId = leg.eventId ?? (reuseAt < reusePool.length ? reusePool[reuseAt++] : undefined);
+    if (targetId) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { error: upErr } = await supabase
         .from("events")
         .update({ ...shared, ...(leg.status ? { status: leg.status } : {}) } as any)
-        .eq("id", leg.eventId)
+        .eq("id", targetId)
         .eq("org_id", orgId);
       if (upErr) {
         return c.json({ error: "leg_update_failed", detail: upErr.message } satisfies ApiErrorResponse, 500);
       }
-      legIds.push(leg.eventId);
+      legIds.push(targetId);
     } else {
       const insert = {
         ...shared,
@@ -2293,7 +2299,11 @@ loads.put("/:id/legs", requireCapability("loads.edit"), async (c) => {
   }
 
   // ── 2. Soft-delete legs the caller dropped ────────────────────────────
-  const removedIds = existing.map((e) => e.id).filter((id) => !keptIds.has(id));
+  // `legIds` is the authoritative surviving set — it includes legs an
+  // un-identified payload entry adopted from the reuse pool, which
+  // `keptIds` (explicit ids only) would have marked for deletion.
+  const survivingIds = new Set(legIds);
+  const removedIds = existing.map((e) => e.id).filter((id) => !survivingIds.has(id));
   if (removedIds.length > 0) {
     // A reconcile that quietly deletes a leg a driver already ran takes
     // its pay, status and paperwork with it — and a client bug (leg

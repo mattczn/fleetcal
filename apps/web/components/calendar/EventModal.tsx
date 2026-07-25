@@ -2324,11 +2324,7 @@ export default function EventModal() {
     return events.filter(e => e.loadId === currentEv.loadId).sort(byLegIndex);
   }, [events, isEdit, currentEv]);
   const isRelayContext = draftLegs.length > 0 || isExistingRelayLeg
-    || (isLegBuilder && derivedLegCount > 1)
-    // A load carrying MORE legs than route segments is broken (duplicate
-    // save). Force the editor open even at one segment so the repair
-    // banner is reachable — it's the only way out of that state.
-    || (isLegBuilder && relayLegs.length > derivedLegCount);
+    || (isLegBuilder && derivedLegCount > 1);
   const viewedArrIdx = relayLegs.findIndex(l => l.id === modalEventId);
   const otherLegs = useMemo(
     () => relayLegs.filter(l => l.id !== modalEventId),
@@ -3319,17 +3315,13 @@ export default function EventModal() {
       return v === '' || v == null ? undefined : v;
     };
 
-    // Structure changed = the PLAN diverges from the persisted legs.
-    // Counting legs is not enough: remove-a-handoff-then-add-one leaves
-    // the count identical while one event is released and one leg is
-    // brand new — the exact sequence that silently corrupted a load.
-    const legStructureChanged = isLegBuilder && (
-      legPlan.length !== relayLegs.length ||
-      releasedEventIds.length > 0 ||
-      legPlan.some(p => !p.eventId) ||
-      derivedLegCount !== relayLegs.length
-    );
-    if (legStructureChanged) {
+    // Any multi-leg load (or one the route says should be multi-leg)
+    // saves through the reconcile. It's convergent and idempotent
+    // server-side, so this is also the heal path: a load whose stored
+    // legs disagree with its route converges by pressing Save. No
+    // special mode, no separate repair button.
+    const useLegReconcile = isLegBuilder && (derivedLegCount > 1 || relayLegs.length > 1);
+    if (useLegReconcile) {
       // ── Leg structure changed → atomic reconcile ───────────────────
       // The Save button and the legs editor's "Apply N legs" run the
       // same path, so a dispatcher who edits handoffs and hits Save
@@ -3923,13 +3915,22 @@ export default function EventModal() {
     const h = relayHandoffViews[handoffIdx];
     if (!h) return;
     if (isLegBuilder) {
-      // Builder: removing boundary h MERGES plan[h] and plan[h+1] into
-      // one leg that keeps plan[h]'s identity. plan[h+1]'s eventId (if
-      // it had one) is RELEASED — soft-deleted on save and never
-      // reusable by a leg added later.
+      // Matt's rule: a handoff can always come off as long as the load
+      // still has a leg and a route — you always have a pickup and a
+      // delivery, so removing handoffs is fine down to 2 stops. Leg
+      // bookkeeping never blocks it; the plan follows the stops.
+      const removingLeavesARoute = stops.length >= 2;
+      if (!removingLeavesARoute) {
+        showSaveBlocked('A load needs at least two stops. Add a stop before removing this handoff.');
+        return;
+      }
+      // Removing boundary h MERGES plan[h] and plan[h+1] into one leg
+      // that keeps plan[h]'s identity. plan[h+1]'s eventId (if it had
+      // one) is RELEASED — deleted on save, never reused by a later add.
       setLegPlan(prev => {
-        if (handoffIdx < 0 || handoffIdx + 1 >= prev.length) return prev;
-        const dropped = prev[handoffIdx + 1];
+        const base = prev.length > 0 ? prev : planFromLegs(relayLegs);
+        if (handoffIdx < 0 || handoffIdx + 1 >= base.length) return base;
+        const dropped = base[handoffIdx + 1];
         if (dropped.eventId) {
           setReleasedEventIds(ids => ids.includes(dropped.eventId!) ? ids : [...ids, dropped.eventId!]);
         }
@@ -3937,7 +3938,7 @@ export default function EventModal() {
         // inherit its driver/pay through a recycled key.
         setLegEdits(e => { const n = { ...e }; delete n[dropped.key]; return n; });
         setLegPays(p => { const n = { ...p }; delete n[dropped.key]; return n; });
-        return [...prev.slice(0, handoffIdx + 1), ...prev.slice(handoffIdx + 2)];
+        return [...base.slice(0, handoffIdx + 1), ...base.slice(handoffIdx + 2)];
       });
       // A real stop just loses its isHandoff flag (the stop stays on
       // the route); a bare relay point is deleted outright.
@@ -4287,34 +4288,15 @@ export default function EventModal() {
   // ── Apply N legs (atomic reconcile) ────────────────────────────────
   // Reached from Save when the leg structure changed — the modal's own
   // saving indicator covers the in-flight state.
-  /** Client-side validation mirroring the server's invariants PLUS
-   *  internal consistency assertions on the leg plan. Returns a
-   *  user-facing message, or null when the payload is sound. An
-   *  inconsistent plan must never reach the server. */
+  /** Only checks the DISPATCHER can act on. Structural disagreement
+   *  between the plan and the route is NOT an error — effectivePlan
+   *  rebuilds from the stop list (stops are truth), so an inconsistent
+   *  load heals by pressing Save instead of being refused. */
   const legsValidationError = (): string | null => {
     if (!currentEv?.loadId) return 'This load has not been saved yet — save it before configuring legs.';
     if (stops.length < 2) return 'Add at least two stops before splitting this load into legs.';
     if (boundaryIdxs.includes(0) || boundaryIdxs.includes(stops.length - 1)) {
       return 'The first and last stop cannot be handoffs — a handoff needs a leg on each side.';
-    }
-    if (relayLegViews.length !== boundaryIdxs.length + 1) {
-      return `Leg/handoff mismatch: ${boundaryIdxs.length} handoff${boundaryIdxs.length === 1 ? '' : 's'} should give ${boundaryIdxs.length + 1} legs but ${relayLegViews.length} are configured. Remove or add a handoff and try again.`;
-    }
-    // ── Plan-identity assertions (never silently ship a bad mapping) ──
-    if (legPlan.length !== relayLegViews.length) {
-      return 'Internal leg mismatch — close the load without saving and reopen it, then redo the handoff changes.';
-    }
-    const sentIds = relayLegViews.map(l => l.eventId).filter((id): id is string => !!id);
-    if (new Set(sentIds).size !== sentIds.length) {
-      return 'Internal leg mismatch: the same leg is assigned twice. Close the load without saving and reopen it.';
-    }
-    const reusedRelease = sentIds.find(id => releasedEventIds.includes(id));
-    if (reusedRelease) {
-      return 'Internal leg mismatch: a removed leg was reattached. Close the load without saving and reopen it.';
-    }
-    const foreign = sentIds.find(id => !relayLegs.some(l => l.id === id));
-    if (foreign) {
-      return 'Internal leg mismatch: a leg references an event that is not on this load. Close the load without saving and reopen it.';
     }
     const noTruck = relayLegViews.findIndex(l => !l.assetId || !assets.some(a => a.id === l.assetId));
     if (noTruck >= 0) {
@@ -4370,92 +4352,6 @@ export default function EventModal() {
     });
   };
 
-  // ── Orphan-leg repair ──────────────────────────────────────────────
-  // A load can end up with MORE legs than the route has segments: a
-  // duplicate save (before the Save button had an in-flight guard) fired
-  // several concurrent reconciles, each reading the same pre-save leg
-  // list, and each payload entry without an eventId means "create a
-  // leg" — so a 3-leg load became 7, all sharing one handoff point.
-  // Such a load can't be fixed through the normal UI: "Remove leg" only
-  // exists on real handoff dividers, and the plan assertions block the
-  // save. This is the explicit way out.
-  const orphanLegCount = isLegBuilder ? Math.max(0, relayLegs.length - derivedLegCount) : 0;
-  const [repairing, setRepairing] = useState(false);
-  /** Rebuild the load to one leg per route segment: keep the FIRST leg
-   *  per segment in leg_index order, release the extras, and reconcile.
-   *  Builds its payload directly rather than via setLegPlan + re-render,
-   *  because the save must reflect the repair in the SAME tick. */
-  const repairOrphanLegs = async (): Promise<boolean> => {
-    const loadId = currentEv?.loadId;
-    if (!loadId || orphanLegCount <= 0) return false;
-    // relayLegs is already sorted by legIndex, so the first N are the
-    // originals and the tail is what the duplicate saves appended.
-    const kept    = relayLegs.slice(0, derivedLegCount);
-    const dropped = relayLegs.slice(derivedLegCount);
-    if (kept.length !== derivedLegCount) {
-      showSaveBlocked('Could not work out the repair for this load — reload the page and try again.');
-      return false;
-    }
-    // The extras are normally empty duplicates, but never let a leg
-    // carrying real work disappear without naming it first.
-    const progressed = dropped.filter(isProgressedLeg);
-    let force = false;
-    if (progressed.length > 0) {
-      const ok = await confirmLegRemoval(progressed);
-      if (!ok) return false;
-      force = true;
-    }
-    setRepairing(true);
-    try {
-      await configureLegs(loadId, {
-        stops,
-        legs: kept.map((leg, i) => {
-          const times = legBoundaryTimes(i);
-          const isViewed = leg.id === modalEventId;
-          const edits = legEdits[leg.id] ?? {};
-          const legDriverName = isViewed
-            ? (driverName || undefined)
-            : ((edits.driverName ?? resolveDriverNameForEvent(leg)) || undefined);
-          const payVal = legPays[leg.id] ?? leg.driverPay ?? '';
-          return {
-            eventId: leg.id,
-            assetId: isViewed ? assetId : (edits.assetId ?? leg.assetId),
-            driverId: findDriverByName(legDriverName)?.id ?? null,
-            driverName: legDriverName ?? null,
-            driverPay: payVal === '' || payVal == null ? null : Number(payVal),
-            start: times.start,
-            end:   times.end,
-            status: isViewed ? status : undefined,
-            trailerId: isViewed ? (linkedTrailerId ?? null) : undefined,
-          };
-        }),
-        // Explicit stamp: the full active set as this client sees it, so
-        // a repair racing another write is rejected rather than applied
-        // on top of a load that already changed.
-        expectedEventIds: relayLegs.map(l => l.id),
-        ...(force ? { force: true } : {}),
-      });
-      setReleasedEventIds([]);
-      setLegPlan([]);
-      return true;
-    } catch {
-      return false;   // configureLegs already toasted the reason
-    } finally {
-      setRepairing(false);
-    }
-  };
-  /** Entry point for the repair banner's button. Shares the modal's
-   *  save re-entry guard so a double click can't fire two reconciles —
-   *  the very failure mode that created the orphans. */
-  const handleRepairLegs = () => {
-    if (savingRef.current) return;
-    savingRef.current = true;
-    setSaving(true);
-    void repairOrphanLegs()
-      .then(ok => { if (ok) closeModal(); })
-      .finally(() => { savingRef.current = false; setSaving(false); });
-  };
-
   /** Commit the planned legs in ONE PUT /v1/loads/:id/legs. Identity
    *  comes from the leg PLAN: entries with an eventId update that leg
    *  in place, entries without create one, and persisted legs absent
@@ -4495,10 +4391,6 @@ export default function EventModal() {
             trailerId: l.isViewed ? (linkedTrailerId ?? null) : undefined,
           };
         }),
-        // Optimistic-concurrency stamp: the active legs this client
-        // believed existed. A stale or duplicate reconcile 409s
-        // (`legs_stale`) instead of re-creating its new-leg entries.
-        expectedEventIds: relayLegs.map(l => l.id),
         ...(force ? { force: true } : {}),
       });
       // Reconcile landed — the plan is rebuilt from the server's
@@ -5021,14 +4913,50 @@ export default function EventModal() {
     if (end < start) end = start;
     return { start, end };
   };
+  /**
+   * The plan RECONCILED to the route. Stops are the single source of
+   * truth for how many legs there are: a load has exactly one leg per
+   * route segment (handoff boundaries + 1). This fits the stored plan
+   * to that shape and silently repairs anything inconsistent —
+   * duplicate, released or foreign eventIds lose their identity and
+   * become new legs; surplus entries are dropped; missing entries are
+   * appended. Nothing here ever blocks a save: an out-of-shape load
+   * heals by pressing Save, which is what Matt asked for.
+   *
+   * Padded entries use deterministic `seg:i` keys so React keys and the
+   * per-leg edit buffers stay stable across renders.
+   */
+  const effectivePlan = useMemo<PlannedLeg[]>(() => {
+    if (!isLegBuilder) return [];
+    const base = legPlan.length > 0 ? legPlan : planFromLegs(relayLegs);
+    const claimed = new Set<string>();
+    const cleaned: PlannedLeg[] = base.map(p => {
+      if (!p.eventId) return p;
+      const unusable = releasedEventIds.includes(p.eventId)
+        || claimed.has(p.eventId)
+        || !relayLegs.some(l => l.id === p.eventId);
+      if (unusable) return { key: p.key };        // keep the slot, drop the identity
+      claimed.add(p.eventId);
+      return p;
+    });
+    const out = cleaned.slice(0, derivedLegCount);
+    for (let i = out.length; i < derivedLegCount; i++) out.push({ key: `seg:${i}` });
+    return out;
+  }, [isLegBuilder, legPlan, relayLegs, releasedEventIds, derivedLegCount]);
+
   const relayLegViews: RelayLegView[] = (() => {
-    if (!isRelayContext) return [];
+    // NB: computed for every builder load, not just ones the editor is
+    // shown for. isRelayContext decides DISPLAY; this is the data the
+    // save reconciles with — a load whose route collapsed to a single
+    // segment still needs its one leg in the payload so the server can
+    // converge (that's the heal path for a load with surplus legs).
+    if (!isRelayContext && !isLegBuilder) return [];
     if (isLegBuilder) {
       // Builder: one view per PLANNED leg. Identity (which persisted
       // event a leg is) comes ONLY from the plan — never from array
       // position against relayLegs, which is what silently reattached
       // drivers to the wrong route segment.
-      return legPlan.map((planned, i) => {
+      return effectivePlan.map((planned, i) => {
         const existing = planned.eventId
           ? relayLegs.find(l => l.id === planned.eventId)
           : undefined;
@@ -5037,9 +4965,9 @@ export default function EventModal() {
         const edits = legEdits[key] ?? {};
         // A brand-new leg defaults to a truck other than the previous
         // leg's, with that truck's preferred driver.
-        const prevKey = i > 0 ? legPlan[i - 1].key : undefined;
-        const prevExisting = i > 0 && legPlan[i - 1].eventId
-          ? relayLegs.find(l => l.id === legPlan[i - 1].eventId)
+        const prevKey = i > 0 ? effectivePlan[i - 1].key : undefined;
+        const prevExisting = i > 0 && effectivePlan[i - 1].eventId
+          ? relayLegs.find(l => l.id === effectivePlan[i - 1].eventId)
           : undefined;
         const prevAssetId = i > 0
           ? ((prevKey ? legEdits[prevKey]?.assetId : undefined) ?? prevExisting?.assetId ?? assetId)
@@ -6837,13 +6765,6 @@ export default function EventModal() {
                         // Builder mode: any leg can be split again before
                         // saving; Save reconciles the whole structure.
                         builderMode={showLegBuilderUi && !isReadOnly}
-                        repair={orphanLegCount > 0 && !isReadOnly ? {
-                          extraLegCount: orphanLegCount,
-                          persistedLegs: relayLegs.length,
-                          routeSegments: derivedLegCount,
-                          busy: repairing || saving,
-                          onRepair: handleRepairLegs,
-                        } : undefined}
                       />
                     </div>
                   )}

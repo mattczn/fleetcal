@@ -17,7 +17,7 @@
  */
 
 import { Fragment, useState } from 'react';
-import { ArrowLeftRight, Plus, AlertTriangle } from 'lucide-react';
+import { ArrowLeftRight, Plus } from 'lucide-react';
 import { legLabel } from '@fleetcal/types';
 import { StyledSelect } from '@/components/ui/StyledSelect';
 import { AssetSelect } from './AssetSelect';
@@ -107,16 +107,6 @@ interface Props {
    *  single pass. Saving reconciles them all at once via
    *  PUT /v1/loads/:id/legs. False = the incremental split flow. */
   builderMode?: boolean;
-  /** Set when the load has MORE persisted legs than the route has
-   *  segments — the signature of a duplicate save that created phantom
-   *  legs. Renders a repair banner; absent means the load is sound. */
-  repair?: {
-    extraLegCount:   number;
-    persistedLegs:   number;
-    routeSegments:   number;
-    busy?:           boolean;
-    onRepair:        () => void;
-  };
 }
 
 function fmtRelayTime(iso: string): string {
@@ -316,7 +306,7 @@ export default function RelayLegsEditor({
   legs, handoffs, loadPrice, assets, drivers, startDate,
   canViewDriverPay, disabled, loadId, handoffPhotos, onSelectPhoto, onPhotosUploaded,
   canonicalDriverName, onChangeLeg, onOpenLeg, onAddHandoff, onAddHandoffForLeg, onRemoveHandoff,
-  builderMode, repair,
+  builderMode,
 }: Props) {
   const [confirmIdx, setConfirmIdx] = useState<number | null>(null);
 
@@ -348,35 +338,6 @@ export default function RelayLegsEditor({
           </button>
         )}
       </div>
-
-      {/* Orphan-leg repair. Only rendered when the load carries more
-          legs than the route has segments — the fingerprint of a
-          duplicate save. The normal controls can't fix it (there's no
-          handoff divider to "Remove leg" from), so this is the way out. */}
-      {repair && (
-        <div className="rounded-lg p-3 space-y-2" style={{ background: '#fef3c7', border: '1px solid #fcd34d' }}>
-          <div className="flex items-start gap-2">
-            <AlertTriangle size={14} style={{ color: '#b45309', flexShrink: 0, marginTop: 1 }} />
-            <div style={{ fontSize: 12, color: '#92400e' }}>
-              <strong>This load has {repair.persistedLegs} legs but only {repair.routeSegments} route segment{repair.routeSegments === 1 ? '' : 's'}</strong>
-              {' — '}{repair.extraLegCount} extra leg{repair.extraLegCount === 1 ? ' was' : 's were'} created by a duplicate save.
-              {' '}Repairing keeps the first leg of each segment and removes the extras.
-            </div>
-          </div>
-          <div className="flex justify-end">
-            <button type="button" onClick={repair.onRepair} disabled={repair.busy}
-              className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors"
-              style={{
-                background: '#b45309', color: '#fff', border: 'none',
-                cursor: repair.busy ? 'wait' : 'pointer', opacity: repair.busy ? 0.6 : 1,
-              }}>
-              {repair.busy
-                ? 'Repairing…'
-                : `Repair — keep ${repair.routeSegments} leg${repair.routeSegments === 1 ? '' : 's'}, remove ${repair.extraLegCount}`}
-            </button>
-          </div>
-        </div>
-      )}
 
       {legs.map((leg, i) => {
         const handoff = i > 0 ? handoffs[i - 1] : null;

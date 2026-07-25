@@ -302,16 +302,12 @@ export interface ConfigureLegsRequest {
    *  pay, status and paperwork with it. Clients must set this only
    *  after the user has confirmed the specific loss. */
   force?: boolean;
-  /** Optimistic concurrency: the active leg event ids the client
-   *  believed existed when it built this payload. If the load's legs
-   *  have changed since, the server rejects with 409 `legs_stale`
-   *  rather than applying a payload written against a different
-   *  structure.
-   *
-   *  This is what stops a double-submit from multiplying legs: two
-   *  in-flight reconciles both read the pre-save leg list, and each
-   *  entry without an `eventId` means "create a leg", so without this
-   *  check every extra click adds another leg. Order-independent. */
+  /** @deprecated Accepted and ignored. This once hard-rejected a payload
+   *  whose leg set had drifted, which dead-ended any client with a stale
+   *  cache — it resent the same wrong set forever. Reconciling is
+   *  convergent (the stop list is the truth, legs are made to match), so
+   *  drift is converged rather than refused, and duplicate submits are
+   *  prevented by the reuse pool instead. */
   expectedEventIds?: string[];
 }
 
