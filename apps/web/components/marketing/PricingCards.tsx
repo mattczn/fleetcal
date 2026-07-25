@@ -5,7 +5,7 @@
  *
  * Rewritten from the prior Systematica zero-radius look:
  *   - rounded-3xl cards w/ soft elevation
- *   - segmented Monthly / Annual (save up to 20%) toggle above the grid
+ *   - segmented Monthly / Annual (save up to 12%) toggle above the grid
  *   - "Growth" is the popular tier — 2px blue ring + lifted, plus
  *     "Most popular" pill in the top-right corner
  *   - Tonal CTA (blue-light) on non-popular, primary pill on popular
@@ -16,9 +16,9 @@
  * the TIERS constant below so the displayed numbers stay in sync
  * with what the user is actually charged at checkout:
  *
- *   Owner Op  monthly $99    · annual $948/yr   ($79/mo  · save $240/yr / 20%)
- *   Growth    monthly $149   · annual $1,548/yr ($129/mo · save $240/yr / 13%)
- *   Fleet     monthly $199   · annual $2,028/yr ($169/mo · save $360/yr / 15%)
+ *   Owner Op  monthly $249   · annual $2,628/yr ($219/mo · save $360/yr / 12%)
+ *   Growth    monthly $299   · annual $3,180/yr ($265/mo · save $408/yr / 11%)
+ *   Fleet     monthly $349   · annual $3,708/yr ($309/mo · save $480/yr / 12%)
  *
  * The post-signup flow routes to Clerk's hosted checkout via
  * `/sign-up?plan=${key}&period=${monthly|annual}`. The period param
@@ -65,9 +65,9 @@ const TIERS: readonly PricingTier[] = [
   {
     key:           'owner_op',
     name:          'Owner Op',
-    monthlyPrice:  99,
-    annualMonthly: 79,
-    annualTotal:   948,
+    monthlyPrice:  249,
+    annualMonthly: 219,
+    annualTotal:   2628,
     trucks:        '1–4 trucks',
     blurb:         'For the owner-op who is also the dispatcher.',
     accent:        '#f97316',
@@ -75,9 +75,9 @@ const TIERS: readonly PricingTier[] = [
   {
     key:           'growth',
     name:          'Growth',
-    monthlyPrice:  149,
-    annualMonthly: 129,
-    annualTotal:   1548,
+    monthlyPrice:  299,
+    annualMonthly: 265,
+    annualTotal:   3180,
     trucks:        '5–9 trucks',
     blurb:         'When you have hired your first dispatcher.',
     accent:        '#1e8e3e',
@@ -86,9 +86,9 @@ const TIERS: readonly PricingTier[] = [
   {
     key:           'fleet',
     name:          'Fleet',
-    monthlyPrice:  199,
-    annualMonthly: 169,
-    annualTotal:   2028,
+    monthlyPrice:  349,
+    annualMonthly: 309,
+    annualTotal:   3708,
     trucks:        '10–14 trucks',
     blurb:         'When dispatch is its own department.',
     accent:        '#0891b2',
@@ -96,7 +96,10 @@ const TIERS: readonly PricingTier[] = [
 ];
 
 export default function PricingCards() {
-  const [annual, setAnnual] = useState(false);
+  // Default to the Annual view — it shows the lower effective /mo rate and
+  // is the billing option we want to steer customers toward. Monthly stays
+  // one tap away on the segmented toggle.
+  const [annual, setAnnual] = useState(true);
 
   return (
     <div>
@@ -114,7 +117,7 @@ export default function PricingCards() {
         >
           {[
             { label: 'Monthly',                  value: false },
-            { label: 'Annual · save up to 20%',  value: true  },
+            { label: 'Annual · save up to 12%',  value: true  },
           ].map(opt => {
             const isActive = annual === opt.value;
             return (
