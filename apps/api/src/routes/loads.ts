@@ -81,6 +81,13 @@ const EVENT_COLS =
   "trailer_dropoff_lat,trailer_dropoff_lng,trailer_dropoff_at,trailer_dropoff_address," +
   "route_polyline,route_stops_key";
 
+/** Statuses meaning the leg has physically started — past the point
+ *  where deleting it is a harmless plan edit. Used by the legs reconcile
+ *  to refuse silent removal of work a driver has already done. */
+const PROGRESSED_STATUSES = new Set<string>([
+  "dispatched", "en_route", "picked_up", "delivered", "problem",
+]);
+
 const LOAD_COLS =
   "id,internal_load_id,load_num,broker,load_price,total_billable,commodity,weight," +
   "dispatcher,notes,internal_notes," +
@@ -2175,6 +2182,7 @@ loads.put("/:id/legs", requireCapability("loads.edit"), async (c) => {
   }
   const existing = existingRaw as unknown as Array<Record<string, unknown> & {
     id: string; title: string; priority: boolean;
+    status: string | null; driver_name: string | null; start: string | null;
   }>;
   if (existing.length === 0) {
     return c.json({ error: "not_found", detail: "load has no active events" } satisfies ApiErrorResponse, 404);
@@ -2191,6 +2199,25 @@ loads.put("/:id/legs", requireCapability("loads.edit"), async (c) => {
   const keptIds = new Set(body.legs.map((l) => l.eventId).filter(Boolean) as string[]);
   if (new Set(body.legs.filter(l => l.eventId).map(l => l.eventId)).size !== keptIds.size) {
     return badRequest(c, ["the same eventId appears on more than one leg"]);
+  }
+
+  // Legs are a route in order, so surviving legs must keep their relative
+  // order. If a payload asks to put leg C before leg B, the client has
+  // lost track of which event is which physical segment (the classic
+  // symptom of matching legs by array index) and applying it would move
+  // drivers, pay and paperwork onto routes they never ran. Refuse rather
+  // than write a scrambled load.
+  const existingOrder = new Map(existing.map((e, i) => [e.id, i]));
+  const keptSequence = body.legs
+    .map((l) => l.eventId)
+    .filter((id): id is string => !!id)
+    .map((id) => existingOrder.get(id) ?? -1);
+  for (let i = 1; i < keptSequence.length; i++) {
+    if (keptSequence[i] <= keptSequence[i - 1]) {
+      return badRequest(c, [
+        "existing legs would be reordered — legs must stay in their current relative order. Reload the load and try again.",
+      ]);
+    }
   }
 
   const legCount = body.legs.length;
@@ -2249,6 +2276,45 @@ loads.put("/:id/legs", requireCapability("loads.edit"), async (c) => {
   // ── 2. Soft-delete legs the caller dropped ────────────────────────────
   const removedIds = existing.map((e) => e.id).filter((id) => !keptIds.has(id));
   if (removedIds.length > 0) {
+    // A reconcile that quietly deletes a leg a driver already ran takes
+    // its pay, status and paperwork with it — and a client bug (leg
+    // identity drifting off by one, say) reaches us as a perfectly
+    // well-formed payload. So the destructive half is gated here, not
+    // only in the UI: a leg that has PROGRESSED past assignment, or that
+    // holds documents, can't be dropped unless the caller says it meant
+    // it. `force` is set by the modal only after the user confirms the
+    // specific loss by name.
+    if (!body.force) {
+      const removed = existing.filter((e) => removedIds.includes(e.id));
+      const blockers: string[] = [];
+      const { data: docRowsRaw } = await supabase
+        .from("load_documents")
+        .select("event_id")
+        .in("event_id", removedIds)
+        .eq("org_id", orgId);
+      const docCounts = new Map<string, number>();
+      for (const d of (docRowsRaw ?? []) as Array<{ event_id: string }>) {
+        docCounts.set(d.event_id, (docCounts.get(d.event_id) ?? 0) + 1);
+      }
+      for (const e of removed) {
+        const status = (e.status as string | null) ?? "scheduled";
+        const label = [
+          (e.driver_name as string | null) || "unassigned",
+          `leg starting ${(e.start as string | null) ?? "?"}`,
+        ].join(", ");
+        if (PROGRESSED_STATUSES.has(status)) {
+          blockers.push(`${label} is already ${status.replace(/_/g, " ")}`);
+        } else if ((docCounts.get(e.id) ?? 0) > 0) {
+          blockers.push(`${label} has ${docCounts.get(e.id)} document(s) attached`);
+        }
+      }
+      if (blockers.length > 0) {
+        return c.json({
+          error:  "leg_removal_blocked",
+          detail: `This change would remove ${blockers.length === 1 ? "a leg that" : "legs that"} can't be dropped silently: ${blockers.join("; ")}.`,
+        } satisfies ApiErrorResponse, 409);
+      }
+    }
     const now = new Date().toISOString();
     const { error: delErr } = await supabase
       .from("events")

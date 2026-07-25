@@ -295,6 +295,13 @@ export interface ConfigureLegsRequest {
   stops: Stop[];
   /** One entry per leg, in leg order. */
   legs:  ConfigureLegsRequestLeg[];
+  /** Permit removing a leg that has already progressed (status beyond
+   *  `assigned`) or that holds documents. Without this the server
+   *  refuses such a save with 409 `leg_removal_blocked` — a reconcile
+   *  that silently deletes a leg a driver already ran would take its
+   *  pay, status and paperwork with it. Clients must set this only
+   *  after the user has confirmed the specific loss. */
+  force?: boolean;
 }
 
 export interface ConfigureLegsResponse {
