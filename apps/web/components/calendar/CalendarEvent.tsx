@@ -1,9 +1,9 @@
 'use client';
 
 import { useState, useRef } from 'react';
-import { Star, CheckCircle2, FileCheck2 } from 'lucide-react';
+import { Star, CheckCircle2, FileCheck2, ArrowUpFromLine, ArrowDownToLine, ArrowLeftRight } from 'lucide-react';
 import { CalendarEvent as EventType, Asset, Driver, EventStatus } from '@/lib/types';
-import { legRoleFor, legLabel, legShortLabel } from '@fleetcal/types';
+import { legRoleFor, legLabel } from '@fleetcal/types';
 import { legPositionFor } from '@/lib/legDisplay';
 import { CARD_FIELD_DEFS } from '@/lib/cardFields';
 import { timeToPixels, timeHeightPixels, localDateStr, naiveHomeToView } from '@/lib/time-utils';
@@ -293,32 +293,34 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
               card body) or some other treatment. The store flag
               showBillingOverlay is preserved for easy re-enable. */}
           {/* Relay overlay — top-right corner.
-              Compact leg-position chip ("Leg 1/3") in a white badge
-              with a purple outline so it reads as RELAY at a glance
-              no matter what color the card underneath is (truck
-              colors vary, so a transparent purple label would
-              disappear on some cards). Purple tone matches the
-              canonical relay color #7c3aed used across EventModal,
+              Role icon in a white badge with a purple outline + purple
+              icon stroke so it reads as RELAY at a glance no matter
+              what color the card underneath is (truck colors vary, so
+              a transparent purple icon would disappear on some cards).
+              Pickup = up-arrow, delivery = down-arrow (the original
+              pair), transfer legs get a swap icon. Purple tone matches
+              the canonical relay color #7c3aed used across EventModal,
               RouteMapPanel, ReviewQueue, etc. Native title tooltip
-              carries the full "Leg 1 · Pickup" label for dispatchers
+              carries the full "Leg 2 · Transfer" label for dispatchers
               learning the convention. */}
-          {isRelay && legPos && (
+          {isRelay && relayRole && (
             <div
-              title={legLabel(legPos.index, legPos.count)}
+              title={legPos ? legLabel(legPos.index, legPos.count) : undefined}
               style={{
                 position: 'absolute', top: 4, right: 4,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                height: 15,
-                padding: '0 4px',
+                width: 18, height: 18,
                 background: '#fff',
                 border: '1.5px solid #7c3aed',
                 borderRadius: 5,
                 boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
                 pointerEvents: 'auto',
               }}>
-              <span style={{ fontSize: 8.5, fontWeight: 800, letterSpacing: '0.02em', color: '#7c3aed', lineHeight: 1, whiteSpace: 'nowrap' }}>
-                {legShortLabel(legPos.index, legPos.count)}
-              </span>
+              {relayRole === 'pickup'
+                ? <ArrowUpFromLine size={11} strokeWidth={2.8} color="#7c3aed" />
+                : relayRole === 'delivery'
+                  ? <ArrowDownToLine size={11} strokeWidth={2.8} color="#7c3aed" />
+                  : <ArrowLeftRight size={11} strokeWidth={2.8} color="#7c3aed" />}
             </div>
           )}
           {/* Height-budget allocation for title + fields.
