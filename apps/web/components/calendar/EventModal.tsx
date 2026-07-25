@@ -2323,6 +2323,37 @@ export default function EventModal() {
     if (!currentEv.relayRole) return [currentEv];
     return events.filter(e => e.loadId === currentEv.loadId).sort(byLegIndex);
   }, [events, isEdit, currentEv]);
+
+  /**
+   * The plan RECONCILED to the route. Stops are the single source of
+   * truth for how many legs there are: a load has exactly one leg per
+   * route segment (handoff boundaries + 1). This fits the stored plan
+   * to that shape and silently repairs anything inconsistent —
+   * duplicate, released or foreign eventIds lose their identity and
+   * become new legs; surplus entries are dropped; missing entries are
+   * appended. Nothing here ever blocks a save: an out-of-shape load
+   * heals by pressing Save, which is what Matt asked for.
+   *
+   * Padded entries use deterministic `seg:i` keys so React keys and the
+   * per-leg edit buffers stay stable across renders.
+   */
+  const effectivePlan = useMemo<PlannedLeg[]>(() => {
+    if (!isLegBuilder) return [];
+    const base = legPlan.length > 0 ? legPlan : planFromLegs(relayLegs);
+    const claimed = new Set<string>();
+    const cleaned: PlannedLeg[] = base.map(p => {
+      if (!p.eventId) return p;
+      const unusable = releasedEventIds.includes(p.eventId)
+        || claimed.has(p.eventId)
+        || !relayLegs.some(l => l.id === p.eventId);
+      if (unusable) return { key: p.key };        // keep the slot, drop the identity
+      claimed.add(p.eventId);
+      return p;
+    });
+    const out = cleaned.slice(0, derivedLegCount);
+    for (let i = out.length; i < derivedLegCount; i++) out.push({ key: `seg:${i}` });
+    return out;
+  }, [isLegBuilder, legPlan, relayLegs, releasedEventIds, derivedLegCount]);
   const isRelayContext = draftLegs.length > 0 || isExistingRelayLeg
     || (isLegBuilder && derivedLegCount > 1);
   const viewedArrIdx = relayLegs.findIndex(l => l.id === modalEventId);
@@ -4913,36 +4944,6 @@ export default function EventModal() {
     if (end < start) end = start;
     return { start, end };
   };
-  /**
-   * The plan RECONCILED to the route. Stops are the single source of
-   * truth for how many legs there are: a load has exactly one leg per
-   * route segment (handoff boundaries + 1). This fits the stored plan
-   * to that shape and silently repairs anything inconsistent —
-   * duplicate, released or foreign eventIds lose their identity and
-   * become new legs; surplus entries are dropped; missing entries are
-   * appended. Nothing here ever blocks a save: an out-of-shape load
-   * heals by pressing Save, which is what Matt asked for.
-   *
-   * Padded entries use deterministic `seg:i` keys so React keys and the
-   * per-leg edit buffers stay stable across renders.
-   */
-  const effectivePlan = useMemo<PlannedLeg[]>(() => {
-    if (!isLegBuilder) return [];
-    const base = legPlan.length > 0 ? legPlan : planFromLegs(relayLegs);
-    const claimed = new Set<string>();
-    const cleaned: PlannedLeg[] = base.map(p => {
-      if (!p.eventId) return p;
-      const unusable = releasedEventIds.includes(p.eventId)
-        || claimed.has(p.eventId)
-        || !relayLegs.some(l => l.id === p.eventId);
-      if (unusable) return { key: p.key };        // keep the slot, drop the identity
-      claimed.add(p.eventId);
-      return p;
-    });
-    const out = cleaned.slice(0, derivedLegCount);
-    for (let i = out.length; i < derivedLegCount; i++) out.push({ key: `seg:${i}` });
-    return out;
-  }, [isLegBuilder, legPlan, relayLegs, releasedEventIds, derivedLegCount]);
 
   const relayLegViews: RelayLegView[] = (() => {
     // NB: computed for every builder load, not just ones the editor is
