@@ -2196,6 +2196,25 @@ loads.put("/:id/legs", requireCapability("loads.edit"), async (c) => {
       return badRequest(c, [`legs[${i}]: eventId does not belong to this load`]);
     }
   }
+  // Optimistic concurrency. Two reconciles fired before either finished
+  // both read this same pre-save leg list, and every payload entry
+  // without an eventId means "create a leg" — so without this check a
+  // double-click multiplies legs (observed: three impatient clicks on a
+  // slow save turned a 3-leg load into a 7-leg one, all sharing the
+  // original handoff). Comparing what the client believed exists against
+  // what actually exists makes the second writer lose.
+  if (Array.isArray(body.expectedEventIds)) {
+    const actual   = new Set(existing.map((e) => e.id));
+    const expected = new Set(body.expectedEventIds);
+    const same = actual.size === expected.size && [...actual].every((id) => expected.has(id));
+    if (!same) {
+      return c.json({
+        error:  "legs_stale",
+        detail: "This load's legs changed while you were editing (another save may have just landed). Reopen the load and redo the change.",
+      } satisfies ApiErrorResponse, 409);
+    }
+  }
+
   const keptIds = new Set(body.legs.map((l) => l.eventId).filter(Boolean) as string[]);
   if (new Set(body.legs.filter(l => l.eventId).map(l => l.eventId)).size !== keptIds.size) {
     return badRequest(c, ["the same eventId appears on more than one leg"]);

@@ -2408,8 +2408,16 @@ export const useCalendarStore = create<CalendarStore>()(
     // the realtime echo of this reconcile doesn't pop the "another
     // dispatcher updated this load" banner on the person who ran it.
     get().markLoadSelfWrite(loadId);
+    // Optimistic-concurrency stamp: the ACTIVE leg ids this client
+    // believes the load has right now (the full set, not just the ones
+    // the payload keeps). The server 409s `legs_stale` if reality has
+    // moved on, which is what stops a duplicate/stale reconcile from
+    // re-running its eventId-less entries and creating phantom legs.
+    // Filled here rather than at the call site so no caller can omit it.
+    const expectedEventIds = body.expectedEventIds
+      ?? get().events.filter(e => e.loadId === loadId).map(e => e.id);
     try {
-      const { loads } = await railway.configureLegs(loadId, body);
+      const { loads } = await railway.configureLegs(loadId, { ...body, expectedEventIds });
       for (const l of loads) markSelfWrite(l.id);
       const keptIds = new Set(loads.map(l => l.id));
       set((state) => ({

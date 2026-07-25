@@ -2314,8 +2314,6 @@ export default function EventModal() {
   const boundaryIdxs = useMemo(() => handoffIndexes(stops), [stops]);
   /** Leg count implied by the CURRENT stop list (what Apply would write). */
   const derivedLegCount = boundaryIdxs.length + 1;
-  const isRelayContext = draftLegs.length > 0 || isExistingRelayLeg
-    || (isLegBuilder && derivedLegCount > 1);
 
   // All legs of the viewed load, leg order, straight from the store —
   // GET /v1/events/:id returns every leg and the open-effect backfills
@@ -2325,6 +2323,12 @@ export default function EventModal() {
     if (!currentEv.relayRole) return [currentEv];
     return events.filter(e => e.loadId === currentEv.loadId).sort(byLegIndex);
   }, [events, isEdit, currentEv]);
+  const isRelayContext = draftLegs.length > 0 || isExistingRelayLeg
+    || (isLegBuilder && derivedLegCount > 1)
+    // A load carrying MORE legs than route segments is broken (duplicate
+    // save). Force the editor open even at one segment so the repair
+    // banner is reachable — it's the only way out of that state.
+    || (isLegBuilder && relayLegs.length > derivedLegCount);
   const viewedArrIdx = relayLegs.findIndex(l => l.id === modalEventId);
   const otherLegs = useMemo(
     () => relayLegs.filter(l => l.id !== modalEventId),
@@ -2550,6 +2554,8 @@ export default function EventModal() {
     setRelayGroupId(undefined); setRelayRole(undefined);
     setLegPays({}); setLegEdits({}); setDraftLegs([]); setPendingSplitStopId(null); setPendingSplitTargetId(null);
     pendingSplitLockRef.current = false;
+    reinstatingRef.current = false;
+    unsplittingRef.current = false;
     setLegPlan([]); setReleasedEventIds([]);
     setAccessorials([]);
     // Internal notes are scoped to a single load — never carry across
@@ -3172,8 +3178,43 @@ export default function EventModal() {
     return [...(existing ?? []), entry];
   }
 
+  /** Save in flight — disables the Save button and blocks doSave
+   *  re-entry. The ref is the real guard (synchronous, so two clicks in
+   *  one tick can't both read a stale `false`); the state drives the
+   *  button label. */
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  /** Re-entry guards for the other paths that mutate server rows
+   *  outside doSave: the reinstate round-trip (awaits before touching
+   *  local state) and the legacy incremental unsplit (fire-and-forget
+   *  store action that soft-deletes a leg). Both are cleared when the
+   *  modal reopens. */
+  const reinstatingRef = useRef(false);
+  const unsplittingRef = useRef(false);
+
   const doSave = async (opts?: { skipGeocodeCheck?: boolean }) => {
     if (!title.trim() || !startDate || !endDate) return;
+
+    // Re-entry guard. A save can take seconds (the legs reconcile writes
+    // every leg and rewrites every leg's stop list), and nothing on
+    // screen said so — a dispatcher who clicked Save again got a SECOND
+    // reconcile carrying the same payload. Legs without an eventId mean
+    // "create this leg", so each extra click created another leg: three
+    // impatient clicks turned a 3-leg load into a 7-leg one. A ref,
+    // not state, because clicks in the same tick would both read a
+    // stale `false` from state.
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      await runSave(opts);
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
+  };
+
+  const runSave = async (opts?: { skipGeocodeCheck?: boolean }) => {
 
     // Block save if pickup is after delivery — the API enforces this
     // and a 400 would surface as a save-failure toast (and rollback
@@ -3810,6 +3851,13 @@ export default function EventModal() {
   // /v1/events/:id/restore before updating client state.
   const handleReinstate = async () => {
     if (!modalEventId) return;
+    // Re-entry guard: the restore below is awaited BEFORE any local
+    // state changes and the button stays live during the round trip, so
+    // an impatient double click would fire two restores and two
+    // follow-up writes. Same lesson as the duplicate-save bug.
+    if (reinstatingRef.current) return;
+    reinstatingRef.current = true;
+    try {
     // remove-event mode needs the server-side un-delete first; without
     // this the event row stays soft-deleted in the DB even though the
     // local store thinks it's active again.
@@ -3861,6 +3909,9 @@ export default function EventModal() {
       });
     }
     closeModal();
+    } finally {
+      reinstatingRef.current = false;
+    }
   };
 
   /** Undo one handoff. Draft markers (not yet saved) just vanish
@@ -3932,6 +3983,11 @@ export default function EventModal() {
       return;
     }
     if (!h.keepEventId || !h.mergeEventId) return;
+    // Legacy incremental unsplit — soft-deletes a leg server-side. Guard
+    // re-entry: the store action is fire-and-forget, so two clicks
+    // landing before closeModal unmounts would issue two merges.
+    if (unsplittingRef.current) return;
+    unsplittingRef.current = true;
     const entry: LoadAuditEntry = { changedAt: new Date().toISOString(), changedByName: currentUserName, relayRemoved: true };
     removeRelay(h.keepEventId, { mergeEventId: h.mergeEventId, auditLog: appendAuditEntry(auditLog, entry) });
     closeModal();
@@ -4314,6 +4370,92 @@ export default function EventModal() {
     });
   };
 
+  // ── Orphan-leg repair ──────────────────────────────────────────────
+  // A load can end up with MORE legs than the route has segments: a
+  // duplicate save (before the Save button had an in-flight guard) fired
+  // several concurrent reconciles, each reading the same pre-save leg
+  // list, and each payload entry without an eventId means "create a
+  // leg" — so a 3-leg load became 7, all sharing one handoff point.
+  // Such a load can't be fixed through the normal UI: "Remove leg" only
+  // exists on real handoff dividers, and the plan assertions block the
+  // save. This is the explicit way out.
+  const orphanLegCount = isLegBuilder ? Math.max(0, relayLegs.length - derivedLegCount) : 0;
+  const [repairing, setRepairing] = useState(false);
+  /** Rebuild the load to one leg per route segment: keep the FIRST leg
+   *  per segment in leg_index order, release the extras, and reconcile.
+   *  Builds its payload directly rather than via setLegPlan + re-render,
+   *  because the save must reflect the repair in the SAME tick. */
+  const repairOrphanLegs = async (): Promise<boolean> => {
+    const loadId = currentEv?.loadId;
+    if (!loadId || orphanLegCount <= 0) return false;
+    // relayLegs is already sorted by legIndex, so the first N are the
+    // originals and the tail is what the duplicate saves appended.
+    const kept    = relayLegs.slice(0, derivedLegCount);
+    const dropped = relayLegs.slice(derivedLegCount);
+    if (kept.length !== derivedLegCount) {
+      showSaveBlocked('Could not work out the repair for this load — reload the page and try again.');
+      return false;
+    }
+    // The extras are normally empty duplicates, but never let a leg
+    // carrying real work disappear without naming it first.
+    const progressed = dropped.filter(isProgressedLeg);
+    let force = false;
+    if (progressed.length > 0) {
+      const ok = await confirmLegRemoval(progressed);
+      if (!ok) return false;
+      force = true;
+    }
+    setRepairing(true);
+    try {
+      await configureLegs(loadId, {
+        stops,
+        legs: kept.map((leg, i) => {
+          const times = legBoundaryTimes(i);
+          const isViewed = leg.id === modalEventId;
+          const edits = legEdits[leg.id] ?? {};
+          const legDriverName = isViewed
+            ? (driverName || undefined)
+            : ((edits.driverName ?? resolveDriverNameForEvent(leg)) || undefined);
+          const payVal = legPays[leg.id] ?? leg.driverPay ?? '';
+          return {
+            eventId: leg.id,
+            assetId: isViewed ? assetId : (edits.assetId ?? leg.assetId),
+            driverId: findDriverByName(legDriverName)?.id ?? null,
+            driverName: legDriverName ?? null,
+            driverPay: payVal === '' || payVal == null ? null : Number(payVal),
+            start: times.start,
+            end:   times.end,
+            status: isViewed ? status : undefined,
+            trailerId: isViewed ? (linkedTrailerId ?? null) : undefined,
+          };
+        }),
+        // Explicit stamp: the full active set as this client sees it, so
+        // a repair racing another write is rejected rather than applied
+        // on top of a load that already changed.
+        expectedEventIds: relayLegs.map(l => l.id),
+        ...(force ? { force: true } : {}),
+      });
+      setReleasedEventIds([]);
+      setLegPlan([]);
+      return true;
+    } catch {
+      return false;   // configureLegs already toasted the reason
+    } finally {
+      setRepairing(false);
+    }
+  };
+  /** Entry point for the repair banner's button. Shares the modal's
+   *  save re-entry guard so a double click can't fire two reconciles —
+   *  the very failure mode that created the orphans. */
+  const handleRepairLegs = () => {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
+    void repairOrphanLegs()
+      .then(ok => { if (ok) closeModal(); })
+      .finally(() => { savingRef.current = false; setSaving(false); });
+  };
+
   /** Commit the planned legs in ONE PUT /v1/loads/:id/legs. Identity
    *  comes from the leg PLAN: entries with an eventId update that leg
    *  in place, entries without create one, and persisted legs absent
@@ -4353,6 +4495,10 @@ export default function EventModal() {
             trailerId: l.isViewed ? (linkedTrailerId ?? null) : undefined,
           };
         }),
+        // Optimistic-concurrency stamp: the active legs this client
+        // believed existed. A stale or duplicate reconcile 409s
+        // (`legs_stale`) instead of re-creating its new-leg entries.
+        expectedEventIds: relayLegs.map(l => l.id),
         ...(force ? { force: true } : {}),
       });
       // Reconcile landed — the plan is rebuilt from the server's
@@ -6691,6 +6837,13 @@ export default function EventModal() {
                         // Builder mode: any leg can be split again before
                         // saving; Save reconciles the whole structure.
                         builderMode={showLegBuilderUi && !isReadOnly}
+                        repair={orphanLegCount > 0 && !isReadOnly ? {
+                          extraLegCount: orphanLegCount,
+                          persistedLegs: relayLegs.length,
+                          routeSegments: derivedLegCount,
+                          busy: repairing || saving,
+                          onRepair: handleRepairLegs,
+                        } : undefined}
                       />
                     </div>
                   )}
@@ -7262,12 +7415,14 @@ export default function EventModal() {
                   Cancel
                 </button>
                 {!isReadOnly && (
-                  <button type="submit" disabled={!title.trim() || !startDate || !endDate || modalConflict === 'deleted'}
+                  <button type="submit" disabled={saving || !title.trim() || !startDate || !endDate || modalConflict === 'deleted'}
                     className="px-6 py-2.5 rounded-lg text-[13px] font-semibold text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                    style={{ background: 'var(--gc-blue)' }}
-                    onMouseEnter={e => { if (title.trim()) e.currentTarget.style.background = 'var(--gc-blue-hover)'; }}
+                    style={{ background: 'var(--gc-blue)', cursor: saving ? 'wait' : undefined }}
+                    onMouseEnter={e => { if (title.trim() && !saving) e.currentTarget.style.background = 'var(--gc-blue-hover)'; }}
                     onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-blue)')}>
-                    {isEdit ? 'Save changes' : draftLegs.length > 0 ? 'Create relay' : eventKind === 'non_revenue' ? 'Create event' : 'Create load'}
+                    {saving
+                      ? 'Saving…'
+                      : isEdit ? 'Save changes' : draftLegs.length > 0 ? 'Create relay' : eventKind === 'non_revenue' ? 'Create event' : 'Create load'}
                   </button>
                 )}
               </div>

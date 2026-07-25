@@ -630,7 +630,13 @@ class RailwayClient {
    *  an eventId update that leg in place, entries without create one,
    *  and existing legs absent from the array are soft-deleted. Server
    *  renumbers leg_index / re-derives relay_role and writes the stop
-   *  list to every leg. Response `loads` = all legs in leg order. */
+   *  list to every leg. Response `loads` = all legs in leg order.
+   *
+   *  ALWAYS pass `expectedEventIds` — the active leg ids the client
+   *  believed existed when it built the payload. The server 409s with
+   *  `legs_stale` if the load's legs changed in the meantime, which is
+   *  what stops a second (concurrent or stale) reconcile from
+   *  re-running the "create" entries and duplicating legs. */
   configureLegs(loadId: string, body: ConfigureLegsRequest) {
     return this.req<ConfigureLegsResponse>('PUT', `/v1/loads/${loadId}/legs`, body);
   }
