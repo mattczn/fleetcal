@@ -308,12 +308,13 @@ export interface ConfigureLegsRequest {
    * deliberately changing when the load runs.
    */
   loadWindow?: { start: string; end: string };
-  /** Permit removing a leg that has already progressed (status beyond
-   *  `assigned`) or that holds documents. Without this the server
-   *  refuses such a save with 409 `leg_removal_blocked` — a reconcile
-   *  that silently deletes a leg a driver already ran would take its
-   *  pay, status and paperwork with it. Clients must set this only
-   *  after the user has confirmed the specific loss. */
+  /** @deprecated Accepted and ignored. The server no longer refuses to
+   *  remove a leg that has progressed or holds documents: the
+   *  dispatcher confirms by pressing Save on a UI that already shows
+   *  the legs, a removed leg's pay goes with the leg by intent, and its
+   *  documents are re-pointed to a surviving leg so paperwork always
+   *  stays with the load. The old refusal also let stale client state
+   *  dead-end a save with no way to clear it. */
   force?: boolean;
   /** @deprecated Accepted and ignored. This once hard-rejected a payload
    *  whose leg set had drifted, which dead-ended any client with a stale

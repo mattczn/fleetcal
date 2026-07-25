@@ -81,13 +81,6 @@ const EVENT_COLS =
   "trailer_dropoff_lat,trailer_dropoff_lng,trailer_dropoff_at,trailer_dropoff_address," +
   "route_polyline,route_stops_key";
 
-/** Statuses meaning the leg has physically started — past the point
- *  where deleting it is a harmless plan edit. Used by the legs reconcile
- *  to refuse silent removal of work a driver has already done. */
-const PROGRESSED_STATUSES = new Set<string>([
-  "dispatched", "en_route", "picked_up", "delivered", "problem",
-]);
-
 const LOAD_COLS =
   "id,internal_load_id,load_num,broker,load_price,total_billable,commodity,weight," +
   "dispatcher,notes,internal_notes," +
@@ -2404,43 +2397,30 @@ loads.put("/:id/legs", requireCapability("loads.edit"), async (c) => {
   const survivingIds = new Set(legIds);
   const removedIds = existing.map((e) => e.id).filter((id) => !survivingIds.has(id));
   if (removedIds.length > 0) {
-    // A reconcile that quietly deletes a leg a driver already ran takes
-    // its pay, status and paperwork with it — and a client bug (leg
-    // identity drifting off by one, say) reaches us as a perfectly
-    // well-formed payload. So the destructive half is gated here, not
-    // only in the UI: a leg that has PROGRESSED past assignment, or that
-    // holds documents, can't be dropped unless the caller says it meant
-    // it. `force` is set by the modal only after the user confirms the
-    // specific loss by name.
-    if (!body.force) {
-      const removed = existing.filter((e) => removedIds.includes(e.id));
-      const blockers: string[] = [];
-      const { data: docRowsRaw } = await supabase
+    // Paperwork belongs to the LOAD, not to whichever leg happened to
+    // be open when it was uploaded — so removing a leg must never orphan
+    // a document. Re-point the removed legs' documents at a surviving
+    // leg before deleting; `load_id` already carries them for every
+    // load-scoped read, and this keeps `event_id` pointing at something
+    // real for the invoice packet and per-leg views.
+    //
+    // (This replaces a guard that refused to drop a leg holding
+    // documents or one past `assigned`. It forced a confirmation dialog
+    // for something the dispatcher can already see on screen, and a
+    // stale client could trip it with no way to clear the state. The
+    // dispatcher confirms by pressing Save; a removed leg's pay goes
+    // with the leg, which is the intent, not a loss to warn about.)
+    const survivorId = legIds[0];
+    if (survivorId) {
+      const { error: docErr } = await supabase
         .from("load_documents")
-        .select("event_id")
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .update({ event_id: survivorId } as any)
         .in("event_id", removedIds)
         .eq("org_id", orgId);
-      const docCounts = new Map<string, number>();
-      for (const d of (docRowsRaw ?? []) as Array<{ event_id: string }>) {
-        docCounts.set(d.event_id, (docCounts.get(d.event_id) ?? 0) + 1);
-      }
-      for (const e of removed) {
-        const status = (e.status as string | null) ?? "scheduled";
-        const label = [
-          (e.driver_name as string | null) || "unassigned",
-          `leg starting ${(e.start as string | null) ?? "?"}`,
-        ].join(", ");
-        if (PROGRESSED_STATUSES.has(status)) {
-          blockers.push(`${label} is already ${status.replace(/_/g, " ")}`);
-        } else if ((docCounts.get(e.id) ?? 0) > 0) {
-          blockers.push(`${label} has ${docCounts.get(e.id)} document(s) attached`);
-        }
-      }
-      if (blockers.length > 0) {
-        return c.json({
-          error:  "leg_removal_blocked",
-          detail: `This change would remove ${blockers.length === 1 ? "a leg that" : "legs that"} can't be dropped silently: ${blockers.join("; ")}.`,
-        } satisfies ApiErrorResponse, 409);
+      if (docErr) {
+        console.error("[PUT /v1/loads/:id/legs] re-point documents failed:", docErr);
+        return c.json({ error: "document_repoint_failed", detail: docErr.message } satisfies ApiErrorResponse, 500);
       }
     }
     const now = new Date().toISOString();
