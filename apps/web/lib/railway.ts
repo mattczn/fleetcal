@@ -21,6 +21,7 @@ import type {
   UpdateEventRequest, UpdateEventResponse,
   SplitRelayRequest, SplitRelayResponse,
   UnsplitRelayRequest, UnsplitRelayResponse,
+  ConfigureLegsRequest, ConfigureLegsResponse,
   DeleteLoadResponse, RestoreLoadResponse,
   CreateEventRequest, CreateEventResponse,
   UpdateEventByIdRequest, UpdateEventByIdResponse,
@@ -622,6 +623,16 @@ class RailwayClient {
    *  the remaining legs in leg order. */
   unsplitRelay(loadId: string, body: UnsplitRelayRequest) {
     return this.req<UnsplitRelayResponse>('POST', `/v1/loads/${loadId}/unsplit-relay`, body);
+  }
+  /** Atomic leg reconcile — the leg builder's single "Apply N legs"
+   *  action. Sends the FULL stop list (boundaries flagged via isHandoff
+   *  or type:'relay') plus one entry per leg in leg order: entries with
+   *  an eventId update that leg in place, entries without create one,
+   *  and existing legs absent from the array are soft-deleted. Server
+   *  renumbers leg_index / re-derives relay_role and writes the stop
+   *  list to every leg. Response `loads` = all legs in leg order. */
+  configureLegs(loadId: string, body: ConfigureLegsRequest) {
+    return this.req<ConfigureLegsResponse>('PUT', `/v1/loads/${loadId}/legs`, body);
   }
   deleteLoad(id: string)              { return this.req<DeleteLoadResponse>('DELETE',  `/v1/loads/${id}`); }
   restoreLoad(id: string)             { return this.req<RestoreLoadResponse>('POST',   `/v1/loads/${id}/restore`); }

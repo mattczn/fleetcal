@@ -8,6 +8,7 @@ import React from "react";
 import { View, Text } from "react-native";
 import Svg, { Defs, Pattern, Rect } from "react-native-svg";
 import type { Load, LoadStatus, Stop } from "./types";
+import { handoffTimesOf } from "@fleetcal/types";
 import { relayChipLabel } from "./relayLegs";
 
 // Driver app uses inline txt() helpers across files — duplicate the
@@ -103,27 +104,30 @@ export function fmtStopAppt(stop?: Stop): string {
 }
 
 /**
- * Time on a relay handoff stop relative to THIS driver's leg.
+ * Time on a handoff stop relative to THIS driver's leg.
  *
- * The web app stores both times on the single relay marker row:
- *   - apptStart → the earlier leg's drop time (driver leaves the trailer)
- *   - apptEnd   → the later leg's pickup time (driver picks it up)
+ * A handoff carries two times — the earlier leg's drop and the later
+ * leg's pickup. Where they live depends on the kind of handoff:
+ *   - relay-point stop → apptStart / apptEnd (the row has no appointment
+ *     of its own, so it reuses those columns)
+ *   - handoff on a REAL stop → handoffDropAt / handoffPickupAt (its
+ *     apptStart/apptEnd belong to the stop's own appointment)
+ * `handoffTimesOf()` normalizes both shapes.
  *
  * On a load card, showing both as a range ("9a-10a") is confusing — the
  * driver only cares about THEIR own time. Direction is relative to MY
  * leg (see lib/relayLegs.ts):
  *
- *   'outbound' (marker legIndex — I drop here)      → drop time
- *   'inbound'  (marker legIndex-1 — I pick up here) → pickup time
+ *   'outbound' (boundary legIndex — I drop here)      → drop time
+ *   'inbound'  (boundary legIndex-1 — I pick up here) → pickup time
  */
 export function fmtRelayHandoffTime(
   stop: Stop | undefined,
   direction: "inbound" | "outbound",
 ): string {
   if (!stop) return "";
-  const iso = direction === "outbound"
-    ? stop.apptStart
-    : (stop.apptEnd ?? stop.apptStart);
+  const { drop, pickup } = handoffTimesOf(stop);
+  const iso = direction === "outbound" ? drop : (pickup ?? drop);
   if (!iso) return "";
   return fmtTimeShort(iso);
 }

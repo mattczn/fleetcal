@@ -317,6 +317,15 @@ interface CalendarStore extends ModalState {
    *  leg order — load-level fields are merged across legs with leg 0
    *  winning conflicts (generalizes the old "pickup wins" rule). */
   saveRelayLegs: (legs: Array<{ id: string; updates: Partial<Omit<CalendarEvent, 'id'>> }>) => void;
+  /** Atomic leg reconcile — the leg builder's single "Apply N legs".
+   *  Sends the full stop list + one entry per leg (eventId present =
+   *  keep that leg, absent = create, omitted entirely = soft-delete)
+   *  and replaces every cached leg with the server's canonical rows.
+   *  Rejects with the API error so the caller can toast it. */
+  configureLegs: (
+    loadId: string,
+    body: import('@fleetcal/types').ConfigureLegsRequest,
+  ) => Promise<void>;
   /** Merge the two legs around a handoff (N legs → N-1). keepEventId
    *  survives (its window extends over both legs); mergeEventId is the
    *  adjacent leg absorbed into it (soft-deleted server-side). On a
@@ -2388,6 +2397,35 @@ export const useCalendarStore = create<CalendarStore>()(
       }
     }
     Promise.all(promises).catch((err) => { console.error('saveRelayLegs:', err); errorToast(err, 'Relay changes did not save'); });
+  },
+
+  configureLegs: async (loadId, body) => {
+    if (get().isDemo) return;
+    if (!get().canEditLoads) return;
+    const { orgId } = get();
+    if (!orgId) return;
+    // Tag every current leg AND every returned leg as a self-write so
+    // the realtime echo of this reconcile doesn't pop the "another
+    // dispatcher updated this load" banner on the person who ran it.
+    get().markLoadSelfWrite(loadId);
+    try {
+      const { loads } = await railway.configureLegs(loadId, body);
+      for (const l of loads) markSelfWrite(l.id);
+      const keptIds = new Set(loads.map(l => l.id));
+      set((state) => ({
+        // Drop every cached leg of this load (soft-deleted ones included)
+        // and re-add the server's canonical rows in leg order.
+        events: [
+          ...state.events.filter(e => e.loadId !== loadId && !keptIds.has(e.id)),
+          ...loads,
+        ],
+      }));
+      set({ loadEditTick: get().loadEditTick + 1 });
+    } catch (err) {
+      console.error('configureLegs:', err);
+      errorToast(err, 'Legs did not save');
+      throw err;
+    }
   },
 
   removeRelay: (keepEventId, opts) => {

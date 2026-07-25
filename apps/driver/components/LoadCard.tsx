@@ -13,6 +13,7 @@ import {
   fmtRelayHandoffTime, relayHandoffAction,
 } from "@/lib/loadCard";
 import { legPositionOf, splitStopsForLeg, type LegStopWindow } from "@/lib/relayLegs";
+import { isHandoffStop } from "@fleetcal/types";
 import { f, SP, RADIUS } from "@/lib/theme";
 import { useTheme } from "@/lib/ThemeProvider";
 
@@ -36,15 +37,23 @@ function legWindowOf(load: Load): LegStopWindow | null {
   if (!pos) return null;
   return splitStopsForLeg(load.stops, pos.legIndex);
 }
+/**
+ * A handoff sitting on a REAL stop is still that stop — it keeps its own
+ * PICKUP / DELIVERY identity and just gains a "· HANDOFF" suffix. Only a
+ * bare `type:'relay'` point reads as "RELAY HANDOFF" on its own.
+ */
+function isRelayPoint(s: Stop | undefined): boolean {
+  return s?.type === "relay";
+}
 function originLabel(s: Stop | undefined, startsAtHandoff: boolean): string {
-  if (startsAtHandoff) return "RELAY HANDOFF";
-  if (s?.type === "pickup") return "PICKUP";
-  return "ORIGIN";
+  if (startsAtHandoff && isRelayPoint(s)) return "RELAY HANDOFF";
+  const base = s?.type === "pickup" ? "PICKUP" : "ORIGIN";
+  return startsAtHandoff ? `${base} · HANDOFF` : base;
 }
 function destLabel(s: Stop | undefined, endsAtHandoff: boolean): string {
-  if (endsAtHandoff) return "RELAY HANDOFF";
-  if (s?.type === "delivery" || s?.type === "drop_hook") return "DELIVERY";
-  return "DESTINATION";
+  if (endsAtHandoff && isRelayPoint(s)) return "RELAY HANDOFF";
+  const base = s?.type === "delivery" || s?.type === "drop_hook" ? "DELIVERY" : "DESTINATION";
+  return endsAtHandoff ? `${base} · HANDOFF` : base;
 }
 function locLabel(s: Stop | undefined): string {
   if (!s) return "—";
@@ -94,8 +103,9 @@ export function LoadCard({ load }: Props) {
   const win    = legWindowOf(load);
   const pickup   = win ? win.mine[0]                   : load.stops[0];
   const delivery = win ? win.mine[win.mine.length - 1] : load.stops[load.stops.length - 1];
-  // Leg starts/ends at a relay marker — drives the RELAY HANDOFF labels
-  // + purple tinting. A middle (transfer) leg has both.
+  // Leg starts/ends at a handoff (a relay point OR a real stop flagged
+  // isHandoff) — drives the handoff labels + purple tinting. A middle
+  // (transfer) leg has both.
   const startsAtHandoff = win?.inboundMarkerIdx  != null;
   const endsAtHandoff   = win?.outboundMarkerIdx != null;
   const isNonRev = load.eventKind === "non_revenue";
@@ -103,7 +113,11 @@ export function LoadCard({ load }: Props) {
   // mirrors the green Confirm banner inside the load detail so the driver
   // spots it in the list before opening.
   const needsConfirm = needsRunConfirmation(load);
-  const destKind: "dest" | "relay" = delivery?.type === "relay" ? "relay" : "dest";
+  const destKind: "dest" | "relay" = delivery && isHandoffStop(delivery) ? "relay" : "dest";
+  // Only a bare relay point has no appointment of its own — a handoff on
+  // a real stop keeps its APPT/WINDOW chip.
+  const originHasAppt = !isRelayPoint(pickup);
+  const destHasAppt   = !isRelayPoint(delivery);
 
   // Pending dispatcher nudges (load_notifications WHERE acknowledged_at IS NULL).
   const pendingCount = (load.pendingNotificationKinds ?? []).length;
@@ -131,14 +145,19 @@ export function LoadCard({ load }: Props) {
   const metaLeft = fmtTimeRangeShort(load);
 
   // Eyebrow trailing text (date + appt window) per leg. Handoff endpoints
-  // show only THIS driver's time on the marker (inbound → pickup time,
+  // show only THIS driver's handoff time (inbound → pickup time,
   // outbound → drop time) instead of the confusing two-driver range.
-  const originExtra = startsAtHandoff
-    ? `${relayHandoffAction("inbound").toUpperCase()}${fmtRelayHandoffTime(pickup, "inbound") ? ` · ${fmtRelayHandoffTime(pickup, "inbound")}` : ""}`
-    : fmtStopAppt(pickup);
-  const destExtra = endsAtHandoff
-    ? `${relayHandoffAction("outbound").toUpperCase()}${fmtRelayHandoffTime(delivery, "outbound") ? ` · ${fmtRelayHandoffTime(delivery, "outbound")}` : ""}`
-    : fmtStopAppt(delivery);
+  // When the handoff sits on a REAL stop, its own appointment window
+  // still leads — the handoff time is appended after it.
+  const handoffExtra = (s: Stop | undefined, dir: "inbound" | "outbound") => {
+    const t = fmtRelayHandoffTime(s, dir);
+    const action = `${relayHandoffAction(dir).toUpperCase()}${t ? ` · ${t}` : ""}`;
+    if (isRelayPoint(s)) return action;
+    const appt = fmtStopAppt(s);
+    return appt ? `${appt} · ${action}` : action;
+  };
+  const originExtra = startsAtHandoff ? handoffExtra(pickup, "inbound")    : fmtStopAppt(pickup);
+  const destExtra   = endsAtHandoff   ? handoffExtra(delivery, "outbound") : fmtStopAppt(delivery);
 
   return (
     <TouchableOpacity
@@ -233,7 +252,7 @@ export function LoadCard({ load }: Props) {
               <Text style={[f(800), { fontSize: 10, letterSpacing: 0.5, color: startsAtHandoff ? C.purpleInk : C.greenInk }]}>
                 {originLabel(pickup, startsAtHandoff)} · {fmtShortDate(load.start)}{originExtra ? ` · ${originExtra}` : ""}
               </Text>
-              {!startsAtHandoff ? <MiniSched stop={pickup} /> : null}
+              {originHasAppt ? <MiniSched stop={pickup} /> : null}
             </View>
             <Text style={[f(700), { fontSize: 15, color: C.t1, marginTop: 2, letterSpacing: -0.2 }]} numberOfLines={1}>
               {locLabel(pickup)}
@@ -249,7 +268,7 @@ export function LoadCard({ load }: Props) {
               <Text style={[f(800), { fontSize: 10, letterSpacing: 0.5, color: endsAtHandoff ? C.purpleInk : C.redInk }]}>
                 {destLabel(delivery, endsAtHandoff)} · {fmtShortDate(load.end)}{destExtra ? ` · ${destExtra}` : ""}
               </Text>
-              {!endsAtHandoff && destKind !== "relay" ? <MiniSched stop={delivery} /> : null}
+              {destHasAppt ? <MiniSched stop={delivery} /> : null}
             </View>
             <Text style={[f(700), { fontSize: 15, color: C.t1, marginTop: 2, letterSpacing: -0.2 }]} numberOfLines={1}>
               {locLabel(delivery)}

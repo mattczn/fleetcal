@@ -3,7 +3,7 @@ import {
   Modal, View, Text, TouchableOpacity, Pressable, TextInput, ScrollView,
   KeyboardAvoidingView, Platform, ActivityIndicator,
 } from "react-native";
-import { X, MapPin, Clock, CheckCircle2, AlertCircle, Building2, Search, Bookmark } from "lucide-react-native";
+import { X, MapPin, Clock, CheckCircle2, AlertCircle, Building2, Search, Bookmark, HandCoins } from "lucide-react-native";
 import { useAuth } from "@clerk/clerk-expo";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -11,6 +11,7 @@ import {
   type PlaceSuggestion, type SavedLocation,
 } from "@/lib/api";
 import { DateTimePickerSheet } from "@/components/DateTimePickerSheet";
+import { isHandoffStop, handoffTimesOf } from "@fleetcal/types";
 import { txt } from "@/lib/font";
 import type { Stop, StopType } from "@/lib/types";
 
@@ -72,6 +73,15 @@ export function StopEditSheet({ visible, orgId, stop, onClose, onSave }: Props) 
   const [lat,          setLat]          = useState<number | undefined>(undefined);
   const [lng,          setLng]          = useState<number | undefined>(undefined);
   const [timezone,     setTimezone]     = useState<string | undefined>(undefined);
+  // Leg boundary flag. A bare `type:'relay'` point is always a handoff
+  // (and isn't editable as a type here); this toggle is how a REAL stop
+  // — the Hurricane delivery leg 1 hands off at — becomes one. Its own
+  // appointment window stays untouched; the exchange times live in
+  // handoffDropAt / handoffPickupAt.
+  const [isHandoff,       setIsHandoff]       = useState(false);
+  const [handoffDropAt,   setHandoffDropAt]   = useState<string | undefined>(undefined);
+  const [handoffPickupAt, setHandoffPickupAt] = useState<string | undefined>(undefined);
+  const [handoffOpen,     setHandoffOpen]     = useState(false);
 
   const [verifying,  setVerifying]  = useState(false);
   const [verifyState, setVerifyState] = useState<"unverified" | "ok" | "failed">("unverified");
@@ -171,6 +181,15 @@ export function StopEditSheet({ visible, orgId, stop, onClose, onSave }: Props) 
     setLat(stop.lat);
     setLng(stop.lng);
     setTimezone(stop.timezone);
+    // Seed from the NORMALIZED handoff, not the raw column. The type pills
+    // have no "relay" option, so opening a bare relay point coerces it to
+    // "Stop" (above) — without carrying the boundary across as isHandoff +
+    // handoff times, saving would silently drop a leg boundary and break
+    // the legs === handoffs + 1 invariant.
+    const ht = handoffTimesOf(stop);
+    setIsHandoff(isHandoffStop(stop));
+    setHandoffDropAt(ht.drop);
+    setHandoffPickupAt(ht.pickup);
     // Pre-existing coords are considered verified; user can re-verify after edits.
     setVerifyState(stop.lat != null && stop.lng != null ? "ok" : "unverified");
     setVerifiedAddress(stop.address ?? "");
@@ -284,6 +303,11 @@ export function StopEditSheet({ visible, orgId, stop, onClose, onSave }: Props) 
       lat,
       lng,
       timezone,
+      // Clearing the toggle clears the exchange times with it, so a stop
+      // never carries orphaned handoff data.
+      isHandoff,
+      handoffDropAt:   isHandoff ? handoffDropAt   : undefined,
+      handoffPickupAt: isHandoff ? handoffPickupAt : undefined,
     });
   }
 
@@ -295,7 +319,15 @@ export function StopEditSheet({ visible, orgId, stop, onClose, onSave }: Props) 
     apptEnd !== stop.apptEnd ||
     instructions.trim() !== (stop.instructions ?? "") ||
     lat !== stop.lat ||
-    lng !== stop.lng
+    lng !== stop.lng ||
+    // Compare against the normalized handoff so a relay point isn't
+    // reported dirty the instant it's opened (same reasoning as the
+    // type coercion above).
+    isHandoff !== isHandoffStop(stop) ||
+    (isHandoff && (
+      handoffDropAt   !== handoffTimesOf(stop).drop ||
+      handoffPickupAt !== handoffTimesOf(stop).pickup
+    ))
   );
 
   return (
@@ -600,6 +632,71 @@ export function StopEditSheet({ visible, orgId, stop, onClose, onSave }: Props) 
                 </View>
               </TouchableOpacity>
 
+              {/* Relay handoff toggle. Marks this stop as a leg boundary
+                  WITHOUT turning it into a bare relay point — it stays a
+                  pickup / delivery with its own appointment, and the two
+                  exchange times ride along in handoffDropAt /
+                  handoffPickupAt. The server rejects a handoff on the
+                  first or last stop, so this is only meaningful in the
+                  middle of the list. */}
+              <Text style={[txt(800), { fontSize: 11, color: "#5f6368", letterSpacing: 0.6, marginBottom: 6 }]}>
+                RELAY
+              </Text>
+              <TouchableOpacity
+                onPress={() => setIsHandoff((v) => !v)}
+                activeOpacity={0.7}
+                style={{
+                  flexDirection: "row", alignItems: "center", gap: 10,
+                  paddingHorizontal: 12, paddingVertical: 12,
+                  backgroundColor: isHandoff ? "#f3e8fd" : "#f1f3f4",
+                  borderRadius: 12,
+                  borderWidth: 1, borderColor: isHandoff ? "#6b21a8" : "transparent",
+                  marginBottom: isHandoff ? 8 : 16,
+                }}
+              >
+                <HandCoins size={15} color={isHandoff ? "#6b21a8" : "#5f6368"} strokeWidth={2.2} />
+                <View style={{ flex: 1 }}>
+                  <Text style={[txt(700), { fontSize: 14, color: isHandoff ? "#6b21a8" : "#3c4043" }]}>
+                    Hand off here
+                  </Text>
+                  <Text style={[txt(500), { fontSize: 11, color: isHandoff ? "#6b21a8" : "#9aa0a6", marginTop: 1 }]}>
+                    One leg ends and the next begins at this stop
+                  </Text>
+                </View>
+                <View style={{
+                  width: 20, height: 20, borderRadius: 6,
+                  backgroundColor: isHandoff ? "#6b21a8" : "transparent",
+                  borderWidth: 1.5, borderColor: isHandoff ? "#6b21a8" : "#9aa0a6",
+                  alignItems: "center", justifyContent: "center",
+                }}>
+                  {isHandoff ? <CheckCircle2 size={13} color="#ffffff" strokeWidth={2.6} /> : null}
+                </View>
+              </TouchableOpacity>
+
+              {isHandoff ? (
+                <TouchableOpacity
+                  onPress={() => setHandoffOpen(true)}
+                  activeOpacity={0.7}
+                  style={{
+                    flexDirection: "row", alignItems: "center", gap: 10,
+                    paddingHorizontal: 12, paddingVertical: 12,
+                    backgroundColor: "#f1f3f4", borderRadius: 12, marginBottom: 16,
+                  }}
+                >
+                  <Clock size={15} color="#5f6368" strokeWidth={2.2} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={[txt(600), { fontSize: 11, color: "#5f6368", letterSpacing: 0.4 }]}>DROP</Text>
+                    <Text style={[txt(700), { fontSize: 14, color: handoffDropAt ? "#202124" : "#9aa0a6" }]} numberOfLines={1}>
+                      {fmtFullDateTime(handoffDropAt)}
+                    </Text>
+                    <Text style={[txt(600), { fontSize: 11, color: "#5f6368", letterSpacing: 0.4, marginTop: 4 }]}>PICKUP</Text>
+                    <Text style={[txt(700), { fontSize: 14, color: handoffPickupAt ? "#202124" : "#9aa0a6" }]} numberOfLines={1}>
+                      {fmtFullDateTime(handoffPickupAt)}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              ) : null}
+
               {/* Instructions */}
               <Text style={[txt(800), { fontSize: 11, color: "#5f6368", letterSpacing: 0.6, marginBottom: 6 }]}>
                 INSTRUCTIONS
@@ -668,6 +765,23 @@ export function StopEditSheet({ visible, orgId, stop, onClose, onSave }: Props) 
           setApptStart(range.start);
           setApptEnd(range.end !== range.start ? range.end : undefined);
           setWindowOpen(false);
+        }}
+      />
+
+      {/* Handoff drop → pickup. Same range picker as the appointment
+          window, but it writes the dedicated handoff columns so the
+          stop's own appointment is left alone. */}
+      <DateTimePickerSheet
+        visible={handoffOpen}
+        mode="range"
+        title="Handoff times"
+        initialStart={handoffDropAt ?? apptEnd ?? apptStart ?? ""}
+        initialEnd={handoffPickupAt ?? handoffDropAt ?? apptEnd ?? apptStart ?? ""}
+        onClose={() => setHandoffOpen(false)}
+        onSave={(range) => {
+          setHandoffDropAt(range.start);
+          setHandoffPickupAt(range.end !== range.start ? range.end : undefined);
+          setHandoffOpen(false);
         }}
       />
     </Modal>

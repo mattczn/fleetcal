@@ -1,6 +1,6 @@
 import { supabase } from "./supabase";
 import { railway } from "./railway";
-import { byLegIndex } from "@fleetcal/types";
+import { byLegIndex, isHandoffStop } from "@fleetcal/types";
 import type { Asset, Driver, Load, LoadStatus, RefNum, Stop, StopType, Customer as ApiCustomer } from "./types";
 // All reads + writes go through Railway. The only remaining direct
 // Supabase usage is the rate-con PDF upload (uploadRateConPdf), which
@@ -145,12 +145,12 @@ export interface SplitRelayOptions {
   deliveryAssetId:    number;
   deliveryDriverId?:  number | null;
   deliveryDriverName?: string | null;
-  /** Full ordered stops list including the NEW relay-type stop. */
+  /** Full ordered stops list including the NEW handoff stop. */
   mergedStops:        Stop[];
-  /** Index of the NEW relay marker within mergedStops. Required when the
-   *  load is already a relay (the list may contain older relay markers —
+  /** Index of the NEW handoff within mergedStops. Required when the
+   *  load is already a relay (the list may contain older handoffs —
    *  a bare findIndex would pick the wrong one). Defaults to the first
-   *  relay stop for single-leg splits. */
+   *  handoff stop for single-leg splits. */
   relayStopIndex?:    number;
 }
 
@@ -166,10 +166,13 @@ export async function splitIntoRelay(opts: SplitRelayOptions): Promise<string> {
   if (!self?.loadId) throw new Error("Cannot split: event has no loadId");
   const priorIds = new Set(loads.map(l => l.id));
 
+  // The boundary can be a bare `type:'relay'` point (what RelaySplitSheet
+  // builds) or a real stop flagged isHandoff — isHandoffStop() covers both.
   const relayStopIndex = opts.relayStopIndex
-    ?? opts.mergedStops.findIndex(s => s.type === "relay");
-  if (relayStopIndex < 0 || opts.mergedStops[relayStopIndex]?.type !== "relay") {
-    throw new Error("mergedStops must include a stop with type='relay'");
+    ?? opts.mergedStops.findIndex(isHandoffStop);
+  const marker = relayStopIndex >= 0 ? opts.mergedStops[relayStopIndex] : undefined;
+  if (!marker || !isHandoffStop(marker)) {
+    throw new Error("mergedStops must include a handoff stop (type='relay' or isHandoff)");
   }
 
   const res = await railway.splitRelay(self.loadId, {

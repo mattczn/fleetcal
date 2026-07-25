@@ -11,7 +11,7 @@ import {
   Repeat2, HandCoins, CheckCircle2, Route, Pencil, Lock, Trash2, Plus, Split,
 } from "lucide-react-native";
 import { fetchLoad, updateLoadStatus, updateLoadTrailer, updateLoadFields, fetchAssets, fetchDrivers, fetchDriverAssetPrefs, fetchCustomers, displayBrokerName, saveStops, splitIntoRelay, removeRelay, softDeleteLoad, type LoadWithLegs } from "@/lib/api";
-import { legLabel } from "@fleetcal/types";
+import { legLabel, isHandoffStop, handoffIndexes, handoffTimesOf } from "@fleetcal/types";
 import { supabase } from "@/lib/supabase";
 import { fetchMotiveLocations, distanceMiles, type MotiveLocation } from "@/lib/motive";
 import { env } from "@/lib/env";
@@ -77,15 +77,17 @@ function legPos(load: Load): { legIndex: number; legCount: number } {
 
 /**
  * Stop-index window [start, end] (inclusive) for a leg within the FULL
- * merged stop list. Relay marker i (0-based, in sequence order) sits
- * between leg i and leg i+1, so leg i's window runs from marker i-1 (or
- * the first stop) through marker i (or the last stop), boundary markers
- * included. Falls back to the whole list when the marker count doesn't
+ * merged stop list. Handoff i (0-based, in sequence order) sits between
+ * leg i and leg i+1, so leg i's window runs from handoff i-1 (or the
+ * first stop) through handoff i (or the last stop), boundary stops
+ * included. Falls back to the whole list when the handoff count doesn't
  * line up with legCount (mid-edit or stale data).
+ *
+ * A boundary is EITHER a `type:'relay'` point or a real stop flagged
+ * isHandoff — `handoffIndexes()` finds both.
  */
 function legStopWindow(stops: Stop[], legIndex: number, legCount: number): { start: number; end: number } {
-  const markers: number[] = [];
-  stops.forEach((s, i) => { if (s.type === "relay") markers.push(i); });
+  const markers = handoffIndexes(stops);
   if (legCount <= 1 || markers.length < legCount - 1) {
     return { start: 0, end: stops.length - 1 };
   }
@@ -595,6 +597,19 @@ function StopCard({
   const window = s.apptStart && s.apptEnd && s.apptStart !== s.apptEnd
     ? `${fmtTime(s.apptStart)} – ${fmtTime(s.apptEnd)}`
     : fmtTime(s.apptStart);
+  // Leg boundary. A `type:'relay'` point already reads as "RELAY" and
+  // carries the exchange in apptStart/apptEnd (unchanged). A handoff on
+  // a REAL stop keeps its own type label + appointment window above and
+  // gains the purple HANDOFF chip plus a drop/pickup line.
+  const isRelayPoint  = s.type === "relay";
+  const isHandoffHere = isHandoffStop(s) && !isRelayPoint;
+  const handoff       = isHandoffHere ? handoffTimesOf(s) : null;
+  const handoffLine   = handoff && (handoff.drop || handoff.pickup)
+    ? [
+        handoff.drop   ? `Drop ${fmtTime(handoff.drop)}`     : null,
+        handoff.pickup ? `Pickup ${fmtTime(handoff.pickup)}` : null,
+      ].filter(Boolean).join("  ·  ")
+    : null;
 
   const distMi = truckLoc && s.lat != null && s.lng != null
     ? distanceMiles(truckLoc.lat, truckLoc.lon, s.lat, s.lng)
@@ -694,10 +709,19 @@ function StopCard({
         <Text style={[txt(800), { color: "#ffffff", fontSize: 16 }]}>{index + 1}</Text>
       </View>
       <View style={{ flex: 1 }}>
-        <View style={{ alignSelf: "flex-start", paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999, backgroundColor: tint.bg, marginBottom: 4 }}>
-          <Text style={[txt(800), { fontSize: 10, color: tint.fg, letterSpacing: 0.5 }]}>
-            {tint.label.toUpperCase()}
-          </Text>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
+          <View style={{ paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999, backgroundColor: tint.bg }}>
+            <Text style={[txt(800), { fontSize: 10, color: tint.fg, letterSpacing: 0.5 }]}>
+              {tint.label.toUpperCase()}
+            </Text>
+          </View>
+          {isHandoffHere ? (
+            <View style={{ paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999, backgroundColor: "#f3e8fd" }}>
+              <Text style={[txt(800), { fontSize: 10, color: "#6b21a8", letterSpacing: 0.5 }]}>
+                HANDOFF
+              </Text>
+            </View>
+          ) : null}
         </View>
         <Text style={[txt(800), { fontSize: 15, color: "#202124", paddingRight: s.arrivedAt ? 78 : 42 }]} numberOfLines={2}>
           {facility}
@@ -711,6 +735,12 @@ function StopCard({
           <Clock size={12} color="#5f6368" strokeWidth={2.2} />
           <Text style={[txt(700), { fontSize: 12, color: "#3c4043" }]}>{window}</Text>
         </View>
+        {handoffLine ? (
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 4 }}>
+            <HandCoins size={12} color="#6b21a8" strokeWidth={2.2} />
+            <Text style={[txt(700), { fontSize: 12, color: "#6b21a8" }]}>{handoffLine}</Text>
+          </View>
+        ) : null}
         {distLabel ? (
           <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
@@ -1908,7 +1938,7 @@ export default function LoadDetail() {
     if (!load) return false;
     const list = stopsDraft ?? load.stops;
     if (!load.relayGroupId) {
-      if (list.some((s) => s.type === "relay")) return false;
+      if (list.some(isHandoffStop)) return false;
       return list.length >= 2;
     }
     const { legIndex, legCount } = legPos(load);

@@ -62,6 +62,7 @@ import { ExpandableInstructions } from "@/components/ExpandableInstructions";
 import { useDriverSession } from "@/lib/useDriverSession";
 import { ScheduleTypeChip } from "@/lib/loadCard";
 import { legPositionOf, splitStopsForLeg, handoffDirectionFor, myHandoffOrdinals } from "@/lib/relayLegs";
+import { isHandoffStop, handoffTimesOf } from "@fleetcal/types";
 import { needsRunConfirmation } from "@/lib/loadStatus";
 import type { LoadStatus, Stop } from "@/lib/types";
 import { isModuleEnabled } from "@fleetcal/types";
@@ -626,23 +627,41 @@ function StopCardInner({
   const accent = { bg: stint.bg, fg: stint.fg, iconBg: STOP_SOLID[stop.type] ?? C.t3 };
   const facility = stop.facilityName ?? stop.city ?? stop.address ?? "—";
   const copyValue = stop.address ?? stop.city ?? stop.facilityName ?? "";
-  // Relay handoff stops carry two times in one row: apptStart = the
-  // dropping driver's time, apptEnd = the receiving driver's pickup.
-  // Show only the time relevant to THIS driver instead of the
-  // confusing "9a – 10a" range. Pair with a "DROP" / "PICKUP" subtype
-  // label below so the role is unambiguous.
-  const isRelayStop = stop.type === "relay" && !!relayHandoff;
-  const relayActionLabel = isRelayStop
+  // A handoff carries two times: the dropping driver's and the receiving
+  // driver's. handoffTimesOf() knows where they live — apptStart/apptEnd
+  // on a bare relay point, handoffDropAt/handoffPickupAt on a handoff
+  // that sits on a REAL stop (whose apptStart/apptEnd are its own
+  // appointment). Show only the time relevant to THIS driver instead of
+  // the confusing "9a – 10a" range, paired with a "DROP" / "PICKUP"
+  // label so the role is unambiguous.
+  //
+  // isRelayPoint  → a bare trailer-drop stop: the whole card IS the
+  //                 handoff, so it replaces the type label + window.
+  // isHandoffHere → any boundary on MY leg, including a real pickup /
+  //                 delivery. A real stop keeps its own label, window
+  //                 and APPT chip and gains the handoff treatment
+  //                 (purple eyebrow + drop/pickup time) on top.
+  const isRelayPoint  = stop.type === "relay";
+  const isHandoffHere = isHandoffStop(stop) && !!relayHandoff;
+  const relayActionLabel = isHandoffHere
     ? (relayHandoff === "outbound" ? "DROP" : "PICKUP")
     : null;
-  const relayTimeIso = isRelayStop
-    ? (relayHandoff === "outbound" ? stop.apptStart : (stop.apptEnd ?? stop.apptStart))
+  const handoffTimes = handoffTimesOf(stop);
+  const relayTimeIso = isHandoffHere
+    ? (relayHandoff === "outbound"
+        ? handoffTimes.drop
+        : (handoffTimes.pickup ?? handoffTimes.drop))
     : null;
-  const window = isRelayStop
+  const window = isRelayPoint && isHandoffHere
     ? fmtTime(relayTimeIso ?? undefined)
     : (stop.apptStart && stop.apptEnd && stop.apptStart !== stop.apptEnd
         ? `${fmtTime(stop.apptStart)} – ${fmtTime(stop.apptEnd)}`
         : fmtTime(stop.apptStart));
+  // Handoff photos: at my OUTBOUND boundary I upload for the next
+  // driver, at my INBOUND boundary I view what was left for me. Relay
+  // points keep the button unconditionally (today's behavior); handoffs
+  // on real stops only get it when they're a boundary of MY leg.
+  const showHandoffPhotos = !!loadId && (isRelayPoint || isHandoffHere);
 
   function openMaps() {
     const target =
@@ -694,15 +713,25 @@ function StopCardInner({
           <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 4 }}>
             <View style={{ paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999, backgroundColor: accent.bg }}>
               <Text style={[txt(800), { fontSize: 10, color: accent.fg, letterSpacing: 0.5 }]}>
-                {/* Relay stops show "RELAY HANDOFF · DROP" or
-                    "RELAY HANDOFF · PICKUP" so the driver immediately
-                    knows what they're doing here. Non-relay stops use
-                    the standard type label (PICKUP / DELIVERY / etc.). */}
-                {isRelayStop
+                {/* A bare relay point shows "RELAY HANDOFF · DROP" /
+                    "· PICKUP" — that exchange IS the whole stop. Every
+                    other stop keeps its own type label (PICKUP /
+                    DELIVERY / etc.); when it also happens to be a
+                    handoff it gets the purple chip beside this one. */}
+                {isRelayPoint && isHandoffHere
                   ? `RELAY HANDOFF · ${relayActionLabel}`
                   : (STOP_TYPE_LABEL[stop.type] ?? stop.type).toUpperCase()}
               </Text>
             </View>
+            {/* Handoff-on-a-real-stop: the stop stays a pickup/delivery,
+                this chip adds the leg-boundary meaning. */}
+            {isHandoffHere && !isRelayPoint ? (
+              <View style={{ paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999, backgroundColor: C.purpleBg }}>
+                <Text style={[txt(800), { fontSize: 10, color: C.purpleInk, letterSpacing: 0.5 }]}>
+                  {`HANDOFF · ${relayActionLabel}`}
+                </Text>
+              </View>
+            ) : null}
           </View>
 
           <Text style={[txt(800), { fontSize: 16, color: C.t1 }]} numberOfLines={2}>
@@ -721,11 +750,23 @@ function StopCardInner({
                 {fmtDate(stop.apptStart)} · {window}
               </Text>
             </View>
-            {/* Hide schedule type for relay handoff — it's not a real
-                appointment, it's a fixed exchange time, so APPT/WINDOW
-                doesn't add information. */}
-            {!isRelayStop && <ScheduleTypeChip stop={stop} size="small" />}
+            {/* Hide schedule type on a bare relay point of MY leg — it's
+                not a real appointment, it's a fixed exchange time, so
+                APPT/WINDOW doesn't add information. A handoff on a real
+                stop DOES have its own appointment, so it keeps the chip. */}
+            {!(isRelayPoint && isHandoffHere) && <ScheduleTypeChip stop={stop} size="small" />}
           </View>
+
+          {/* Handoff time on a real stop — its own appointment is shown
+              above, so the exchange time gets its own purple line. */}
+          {isHandoffHere && !isRelayPoint && relayTimeIso ? (
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 6 }}>
+              <HandCoins size={12} color={C.purpleInk} strokeWidth={2.2} />
+              <Text style={[txt(700), { fontSize: 12, color: C.purpleInk }]}>
+                {relayHandoff === "outbound" ? "Drop for next driver" : "Take over"} · {fmtTime(relayTimeIso)}
+              </Text>
+            </View>
+          ) : null}
         </View>
       </View>
 
@@ -755,11 +796,12 @@ function StopCardInner({
           : <CheckInButton stop={stop} orgId={orgId} onCheckedIn={onCheckedIn} eventId={eventId} driverName={driverName} />}
       </View>
 
-      {/* Relay handoff: at my OUTBOUND marker I upload photos for the
-          next driver; at my INBOUND marker I jump to the documents
-          viewer to see what the previous driver left behind (trailer
-          location, paperwork, etc.). */}
-      {stop.type === "relay" && loadId ? (
+      {/* Handoff: at my OUTBOUND boundary I upload photos for the next
+          driver; at my INBOUND boundary I jump to the documents viewer
+          to see what the previous driver left behind (trailer location,
+          paperwork, etc.). Works the same whether the boundary is a bare
+          relay point or a real stop flagged isHandoff. */}
+      {showHandoffPhotos && loadId ? (
         relayHandoff === "inbound" && onViewDocuments ? (
           <TouchableOpacity
             onPress={onViewDocuments}

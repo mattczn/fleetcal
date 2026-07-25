@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { GripVertical, Plus, Trash2, MapPin, CheckCircle2, AlertCircle, Clock, LocateFixed, ArrowLeftRight, Bookmark } from 'lucide-react';
+import { isHandoffStop, handoffIndexes } from '@fleetcal/types';
 import Tooltip from '@/components/ui/Tooltip';
 import type { Stop, StopType } from '@/lib/types';
 import { useCalendarStore } from '@/store/useCalendarStore';
@@ -39,6 +40,20 @@ interface Props {
   /** Driver name per leg, leg order — labels each handoff divider
    *  ("Luis drops → Sarah picks up"; falls back to "Handoff N"). */
   legDriverNames?: (string | undefined)[];
+  /** Leg-builder mode: shows the per-stop "Handoff after this stop"
+   *  toggle, the colored leg rail + per-stop leg tags, and the
+   *  "+ add handoff between these stops" insert rows. Off (default)
+   *  keeps the plain stops list every other caller renders. */
+  legBuilder?: boolean;
+  /** Toggle `isHandoff` on the stop at `idx`. Only offered for
+   *  intermediate stops — the first and last can never be boundaries. */
+  onToggleHandoff?: (idx: number) => void;
+  /** Insert a NEW relay-point stop between stops `idx` and `idx+1`
+   *  (the yard case — a handoff point that isn't a stop yet). */
+  onInsertHandoffAfter?: (idx: number) => void;
+  /** Per-leg accent colors, leg order — drives the rail + leg tags.
+   *  Falls back to the relay purple when absent. */
+  legColors?: string[];
   eventStart?: string; // "YYYY-MM-DDTHH:mm" — for relay time bounds
   eventEnd?: string;
   loadedMiles?: number | null;
@@ -164,6 +179,12 @@ const TYPE_CONFIG: Record<StopType, { label: string; color: string; bg: string }
   relay:     { label: 'RELAY', color: '#6d28d9', bg: '#f5f3ff' },
 };
 
+/** Relay/leg accent — matches EventModal's RELAY_COLOR. */
+const RELAY_ACCENT = '#7c3aed';
+/** Per-leg rail colors, cycled. Leg 1 keeps the familiar relay purple
+ *  so 2-leg loads look exactly as they did. */
+const LEG_RAIL_COLORS = ['#7c3aed', '#0891b2', '#c2410c', '#15803d', '#b45309', '#be185d'];
+
 const STOP_TYPES: StopType[] = ['pickup', 'delivery', 'drop', 'drop_hook', 'stop', 'relay'];
 const TYPE_LABELS: Record<StopType, string> = {
   pickup: 'Pickup', delivery: 'Delivery', drop: 'Drop Trailer', drop_hook: 'Drop & Hook', stop: 'Stop', relay: 'Relay Point',
@@ -257,7 +278,7 @@ function CheckInChip({ stop }: { stop: Stop }) {
   );
 }
 
-export default function StopsSection({ stops, onChange, headerColor, onMapRoute, onActivateRelay, relayActive, relayRole, legIndex, legCount, legDriverNames, eventStart, eventEnd, loadedMiles, loadPrice, ratePerMile }: Props) {
+export default function StopsSection({ stops, onChange, headerColor, onMapRoute, onActivateRelay, relayActive, relayRole, legIndex, legCount, legDriverNames, legBuilder, onToggleHandoff, onInsertHandoffAfter, legColors, eventStart, eventEnd, loadedMiles, loadPrice, ratePerMile }: Props) {
   const savedLocations    = useCalendarStore(s => s.savedLocations);
   const fetchSavedLocs    = useCalendarStore(s => s.fetchSavedLocations);
   const allEvents         = useCalendarStore(s => s.events);
@@ -558,12 +579,11 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
       {/* Stop rows */}
       <div className="space-y-2">
         {(() => {
-          // Relay marker positions, sequence order. Marker i (0-based
-          // among relay stops) sits between leg i and leg i+1.
-          const markerIdxs = stops.reduce<number[]>((acc, s, i) => {
-            if (s.type === 'relay') acc.push(i);
-            return acc;
-          }, []);
+          // Handoff boundary positions, sequence order. Boundary i sits
+          // between leg i and leg i+1. A boundary is either a bare
+          // relay-point stop or a REAL stop flagged isHandoff — always
+          // resolve via the shared helper, never `type === 'relay'`.
+          const markerIdxs = handoffIndexes(stops);
           // Viewed-leg position: explicit legIndex wins; legacy relayRole
           // maps pickup=first, delivery=last, transfer=middle-of-3.
           const viewedLeg = legIndex ?? (
@@ -578,29 +598,51 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
             // Boundary markers belong to both adjacent legs.
             return idx >= lo && idx <= hi;
           };
-          const showDividers = viewedLeg != null || (legCount ?? 0) > 1;
+          const showDividers = viewedLeg != null || (legCount ?? 0) > 1 || legBuilder;
+          // Leg each stop belongs to = number of boundaries strictly
+          // before it. A boundary stop reads as the EARLIER leg (the
+          // handoff happens after it); the next row opens the next leg.
+          const legOf = (idx: number) => markerIdxs.filter(m => m < idx).length;
+          const legTint = (leg: number) =>
+            legColors?.[leg] ?? LEG_RAIL_COLORS[leg % LEG_RAIL_COLORS.length];
+          const totalLegs = markerIdxs.length + 1;
           return stops.map((stop, idx) => {
           const cfg = TYPE_CONFIG[stop.type] ?? TYPE_CONFIG.stop;
           const thisLeg = isThisLeg(idx);
-          const markerOrdinal = stop.type === 'relay' ? markerIdxs.indexOf(idx) : -1;
-          const isRelayHandoff = markerOrdinal >= 0 && showDividers;
-          // Divider before the relay handoff stop — labeled with who
-          // hands the load to whom when both legs' drivers are known.
+          const markerOrdinal = markerIdxs.indexOf(idx);
+          const isBoundary = markerOrdinal >= 0;
+          // A bare relay POINT is itself the handoff location, so its
+          // divider reads above the row. A real stop flagged isHandoff
+          // hands off AFTER servicing it — divider goes below.
+          const dividerBelow = isBoundary && isHandoffStop(stop) && stop.type !== 'relay';
+          const showThisDivider = isBoundary && showDividers;
+          // Divider labeled with who hands the load to whom when both
+          // legs' drivers are known.
           const fromName = legDriverNames?.[markerOrdinal]?.trim();
           const toName   = legDriverNames?.[markerOrdinal + 1]?.trim();
           const dividerLabel = fromName && toName
             ? `${fromName} drops → ${toName} picks up`
             : `Handoff ${markerOrdinal + 1}`;
-          const divider = isRelayHandoff ? (
+          const dividerNode = showThisDivider ? (
             <div key={`divider-${stop.id}`} className="flex items-center gap-2 px-1 py-0.5">
               <div className="flex-1 h-px" style={{ background: '#ddd6fe' }} />
               <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-lg"
-                style={{ background: '#f5f3ff', color: '#7c3aed', border: '1px solid #ddd6fe' }}>
+                style={{ background: '#f5f3ff', color: RELAY_ACCENT, border: '1px solid #ddd6fe' }}>
                 {dividerLabel}
               </span>
               <div className="flex-1 h-px" style={{ background: '#ddd6fe' }} />
             </div>
           ) : null;
+          const divider = dividerBelow ? null : dividerNode;
+          const stopLeg = legOf(idx);
+          const isFirst = idx === 0;
+          const isLast  = idx === stops.length - 1;
+          // The handoff toggle is only meaningful on an INTERMEDIATE
+          // real stop — the first and last stop can never be boundaries
+          // (server enforces it too), and a bare relay point is always
+          // one.
+          const canToggleHandoff = !!legBuilder && !!onToggleHandoff
+            && !isFirst && !isLast && stop.type !== 'relay';
 
           return (
             <div key={stop.id}>
@@ -620,8 +662,29 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
                 background: thisLeg ? 'var(--gc-surface)' : 'var(--gc-bg)',
                 opacity: (dragActive && dragIdx.current === idx ? 0.4 : 1) * (thisLeg ? 1 : 0.45),
                 transition: 'opacity 150ms',
+                // Leg rail — the colored bracket down the left of every
+                // row showing which leg the stop belongs to.
+                ...(legBuilder && totalLegs > 1
+                  ? { borderLeft: `3px solid ${legTint(stopLeg)}`, paddingLeft: 8 }
+                  : {}),
               }}
             >
+              {/* Leg tag — which leg this stop belongs to. Boundary
+                  stops carry both legs since they're serviced by the
+                  driver dropping AND the one picking up. */}
+              {legBuilder && totalLegs > 1 && (
+                <span style={{
+                  position: 'absolute', top: -7, left: 8, zIndex: 1,
+                  fontSize: 9, fontWeight: 800, letterSpacing: '0.04em',
+                  textTransform: 'uppercase', lineHeight: 1,
+                  padding: '2px 5px', borderRadius: 4,
+                  color: '#fff', background: legTint(stopLeg),
+                  whiteSpace: 'nowrap',
+                }}>
+                  Leg {stopLeg + 1}{isBoundary ? ` → ${stopLeg + 2}` : ''}
+                </span>
+              )}
+
               {/* Drag handle + sequence */}
               <div
                 style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, paddingTop: 2, cursor: 'grab', flexShrink: 0 }}
@@ -1031,6 +1094,59 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
                         </>
                       );
                     })()}
+                    {/* Handoff-on-a-real-stop toggle. Turns THIS stop
+                        into a leg boundary (no duplicate relay point
+                        needed) and reveals the two handoff times. */}
+                    {canToggleHandoff && (
+                      <div style={{ marginTop: 2 }}>
+                        <button
+                          type="button"
+                          onClick={() => onToggleHandoff!(idx)}
+                          style={{
+                            display: 'flex', alignItems: 'center', gap: 5, width: '100%',
+                            fontSize: 10.5, fontWeight: 700, letterSpacing: '0.01em',
+                            padding: '4px 7px', borderRadius: 6, cursor: 'pointer',
+                            border: `1px ${stop.isHandoff ? 'solid' : 'dashed'} ${stop.isHandoff ? RELAY_ACCENT : '#ddd6fe'}`,
+                            background: stop.isHandoff ? '#f5f3ff' : 'transparent',
+                            color: RELAY_ACCENT,
+                          }}
+                          title={stop.isHandoff
+                            ? 'Remove the handoff here — merges this leg with the next one'
+                            : 'End a leg at this stop — the next driver takes over from here'}
+                        >
+                          <ArrowLeftRight size={10} style={{ flexShrink: 0 }} />
+                          <span style={{ textAlign: 'left' }}>
+                            {stop.isHandoff ? 'Handoff after this stop' : 'Handoff after this stop?'}
+                          </span>
+                        </button>
+                        {stop.isHandoff && (
+                          <div style={{ marginTop: 5, display: 'flex', flexDirection: 'column', gap: 5 }}>
+                            <div>
+                              <div style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#6d28d9', marginBottom: 3 }}>
+                                {fromName ? `${fromName} drops` : 'Driver 1 drop'}
+                              </div>
+                              <ApptInput
+                                value={toView(stop.handoffDropAt)}
+                                onChange={v => update(idx, { handoffDropAt: toHome(v) })}
+                                placeholder="Drop time"
+                                headerColor={RELAY_ACCENT}
+                              />
+                            </div>
+                            <div>
+                              <div style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#6d28d9', marginBottom: 3 }}>
+                                {toName ? `${toName} picks up` : 'Driver 2 pickup'}
+                              </div>
+                              <ApptInput
+                                value={toView(stop.handoffPickupAt)}
+                                onChange={v => update(idx, { handoffPickupAt: toHome(v) })}
+                                placeholder="Pickup time"
+                                headerColor={RELAY_ACCENT}
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </>
                 )}
               </div>
@@ -1073,6 +1189,28 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
                 </button>
               )}
             </div>
+            {/* Handoff-on-a-stop reads as "after this stop", so its
+                divider renders below the row it belongs to. */}
+            {dividerBelow ? dividerNode : null}
+            {/* "+ add handoff between these stops" — creates a NEW
+                relay-point stop in the gap (the yard case: a handoff
+                location that isn't a stop yet). Not offered after the
+                last stop (a handoff needs a leg on each side) nor
+                adjacent to an existing boundary. */}
+            {legBuilder && onInsertHandoffAfter && !isLast && !isBoundary && !markerIdxs.includes(idx + 1) && (
+              <div className="flex items-center gap-2 px-1" style={{ paddingTop: 4 }}>
+                <div className="flex-1 h-px" style={{ background: 'var(--gc-border-light)' }} />
+                <button type="button" onClick={() => onInsertHandoffAfter(idx)}
+                  className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-lg font-semibold transition-colors"
+                  style={{ color: RELAY_ACCENT, border: '1px dashed #ddd6fe', background: 'transparent', cursor: 'pointer' }}
+                  onMouseEnter={e => (e.currentTarget.style.background = '#f5f3ff')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                  title="Add a new relay point between these stops (e.g. the yard)">
+                  <Plus size={9} /> Add handoff between these stops
+                </button>
+                <div className="flex-1 h-px" style={{ background: 'var(--gc-border-light)' }} />
+              </div>
+            )}
             </div>
           );
         });

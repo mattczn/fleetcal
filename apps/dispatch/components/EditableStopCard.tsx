@@ -2,6 +2,7 @@ import React from "react";
 import { View, Text, TouchableOpacity, ActivityIndicator } from "react-native";
 import { ChevronUp, ChevronDown, Pencil, Trash2, AlertTriangle, CheckCircle2 } from "lucide-react-native";
 import { txt } from "@/lib/font";
+import { isHandoffStop } from "@fleetcal/types";
 import type { Stop, StopType } from "@/lib/types";
 
 const STOP_TINT: Record<StopType, { bg: string; fg: string; mark: string; label: string }> = {
@@ -32,6 +33,10 @@ export function EditableStopCard({
   const tint = STOP_TINT[stop.type] ?? STOP_TINT.stop;
   const facility = stop.facilityName ?? stop.city ?? stop.address ?? "Untitled stop";
   const hasCoords = stop.lat != null && stop.lng != null;
+  // A `type:'relay'` point already says RELAY in its type chip; a handoff
+  // sitting on a REAL stop keeps that stop's chip and gets this one too,
+  // so the dispatcher can see the leg boundaries while reordering.
+  const isHandoffHere = isHandoffStop(stop) && stop.type !== "relay";
   return (
     <View
       style={{
@@ -89,6 +94,13 @@ export function EditableStopCard({
                 {tint.label.toUpperCase()}
               </Text>
             </View>
+            {isHandoffHere ? (
+              <View style={{ paddingHorizontal: 6, paddingVertical: 1, borderRadius: 999, backgroundColor: "#f3e8fd" }}>
+                <Text style={[txt(800), { fontSize: 9, color: "#6b21a8", letterSpacing: 0.4 }]}>
+                  HANDOFF
+                </Text>
+              </View>
+            ) : null}
             {verifying ? (
               <View style={{
                 flexDirection: "row", alignItems: "center", gap: 4,

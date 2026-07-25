@@ -32,7 +32,7 @@ import DatePicker from './DatePicker';
 import TimePicker from './TimePicker';
 import StopsSection from './StopsSection';
 import RelayLegsEditor, { RelayLegView, RelayHandoffView, RelayHandoffPhoto } from './RelayLegsEditor';
-import { legRoleFor, legLabel, byLegIndex } from '@fleetcal/types';
+import { legRoleFor, legLabel, byLegIndex, handoffIndexes, handoffTimesOf, isHandoffStop } from '@fleetcal/types';
 import { legStraightMiles } from '@/lib/legMiles';
 import { errorToast } from '@/lib/errorToast';
 import RouteMapPanel from './RouteMapPanel';
@@ -1747,7 +1747,7 @@ export default function EventModal() {
     refetchEvent, refetchingEventIds,
     addEvent, updateEvent, removeEvent, cancelEventKeepLoad, closeModal,
     openEditModal, openCreateModal,
-    createRelayLegs, splitToRelay, saveRelayLegs, removeRelay,
+    createRelayLegs, splitToRelay, saveRelayLegs, removeRelay, configureLegs,
     fieldSettings, sectionOrder, promptInstructions, promptVariables,
     batchItems, batchIndex, batchNext, clearBatch,
     orgId, dispatchers, customers, addCustomer, addCustomerAlias, addCustomerContact, updateCustomer,
@@ -2257,14 +2257,27 @@ export default function EventModal() {
   const pendingSplitLockRef = useRef(false);
 
   const isExistingRelayLeg = isEdit && !!relayRole;
-  const isRelayContext = draftLegs.length > 0 || isExistingRelayLeg;
+
+  // ── Leg builder ────────────────────────────────────────────────────
+  // On a saved revenue load, legs are DERIVED from the stop list's
+  // handoff boundaries (a bare relay point OR a real stop flagged
+  // isHandoff) rather than from persisted events, so the dispatcher can
+  // author several handoffs and commit them in one PUT /legs reconcile.
+  // Create mode keeps the draftLegs + POST /v1/loads path.
+  const currentEv = isEdit && modalEventId ? events.find(e => e.id === modalEventId) : undefined;
+  const isLegBuilder = isEdit && eventKind === 'revenue' && !!currentEv?.loadId && !isBatch;
+  const boundaryIdxs = useMemo(() => handoffIndexes(stops), [stops]);
+  /** Leg count implied by the CURRENT stop list (what Apply would write). */
+  const derivedLegCount = boundaryIdxs.length + 1;
+  const isRelayContext = draftLegs.length > 0 || isExistingRelayLeg
+    || (isLegBuilder && derivedLegCount > 1);
 
   // All legs of the viewed load, leg order, straight from the store —
   // GET /v1/events/:id returns every leg and the open-effect backfills
   // any that fell outside the calendar's loaded window.
-  const currentEv = isEdit && modalEventId ? events.find(e => e.id === modalEventId) : undefined;
   const relayLegs = useMemo<CalendarEvent[]>(() => {
-    if (!isEdit || !currentEv?.loadId || !currentEv.relayRole) return [];
+    if (!isEdit || !currentEv?.loadId) return [];
+    if (!currentEv.relayRole) return [currentEv];
     return events.filter(e => e.loadId === currentEv.loadId).sort(byLegIndex);
   }, [events, isEdit, currentEv]);
   const viewedArrIdx = relayLegs.findIndex(l => l.id === modalEventId);
@@ -2292,7 +2305,9 @@ export default function EventModal() {
   // included. legIdx==null → whole route minus the markers (create mode
   // editing the whole load).
   const legWindowSlice = (list: Stop[], legIdx: number | undefined): Stop[] => {
-    const markerIdxs = list.reduce<number[]>((acc, s, i) => { if (s.type === 'relay') acc.push(i); return acc; }, []);
+    // Boundaries are relay points AND real stops flagged isHandoff —
+    // always via the shared helper, never a `type === 'relay'` test.
+    const markerIdxs = handoffIndexes(list);
     if (markerIdxs.length === 0) return list;
     if (legIdx == null) return list.filter(s => s.type !== 'relay');
     const lo = legIdx === 0 ? 0 : (markerIdxs[legIdx - 1] ?? 0);
@@ -3180,7 +3195,8 @@ export default function EventModal() {
     // leg i+1: apptStart = the earlier driver's drop, apptEnd = the next
     // driver's pickup. Leg i runs from marker i-1 (or the load start) to
     // marker i (or the load end).
-    const relayMarkers = stops.filter(s => s.type === 'relay');
+    // Boundaries = bare relay points AND real stops flagged isHandoff.
+    const relayMarkers = boundaryIdxs.map(i => stops[i]);
     // Per-leg driver pay from the legs editor. Empty input ⇒ undefined
     // so the API treats it as "no value" instead of zero.
     const legPayOf = (key: string): number | undefined => {
@@ -3188,7 +3204,17 @@ export default function EventModal() {
       return v === '' || v == null ? undefined : v;
     };
 
-    if (isEdit && isExistingRelayLeg && modalEventId && !pendingSplitStopId) {
+    if (isLegBuilder && derivedLegCount !== relayLegs.length) {
+      // ── Leg structure changed → atomic reconcile ───────────────────
+      // The Save button and the legs editor's "Apply N legs" run the
+      // same path, so a dispatcher who edits handoffs and hits Save
+      // isn't told to go press a different button.
+      const ok = await applyLegsNow();
+      if (!ok) return;          // applyLegsNow already toasted the reason
+      closeModal();
+      return;
+
+    } else if (isEdit && isExistingRelayLeg && modalEventId && !pendingSplitStopId) {
       // ── Existing relay: patch EVERY leg in one action ──────────────
       // Marker invariant: an N-leg relay carries exactly N-1 relay
       // points (orphans sneak in via the stop-type dropdown or stale
@@ -3748,6 +3774,23 @@ export default function EventModal() {
   const handleRemoveHandoff = (handoffIdx: number) => {
     const h = relayHandoffViews[handoffIdx];
     if (!h) return;
+    if (isLegBuilder) {
+      // Builder: removing a boundary MERGES the two adjacent legs. A
+      // real stop just loses its isHandoff flag (the stop stays on the
+      // route); a bare relay point is deleted outright. Either way the
+      // derived leg list drops one entry and the earlier leg keeps its
+      // eventId + driver by position. Committed by "Apply N legs".
+      setStops(prev => {
+        const next = isHandoffStop(h.stop) && h.stop.type !== 'relay'
+          ? prev.map(s => s.id === h.stop.id
+              ? { ...s, isHandoff: false, handoffDropAt: undefined, handoffPickupAt: undefined }
+              : s)
+          : prev.filter(s => s.id !== h.stop.id);
+        return next.map((s, i) => ({ ...s, sequence: i + 1 }));
+      });
+      markDirty();
+      return;
+    }
     if (h.isDraft) {
       setStops(prev => prev.filter(s => s.id !== h.stop.id).map((s, i) => ({ ...s, sequence: i + 1 })));
       if (isExistingRelayLeg || pendingSplitStopId) {
@@ -3774,9 +3817,29 @@ export default function EventModal() {
    *  viewed leg; one pending handoff per save), or the LAST leg in
    *  create mode (repeatable: each call appends a leg). */
   const addHandoff = (targetLegId?: string) => {
-    // One unsaved handoff at a time in edit mode. The ref is the
-    // race-proof gate (flips synchronously); the state check is belt +
-    // suspenders for anything that re-enables the buttons early.
+    // Builder mode (saved load): a handoff is purely a stop-list edit —
+    // insert a relay point at the end of the chosen leg's window and
+    // let the derived leg list pick it up. No pending-split state, no
+    // one-per-save limit: "Apply N legs" reconciles them all at once.
+    if (isLegBuilder) {
+      const targetIdx = targetLegId
+        ? Math.max(0, relayLegViews.findIndex(v => v.key === targetLegId || v.eventId === targetLegId))
+        : Math.max(0, relayLegViews.findIndex(v => v.isViewed));
+      const windowEndIdx = targetIdx < boundaryIdxs.length ? boundaryIdxs[targetIdx] : stops.length - 1;
+      // Insert before the window's closing stop so the new boundary
+      // splits the leg rather than landing outside it. Guard against a
+      // 1-stop window (nothing to split).
+      const insertAfter = Math.max(0, windowEndIdx - 1);
+      if (windowEndIdx <= (targetIdx === 0 ? 0 : boundaryIdxs[targetIdx - 1])) {
+        showSaveBlocked('This leg has no room for another handoff — add a stop to it first.');
+        return;
+      }
+      handleInsertHandoffAfter(insertAfter);
+      return;
+    }
+    // One unsaved handoff at a time in the legacy split flow. The ref
+    // is the race-proof gate (flips synchronously); the state check is
+    // belt + suspenders for anything that re-enables buttons early.
     if (isEdit && (pendingSplitStopId || pendingSplitLockRef.current)) return;
     // Structural guard: refuse to insert a marker when the stop list
     // already has more relay points than the load has handoffs (orphans
@@ -3879,6 +3942,29 @@ export default function EventModal() {
     }
     const isViewedKey = key === 'leg0' || key === modalEventId;
     const draft = draftLegs.find(d => d.key === key);
+    // A builder leg that doesn't exist server-side yet gets the same
+    // silent driver↔truck pref application as a create-mode draft, but
+    // its values live in legEdits (keyed by position).
+    const isNewBuilderLeg = key.startsWith('newleg:');
+    if (isNewBuilderLeg) {
+      if (patch.driverName !== undefined) {
+        const name = patch.driverName;
+        const prefAid = preferredAssetForDriverName(name);
+        setLegEdits(prev => ({
+          ...prev,
+          [key]: { ...prev[key], driverName: name, ...(prefAid != null ? { assetId: prefAid } : {}) },
+        }));
+      }
+      if (patch.assetId !== undefined) {
+        const aid = patch.assetId;
+        const suggested = preferredDriverName(aid);
+        setLegEdits(prev => ({
+          ...prev,
+          [key]: { ...prev[key], assetId: aid, ...(suggested ? { driverName: suggested } : {}) },
+        }));
+      }
+      return;
+    }
     if (patch.driverName !== undefined) {
       const name = patch.driverName;
       if (isViewedKey) {
@@ -3905,6 +3991,125 @@ export default function EventModal() {
         setLegEdits(prev => ({ ...prev, [key]: { ...prev[key], assetId: aid } }));
       }
     }
+  };
+
+  /** Toggle `isHandoff` on an intermediate stop — the leg-builder's
+   *  "handoff on a real stop" affordance. Turning it ON seeds the two
+   *  handoff times from the stop's own appointment window so the leg
+   *  boundaries are valid immediately; turning it OFF merges the two
+   *  adjacent legs (the derived leg list simply loses an entry, and the
+   *  earlier leg's eventId + driver survive by position). */
+  const handleToggleStopHandoff = (idx: number) => {
+    const stop = stops[idx];
+    if (!stop) return;
+    if (idx === 0 || idx === stops.length - 1) {
+      showSaveBlocked('The first and last stop cannot be handoffs — a handoff needs a leg on each side.');
+      return;
+    }
+    setStops(prev => prev.map((s, i) => {
+      if (i !== idx) return s;
+      if (s.isHandoff) {
+        return { ...s, isHandoff: false, handoffDropAt: undefined, handoffPickupAt: undefined };
+      }
+      const drop = s.apptEnd ?? s.apptStart;
+      return {
+        ...s,
+        isHandoff: true,
+        handoffDropAt:   s.handoffDropAt   ?? drop,
+        handoffPickupAt: s.handoffPickupAt ?? drop,
+      };
+    }));
+    markDirty();
+  };
+
+  /** "+ add handoff between these stops" — inserts a NEW relay-point
+   *  stop in the gap after `idx` (the yard case: a handoff location
+   *  that isn't a stop yet). Times default midway between the
+   *  neighbours' known times so the leg windows stay ordered. */
+  const handleInsertHandoffAfter = (idx: number) => {
+    const before = stops[idx];
+    const after  = stops[idx + 1];
+    if (!before || !after) return;
+    const anchor = handoffTimesOf(before).drop ?? before.apptEnd ?? before.apptStart
+      ?? `${startDate}T${startTime}`;
+    const relayStop: Stop = {
+      id: crypto.randomUUID(),
+      eventId: '',
+      sequence: 0,
+      type: 'relay',
+      geocodeStatus: 'pending',
+      apptStart: anchor,
+      apptEnd:   anchor,
+    };
+    setStops(prev => [...prev.slice(0, idx + 1), relayStop, ...prev.slice(idx + 1)]
+      .map((s, i) => ({ ...s, sequence: i + 1 })));
+    markDirty();
+  };
+
+  // ── Apply N legs (atomic reconcile) ────────────────────────────────
+  const [applyingLegs, setApplyingLegs] = useState(false);
+  /** Client-side validation mirroring the server's invariants. Returns
+   *  a user-facing message, or null when the payload is sound. */
+  const legsValidationError = (): string | null => {
+    if (!currentEv?.loadId) return 'This load has not been saved yet — save it before configuring legs.';
+    if (stops.length < 2) return 'Add at least two stops before splitting this load into legs.';
+    if (boundaryIdxs.includes(0) || boundaryIdxs.includes(stops.length - 1)) {
+      return 'The first and last stop cannot be handoffs — a handoff needs a leg on each side.';
+    }
+    if (relayLegViews.length !== boundaryIdxs.length + 1) {
+      return `Leg/handoff mismatch: ${boundaryIdxs.length} handoff${boundaryIdxs.length === 1 ? '' : 's'} should give ${boundaryIdxs.length + 1} legs but ${relayLegViews.length} are configured. Remove or add a handoff and try again.`;
+    }
+    const noTruck = relayLegViews.findIndex(l => !l.assetId || !assets.some(a => a.id === l.assetId));
+    if (noTruck >= 0) {
+      return `${legLabel(noTruck, relayLegViews.length) || `Leg ${noTruck + 1}`} needs a truck before these legs can be saved.`;
+    }
+    for (let i = 0; i < boundaryIdxs.length; i++) {
+      const t = handoffTimesOf(stops[boundaryIdxs[i]]);
+      if (!t.drop && !t.pickup) {
+        return `Handoff ${i + 1} needs a drop time before these legs can be saved.`;
+      }
+    }
+    return null;
+  };
+  /** Commit the derived legs in ONE PUT /v1/loads/:id/legs. Existing
+   *  legs keep their eventId by position, new legs omit it, and legs
+   *  that no longer exist are simply absent (server soft-deletes them).
+   *  Returns true when the reconcile landed. */
+  const applyLegsNow = async (): Promise<boolean> => {
+    const blocked = legsValidationError();
+    if (blocked) { showSaveBlocked(blocked); return false; }
+    const loadId = currentEv?.loadId;
+    if (!loadId) return false;
+    setApplyingLegs(true);
+    try {
+      await configureLegs(loadId, {
+        stops,
+        legs: relayLegViews.map((l, i) => {
+          const times = legBoundaryTimes(i);
+          const payVal = legPays[l.key];
+          return {
+            ...(l.eventId ? { eventId: l.eventId } : {}),
+            assetId: l.assetId,
+            driverId: findDriverByName(l.driverName)?.id ?? null,
+            driverName: l.driverName || null,
+            driverPay: payVal === '' || payVal == null ? null : payVal,
+            start: times.start,
+            end:   times.end,
+            status: l.isViewed ? status : undefined,
+            trailerId: l.isViewed ? (linkedTrailerId ?? null) : undefined,
+          };
+        }),
+      });
+      return true;
+    } catch {
+      // configureLegs already toasted the failure.
+      return false;
+    } finally {
+      setApplyingLegs(false);
+    }
+  };
+  const handleApplyLegs = () => {
+    void applyLegsNow().then(ok => { if (ok) closeModal(); });
   };
 
   /** Re-pull the load's documents after a handoff-photo upload. */
@@ -4389,53 +4594,74 @@ export default function EventModal() {
   // the modal's edit buffers. The viewed leg's driver/truck mirror the
   // main form fields; other persisted legs read legEdits overrides;
   // draft legs read draftLegs.
-  const relayMarkersInStops = stops.filter(s => s.type === 'relay');
+  const relayMarkersInStops = boundaryIdxs.map(i => stops[i]);
   // Cheap haversine estimate for draft legs (no cached routed miles yet).
   const draftLegMilesEstimate = (legIdx: number): number | null => {
     const slice = legWindowSlice(stops, legIdx);
     const mi = legStraightMiles({ stops: slice });
     return mi > 0 ? mi : null;
   };
+  /** Start/end for derived leg i, from the boundary times around it.
+   *  Leg 0 starts at the form start; the last leg ends at the form end;
+   *  interior boundaries supply pickup (next leg's start) and drop
+   *  (this leg's end). handoffTimesOf normalizes relay-point stops
+   *  (apptStart/apptEnd) and isHandoff stops (handoffDropAt/PickupAt). */
+  const legBoundaryTimes = (i: number): { start: string; end: string } => {
+    const formStart = `${startDate}T${startTime}`;
+    const formEnd   = `${endDate || startDate}T${endTime || startTime}`;
+    const before = i > 0 ? relayMarkersInStops[i - 1] : undefined;
+    const after  = i < relayMarkersInStops.length ? relayMarkersInStops[i] : undefined;
+    const bt = before ? handoffTimesOf(before) : undefined;
+    const at = after  ? handoffTimesOf(after)  : undefined;
+    const start = bt ? (bt.pickup ?? bt.drop ?? formStart) : formStart;
+    let end = at ? (at.drop ?? at.pickup ?? formEnd) : formEnd;
+    // Never emit an inverted window — the server rejects start > end.
+    if (end < start) end = start;
+    return { start, end };
+  };
   const relayLegViews: RelayLegView[] = (() => {
     if (!isRelayContext) return [];
-    if (isExistingRelayLeg) {
-      const views: RelayLegView[] = relayLegs.map((leg, i) => {
-        const isViewed = leg.id === modalEventId;
-        const edits = legEdits[leg.id] ?? {};
+    if (isLegBuilder) {
+      // Builder: one view per DERIVED leg. Position i reuses persisted
+      // leg i (so its eventId, driver/truck and pay carry over); legs
+      // beyond the persisted count are new and get a positional key.
+      return Array.from({ length: derivedLegCount }, (_, i) => {
+        const existing = relayLegs[i];
+        const key = existing?.id ?? `newleg:${i}`;
+        const isViewed = !!existing && existing.id === modalEventId;
+        const edits = legEdits[key] ?? {};
+        // A brand-new leg defaults to a truck other than the previous
+        // leg's, with that truck's preferred driver.
+        const prevAssetId = i > 0
+          ? (legEdits[relayLegs[i - 1]?.id ?? `newleg:${i - 1}`]?.assetId
+              ?? relayLegs[i - 1]?.assetId
+              ?? assetId)
+          : assetId;
+        const fallbackAsset = existing?.assetId
+          ?? assets.find(a => a.id !== prevAssetId)?.id
+          ?? assetId;
+        const resolvedAsset = edits.assetId ?? (isViewed ? assetId : fallbackAsset);
+        const fallbackDriver = existing
+          ? resolveDriverNameForEvent(existing)
+          : preferredDriverName(resolvedAsset);
         return {
-          key: leg.id,
-          eventId: leg.id,
+          key,
+          eventId: existing?.id,
           legIndex: i,
-          assetId: isViewed ? assetId : (edits.assetId ?? leg.assetId),
-          driverName: isViewed ? driverName : (edits.driverName ?? resolveDriverNameForEvent(leg)),
-          pay: legPays[leg.id] ?? '',
-          startIso: isViewed ? startDate : leg.start,
-          miles: isViewed ? loadedMiles : (leg.loadedMiles ?? otherLegMiles[leg.id] ?? null),
+          assetId: resolvedAsset,
+          driverName: edits.driverName ?? (isViewed ? driverName : fallbackDriver),
+          pay: legPays[key] ?? (existing?.driverPay ?? ''),
+          startIso: isViewed ? startDate : (existing?.start ?? legBoundaryTimes(i).start),
+          miles: isViewed
+            ? loadedMiles
+            : (existing ? (existing.loadedMiles ?? otherLegMiles[existing.id] ?? draftLegMilesEstimate(i))
+                        : draftLegMilesEstimate(i)),
           isViewed,
+          isDraft: !existing,
         };
       });
-      if (pendingSplitStopId && draftLegs[0]) {
-        const marker = stops.find(s => s.id === pendingSplitStopId);
-        // The draft leg lands right after the leg being split (any leg
-        // — per-leg "+"; falls back to the viewed one).
-        const targetArrIdx = views.findIndex(v => v.eventId === (pendingSplitTargetId ?? modalEventId));
-        const insertAt = (targetArrIdx >= 0 ? targetArrIdx : (viewedArrIdx >= 0 ? viewedArrIdx : views.length - 1)) + 1;
-        views.splice(insertAt, 0, {
-          key: draftLegs[0].key,
-          legIndex: insertAt,
-          assetId: draftLegs[0].assetId,
-          driverName: draftLegs[0].driverName,
-          pay: legPays[draftLegs[0].key] ?? '',
-          startIso: marker?.apptEnd ?? marker?.apptStart,
-          miles: draftLegMilesEstimate(insertAt),
-          isViewed: false,
-          isDraft: true,
-        });
-        views.forEach((v, i) => { v.legIndex = i; });
-      }
-      return views;
     }
-    // Create mode (or single→relay conversion drafts in edit mode).
+    // Create mode — legs are the form's own leg 0 plus the drafts.
     return [
       {
         key: 'leg0', legIndex: 0, assetId, driverName,
@@ -4463,7 +4689,11 @@ export default function EventModal() {
   const relayHandoffViews: RelayHandoffView[] = isRelayContext
     ? relayMarkersInStops.map((stop, m) => ({
         stop,
-        isDraft: isExistingRelayLeg ? stop.id === pendingSplitStopId : true,
+        // In builder mode a boundary is "draft" until Apply writes it —
+        // i.e. whenever it implies a leg the load doesn't have yet.
+        isDraft: isLegBuilder
+          ? derivedLegCount > relayLegs.length
+          : (isExistingRelayLeg ? stop.id === pendingSplitStopId : true),
         keepEventId: relayLegViews[m]?.eventId,
         mergeEventId: relayLegViews[m + 1]?.eventId,
       }))
@@ -6187,11 +6417,20 @@ export default function EventModal() {
                         // existing relay each leg card gets its own "+"
                         // instead (split THAT leg), gated to one pending
                         // handoff per save.
-                        onAddHandoff={!isBatch && !isExistingRelayLeg && !(isEdit && pendingSplitStopId) ? () => addHandoff() : undefined}
-                        onAddHandoffForLeg={!isBatch && isExistingRelayLeg && !pendingSplitStopId
+                        onAddHandoff={!isBatch && !isLegBuilder && !isExistingRelayLeg && !(isEdit && pendingSplitStopId) ? () => addHandoff() : undefined}
+                        onAddHandoffForLeg={!isBatch && !isReadOnly && (isLegBuilder || (isExistingRelayLeg && !pendingSplitStopId))
                           ? (legKey) => addHandoff(legKey)
                           : undefined}
                         onRemoveHandoff={handleRemoveHandoff}
+                        // Builder: one confirm for the whole structure.
+                        applyLegs={isLegBuilder && !isReadOnly ? {
+                          summary: derivedLegCount === relayLegs.length
+                            ? `${relayLegs.length} leg${relayLegs.length === 1 ? '' : 's'} — saves drivers, trucks and pay`
+                            : `${relayLegs.length} leg${relayLegs.length === 1 ? '' : 's'} → ${derivedLegCount} legs`,
+                          busy: applyingLegs,
+                          blockedReason: legsValidationError(),
+                          onApply: handleApplyLegs,
+                        } : undefined}
                       />
                     </div>
                   )}
@@ -6218,12 +6457,17 @@ export default function EventModal() {
                       onChange={next => { setStops(next); markDirty(); }}
                       headerColor={headerColor}
                       onMapRoute={() => { setShowMapPanel(true); setShowPdfViewer(false); }}
-                      onActivateRelay={!isBatch ? () => addHandoff() : undefined}
-                      relayActive={isEdit ? pendingSplitStopId != null : false}
+                      onActivateRelay={!isBatch && !isReadOnly ? () => addHandoff() : undefined}
+                      relayActive={isEdit && !isLegBuilder ? pendingSplitStopId != null : false}
                       relayRole={relayRole}
                       legIndex={viewedLegIdx}
                       legCount={isRelayContext ? relayLegViews.length : undefined}
                       legDriverNames={isRelayContext ? relayLegViews.map(v => v.driverName || undefined) : undefined}
+                      // Leg-builder affordances: per-stop handoff toggle,
+                      // leg rail + tags, and insert-between rows.
+                      legBuilder={isLegBuilder && !isReadOnly}
+                      onToggleHandoff={handleToggleStopHandoff}
+                      onInsertHandoffAfter={handleInsertHandoffAfter}
                       eventStart={startDate && startTime ? `${startDate}T${startTime}` : undefined}
                       eventEnd={endDate && endTime ? `${endDate}T${endTime}` : undefined}
                       // Whole-haul miles (Σ every leg) in the header. RPM is
