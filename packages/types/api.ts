@@ -295,6 +295,19 @@ export interface ConfigureLegsRequest {
   stops: Stop[];
   /** One entry per leg, in leg order. */
   legs:  ConfigureLegsRequestLeg[];
+  /**
+   * The load's overall window — when the freight is picked up and when
+   * it is delivered. Legs TILE this window: the server pins the first
+   * leg's start and the last leg's end to it, so adding or removing a
+   * handoff can only subdivide the interior and can never move the
+   * load's pickup or delivery.
+   *
+   * Omit to preserve the load's CURRENT window (earliest start / latest
+   * end across its active legs), which is what adding or removing a
+   * handoff should always do. Send it only when the dispatcher is
+   * deliberately changing when the load runs.
+   */
+  loadWindow?: { start: string; end: string };
   /** Permit removing a leg that has already progressed (status beyond
    *  `assigned`) or that holds documents. Without this the server
    *  refuses such a save with 409 `leg_removal_blocked` — a reconcile

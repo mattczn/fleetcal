@@ -2252,6 +2252,50 @@ loads.put("/:id/legs", requireCapability("loads.edit"), async (c) => {
   }
 
   const legCount = body.legs.length;
+
+  // ── Pin the load's window ─────────────────────────────────────────────
+  //
+  // A relay leg only SUBDIVIDES a load; it never changes when the load
+  // itself runs. Client-side, the modal's start/end fields describe the
+  // leg being viewed, so splitting one (which clamps that leg's end to
+  // the new handoff) kept dragging the load's delivery time earlier with
+  // every handoff added. Rather than rely on the client getting that
+  // right in every path, make it structural here: legs TILE the window.
+  // The first leg starts when the load starts, the last ends when it
+  // ends, and interior boundaries are clamped inside. Omitting
+  // loadWindow preserves whatever the load's window already is — the
+  // correct behaviour for add/remove — so only a deliberate reschedule
+  // moves it.
+  const currentWindow = existing.length > 0
+    ? {
+        start: existing.reduce((min, e) => {
+          const s = (e.start as string | null) ?? "";
+          return s && (!min || s < min) ? s : min;
+        }, ""),
+        end: existing.reduce((max, e) => {
+          const en = (e.end as string | null) ?? "";
+          return en && (!max || en > max) ? en : max;
+        }, ""),
+      }
+    : null;
+  const windowStart = body.loadWindow?.start || currentWindow?.start || body.legs[0].start;
+  const windowEnd   = body.loadWindow?.end   || currentWindow?.end   || body.legs[legCount - 1].end;
+
+  if (windowStart && windowEnd && windowStart <= windowEnd) {
+    const clamp = (v: string) => (v < windowStart ? windowStart : v > windowEnd ? windowEnd : v);
+    for (const leg of body.legs) {
+      leg.start = clamp(leg.start);
+      leg.end   = clamp(leg.end);
+      if (leg.end < leg.start) leg.end = leg.start;
+    }
+    // The boundary legs anchor the window exactly.
+    body.legs[0].start = windowStart;
+    body.legs[legCount - 1].end = windowEnd;
+    if (body.legs[0].end < body.legs[0].start) body.legs[0].end = body.legs[0].start;
+    if (body.legs[legCount - 1].end < body.legs[legCount - 1].start) {
+      body.legs[legCount - 1].start = body.legs[legCount - 1].end;
+    }
+  }
   // Shape new legs after an existing one. When nothing is active (the
   // rebuild path above) fall back to the most recent soft-deleted leg so
   // the calendar title survives, then to the load number.
