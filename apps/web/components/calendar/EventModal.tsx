@@ -2300,6 +2300,11 @@ export default function EventModal() {
    *  Index is not identity — the same mistake class as the original
    *  positional-leg bug. */
   const padKeysRef = useRef<string[]>([]);
+  /** Load ids whose full leg set is currently being fetched. While a
+   *  load is in here we KNOW the plan is incomplete, so slots we
+   *  haven't loaded render as "loading" rather than as a blank
+   *  editable card that reads like "unassigned". */
+  const [legsFetchingLoadIds, setLegsFetchingLoadIds] = useState<string[]>([]);
   /** Fields the dispatcher explicitly cleared this session, keyed by
    *  eventId. Distinguishes "I chose — No driver —" (honour it) from
    *  "the buffer went missing" (never write the clear). */
@@ -2400,6 +2405,14 @@ export default function EventModal() {
    *  start↔end and start↔stops linkages, which are correct only when
    *  the two fields really are the load's own window. */
   const isMultiLegView = isExistingRelayLeg || derivedLegCount > 1 || draftLegs.length > 0;
+  /** True while this load's legs are still arriving: the backfill is in
+   *  flight AND we can see fewer legs than the route has segments. The
+   *  difference between "we don't know yet" and "genuinely unassigned"
+   *  — the former must never render as an editable blank card. */
+  const legsLoading = isLegBuilder
+    && !!currentEv?.loadId
+    && legsFetchingLoadIds.includes(currentEv.loadId)
+    && relayLegs.length < derivedLegCount;
   const isRelayContext = draftLegs.length > 0 || isExistingRelayLeg
     || (isLegBuilder && derivedLegCount > 1);
   /**
@@ -2642,7 +2655,7 @@ export default function EventModal() {
   };
 
   useEffect(() => {
-    if (!modalOpen) { setConfirmDel(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setRateConOriginal(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setOtherLegMiles({}); setShowDriverSummary(false); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setLoadInvoices([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); setInternalNotes([]); setOriginalInternalNotes([]); setNoteComposer(''); setNoteComposerOpen(false); setPendingNewBroker(null); setLegPays({}); setLegEdits({}); setDraftLegs([]); setPendingSplitStopId(null); setPendingSplitTargetId(null); pendingSplitLockRef.current = false; setLegPlan([]); setReleasedEventIds([]); setExplicitClears({}); padKeysRef.current = []; setSuggestAssetSwap(null); setSuggestDriverSwap(null); return; }
+    if (!modalOpen) { setConfirmDel(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setRateConOriginal(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setOtherLegMiles({}); setShowDriverSummary(false); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setLoadInvoices([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); setInternalNotes([]); setOriginalInternalNotes([]); setNoteComposer(''); setNoteComposerOpen(false); setPendingNewBroker(null); setLegPays({}); setLegEdits({}); setDraftLegs([]); setPendingSplitStopId(null); setPendingSplitTargetId(null); pendingSplitLockRef.current = false; setLegPlan([]); setReleasedEventIds([]); setExplicitClears({}); padKeysRef.current = []; setLegsFetchingLoadIds([]); setSuggestAssetSwap(null); setSuggestDriverSwap(null); return; }
     setParseState('idle'); setParseError('');
     setRateConPdf(undefined); setRateConOriginal(undefined); setShowPdfViewer(false); setShowMapPanel(modalShowMap);
     setIsDirty(false); setShowSavePrompt(false);
@@ -2718,9 +2731,12 @@ export default function EventModal() {
           const cachedLegCount = events.filter(e => e.loadId === ev.loadId).length;
           const expected = ev.legCount ?? 2;
           if (cachedLegCount < expected) {
-            import('@/lib/railway').then(({ railway }) => railway.getLoad(ev.loadId!))
+            const fetchingId = ev.loadId;
+            setLegsFetchingLoadIds(prev => prev.includes(fetchingId) ? prev : [...prev, fetchingId]);
+            import('@/lib/railway').then(({ railway }) => railway.getLoad(fetchingId))
               .then(({ loads }) => mergeEvents(loads as CalendarEvent[]))
-              .catch(err => console.error('relay-legs fetch:', err));
+              .catch(err => console.error('relay-legs fetch:', err))
+              .finally(() => setLegsFetchingLoadIds(prev => prev.filter(id => id !== fetchingId)));
           }
         }
       }
@@ -3311,6 +3327,13 @@ export default function EventModal() {
   };
 
   const runSave = async (opts?: { skipGeocodeCheck?: boolean }) => {
+    // Covers EVERY save branch, not just the reconcile: a load whose
+    // legs are still arriving must not be written back from a
+    // half-known plan.
+    if (legsLoading) {
+      showSaveBlocked('Still loading this load\u2019s legs — wait a moment and save again.');
+      return;
+    }
 
     // Block save if pickup is after delivery — the API enforces this
     // and a 400 would surface as a save-failure toast (and rollback
@@ -4460,6 +4483,11 @@ export default function EventModal() {
    *  load heals by pressing Save instead of being refused. */
   const legsValidationError = (): string | null => {
     if (!currentEv?.loadId) return 'This load has not been saved yet — save it before configuring legs.';
+    // Last hole through which a half-known load could be written back:
+    // never build a payload from a plan whose legs are still arriving.
+    if (legsLoading) {
+      return 'Still loading this load\u2019s legs — wait a moment and save again.';
+    }
     if (stops.length < 2) return 'Add at least two stops before splitting this load into legs.';
     if (boundaryIdxs.includes(0) || boundaryIdxs.includes(stops.length - 1)) {
       return 'The first and last stop cannot be handoffs — a handoff needs a leg on each side.';
@@ -5235,6 +5263,12 @@ export default function EventModal() {
                         : draftLegMilesEstimate(i)),
           isViewed,
           isDraft: !existing,
+          // A padded slot while the backfill is in flight is a leg we
+          // haven't loaded yet, NOT a new one — render it as loading.
+          // A slot the dispatcher just created (splitPlanAt mints a
+          // `newleg:` key into the plan) is never padded, so it stays
+          // immediately editable.
+          isLoading: legsLoading && !existing && key.startsWith('pad:'),
         };
       });
     }

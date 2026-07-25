@@ -56,6 +56,11 @@ export interface RelayLegView {
   /** True for legs that don't exist server-side yet (pending handoff
    *  or create-mode split). */
   isDraft?: boolean;
+  /** True for a leg the client hasn't loaded yet (the load's legs are
+   *  still being fetched). Renders as a skeleton — NOT as an editable
+   *  blank card, which reads as "unassigned" when the truth is "not
+   *  known yet" and invites typing into a slot about to be re-seeded. */
+  isLoading?: boolean;
 }
 
 /** Handoff marker i sits between legs[i] and legs[i+1]. */
@@ -221,6 +226,37 @@ function LegCard({
     padding: '8px 10px', fontSize: 13, color: 'var(--gc-text-1)',
     background: 'var(--gc-surface)', outline: 'none',
   };
+
+  // Not loaded yet — show a skeleton, not a blank editable card. The
+  // dispatcher must not read "we haven't fetched this leg" as "this leg
+  // has no driver", nor type into a slot that's about to be re-seeded.
+  if (leg.isLoading) {
+    const bar = (w: string) => (
+      <div style={{
+        height: 34, width: w, borderRadius: 8,
+        background: 'linear-gradient(90deg, #ede9fe 25%, #f5f3ff 50%, #ede9fe 75%)',
+        backgroundSize: '200% 100%', animation: 'relayLegShimmer 1.2s linear infinite',
+      }} />
+    );
+    return (
+      <div className="rounded-lg p-4 space-y-3" aria-busy="true"
+        style={{ background: 'var(--gc-surface)', border: '1px dashed #ddd6fe', opacity: 0.85 }}>
+        <style>{'@keyframes relayLegShimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}'}</style>
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] font-bold px-2 py-0.5 rounded-lg"
+            style={{ background: '#ede9fe', color: RELAY_COLOR, border: '1px solid #ddd6fe', letterSpacing: '0.02em' }}>
+            {label}
+          </span>
+          <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
+            Loading leg…
+          </span>
+        </div>
+        <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
+          {bar('100%')}{bar('100%')}{canViewDriverPay ? bar('100%') : null}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="rounded-lg p-4 space-y-3"
