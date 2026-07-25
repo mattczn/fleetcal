@@ -495,27 +495,35 @@ export default function RelayLegsEditor({
                     letterSpacing: '0.05em', color: '#6d28d9', marginBottom: 3,
                   };
                   return (
-                    <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
-                      <div>
-                        <div style={labelStyle}>{fromName ? `${fromName} drops` : 'Driver 1 drop'}</div>
-                        <ApptInput
-                          value={toView(t.drop)}
-                          onChange={v => onChangeHandoffTimes(handoffIdx, { drop: toHome(v) })}
-                          placeholder="Drop time"
-                          headerColor={RELAY_COLOR}
-                        />
-                      </div>
-                      <div>
-                        <div style={labelStyle}>{toName ? `${toName} picks up` : 'Driver 2 pickup'}</div>
-                        <ApptInput
-                          value={toView(t.pickup)}
-                          onChange={v => onChangeHandoffTimes(handoffIdx, { pickup: toHome(v) })}
-                          placeholder="Pickup time"
-                          headerColor={RELAY_COLOR}
-                        />
+                    // The warning lives OUTSIDE the grid. As a grid child it
+                    // became a third auto-fit column, squeezing both date
+                    // pickers to ~150px so they truncated to "Sa…". The
+                    // grid now only ever holds the two time fields, and a
+                    // 200px floor keeps the date+time pair legible — it
+                    // wraps to one column rather than shrinking.
+                    <div>
+                      <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={labelStyle}>{fromName ? `${fromName} drops` : 'Driver 1 drop'}</div>
+                          <ApptInput
+                            value={toView(t.drop)}
+                            onChange={v => onChangeHandoffTimes(handoffIdx, { drop: toHome(v) })}
+                            placeholder="Drop time"
+                            headerColor={RELAY_COLOR}
+                          />
+                        </div>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={labelStyle}>{toName ? `${toName} picks up` : 'Driver 2 pickup'}</div>
+                          <ApptInput
+                            value={toView(t.pickup)}
+                            onChange={v => onChangeHandoffTimes(handoffIdx, { pickup: toHome(v) })}
+                            placeholder="Pickup time"
+                            headerColor={RELAY_COLOR}
+                          />
+                        </div>
                       </div>
                       {t.drop && t.pickup && t.pickup < t.drop && (
-                        <div style={{ gridColumn: '1 / -1', fontSize: 11, color: '#b91c1c', background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 6, padding: '5px 8px' }}>
+                        <div style={{ marginTop: 8, fontSize: 11, color: '#b91c1c', background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 6, padding: '5px 8px' }}>
                           Pickup is before the drop — check these times.
                         </div>
                       )}

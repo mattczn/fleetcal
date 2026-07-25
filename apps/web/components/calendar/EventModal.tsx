@@ -1905,10 +1905,16 @@ export default function EventModal() {
   // the form below) AND blocks doSave from firing the POST, so the
   // user sees the problem before clicking Save instead of after a 400
   // round trip.
-  const dateOrderError = (startDate && startTime && endDate && endTime &&
-    `${startDate}T${startTime}` > `${endDate}T${endTime}`)
-    ? 'Delivery is before pickup. Fix the start / end before saving.'
-    : null;
+  // Compares the values the header actually SHOWS (see headerStartParts
+  // / headerEndParts below — on an interior relay leg these are the
+  // surrounding handoff times, not the form's own). Declared as a
+  // function so it can read those without being reordered above them.
+  const getDateOrderError = (): string | null => {
+    const a = `${headerStartParts.date}T${headerStartParts.time}`;
+    const b = `${headerEndParts.date}T${headerEndParts.time}`;
+    if (!headerStartParts.date || !headerStartParts.time || !headerEndParts.date || !headerEndParts.time) return null;
+    return a > b ? 'Delivery is before pickup. Fix the start / end before saving.' : null;
+  };
 
   // Inline "switch the partner field too?" suggestions for edit mode.
   // When the user picks a driver that's preferred on a different
@@ -3303,7 +3309,7 @@ export default function EventModal() {
     // and a 400 would surface as a save-failure toast (and rollback
     // the optimistic update). Catching it here keeps the user in the
     // modal with the inline banner instead.
-    if (dateOrderError) return;
+    if (getDateOrderError()) return;
 
     // Capability gate — match the API's enforcement so a read-only
     // role (e.g. maintenance opening a revenue load) can't trigger a
@@ -4535,6 +4541,62 @@ export default function EventModal() {
     markDirty();
   };
 
+  // ── Header START / END on a relay leg ──────────────────────────────
+  // The header fields are where a dispatcher reaches for these times,
+  // but on an interior leg the form's own start/end are ignored by
+  // legBoundaryTimes (interior boundaries come from the handoffs), so
+  // editing them did nothing. These bind the header to the SAME stored
+  // value the handoff box edits — one source of truth displayed twice,
+  // not a two-way sync, so there's no echo loop:
+  //
+  //   START  leg 0      → the load-window start (the form's own value)
+  //          otherwise  → handoff[i-1]'s PICKUP time
+  //   END    last leg   → the load-window end (the form's own value)
+  //          otherwise  → handoff[i]'s DROP time
+  //
+  // Non-relay loads have no boundaries, so both fall through to the
+  // form values exactly as before.
+  const headerBoundLegIdx = viewedLegIdx ?? 0;
+  const headerBoundaryStops = boundaryIdxs.map(i => stops[i]);
+  const headerStartFromHandoff = isLegBuilder && headerBoundLegIdx > 0
+    ? headerBoundaryStops[headerBoundLegIdx - 1]
+    : undefined;
+  const headerEndFromHandoff = isLegBuilder && headerBoundLegIdx < headerBoundaryStops.length
+    ? headerBoundaryStops[headerBoundLegIdx]
+    : undefined;
+  const splitIso = (iso: string | undefined) => {
+    const m = (iso ?? '').match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
+    return { date: m?.[1] ?? '', time: m?.[2] ?? '' };
+  };
+  const headerStartParts = headerStartFromHandoff
+    ? splitIso(handoffTimesOf(headerStartFromHandoff).pickup ?? handoffTimesOf(headerStartFromHandoff).drop)
+    : { date: startDate, time: startTime };
+  const headerEndParts = headerEndFromHandoff
+    ? splitIso(handoffTimesOf(headerEndFromHandoff).drop ?? handoffTimesOf(headerEndFromHandoff).pickup)
+    : { date: endDate, time: endTime };
+  /** Write the header start. Routes to the handoff's pickup time on an
+   *  interior leg, otherwise to the form (the load-window start). */
+  const setHeaderStart = (date: string, time: string) => {
+    if (headerStartFromHandoff) {
+      const idx = stops.findIndex(st => st.id === headerStartFromHandoff.id);
+      const ordinal = boundaryIdxs.indexOf(idx);
+      if (ordinal >= 0) handleChangeHandoffTimes(ordinal, { pickup: `${date}T${time}` });
+      return;
+    }
+    setStartDate(date); setStartTime(time);
+  };
+  /** Write the header end. Routes to the handoff's drop time on any
+   *  non-final leg, otherwise to the form (the load-window end). */
+  const setHeaderEnd = (date: string, time: string) => {
+    if (headerEndFromHandoff) {
+      const idx = stops.findIndex(st => st.id === headerEndFromHandoff.id);
+      const ordinal = boundaryIdxs.indexOf(idx);
+      if (ordinal >= 0) handleChangeHandoffTimes(ordinal, { drop: `${date}T${time}` });
+      return;
+    }
+    setEndDate(date); setEndTime(time);
+  };
+
   /** Edit the handoff STOP itself (facility, address, and whatever the
    *  shared address input geocodes onto it — lat/lng/timezone/status).
    *  Writes straight to that stop, exactly as the Locations row does,
@@ -4878,7 +4940,7 @@ export default function EventModal() {
 
   const handleBatchSave = (opts?: { skipGeocodeCheck?: boolean }) => {
     if (!title.trim() || !startDate || !endDate) return;
-    if (dateOrderError) return;
+    if (getDateOrderError()) return;
     if (brokerMatch.status === 'new') { setBrokerSaveBlocked(true); return; }
     if (!opts?.skipGeocodeCheck && stops.some(s => s.geocodeStatus === 'failed')) {
       setGeocodeBlock('batch');
@@ -6507,7 +6569,7 @@ export default function EventModal() {
             <div className="grid grid-cols-2 gap-4">
               <Field label={startLabel}>
                 <div className="flex gap-2">
-                  <DatePicker value={startDate}
+                  <DatePicker value={headerStartParts.date}
                     onChange={v => {
                       markDirty();
                       // Duration preservation (moving the start drags the
@@ -6525,16 +6587,16 @@ export default function EventModal() {
                         setEndDate(`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`);
                         setEndTime(`${pad(d.getHours())}:${pad(d.getMinutes())}`);
                       }
-                      setStartDate(v);
+                      setHeaderStart(v, headerStartParts.time || startTime);
                     }}
                     headerColor={LOAD_ACCENT} required />
-                  <SmartTimeInput value={startTime} onChange={v => { markDirty(); setStartTime(v); }} headerColor={headerColor} />
+                  <SmartTimeInput value={headerStartParts.time} onChange={v => { markDirty(); setHeaderStart(headerStartParts.date || startDate, v); }} headerColor={headerColor} />
                 </div>
               </Field>
               <Field label={endLabel}>
                 <div className="flex gap-2">
-                  <DatePicker value={endDate} onChange={v => { markDirty(); setEndDate(v); }} headerColor={LOAD_ACCENT} min={startDate} required />
-                  <SmartTimeInput value={endTime} onChange={v => { markDirty(); setEndTime(v); }} headerColor={headerColor} />
+                  <DatePicker value={headerEndParts.date} onChange={v => { markDirty(); setHeaderEnd(v, headerEndParts.time || endTime); }} headerColor={LOAD_ACCENT} min={headerStartParts.date} required />
+                  <SmartTimeInput value={headerEndParts.time} onChange={v => { markDirty(); setHeaderEnd(headerEndParts.date || endDate, v); }} headerColor={headerColor} />
                 </div>
               </Field>
             </div>
@@ -6544,12 +6606,12 @@ export default function EventModal() {
                 time-of-day inversions that DatePicker's min={startDate}
                 can't see). Matches the conflict-banner style at the top
                 of this modal. */}
-            {dateOrderError && (
+            {getDateOrderError() && (
               <div className="flex items-center gap-2 px-3 py-2 rounded-md"
                 style={{ background: '#fef2f2', border: '1px solid #fca5a5' }}>
                 <AlertTriangle size={14} style={{ color: '#dc2626', flexShrink: 0 }} />
                 <span className="text-sm font-medium" style={{ color: '#991b1b' }}>
-                  {dateOrderError}
+                  {getDateOrderError()}
                 </span>
               </div>
             )}
