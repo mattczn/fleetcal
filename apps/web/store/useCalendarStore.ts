@@ -2434,9 +2434,16 @@ export const useCalendarStore = create<CalendarStore>()(
       // `leg_removal_blocked`, which names the leg that would be lost.
       const e = err as { status?: number; detail?: unknown; message?: string };
       const d = (typeof e.detail === 'object' && e.detail !== null)
-        ? e.detail as { error?: string; detail?: string; message?: string }
+        ? e.detail as { error?: string; detail?: string; message?: string; errors?: unknown }
         : undefined;
-      const serverMsg = d?.detail ?? d?.message;
+      // A 400 from the API is `{ error: 'validation_failed', errors: [...] }`
+      // — the reason lives in `errors`, not `detail`. Without this the
+      // dispatcher saw a bare "PUT /v1/loads/…/legs → 400" and had no way
+      // to know (or tell us) what the server actually objected to.
+      const validationMsg = Array.isArray(d?.errors) && d.errors.length > 0
+        ? (d.errors as unknown[]).map(String).join('; ')
+        : undefined;
+      const serverMsg = d?.detail ?? validationMsg ?? d?.message;
       if (serverMsg) {
         errorToast({ status: e.status ?? 400, message: serverMsg }, 'Legs did not save');
       } else {
