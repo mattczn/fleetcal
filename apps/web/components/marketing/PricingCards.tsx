@@ -16,8 +16,8 @@
  * the TIERS constant below so the displayed numbers stay in sync
  * with what the user is actually charged at checkout:
  *
- *   Owner Op  monthly $249   · annual $2,532/yr ($211/mo · save $456/yr / 15%)
- *   Growth    monthly $299   · annual $3,048/yr ($254/mo · save $540/yr / 15%)
+ *   Owner Op  monthly $249   · annual $2,508/yr ($209/mo · save $480/yr / 16%)
+ *   Growth    monthly $299   · annual $2,988/yr ($249/mo · save $600/yr / 17%)
  *   Fleet     monthly $349   · annual $3,588/yr ($299/mo · save $600/yr / 14%)
  *
  * The post-signup flow routes to Clerk's hosted checkout via
@@ -66,8 +66,8 @@ const TIERS: readonly PricingTier[] = [
     key:           'owner_op',
     name:          'Owner Op',
     monthlyPrice:  249,
-    annualMonthly: 211,
-    annualTotal:   2532,
+    annualMonthly: 209,
+    annualTotal:   2508,
     trucks:        '1–4 trucks',
     blurb:         'For the owner-op who is also the dispatcher.',
     accent:        '#f97316',
@@ -76,8 +76,8 @@ const TIERS: readonly PricingTier[] = [
     key:           'growth',
     name:          'Growth',
     monthlyPrice:  299,
-    annualMonthly: 254,
-    annualTotal:   3048,
+    annualMonthly: 249,
+    annualTotal:   2988,
     trucks:        '5–9 trucks',
     blurb:         'When you have hired your first dispatcher.',
     accent:        '#1e8e3e',
