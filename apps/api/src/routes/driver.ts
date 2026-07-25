@@ -41,7 +41,8 @@ driver.use("*", driverAuth);
 
 const STOP_COLS =
   "id,event_id,sequence,type,facility_name,address,city,state,timezone," +
-  "appt_start,appt_end,schedule_type,lat,lng,instructions,geocode_status," +
+  "appt_start,appt_end,schedule_type,is_handoff,handoff_drop_at,handoff_pickup_at," +
+  "lat,lng,instructions,geocode_status," +
   "arrived_at,arrived_lat,arrived_lng";
 
 const EVENT_COLS =
@@ -72,6 +73,9 @@ interface StopRow {
   appt_start: string | null;
   appt_end: string | null;
   schedule_type: string | null;
+  is_handoff: boolean | null;
+  handoff_drop_at: string | null;
+  handoff_pickup_at: string | null;
   lat: number | null;
   lng: number | null;
   instructions: string | null;
@@ -95,6 +99,9 @@ function rowToStop(s: StopRow): Stop {
     apptStart:     s.appt_start    ?? undefined,
     apptEnd:       s.appt_end      ?? undefined,
     scheduleType:  (s.schedule_type as Stop["scheduleType"]) ?? undefined,
+    isHandoff:  s.is_handoff ?? undefined,
+    handoffDropAt:  s.handoff_drop_at ?? undefined,
+    handoffPickupAt:  s.handoff_pickup_at ?? undefined,
     lat:           s.lat           ?? undefined,
     lng:           s.lng           ?? undefined,
     instructions:  s.instructions  ?? undefined,

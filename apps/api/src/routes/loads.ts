@@ -35,6 +35,9 @@ import {
   type SplitRelayResponse,
   type UnsplitRelayRequest,
   type UnsplitRelayResponse,
+  type ConfigureLegsRequest,
+  type ConfigureLegsResponse,
+  isHandoffStop,
   type DeleteLoadResponse,
   type RestoreLoadResponse,
   type GetRateConUrlResponse,
@@ -66,7 +69,8 @@ const loads = new Hono<{ Variables: AuthVariables }>();
 
 const STOP_COLS =
   "id,event_id,sequence,type,facility_name,address,city,state,timezone," +
-  "appt_start,appt_end,schedule_type,lat,lng,instructions,geocode_status," +
+  "appt_start,appt_end,schedule_type,is_handoff,handoff_drop_at,handoff_pickup_at," +
+  "lat,lng,instructions,geocode_status," +
   "arrived_at,arrived_lat,arrived_lng";
 
 const EVENT_COLS =
@@ -98,6 +102,9 @@ interface StopRow {
   appt_start: string | null;
   appt_end: string | null;
   schedule_type: string | null;
+  is_handoff: boolean | null;
+  handoff_drop_at: string | null;
+  handoff_pickup_at: string | null;
   lat: number | null;
   lng: number | null;
   instructions: string | null;
@@ -121,6 +128,9 @@ function rowToStop(s: StopRow): Stop {
     apptStart:     s.appt_start    ?? undefined,
     apptEnd:       s.appt_end      ?? undefined,
     scheduleType:  (s.schedule_type as Stop["scheduleType"]) ?? undefined,
+    isHandoff:  s.is_handoff ?? undefined,
+    handoffDropAt:  s.handoff_drop_at ?? undefined,
+    handoffPickupAt:  s.handoff_pickup_at ?? undefined,
     lat:           s.lat           ?? undefined,
     lng:           s.lng           ?? undefined,
     instructions:  s.instructions  ?? undefined,
@@ -451,6 +461,9 @@ loads.post("/", requireCapability("loads.create"), async (c) => {
       appt_start:     s.apptStart     ?? null,
       appt_end:       s.apptEnd       ?? null,
       schedule_type:  s.scheduleType  ?? null,
+      is_handoff:  s.isHandoff ?? false,
+      handoff_drop_at:  s.handoffDropAt ?? null,
+      handoff_pickup_at:  s.handoffPickupAt ?? null,
       lat:            s.lat           ?? null,
       lng:            s.lng           ?? null,
       instructions:   s.instructions  ?? null,
@@ -1807,6 +1820,9 @@ loads.post("/:id/split-relay", requireCapability("loads.edit"), async (c) => {
     appt_start:     s.apptStart     ?? null,
     appt_end:       s.apptEnd       ?? null,
     schedule_type:  s.scheduleType  ?? null,
+    is_handoff:  s.isHandoff ?? false,
+    handoff_drop_at:  s.handoffDropAt ?? null,
+    handoff_pickup_at:  s.handoffPickupAt ?? null,
     lat:            s.lat           ?? null,
     lng:            s.lng           ?? null,
     instructions:   s.instructions  ?? null,
@@ -1824,12 +1840,12 @@ loads.post("/:id/split-relay", requireCapability("loads.edit"), async (c) => {
   }
 
   // 5. Handoff photos: a new marker was inserted at ordinal h (its
-  //    position among relay-type stops). Existing relay_handoff docs at
+  //    position among handoff stops). Existing relay_handoff docs at
   //    handoff_index >= h belong to later handoffs — shift them up so
   //    they stay attached to the same physical exchange.
   const newMarkerOrdinal = body.mergedStops
     .slice(0, body.relayStopIndex)
-    .filter((s) => s.type === "relay").length;
+    .filter((s) => isHandoffStop(s)).length;
   const { data: shiftDocsRaw } = await supabase
     .from("load_documents")
     .select("id, handoff_index")
@@ -2093,6 +2109,216 @@ loads.post("/:id/unsplit-relay", requireCapability("loads.edit"), async (c) => {
 
   const joined = await fetchLoadJoined(loadId, orgId);
   const res: UnsplitRelayResponse = { loads: joined ?? [] };
+  return c.json(res);
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// PUT /v1/loads/:id/legs — reconcile the load's legs in one call
+//
+// split-relay / unsplit-relay move one handoff at a time, which forces a
+// save per handoff when a dispatcher is authoring a multi-leg relay. This
+// takes the whole intended shape at once: the full stop list (handoff
+// boundaries flagged) plus one entry per leg, and reconciles events to
+// match. See ConfigureLegsRequest for the contract.
+// ─────────────────────────────────────────────────────────────────────────
+
+loads.put("/:id/legs", requireCapability("loads.edit"), async (c) => {
+  const orgId  = c.get("orgId");
+  const loadId = c.req.param("id");
+  const body = await c.req.json<ConfigureLegsRequest>();
+
+  // ── Validate ──────────────────────────────────────────────────────────
+  const errors: string[] = [];
+  if (!Array.isArray(body?.stops)) errors.push("'stops' must be an array");
+  if (!Array.isArray(body?.legs) || body.legs.length < 1) {
+    errors.push("'legs' must have at least 1 entry");
+  }
+  if (Array.isArray(body?.legs) && body.legs.length > 10) {
+    errors.push("'legs' cannot exceed 10 entries");
+  }
+  if (Array.isArray(body?.stops) && Array.isArray(body?.legs)) {
+    // Legs are the gaps between handoff boundaries, so the counts are
+    // two views of the same structure and must agree exactly.
+    const handoffCount = body.stops.filter((s) => isHandoffStop(s)).length;
+    if (body.legs.length !== handoffCount + 1) {
+      errors.push(
+        `legs/handoffs mismatch: ${body.legs.length} legs needs ${body.legs.length - 1} handoff stops, found ${handoffCount}`,
+      );
+    }
+    // A boundary can't be the first or last stop — the leg on the far
+    // side of it would have no route.
+    const lastIdx = body.stops.length - 1;
+    if (body.stops.length > 0 && handoffCount > 0) {
+      if (isHandoffStop(body.stops[0])) errors.push("the first stop cannot be a handoff");
+      if (isHandoffStop(body.stops[lastIdx])) errors.push("the last stop cannot be a handoff");
+    }
+  }
+  for (const [i, leg] of (body?.legs ?? []).entries()) {
+    if (typeof leg.assetId !== "number") errors.push(`legs[${i}]: assetId (number) required`);
+    if (!leg.start) errors.push(`legs[${i}]: start required`);
+    if (!leg.end)   errors.push(`legs[${i}]: end required`);
+    if (leg.start && leg.end && leg.start > leg.end) errors.push(`legs[${i}]: start must be <= end`);
+  }
+  if (errors.length) return badRequest(c, errors);
+
+  // ── Current state ─────────────────────────────────────────────────────
+  const { data: existingRaw, error: fetchErr } = await supabase
+    .from("events")
+    .select(EVENT_COLS)
+    .eq("load_id", loadId)
+    .eq("org_id", orgId)
+    .is("deleted_at", null)
+    .order("leg_index", { ascending: true })
+    .order("start", { ascending: true });
+  if (fetchErr || !existingRaw) {
+    return c.json({ error: "fetch_failed", detail: fetchErr?.message } satisfies ApiErrorResponse, 500);
+  }
+  const existing = existingRaw as unknown as Array<Record<string, unknown> & {
+    id: string; title: string; priority: boolean;
+  }>;
+  if (existing.length === 0) {
+    return c.json({ error: "not_found", detail: "load has no active events" } satisfies ApiErrorResponse, 404);
+  }
+  const existingIds = new Set(existing.map((e) => e.id));
+
+  // Every referenced eventId must belong to this load — otherwise a
+  // caller could graft another load's leg onto this one.
+  for (const [i, leg] of body.legs.entries()) {
+    if (leg.eventId && !existingIds.has(leg.eventId)) {
+      return badRequest(c, [`legs[${i}]: eventId does not belong to this load`]);
+    }
+  }
+  const keptIds = new Set(body.legs.map((l) => l.eventId).filter(Boolean) as string[]);
+  if (new Set(body.legs.filter(l => l.eventId).map(l => l.eventId)).size !== keptIds.size) {
+    return badRequest(c, ["the same eventId appears on more than one leg"]);
+  }
+
+  const legCount = body.legs.length;
+  const template = existing[0];
+
+  // ── 1. Update / create each leg in order ──────────────────────────────
+  const legIds: string[] = [];
+  for (const [i, leg] of body.legs.entries()) {
+    const shared = {
+      asset_id:    leg.assetId,
+      driver_id:   leg.driverId   ?? null,
+      driver_name: leg.driverName ?? null,
+      driver_pay:  leg.driverPay  ?? null,
+      start:       leg.start,
+      end:         leg.end,
+      leg_index:   i,
+      relay_role:  legRoleFor(i, legCount) ?? null,
+      ...(leg.trailerId   !== undefined ? { trailer_id:   leg.trailerId }   : {}),
+      ...(leg.trailerType !== undefined ? { trailer_type: leg.trailerType } : {}),
+    };
+    if (leg.eventId) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error: upErr } = await supabase
+        .from("events")
+        .update({ ...shared, ...(leg.status ? { status: leg.status } : {}) } as any)
+        .eq("id", leg.eventId)
+        .eq("org_id", orgId);
+      if (upErr) {
+        return c.json({ error: "leg_update_failed", detail: upErr.message } satisfies ApiErrorResponse, 500);
+      }
+      legIds.push(leg.eventId);
+    } else {
+      const insert = {
+        ...shared,
+        org_id:     orgId,
+        load_id:    loadId,
+        title:      template.title,
+        status:     leg.status ?? (leg.driverId != null ? "assigned" : "scheduled"),
+        event_kind: "revenue",
+        priority:   template.priority,
+      };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: newRaw, error: insErr } = await supabase
+        .from("events")
+        .insert(insert as any)
+        .select("id")
+        .single();
+      const created = newRaw as { id: string } | null;
+      if (insErr || !created) {
+        return c.json({ error: "leg_create_failed", detail: insErr?.message } satisfies ApiErrorResponse, 500);
+      }
+      legIds.push(created.id);
+    }
+  }
+
+  // ── 2. Soft-delete legs the caller dropped ────────────────────────────
+  const removedIds = existing.map((e) => e.id).filter((id) => !keptIds.has(id));
+  if (removedIds.length > 0) {
+    const now = new Date().toISOString();
+    const { error: delErr } = await supabase
+      .from("events")
+      .update({ deleted_at: now })
+      .in("id", removedIds)
+      .eq("org_id", orgId);
+    if (delErr) {
+      return c.json({ error: "leg_delete_failed", detail: delErr.message } satisfies ApiErrorResponse, 500);
+    }
+  }
+
+  // ── 3. Write the full stop list to every leg ──────────────────────────
+  //     Each leg stores the whole route; per-leg windows are derived from
+  //     leg_index + the handoff boundaries (see routeGeometry.legStops).
+  await supabase.from("stops").delete().in("event_id", legIds).eq("org_id", orgId);
+  const stopRows = legIds.flatMap((eventId) =>
+    body.stops.map((s, idx) => ({
+      event_id:          eventId,
+      org_id:            orgId,
+      sequence:          idx + 1,
+      type:              s.type,
+      facility_name:     s.facilityName  ?? null,
+      address:           s.address       ?? null,
+      city:              s.city          ?? null,
+      state:             s.state         ?? null,
+      timezone:          s.timezone      ?? null,
+      appt_start:        s.apptStart     ?? null,
+      appt_end:          s.apptEnd       ?? null,
+      schedule_type:     s.scheduleType  ?? null,
+      is_handoff:        s.isHandoff     ?? false,
+      handoff_drop_at:   s.handoffDropAt ?? null,
+      handoff_pickup_at: s.handoffPickupAt ?? null,
+      lat:               s.lat           ?? null,
+      lng:               s.lng           ?? null,
+      instructions:      s.instructions  ?? null,
+      geocode_status:    s.geocodeStatus ?? "pending",
+    })),
+  );
+  if (stopRows.length > 0) {
+    const { error: stopErr } = await supabase.from("stops").insert(stopRows);
+    if (stopErr) {
+      console.error("[PUT /v1/loads/:id/legs] stops insert failed:", stopErr);
+      return c.json({ error: "stops_insert_failed", detail: stopErr.message } satisfies ApiErrorResponse, 500);
+    }
+  }
+
+  // ── 4. Drop handoff photos whose handoff no longer exists ─────────────
+  //     Legs can be added or removed here, so a photo pinned to handoff 3
+  //     on a load that now has two handoffs has nowhere to live. Null the
+  //     ordinal rather than deleting the file — it stays visible as a
+  //     load-level handoff photo.
+  const maxHandoffIdx = legCount - 2; // handoffs are 0..legCount-2
+  const { data: strayDocsRaw } = await supabase
+    .from("load_documents")
+    .select("id")
+    .eq("load_id", loadId)
+    .eq("org_id", orgId)
+    .eq("kind", "relay_handoff")
+    .gt("handoff_index", maxHandoffIdx);
+  for (const doc of (strayDocsRaw ?? []) as Array<{ id: string }>) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await supabase
+      .from("load_documents")
+      .update({ handoff_index: null } as any)
+      .eq("id", doc.id)
+      .eq("org_id", orgId);
+  }
+
+  const joined = await fetchLoadJoined(loadId, orgId);
+  const res: ConfigureLegsResponse = { loads: joined ?? [] };
   return c.json(res);
 });
 

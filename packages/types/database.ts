@@ -1892,6 +1892,9 @@ export type Database = {
           lng: number | null
           org_id: string
           schedule_type: string | null
+          is_handoff: boolean
+          handoff_drop_at: string | null
+          handoff_pickup_at: string | null
           sequence: number
           timezone: string | null
           type: string
@@ -1916,6 +1919,9 @@ export type Database = {
           lng?: number | null
           org_id: string
           schedule_type?: string | null
+          is_handoff?: boolean
+          handoff_drop_at?: string | null
+          handoff_pickup_at?: string | null
           sequence: number
           timezone?: string | null
           type: string
@@ -1940,6 +1946,9 @@ export type Database = {
           lng?: number | null
           org_id?: string
           schedule_type?: string | null
+          is_handoff?: boolean
+          handoff_drop_at?: string | null
+          handoff_pickup_at?: string | null
           sequence?: number
           timezone?: string | null
           type?: string

@@ -116,6 +116,17 @@ export interface Stop {
   apptEnd?: string;
   /** How the appointment window should be interpreted in the UI. Null = legacy. */
   scheduleType?: ScheduleType;
+  /** True when this stop is a relay leg boundary — the leg that ends here
+   *  hands the trailer to the leg that starts here. A `type:'relay'` stop
+   *  is always a handoff regardless of this flag; use `isHandoffStop()`
+   *  rather than reading either signal directly. */
+  isHandoff?: boolean;
+  /** Handoff times for a handoff on a REAL stop (pickup/delivery/etc.),
+   *  which can't reuse apptStart/apptEnd — those hold the stop's own
+   *  appointment. Relay-point stops keep using apptStart/apptEnd.
+   *  `handoffTimesOf()` normalizes both shapes. */
+  handoffDropAt?: string;
+  handoffPickupAt?: string;
   geocodeStatus?: GeocodeStatus;
   instructions?: string;
   arrivedAt?: string;

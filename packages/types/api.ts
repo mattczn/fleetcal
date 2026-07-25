@@ -255,6 +255,52 @@ export interface UnsplitRelayResponse {
   loads: Load[]; // remaining legs of the load, in leg order
 }
 
+// ── PUT /v1/loads/:id/legs ──────────────────────────────────────────────
+
+/**
+ * Reconcile a load's legs to a desired configuration in ONE call.
+ *
+ * split-relay / unsplit-relay each change the leg count by one, which
+ * forces a save-per-handoff when a dispatcher is authoring a multi-leg
+ * relay ("Vegas → Hurricane → yard → SLC"). This endpoint takes the
+ * whole intended shape — the full ordered stop list (with handoff
+ * boundaries flagged) plus one entry per leg — and reconciles:
+ *
+ *   - legs carrying an `eventId` are updated in place,
+ *   - legs without one are created,
+ *   - existing legs absent from the list are soft-deleted,
+ *   - leg_index / relay_role are renumbered from array position,
+ *   - the full stop list is written to every leg.
+ *
+ * `legs.length` must equal (number of handoff stops) + 1 — legs are the
+ * gaps between boundaries, so the two can't disagree.
+ */
+export interface ConfigureLegsRequestLeg {
+  /** Existing event to reuse for this position. Omit to create a leg. */
+  eventId?:    string;
+  assetId:     number;
+  driverId?:   number | null;
+  driverName?: string | null;
+  driverPay?:  number | null;
+  start:       string;        // YYYY-MM-DDTHH:mm
+  end:         string;
+  status?:     LoadStatus;
+  trailerId?:  number | null;
+  trailerType?: string | null;
+}
+
+export interface ConfigureLegsRequest {
+  /** Full ordered stop list for the load. Handoff boundaries are the
+   *  stops with `isHandoff` set (or `type:'relay'`). */
+  stops: Stop[];
+  /** One entry per leg, in leg order. */
+  legs:  ConfigureLegsRequestLeg[];
+}
+
+export interface ConfigureLegsResponse {
+  loads: Load[]; // all legs of the load, in leg order
+}
+
 // ── DELETE /v1/loads/:id (soft-delete) ──────────────────────────────────
 
 export interface DeleteLoadResponse {

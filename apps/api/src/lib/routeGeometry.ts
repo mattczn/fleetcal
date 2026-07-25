@@ -19,6 +19,7 @@
  */
 
 import type { Stop } from "@fleetcal/types";
+import { isHandoffStop } from "@fleetcal/types";
 import { env } from "./env.js";
 import { supabase } from "./supabase.js";
 
@@ -62,24 +63,26 @@ export interface LegPosition {
 
 /**
  * Stops that belong to this leg. Relay legs store the FULL merged stop
- * list on EVERY event; relay-type stops are the handoff markers — marker
- * i divides leg i from leg i+1. Leg i routes from marker i-1 (or the
- * first stop) through marker i (or the last stop), both markers included
- * as route endpoints, so each leg's `loaded_miles` reflects only the
- * distance that leg actually hauled and all legs sum to the whole load.
- * Mirrors the client's per-leg calc in EventModal.tsx so server + client
- * agree. Non-relay events (no relay stop) route through every stop
- * unchanged.
+ * list on EVERY event; handoff stops are the boundaries — handoff i
+ * divides leg i from leg i+1. Leg i routes from handoff i-1 (or the
+ * first stop) through handoff i (or the last stop), both boundaries
+ * included as route endpoints, so each leg's `loaded_miles` reflects
+ * only the distance that leg actually hauled and all legs sum to the
+ * whole load. A boundary is a dedicated relay point OR any real stop
+ * flagged as a handoff (isHandoffStop covers both). Mirrors the
+ * client's per-leg calc in EventModal.tsx so server + client agree.
+ * Non-relay events (no handoff) route through every stop unchanged.
  */
 function legStops(stops: Stop[], leg: LegPosition | null): Stop[] {
   const markerIdxs: number[] = [];
   stops.forEach((s, i) => {
-    if (s.type === "relay") markerIdxs.push(i);
+    if (isHandoffStop(s)) markerIdxs.push(i);
   });
   if (markerIdxs.length === 0) return stops;
   if (!leg) {
-    // Relay markers present but this event isn't tagged as a leg — drop
-    // the markers and route the remaining real stops.
+    // Handoffs present but this event isn't tagged as a leg — drop bare
+    // relay points and route the remaining real stops (a handoff ON a
+    // real stop stays; it's a place the truck actually goes).
     return stops.filter((s) => s.type !== "relay");
   }
   const startIdx = leg.legIndex <= 0 ? 0 : (markerIdxs[leg.legIndex - 1] ?? 0);

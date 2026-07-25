@@ -166,6 +166,12 @@ CREATE TABLE stops (
   lng            double precision,
   appt_start     text,                   -- YYYY-MM-DDTHH:mm or time string
   appt_end       text,                   -- null if no window
+  -- Relay leg boundary (20260724). A type='relay' stop is always a
+  -- handoff; this flag marks a handoff sitting on a REAL stop. Read via
+  -- isHandoffStop() — never test type='relay' alone.
+  is_handoff        boolean NOT NULL DEFAULT false,
+  handoff_drop_at   text,                -- handoff times for is_handoff stops;
+  handoff_pickup_at text,                -- relay points use appt_start/appt_end
   geocode_status text NOT NULL DEFAULT 'pending',  -- pending | success | failed
   instructions   text,
   arrived_at     timestamptz,                      -- driver check-in time (mobile app)

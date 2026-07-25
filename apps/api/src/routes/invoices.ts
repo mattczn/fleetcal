@@ -392,6 +392,10 @@ async function buildSnapshot(
   const stopsForSnapshot: InvoiceSnapshotStop[] = [];
   const seqByKind = new Map<string, number>();
   for (const s of stopRows) {
+    // Bare relay points are an internal dispatch artifact — the customer
+    // never sees where we swapped drivers. Deliberately NOT isHandoffStop:
+    // a handoff sitting on a real pickup/delivery stop is still a real
+    // stop and belongs on the invoice.
     if (s.type === "relay") continue;
     const kind = stopKindLabel(s.type);
     const seq  = (seqByKind.get(kind) ?? 0) + 1;
