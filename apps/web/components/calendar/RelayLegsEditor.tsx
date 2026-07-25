@@ -18,8 +18,11 @@
 
 import { Fragment, useState } from 'react';
 import { ArrowLeftRight, Plus } from 'lucide-react';
-import { legLabel } from '@fleetcal/types';
+import { legLabel, handoffTimesOf } from '@fleetcal/types';
 import { StyledSelect } from '@/components/ui/StyledSelect';
+import { ApptInput } from './StopsSection';
+import { naiveHomeToView, naiveViewToHome } from '@/lib/time-utils';
+import { useCalendarStore } from '@/store/useCalendarStore';
 import { AssetSelect } from './AssetSelect';
 import { HandoffPhotosButton } from '@/components/calendar/RelayHandoffPhotos';
 import FinalizedPayBanner from '@/components/payroll/FinalizedPayBanner';
@@ -101,6 +104,10 @@ interface Props {
    *  pending unsaved handoff already exists — one split per save). */
   onAddHandoffForLeg?: (legKey: string) => void;
   onRemoveHandoff: (handoffIdx: number) => void;
+  /** Edit a handoff's drop / pickup time. The parent writes
+   *  handoffDropAt/handoffPickupAt for a handoff on a real stop, or
+   *  apptStart/apptEnd for a bare relay point. Absent = read-only. */
+  onChangeHandoffTimes?: (handoffIdx: number, patch: { drop?: string; pickup?: string }) => void;
   /** Leg-builder mode: the legs come from the CURRENT stop list's
    *  handoff boundaries (not from persisted events), so ANY leg can be
    *  split again before saving — that's how one leg becomes three in a
@@ -306,9 +313,15 @@ export default function RelayLegsEditor({
   legs, handoffs, loadPrice, assets, drivers, startDate,
   canViewDriverPay, disabled, loadId, handoffPhotos, onSelectPhoto, onPhotosUploaded,
   canonicalDriverName, onChangeLeg, onOpenLeg, onAddHandoff, onAddHandoffForLeg, onRemoveHandoff,
-  builderMode,
+  builderMode, onChangeHandoffTimes,
 }: Props) {
   const [confirmIdx, setConfirmIdx] = useState<number | null>(null);
+  // Handoff times are stored in HOME_TZ but entered/displayed in the
+  // user's view timezone — identical treatment to the stop rows, so a
+  // value edited here and read there formats the same.
+  const calendarTimezone = useCalendarStore(s => s.calendarTimezone);
+  const toView = (v: string | undefined): string => v ? naiveHomeToView(v, calendarTimezone) : '';
+  const toHome = (v: string): string => v ? naiveViewToHome(v, calendarTimezone) : '';
 
   const legCount = legs.length;
   const totalPay = legs.reduce((s, l) => s + (typeof l.pay === 'number' ? l.pay : 0), 0);
@@ -364,9 +377,9 @@ export default function RelayLegsEditor({
                 <div style={{ background: '#ede9fe', borderRadius: 8, padding: '8px 12px', fontSize: 12.5, color: '#5b21b6', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                   <ArrowLeftRight size={13} style={{ flexShrink: 0 }} />
                   <span style={{ flex: 1, minWidth: 160 }}>
-                    {handoff.stop.address
-                      ? <>Relay point: <strong>{handoff.stop.address}</strong>{handoff.stop.apptStart ? ` · Drop ${fmtRelayTime(handoff.stop.apptStart)}` : ''}{handoff.stop.apptEnd ? ` → Pickup ${fmtRelayTime(handoff.stop.apptEnd)}` : ''}</>
-                      : <>Set the relay point and drop/pickup times in the <strong>Locations</strong> section below.</>}
+                    {handoff.stop.address || handoff.stop.facilityName
+                      ? <>Relay point: <strong>{handoff.stop.facilityName || handoff.stop.address}</strong></>
+                      : <>Set the relay point address in the <strong>Locations</strong> section below.</>}
                   </span>
                   {loadId && !handoff.isDraft && onSelectPhoto && onPhotosUploaded && (
                     <HandoffPhotosButton
@@ -392,6 +405,45 @@ export default function RelayLegsEditor({
                     </button>
                   )}
                 </div>
+                {/* Handoff times — the ONE place these are set. Writes
+                    handoffDropAt/handoffPickupAt on a real stop or
+                    apptStart/apptEnd on a bare relay point; the parent
+                    mirrors handoffTimesOf's branching. The Locations
+                    rows show the same values read-only. */}
+                {onChangeHandoffTimes && !disabled && (() => {
+                  const t = handoffTimesOf(handoff.stop);
+                  const labelStyle: React.CSSProperties = {
+                    fontSize: 9, fontWeight: 700, textTransform: 'uppercase',
+                    letterSpacing: '0.05em', color: '#6d28d9', marginBottom: 3,
+                  };
+                  return (
+                    <div className="grid grid-cols-2 gap-3" style={{ padding: '0 2px' }}>
+                      <div>
+                        <div style={labelStyle}>{fromName ? `${fromName} drops` : 'Driver 1 drop'}</div>
+                        <ApptInput
+                          value={toView(t.drop)}
+                          onChange={v => onChangeHandoffTimes(handoffIdx, { drop: toHome(v) })}
+                          placeholder="Drop time"
+                          headerColor={RELAY_COLOR}
+                        />
+                      </div>
+                      <div>
+                        <div style={labelStyle}>{toName ? `${toName} picks up` : 'Driver 2 pickup'}</div>
+                        <ApptInput
+                          value={toView(t.pickup)}
+                          onChange={v => onChangeHandoffTimes(handoffIdx, { pickup: toHome(v) })}
+                          placeholder="Pickup time"
+                          headerColor={RELAY_COLOR}
+                        />
+                      </div>
+                      {t.drop && t.pickup && t.pickup < t.drop && (
+                        <div className="col-span-2" style={{ fontSize: 11, color: '#b91c1c', background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 6, padding: '5px 8px' }}>
+                          Pickup is before the drop — check these times.
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             )}
             <LegCard

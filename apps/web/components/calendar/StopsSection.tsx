@@ -131,7 +131,10 @@ function StopTimeInput({ value, onChange, headerColor }: { value: string; onChan
 }
 
 /** DatePicker + SmartTime combo reading/writing "YYYY-MM-DDTHH:mm" */
-function ApptInput({ value, onChange, placeholder, headerColor }: { value: string; onChange: (v: string) => void; placeholder: string; headerColor: string }) {
+/** DatePicker + SmartTime combo reading/writing "YYYY-MM-DDTHH:mm".
+ *  Exported so RelayLegsEditor's handoff rows use the identical control
+ *  (same formatting, same timezone handling) as the stop rows. */
+export function ApptInput({ value, onChange, placeholder, headerColor }: { value: string; onChange: (v: string) => void; placeholder: string; headerColor: string }) {
   const m = value.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})$/);
   const datePart = m ? m[1] : '';
   const timePart = m ? m[2] : '';
@@ -168,6 +171,64 @@ function ApptInput({ value, onChange, placeholder, headerColor }: { value: strin
         onMouseLeave={e => (e.currentTarget.style.color = 'var(--gc-text-3)')}
       >×</button>
     </div>
+  );
+}
+
+/**
+ * Handoff drop/pickup times as shown on a stop row.
+ *
+ * In the leg builder these are READ-ONLY here — the legs editor's
+ * handoff divider is the single place to edit them, so the same value
+ * can't be set from two surfaces. Outside the builder (a bare relay
+ * point on a load that isn't being leg-edited — e.g. one created by the
+ * older split flow, or viewed on the load detail page) the inputs stay
+ * live so those flows keep working.
+ */
+function HandoffTimesReadOnly({
+  dropLabel, pickupLabel, drop, pickup, editable, onEditDrop, onEditPickup, error,
+}: {
+  dropLabel: string;
+  pickupLabel: string;
+  drop: string;
+  pickup: string;
+  editable: boolean;
+  onEditDrop: (v: string) => void;
+  onEditPickup: (v: string) => void;
+  error: string | null;
+}) {
+  const labelStyle: React.CSSProperties = {
+    fontSize: 9, fontWeight: 700, textTransform: 'uppercase',
+    letterSpacing: '0.05em', color: '#6d28d9', marginBottom: 3,
+  };
+  const readOnlyBox: React.CSSProperties = {
+    border: '1px solid #ddd6fe', borderRadius: 8, background: '#f5f3ff',
+    padding: 'calc(8.5px * var(--ui-scale, 1)) calc(10px * var(--ui-scale, 1))',
+    fontSize: 'calc(12px * var(--ui-scale, 1))', color: '#5b21b6',
+  };
+  return (
+    <>
+      <div>
+        <div style={labelStyle}>{dropLabel}</div>
+        {editable
+          ? <ApptInput value={drop} onChange={onEditDrop} placeholder="Drop time" headerColor="#7c3aed" />
+          : <div style={readOnlyBox} title="Set this on the handoff row in the Relay section">
+              {drop ? fmtAppt(drop) : <span style={{ color: '#a78bfa' }}>Set in Relay section</span>}
+            </div>}
+      </div>
+      <div>
+        <div style={labelStyle}>{pickupLabel}</div>
+        {editable
+          ? <ApptInput value={pickup} onChange={onEditPickup} placeholder="Pickup time" headerColor="#7c3aed" />
+          : <div style={readOnlyBox} title="Set this on the handoff row in the Relay section">
+              {pickup ? fmtAppt(pickup) : <span style={{ color: '#a78bfa' }}>Set in Relay section</span>}
+            </div>}
+      </div>
+      {error && (
+        <div style={{ fontSize: 11, color: '#b91c1c', background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 6, padding: '5px 8px', marginTop: 2 }}>
+          {error}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -1121,47 +1182,33 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
                   inside ride that shrink without overflowing. */}
               <div style={{ flexShrink: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 5, width: 'clamp(150px, 30%, 240px)' }}>
                 {stop.type === 'relay' ? (
-                  <>
-                    <div>
-                      <div style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#6d28d9', marginBottom: 3 }}>{fromName ? `${fromName} drops` : 'Driver 1 drop'}</div>
-                      <ApptInput
-                        value={toView(stop.apptStart)}
-                        onChange={v => {
-                          setRelayTimeError(null);
-                          const stored = toHome(v);
-                          update(idx, { apptStart: stored });
-                          // Warn (but don't block) if drop ends up after Driver 2 pickup
-                          if (stop.apptEnd && stored && stored > stop.apptEnd) {
-                            showRelayError('Driver 1 drop is after Driver 2 pickup — check times.');
-                          }
-                        }}
-                        placeholder="Drop time"
-                        headerColor="#7c3aed"
-                      />
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#6d28d9', marginBottom: 3 }}>{toName ? `${toName} picks up` : 'Driver 2 pickup'}</div>
-                      <ApptInput
-                        value={toView(stop.apptEnd)}
-                        onChange={v => {
-                          setRelayTimeError(null);
-                          const stored = toHome(v);
-                          update(idx, { apptEnd: stored });
-                          // Warn (but don't block) if pickup ends up before Driver 1 drop
-                          if (stop.apptStart && stored && stored < stop.apptStart) {
-                            showRelayError('Driver 2 pickup is before Driver 1 drop — check times.');
-                          }
-                        }}
-                        placeholder="Pickup time"
-                        headerColor="#7c3aed"
-                      />
-                    </div>
-                    {relayTimeError && (
-                      <div style={{ fontSize: 11, color: '#b91c1c', background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 6, padding: '5px 8px', marginTop: 2 }}>
-                        {relayTimeError}
-                      </div>
-                    )}
-                  </>
+                  // Handoff times are edited in the LEGS EDITOR now, so
+                  // there is exactly one place to set them. Shown here
+                  // read-only for context while routing the stops.
+                  <HandoffTimesReadOnly
+                    dropLabel={fromName ? `${fromName} drops` : 'Driver 1 drop'}
+                    pickupLabel={toName ? `${toName} picks up` : 'Driver 2 pickup'}
+                    drop={toView(stop.apptStart)}
+                    pickup={toView(stop.apptEnd)}
+                    editable={!legBuilder}
+                    onEditDrop={v => {
+                      setRelayTimeError(null);
+                      const stored = toHome(v);
+                      update(idx, { apptStart: stored });
+                      if (stop.apptEnd && stored && stored > stop.apptEnd) {
+                        showRelayError('Driver 1 drop is after Driver 2 pickup — check times.');
+                      }
+                    }}
+                    onEditPickup={v => {
+                      setRelayTimeError(null);
+                      const stored = toHome(v);
+                      update(idx, { apptEnd: stored });
+                      if (stop.apptStart && stored && stored < stop.apptStart) {
+                        showRelayError('Driver 2 pickup is before Driver 1 drop — check times.');
+                      }
+                    }}
+                    error={relayTimeError}
+                  />
                 ) : (
                   <>
                     {/* Schedule-type pill set: appointment | window | fcfs */}
@@ -1228,29 +1275,19 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
                           </span>
                         </button>
                         {stop.isHandoff && (
+                          // Read-only mirror — the handoff row in the
+                          // legs editor owns these two values.
                           <div style={{ marginTop: 5, display: 'flex', flexDirection: 'column', gap: 5 }}>
-                            <div>
-                              <div style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#6d28d9', marginBottom: 3 }}>
-                                {fromName ? `${fromName} drops` : 'Driver 1 drop'}
-                              </div>
-                              <ApptInput
-                                value={toView(stop.handoffDropAt)}
-                                onChange={v => update(idx, { handoffDropAt: toHome(v) })}
-                                placeholder="Drop time"
-                                headerColor={RELAY_ACCENT}
-                              />
-                            </div>
-                            <div>
-                              <div style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#6d28d9', marginBottom: 3 }}>
-                                {toName ? `${toName} picks up` : 'Driver 2 pickup'}
-                              </div>
-                              <ApptInput
-                                value={toView(stop.handoffPickupAt)}
-                                onChange={v => update(idx, { handoffPickupAt: toHome(v) })}
-                                placeholder="Pickup time"
-                                headerColor={RELAY_ACCENT}
-                              />
-                            </div>
+                            <HandoffTimesReadOnly
+                              dropLabel={fromName ? `${fromName} drops` : 'Driver 1 drop'}
+                              pickupLabel={toName ? `${toName} picks up` : 'Driver 2 pickup'}
+                              drop={toView(stop.handoffDropAt)}
+                              pickup={toView(stop.handoffPickupAt)}
+                              editable={false}
+                              onEditDrop={() => {}}
+                              onEditPickup={() => {}}
+                              error={null}
+                            />
                           </div>
                         )}
                       </div>

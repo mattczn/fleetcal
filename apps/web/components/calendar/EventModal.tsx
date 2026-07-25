@@ -3420,7 +3420,7 @@ export default function EventModal() {
         return;
       }
       if (!marker.apptStart) {
-        showSaveBlocked('Set the drop time on the new relay point (Locations section) before saving the handoff.');
+        showSaveBlocked('Set the drop time on the new handoff — the times are on the handoff row in the Relay section.');
         return;
       }
       // Marker invariant: existing legs carry legs-1 markers, plus the
@@ -3518,7 +3518,7 @@ export default function EventModal() {
         return;
       }
       if (relayMarkers.some(m => { const t = handoffTimesOf(m); return !t.drop && !t.pickup; })) {
-        showSaveBlocked('Set the drop time on every handoff (Locations section) before saving.');
+        showSaveBlocked('Set the drop time on every handoff — the times are on the handoff rows in the Relay section.');
         return;
       }
       const rgId = crypto.randomUUID();
@@ -4300,16 +4300,33 @@ export default function EventModal() {
     const newBoundaryOrdinal = boundaryIdxs.filter(b => b <= idx).length;
     if (isLegBuilder) splitPlanAt(newBoundaryOrdinal);
     else if (isCreateLegBuilder) spliceDraftLegAt(newBoundaryOrdinal);
-    const anchor = handoffTimesOf(before).drop ?? before.apptEnd ?? before.apptStart
-      ?? `${startDate}T${startTime}`;
+    // Pre-fill both times by the existing rule: the handoff sits an
+    // hour before the NEXT stop (thirds of the gap when it's shorter),
+    // so the dispatcher can accept the defaults from the legs editor
+    // without opening Locations at all.
+    const prevIso = handoffTimesOf(before).pickup ?? handoffTimesOf(before).drop
+      ?? before.apptEnd ?? before.apptStart ?? `${startDate}T${startTime}`;
+    const nextIso = after.apptStart ?? after.apptEnd
+      ?? `${endDate || startDate}T${endTime || startTime}`;
+    const prevMs = Date.parse(prevIso);
+    const nextMs = Date.parse(nextIso);
+    const fmtLocal = (d: Date) =>
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}T${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    let dropIso = prevIso;
+    let pickupIso = prevIso;
+    if (Number.isFinite(prevMs) && Number.isFinite(nextMs) && nextMs > prevMs) {
+      const unit = Math.min(60 * 60 * 1000, Math.floor((nextMs - prevMs) / 3));
+      pickupIso = fmtLocal(new Date(Math.max(prevMs, nextMs - unit)));
+      dropIso   = fmtLocal(new Date(Math.max(prevMs, nextMs - 2 * unit)));
+    }
     const relayStop: Stop = {
       id: crypto.randomUUID(),
       eventId: '',
       sequence: 0,
       type: 'relay',
       geocodeStatus: 'pending',
-      apptStart: anchor,
-      apptEnd:   anchor,
+      apptStart: dropIso,
+      apptEnd:   pickupIso,
     };
     setStops(prev => [...prev.slice(0, idx + 1), relayStop, ...prev.slice(idx + 1)]
       .map((s, i) => ({ ...s, sequence: i + 1 })));
@@ -4336,7 +4353,7 @@ export default function EventModal() {
     for (let i = 0; i < boundaryIdxs.length; i++) {
       const t = handoffTimesOf(stops[boundaryIdxs[i]]);
       if (!t.drop && !t.pickup) {
-        return `Handoff ${i + 1} needs a drop time before these legs can be saved.`;
+        return `Handoff ${i + 1} needs a drop time — set it on the handoff row in the Relay section.`;
       }
     }
     return null;
@@ -4435,6 +4452,33 @@ export default function EventModal() {
       // server's leg_removal_blocked message).
       return false;
     }
+  };
+
+  /** Write a handoff's drop / pickup time from the legs editor. Mirrors
+   *  handoffTimesOf's read branching: a handoff sitting ON a real stop
+   *  uses handoffDropAt/handoffPickupAt (its own appointment window is
+   *  a different thing and stays put); a bare relay point IS the
+   *  handoff, so it uses apptStart/apptEnd. */
+  const handleChangeHandoffTimes = (handoffIdx: number, patch: { drop?: string; pickup?: string }) => {
+    const stopIdx = boundaryIdxs[handoffIdx];
+    if (stopIdx == null) return;
+    setStops(prev => prev.map((s, i) => {
+      if (i !== stopIdx) return s;
+      const onRealStop = s.type !== 'relay';
+      if (onRealStop) {
+        return {
+          ...s,
+          ...(patch.drop   !== undefined ? { handoffDropAt:   patch.drop   || undefined } : {}),
+          ...(patch.pickup !== undefined ? { handoffPickupAt: patch.pickup || undefined } : {}),
+        };
+      }
+      return {
+        ...s,
+        ...(patch.drop   !== undefined ? { apptStart: patch.drop   || undefined } : {}),
+        ...(patch.pickup !== undefined ? { apptEnd:   patch.pickup || undefined } : {}),
+      };
+    }));
+    markDirty();
   };
 
   /** Re-pull the load's documents after a handoff-photo upload. */
@@ -6763,6 +6807,9 @@ export default function EventModal() {
                           ? (legKey) => addHandoff(legKey)
                           : undefined}
                         onRemoveHandoff={handleRemoveHandoff}
+                        // Handoff times live here now — the Locations
+                        // rows mirror them read-only.
+                        onChangeHandoffTimes={!isReadOnly ? handleChangeHandoffTimes : undefined}
                         // Builder mode: any leg can be split again before
                         // saving; Save reconciles the whole structure.
                         builderMode={showLegBuilderUi && !isReadOnly}
