@@ -2184,8 +2184,28 @@ loads.put("/:id/legs", requireCapability("loads.edit"), async (c) => {
     id: string; title: string; priority: boolean;
     status: string | null; driver_name: string | null; start: string | null;
   }>;
+  // No ACTIVE legs is a state to converge from, not an error. The load
+  // row still exists (checked below) — its events were soft-deleted, or
+  // a create half-landed — and the caller is telling us what the legs
+  // should be, so build them. Refusing here stranded a load with no way
+  // to fix it from the UI, which is the opposite of what a convergent
+  // reconcile is for. Only a genuinely missing/foreign load is a 404.
   if (existing.length === 0) {
-    return c.json({ error: "not_found", detail: "load has no active events" } satisfies ApiErrorResponse, 404);
+    const { data: loadRow } = await supabase
+      .from("loads")
+      .select("id, load_num")
+      .eq("id", loadId)
+      .eq("org_id", orgId)
+      .maybeSingle();
+    if (!loadRow) {
+      return c.json({
+        error:  "not_found",
+        detail: "That load no longer exists. Reload the calendar and try again.",
+      } satisfies ApiErrorResponse, 404);
+    }
+    // Any payload eventId is stale by definition when nothing is active.
+    for (const leg of body.legs) delete leg.eventId;
+    console.warn(`[PUT /v1/loads/:id/legs] load ${loadId} had no active events — rebuilding ${body.legs.length} leg(s)`);
   }
   const existingIds = new Set(existing.map((e) => e.id));
 
@@ -2232,7 +2252,28 @@ loads.put("/:id/legs", requireCapability("loads.edit"), async (c) => {
   }
 
   const legCount = body.legs.length;
-  const template = existing[0];
+  // Shape new legs after an existing one. When nothing is active (the
+  // rebuild path above) fall back to the most recent soft-deleted leg so
+  // the calendar title survives, then to the load number.
+  let template: { title: string; priority: boolean } | undefined = existing[0];
+  if (!template) {
+    const { data: ghostRaw } = await supabase
+      .from("events")
+      .select("title, priority")
+      .eq("load_id", loadId)
+      .eq("org_id", orgId)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const ghost = ghostRaw as { title: string | null; priority: boolean | null } | null;
+    const { data: lr } = await supabase
+      .from("loads").select("load_num").eq("id", loadId).eq("org_id", orgId).maybeSingle();
+    const loadNum = (lr as { load_num: string | null } | null)?.load_num;
+    template = {
+      title:    ghost?.title ?? (loadNum ? `Load ${loadNum}` : "Load"),
+      priority: ghost?.priority ?? false,
+    };
+  }
 
   // ── 1. Update / create each leg in order ──────────────────────────────
   //
