@@ -47,15 +47,22 @@ stops.get("/recent", async (c) => {
   const pattern = `%${safe}%`;
 
   // Pull a generous batch then dedupe in memory — Supabase JS client doesn't
-  // support DISTINCT/GROUP BY directly. 80 rows is plenty given typical
-  // dispatcher autocomplete usage.
+  // support DISTINCT/GROUP BY directly.
+  //
+  // The batch has to be MUCH larger than the result limit because stop rows
+  // duplicate heavily: every leg of a relay stores the whole stop list, and
+  // stops are deleted + reinserted on each save. One frequently-used
+  // facility can therefore account for dozens of consecutive rows, so a
+  // small batch dedupes down to a handful of distinct places and the
+  // dispatcher sees a near-empty dropdown. 600 keeps enough variety to
+  // fill `limit` distinct locations for realistic histories.
   const { data, error } = await supabase
     .from("stops")
     .select("facility_name,address,city,state,lat,lng,timezone,created_at")
     .eq("org_id", orgId)
     .or(`facility_name.ilike.${pattern},address.ilike.${pattern}`)
     .order("created_at", { ascending: false })
-    .limit(80);
+    .limit(600);
 
   if (error) {
     console.error("[GET /v1/stops/recent] failed:", error);

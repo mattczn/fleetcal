@@ -6,6 +6,7 @@ import { isHandoffStop, handoffIndexes } from '@fleetcal/types';
 import Tooltip from '@/components/ui/Tooltip';
 import type { Stop, StopType } from '@/lib/types';
 import { useCalendarStore } from '@/store/useCalendarStore';
+import { railway } from '@/lib/railway';
 import DatePicker from './DatePicker';
 import TimePicker from './TimePicker';
 import { naiveHomeToView, naiveViewToHome } from '@/lib/time-utils';
@@ -237,6 +238,44 @@ interface StopSuggestion {
   count: number;
   isSaved?: boolean;
   savedName?: string;
+  /** Came from the org-wide history lookup rather than the loaded
+   *  calendar window. Ranked below local matches but still offered. */
+  isRemote?: boolean;
+}
+
+/** How many facility/address suggestions to show at once. The calendar
+ *  store only holds a ~2-week window, so local matches alone are a thin
+ *  slice of where the fleet actually goes — the org-history lookup fills
+ *  the rest and this cap has to leave room for it. */
+const SUGGESTION_LIMIT = 10;
+
+function suggestionKey(facilityName?: string, address?: string): string {
+  return `${(facilityName ?? '').toLowerCase().trim()}||${(address ?? '').toLowerCase().trim()}`;
+}
+
+/**
+ * Rank matches for a query: prefix hits on the facility name first (what
+ * you get when you type "ALB" for ALBERTSONS), then other name hits, then
+ * address-only hits. Saved locations outrank history, and local history
+ * outranks the org-wide lookup only as a tiebreak — freshness of the
+ * calendar window is not a signal of relevance.
+ */
+function rankSuggestions(list: StopSuggestion[], q: string): StopSuggestion[] {
+  const score = (s: StopSuggestion): number => {
+    const name = (s.facilityName ?? '').toLowerCase();
+    const addr = (s.address ?? '').toLowerCase();
+    if (name.startsWith(q)) return 0;
+    if (name.includes(q))   return 1;
+    if (addr.startsWith(q)) return 2;
+    return 3;
+  };
+  return [...list].sort((a, b) => {
+    if (a.isSaved !== b.isSaved) return a.isSaved ? -1 : 1;
+    const sa = score(a), sb = score(b);
+    if (sa !== sb) return sa - sb;
+    if (a.isRemote !== b.isRemote) return a.isRemote ? 1 : -1;
+    return b.count - a.count;
+  });
 }
 
 // Distance in miles between two lat/lng points (haversine).
@@ -391,16 +430,84 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
   const placesToken = useRef<string | null>(null);
   const getPlacesToken = () => (placesToken.current ??= crypto.randomUUID());
 
+  // ── Org-wide stop history ─────────────────────────────────────────────
+  // `historicalStops` above can only see events the calendar store has
+  // loaded — roughly a two-week window around the viewed date. That's a
+  // tiny slice of where the fleet actually goes, which is why typing a
+  // facility name used to surface almost nothing. GET /v1/stops/recent
+  // searches every stop the org has ever saved (the dispatch app has
+  // always used it); we merge its hits in behind the local ones.
+  const [remoteStops, setRemoteStops] = useState<StopSuggestion[]>([]);
+  const remoteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const remoteSeq   = useRef(0);
+  const facilityQ   = useRef('');
+  const addrQ       = useRef('');
+
+  const localMatches = useCallback((q: string) => historicalStops.filter(s =>
+    (s.facilityName ?? '').toLowerCase().includes(q) ||
+    (s.address ?? '').toLowerCase().includes(q)
+  ), [historicalStops]);
+
+  /** Local + org-history matches, deduped and ranked. */
+  const mergedMatches = useCallback((q: string): StopSuggestion[] => {
+    const seen = new Set<string>();
+    const out: StopSuggestion[] = [];
+    for (const s of [...localMatches(q), ...remoteStops]) {
+      if (seen.has(s.key)) continue;
+      seen.add(s.key);
+      out.push(s);
+    }
+    return rankSuggestions(out, q).slice(0, SUGGESTION_LIMIT);
+  }, [localMatches, remoteStops]);
+
+  /** Debounced org-history lookup. Stale responses are dropped by seq so a
+   *  slow request for "ALB" can't overwrite results for "ALBERTSONS". */
+  const searchOrgHistory = useCallback((q: string) => {
+    if (remoteTimer.current) clearTimeout(remoteTimer.current);
+    if (q.length < 2) { setRemoteStops([]); return; }
+    const seq = ++remoteSeq.current;
+    remoteTimer.current = setTimeout(async () => {
+      try {
+        const { recentStops } = await railway.listRecentStops({ q, limit: 25 });
+        if (seq !== remoteSeq.current) return;
+        setRemoteStops((recentStops ?? []).map(r => ({
+          key:          suggestionKey(r.facilityName, r.address),
+          facilityName: r.facilityName,
+          address:      r.address,
+          lat:          r.lat,
+          lng:          r.lng,
+          timezone:     r.timezone,
+          count:        0,
+          isRemote:     true,
+        })));
+      } catch {
+        // Autocomplete is additive — a failed history lookup just leaves
+        // the local matches in place rather than surfacing an error.
+        if (seq === remoteSeq.current) setRemoteStops([]);
+      }
+    }, 250);
+  }, []);
+
+  // History arrives after the keystroke that asked for it, so refresh
+  // whichever dropdown is open rather than making the user type again.
+  useEffect(() => {
+    if (facilityAcIdx !== null && facilityQ.current) {
+      setFacilitySuggestions(mergedMatches(facilityQ.current));
+    }
+    if (acIdx !== null && addrQ.current) {
+      setSavedSuggestions(mergedMatches(addrQ.current));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [remoteStops]);
+
   const fetchSuggestions = useCallback((idx: number, input: string) => {
     if (acTimer.current) clearTimeout(acTimer.current);
     const q = input.trim().toLowerCase();
-    // Search historical stops (includes saved locations) client-side instantly
-    const matched = q.length >= 1
-      ? historicalStops.filter(s =>
-          (s.facilityName ?? '').toLowerCase().includes(q) ||
-          (s.address ?? '').toLowerCase().includes(q)
-        ).slice(0, 6)
-      : [];
+    // Local matches (saved locations + loaded calendar window) render
+    // instantly; the org-history lookup fills in behind them.
+    addrQ.current = q;
+    searchOrgHistory(q);
+    const matched = q.length >= 1 ? mergedMatches(q) : [];
     setSavedSuggestions(matched);
     if (!q || q.length < 4) { setSuggestions([]); if (!matched.length) setAcIdx(null); else setAcIdx(idx); return; }
     setAcIdx(idx);
@@ -412,7 +519,7 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
         setAcIdx(idx);
       } catch { setSuggestions([]); }
     }, 300);
-  }, [historicalStops]);
+  }, [mergedMatches, searchOrgHistory]);
 
   function selectStopSuggestion(idx: number, s: StopSuggestion) {
     justSelected.current = true;
@@ -754,13 +861,15 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
                       onChange={e => {
                         update(idx, { facilityName: e.target.value });
                         const q = e.target.value.trim().toLowerCase();
+                        facilityQ.current = q;
+                        searchOrgHistory(q);
                         if (q.length >= 1) {
-                          const matched = historicalStops.filter(s =>
-                            (s.facilityName ?? '').toLowerCase().includes(q) ||
-                            (s.address ?? '').toLowerCase().includes(q)
-                          ).slice(0, 6);
+                          const matched = mergedMatches(q);
                           setFacilitySuggestions(matched);
-                          setFacilityAcIdx(matched.length ? idx : null);
+                          // Keep the dropdown anchored to this stop even
+                          // when local matches are empty — org history
+                          // usually lands a beat later and fills it.
+                          setFacilityAcIdx(idx);
                         } else {
                           setFacilitySuggestions([]); setFacilityAcIdx(null);
                         }
@@ -770,13 +879,12 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
                       onFocus={e => {
                         e.currentTarget.style.borderColor = headerColor;
                         const q = (stop.facilityName ?? '').trim().toLowerCase();
+                        facilityQ.current = q;
                         if (q.length >= 1) {
-                          const matched = historicalStops.filter(s =>
-                            (s.facilityName ?? '').toLowerCase().includes(q) ||
-                            (s.address ?? '').toLowerCase().includes(q)
-                          ).slice(0, 6);
+                          searchOrgHistory(q);
+                          const matched = mergedMatches(q);
                           setFacilitySuggestions(matched);
-                          setFacilityAcIdx(matched.length ? idx : null);
+                          setFacilityAcIdx(idx);
                         }
                       }}
                       onBlur={e => {
