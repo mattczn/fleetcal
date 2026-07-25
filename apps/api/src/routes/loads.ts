@@ -22,6 +22,7 @@ import {
   appLoadToLoadInsert,
   appLoadToEventInsert,
   joinEventLoadToApp,
+  legRoleFor,
   type CreateLoadRequest,
   type CreateLoadResponse,
   type ListLoadsResponse,
@@ -70,7 +71,7 @@ const STOP_COLS =
 
 const EVENT_COLS =
   "id,asset_id,driver_id,driver_name,title,start,end,status,priority," +
-  "notes,driver_pay,loaded_miles,deferred_to_week,relay_role,event_kind,non_revenue_type,trailer_id," +
+  "notes,driver_pay,loaded_miles,deferred_to_week,relay_role,leg_index,event_kind,non_revenue_type,trailer_id," +
   "trailer_type,deleted_at,load_id,created_at,updated_at," +
   "confirmed_at,confirmed_by,confirm_reminder_sent_at," +
   "trailer_dropoff_lat,trailer_dropoff_lng,trailer_dropoff_at,trailer_dropoff_address," +
@@ -131,9 +132,10 @@ function rowToStop(s: StopRow): Stop {
 }
 
 /**
- * Fetch the joined Load[] view for a single load id (1 entry for single,
- * 2 for relay). Returns null if the load doesn't exist or doesn't belong
- * to the org. Stops are populated and sorted by sequence.
+ * Fetch the joined Load[] view for a single load id — one entry per leg,
+ * in leg order (single-leg loads return one entry). Returns null if the
+ * load doesn't exist or doesn't belong to the org. Stops are populated
+ * and sorted by sequence.
  */
 async function fetchLoadJoined(
   loadId: string,
@@ -152,6 +154,7 @@ async function fetchLoadJoined(
     .select(EVENT_COLS)
     .eq("load_id", loadId)
     .eq("org_id", orgId)
+    .order("leg_index", { ascending: true })
     .order("start", { ascending: true });
   if (evErr || !eventRowsRaw) return [];
   const eventRows = eventRowsRaw as unknown as Array<Record<string, unknown> & { id: string }>;
@@ -172,8 +175,10 @@ async function fetchLoadJoined(
   // by the load_documents_refresh_counts trigger). joinEventLoadToApp
   // reads it off the load row — no extra query needed.
 
+  const legCount = eventRows.filter((e) => !e.deleted_at).length || eventRows.length;
   return Promise.all(eventRows.map(async (ev) => {
     const joined = joinEventLoadToApp(ev, loadRow);
+    joined.legCount = legCount;
     joined.stops = (stopsByEvent.get(ev.id) ?? []).slice().sort(
       (a, b) => a.sequence - b.sequence,
     );
@@ -187,7 +192,7 @@ async function fetchLoadJoined(
       routePolyline: joined.routePolyline,
       routeStopsKey: (ev.route_stops_key as string | null) ?? null,
       loadedMiles:   joined.loadedMiles ?? null,
-    }, joined.relayRole ?? null);
+    }, joined.relayRole ? { legIndex: joined.legIndex ?? 0, legCount } : null);
     joined.routePolyline = cached.routePolyline ?? undefined;
     joined.loadedMiles   = cached.loadedMiles ?? undefined;
     return joined;
@@ -304,7 +309,7 @@ function diffAccessorialsForAudit(
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// POST /v1/loads — create a load (1 or 2 events)
+// POST /v1/loads — create a load (1..N events, one per leg in leg order)
 // ─────────────────────────────────────────────────────────────────────────
 
 loads.post("/", requireCapability("loads.create"), async (c) => {
@@ -319,14 +324,8 @@ loads.post("/", requireCapability("loads.create"), async (c) => {
   if (!Array.isArray(body?.events)) {
     errors.push("'events' must be an array");
   } else {
-    if (body.events.length < 1 || body.events.length > 2) {
-      errors.push("'events' must have 1 or 2 entries");
-    }
-    if (body.events.length === 2) {
-      const roles = body.events.map((e) => e.relayRole);
-      if (!roles.includes("pickup") || !roles.includes("delivery") || roles[0] === roles[1]) {
-        errors.push("relay loads need exactly one 'pickup' and one 'delivery' relayRole");
-      }
+    if (body.events.length < 1 || body.events.length > 10) {
+      errors.push("'events' must have 1..10 entries");
     }
     for (const [i, ev] of body.events.entries()) {
       if (!ev.title?.trim()) errors.push(`events[${i}]: title required`);
@@ -400,7 +399,16 @@ loads.post("/", requireCapability("loads.create"), async (c) => {
   // is `scheduled`. The caller can still override by passing `status`
   // explicitly — useful for rate-con AI that already knows the driver
   // confirmed verbally, or for manual closeout backfills.
-  const eventInserts = body.events.map((ev) =>
+  // Leg order = array order. Back-compat: legacy 2-leg callers identified
+  // legs by relayRole rather than position, so honor an explicit
+  // [delivery, pickup] ordering by swapping before positions are assigned.
+  const orderedEvents =
+    body.events.length === 2 &&
+    body.events[0].relayRole === "delivery" &&
+    body.events[1].relayRole === "pickup"
+      ? [body.events[1], body.events[0]]
+      : body.events;
+  const eventInserts = orderedEvents.map((ev, i) =>
     appLoadToEventInsert(
       {
         ...ev,
@@ -409,6 +417,10 @@ loads.post("/", requireCapability("loads.create"), async (c) => {
         status:    ev.status ?? (ev.driverId != null ? "assigned" : "scheduled"),
         // Apply the auto-fill only to single-leg loads — see above.
         driverPay: autoDriverPay != null ? autoDriverPay : ev.driverPay,
+        // Position is authoritative: leg_index from array order,
+        // relay_role derived (first=pickup, last=delivery, mid=transfer).
+        legIndex:  i,
+        relayRole: legRoleFor(i, orderedEvents.length),
         stops:     [],
       },
       orgId,
@@ -424,8 +436,8 @@ loads.post("/", requireCapability("loads.create"), async (c) => {
     return c.json({ error: "events_insert_failed", detail: evErr?.message } satisfies ApiErrorResponse, 500);
   }
 
-  // 3. Insert stops
-  const stopInserts = body.events.flatMap((ev, i) =>
+  // 3. Insert stops (orderedEvents — same ordering eventRows was inserted in)
+  const stopInserts = orderedEvents.flatMap((ev, i) =>
     (ev.stops ?? []).map((s, idx) => ({
       event_id:       eventRows[i].id,
       org_id:         orgId,
@@ -739,7 +751,7 @@ loads.get("/:id/documents", async (c) => {
 
   const { data: rows, error } = await supabase
     .from("load_documents")
-    .select("id,load_id,invoice_id,storage_path,file_name,mime_type,size_bytes,kind,uploaded_at,included_in_invoice")
+    .select("id,load_id,invoice_id,storage_path,file_name,mime_type,size_bytes,kind,handoff_index,uploaded_at,included_in_invoice")
     .eq("load_id", loadId)
     .eq("org_id", orgId)
     .order("uploaded_at", { ascending: false });
@@ -752,7 +764,7 @@ loads.get("/:id/documents", async (c) => {
     id: string; load_id: string | null; invoice_id: string | null;
     storage_path: string;
     file_name: string; mime_type: string | null; size_bytes: number | null;
-    kind: string; uploaded_at: string;
+    kind: string; handoff_index: number | null; uploaded_at: string;
     included_in_invoice: boolean | null;
   };
   // Cast via unknown — the generated Supabase types don't know about
@@ -823,6 +835,7 @@ loads.get("/:id/documents", async (c) => {
     mimeType:           d.mime_type   ?? undefined,
     sizeBytes:          d.size_bytes  ?? undefined,
     kind:               (d.kind as DocumentKind) ?? "other",
+    handoffIndex:       d.handoff_index,
     uploadedAt:         d.uploaded_at,
     signedUrl:          urlByPath.get(d.storage_path),
     includedInInvoice:  d.included_in_invoice,
@@ -853,14 +866,22 @@ loads.post("/:id/documents", requireCapability("loads.edit"), async (c) => {
   const orgId  = c.get("orgId");
   const loadId = c.req.param("id");
 
-  let body: { file?: File; kind?: string };
-  try { body = await c.req.parseBody() as { file?: File; kind?: string }; }
+  let body: { file?: File; kind?: string; handoffIndex?: string };
+  try { body = await c.req.parseBody() as { file?: File; kind?: string; handoffIndex?: string }; }
   catch (err) {
     console.error("[POST /v1/loads/:id/documents] parseBody:", err);
     return c.json({ error: "validation_failed", errors: ["multipart parse failed"] } satisfies ApiErrorResponse, 400);
   }
   const file = body.file;
   const kind = (body.kind ?? "other").toString();
+  // relay_handoff docs may be keyed to a specific handoff ordinal (see
+  // the driver upload endpoint) — same optional multipart field here so
+  // dispatch-uploaded handoff photos land on the right exchange.
+  const handoffIndexRaw = body.handoffIndex != null ? Number(body.handoffIndex) : null;
+  const handoffIndex =
+    kind === "relay_handoff" && handoffIndexRaw != null && Number.isInteger(handoffIndexRaw) && handoffIndexRaw >= 0
+      ? handoffIndexRaw
+      : null;
   if (!file || typeof file === "string") {
     return c.json({ error: "validation_failed", errors: ["file required"] } satisfies ApiErrorResponse, 400);
   }
@@ -1042,6 +1063,7 @@ loads.post("/:id/documents", requireCapability("loads.edit"), async (c) => {
       mime_type:    uploadMime || null,
       size_bytes:   bytes.length,
       kind,
+      handoff_index: handoffIndex,
     } as any)
     .select("id, load_id, storage_path, file_name, mime_type, size_bytes, kind, uploaded_at")
     .single();
@@ -1659,13 +1681,14 @@ loads.post("/:id/split-relay", requireCapability("loads.edit"), async (c) => {
   }
   if (errors.length) return badRequest(c, errors);
 
-  // Fetch the load and verify it has exactly one event
+  // Fetch the load's active legs (ordered: leg_index, then start)
   const { data: existingEventsRaw, error: fetchErr } = await supabase
     .from("events")
     .select(EVENT_COLS)
     .eq("load_id", loadId)
     .eq("org_id", orgId)
     .is("deleted_at", null)
+    .order("leg_index", { ascending: true })
     .order("start", { ascending: true });
   if (fetchErr || !existingEventsRaw) {
     return c.json({ error: "fetch_failed", detail: fetchErr?.message } satisfies ApiErrorResponse, 500);
@@ -1673,63 +1696,103 @@ loads.post("/:id/split-relay", requireCapability("loads.edit"), async (c) => {
   const existingEvents = existingEventsRaw as unknown as Array<Record<string, unknown> & {
     id: string; title: string; end: string; priority: boolean;
   }>;
-  if (existingEvents.length !== 1) {
-    return badRequest(c, [`load must have exactly 1 event to split; found ${existingEvents.length}`]);
+  if (existingEvents.length < 1) {
+    return badRequest(c, ["load has no active events"]);
   }
-  const pickupEvent = existingEvents[0];
 
-  // 1. Update the existing event → pickup leg
-  const { error: pickupErr } = await supabase
+  // The leg being split. Back-compat: single-leg loads may omit
+  // targetEventId (the original single→relay flow).
+  let targetIdx: number;
+  if (body.targetEventId) {
+    targetIdx = existingEvents.findIndex((e) => e.id === body.targetEventId);
+    if (targetIdx < 0) return badRequest(c, ["targetEventId not found among this load's events"]);
+  } else if (existingEvents.length === 1) {
+    targetIdx = 0;
+  } else {
+    return badRequest(c, ["targetEventId required when the load already has multiple legs"]);
+  }
+  const targetEvent = existingEvents[targetIdx];
+  const newLegCount = existingEvents.length + 1;
+
+  // 1. Update the split leg: clamp its end to the handoff
+  const { error: targetErr } = await supabase
     .from("events")
     .update({
       end:        body.pickupEnd,
-      relay_role: "pickup",
+      relay_role: legRoleFor(targetIdx, newLegCount) ?? null,
     })
-    .eq("id", pickupEvent.id)
+    .eq("id", targetEvent.id)
     .eq("org_id", orgId);
-  if (pickupErr) {
-    return c.json({ error: "pickup_update_failed", detail: pickupErr.message } satisfies ApiErrorResponse, 500);
+  if (targetErr) {
+    return c.json({ error: "pickup_update_failed", detail: targetErr.message } satisfies ApiErrorResponse, 500);
   }
 
-  // 2. Create the delivery leg event
-  const deliveryInsert = {
+  // 2. Insert the new leg immediately after the split leg
+  const newLegInsert = {
     org_id:      orgId,
     load_id:     loadId,
     asset_id:    body.deliveryAssetId,
     driver_id:   body.deliveryDriverId   ?? null,
     driver_name: body.deliveryDriverName ?? null,
-    title:       pickupEvent.title,
+    title:       targetEvent.title,
     start:       body.deliveryStart,
     end:         body.deliveryEnd,
     status:      "scheduled",
     event_kind:  "revenue",
-    relay_role:  "delivery",
-    priority:    pickupEvent.priority,
+    relay_role:  legRoleFor(targetIdx + 1, newLegCount),
+    leg_index:   targetIdx + 1,
+    priority:    targetEvent.priority,
   };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: deliveryEventRaw, error: delivErr } = await supabase
+  const { data: newLegRaw, error: newLegErr } = await supabase
     .from("events")
-    .insert(deliveryInsert as any)
+    .insert(newLegInsert as any)
     .select()
     .single();
-  const deliveryEvent = deliveryEventRaw as { id: string } | null;
-  if (delivErr || !deliveryEvent) {
-    // Cleanup: revert pickup event role
+  const newLegEvent = newLegRaw as { id: string } | null;
+  if (newLegErr || !newLegEvent) {
+    // Cleanup: revert the split leg
     await supabase
       .from("events")
-      .update({ relay_role: null, end: pickupEvent.end })
-      .eq("id", pickupEvent.id)
+      .update({ relay_role: (targetEvent.relay_role as string | null) ?? null, end: targetEvent.end })
+      .eq("id", targetEvent.id)
       .eq("org_id", orgId);
-    return c.json({ error: "delivery_create_failed", detail: delivErr?.message } satisfies ApiErrorResponse, 500);
+    return c.json({ error: "delivery_create_failed", detail: newLegErr?.message } satisfies ApiErrorResponse, 500);
   }
 
-  // 3. Replace stops on both legs with the full merged list. Both legs
-  //    share the same stops; the relay-type stop (at relayStopIndex) is the
-  //    handoff marker. The modal greys out the other leg's stops based on
-  //    relay_role + the relay marker's position. (relayStopIndex is still
-  //    accepted for forward-compat but isn't used to partition anymore.)
-  void body.relayStopIndex;
-  await supabase.from("stops").delete().eq("event_id", pickupEvent.id).eq("org_id", orgId);
+  // 3. Renumber leg_index 0..N and re-derive relay_role on every leg.
+  //    (The split leg + new leg were already written above; this pass
+  //    shifts the legs AFTER the insertion point and refreshes roles —
+  //    e.g. a former delivery leg that's no longer last becomes transfer.)
+  const finalOrder: Array<{ id: string }> = [
+    ...existingEvents.slice(0, targetIdx + 1),
+    newLegEvent,
+    ...existingEvents.slice(targetIdx + 1),
+  ];
+  for (let i = 0; i < finalOrder.length; i++) {
+    if (finalOrder[i].id === targetEvent.id || finalOrder[i].id === newLegEvent.id) continue;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await supabase
+      .from("events")
+      .update({ leg_index: i, relay_role: legRoleFor(i, finalOrder.length) } as any)
+      .eq("id", finalOrder[i].id)
+      .eq("org_id", orgId);
+  }
+  // The split leg's leg_index is unchanged but ensure it's persisted
+  // (legacy rows predating leg_index backfill default to 0).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await supabase
+    .from("events")
+    .update({ leg_index: targetIdx } as any)
+    .eq("id", targetEvent.id)
+    .eq("org_id", orgId);
+
+  // 4. Replace stops on ALL legs with the full merged list. Every leg
+  //    shares the same stops; relay-type stops are the handoff markers
+  //    (marker i divides leg i from leg i+1). UIs derive each leg's
+  //    window from its leg_index + the markers' positions.
+  const legIds = finalOrder.map((l) => l.id);
+  await supabase.from("stops").delete().in("event_id", legIds).eq("org_id", orgId);
 
   const buildStopRows = (eventId: string) => body.mergedStops.map((s, idx) => ({
     event_id:       eventId,
@@ -1749,7 +1812,7 @@ loads.post("/:id/split-relay", requireCapability("loads.edit"), async (c) => {
     instructions:   s.instructions  ?? null,
     geocode_status: s.geocodeStatus ?? "pending",
   }));
-  const stopRows = [...buildStopRows(pickupEvent.id), ...buildStopRows(deliveryEvent.id)];
+  const stopRows = legIds.flatMap((id) => buildStopRows(id));
 
   if (stopRows.length) {
     const { error: stopErr } = await supabase.from("stops").insert(stopRows);
@@ -1758,6 +1821,29 @@ loads.post("/:id/split-relay", requireCapability("loads.edit"), async (c) => {
       // Best-effort: orphan stops are bad but recovery is hard here.
       return c.json({ error: "stops_insert_failed", detail: stopErr.message } satisfies ApiErrorResponse, 500);
     }
+  }
+
+  // 5. Handoff photos: a new marker was inserted at ordinal h (its
+  //    position among relay-type stops). Existing relay_handoff docs at
+  //    handoff_index >= h belong to later handoffs — shift them up so
+  //    they stay attached to the same physical exchange.
+  const newMarkerOrdinal = body.mergedStops
+    .slice(0, body.relayStopIndex)
+    .filter((s) => s.type === "relay").length;
+  const { data: shiftDocsRaw } = await supabase
+    .from("load_documents")
+    .select("id, handoff_index")
+    .eq("load_id", loadId)
+    .eq("org_id", orgId)
+    .eq("kind", "relay_handoff")
+    .gte("handoff_index", newMarkerOrdinal);
+  for (const doc of (shiftDocsRaw ?? []) as Array<{ id: string; handoff_index: number }>) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await supabase
+      .from("load_documents")
+      .update({ handoff_index: doc.handoff_index + 1 } as any)
+      .eq("id", doc.id)
+      .eq("org_id", orgId);
   }
 
   const joined = await fetchLoadJoined(loadId, orgId);
@@ -1847,7 +1933,7 @@ loads.post("/:id/restore", requireCapability("loads.edit"), async (c) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
-// POST /v1/loads/:id/unsplit-relay — collapse 2-event relay back to single
+// POST /v1/loads/:id/unsplit-relay — merge two adjacent legs (N → N-1)
 // ─────────────────────────────────────────────────────────────────────────
 
 loads.post("/:id/unsplit-relay", requireCapability("loads.edit"), async (c) => {
@@ -1859,31 +1945,46 @@ loads.post("/:id/unsplit-relay", requireCapability("loads.edit"), async (c) => {
     return badRequest(c, ["keepEventId required"]);
   }
 
-  // Fetch the load's active events
+  // Fetch the load's active legs in leg order
   const { data: existingEventsRaw, error: fetchErr } = await supabase
     .from("events")
     .select(EVENT_COLS)
     .eq("load_id", loadId)
     .eq("org_id", orgId)
     .is("deleted_at", null)
+    .order("leg_index", { ascending: true })
     .order("start", { ascending: true });
   if (fetchErr || !existingEventsRaw) {
     return c.json({ error: "fetch_failed", detail: fetchErr?.message } satisfies ApiErrorResponse, 500);
   }
   const existingEvents = existingEventsRaw as unknown as Array<{
-    id: string; end: string; relay_role: string | null;
+    id: string; start: string; end: string; relay_role: string | null;
   }>;
-  if (existingEvents.length !== 2) {
-    return badRequest(c, [`load must have exactly 2 events to unsplit; found ${existingEvents.length}`]);
+  if (existingEvents.length < 2) {
+    return badRequest(c, [`load must have at least 2 events to unsplit; found ${existingEvents.length}`]);
   }
 
-  const keep = existingEvents.find((e) => e.id === body.keepEventId);
-  const drop = existingEvents.find((e) => e.id !== body.keepEventId);
-  if (!keep || !drop) {
+  const keepIdx = existingEvents.findIndex((e) => e.id === body.keepEventId);
+  if (keepIdx < 0) {
     return badRequest(c, ["keepEventId not found among this load's events"]);
   }
+  // The leg to absorb. Back-compat: on a 2-leg load it's implied.
+  let dropIdx: number;
+  if (body.mergeEventId) {
+    dropIdx = existingEvents.findIndex((e) => e.id === body.mergeEventId);
+    if (dropIdx < 0) return badRequest(c, ["mergeEventId not found among this load's events"]);
+    if (Math.abs(dropIdx - keepIdx) !== 1) {
+      return badRequest(c, ["mergeEventId must be adjacent to keepEventId"]);
+    }
+  } else if (existingEvents.length === 2) {
+    dropIdx = keepIdx === 0 ? 1 : 0;
+  } else {
+    return badRequest(c, ["mergeEventId required when the load has more than 2 legs"]);
+  }
+  const keep = existingEvents[keepIdx];
+  const drop = existingEvents[dropIdx];
 
-  // 1. Soft-delete the dropped event
+  // 1. Soft-delete the absorbed leg
   const now = new Date().toISOString();
   const { error: dropErr } = await supabase
     .from("events")
@@ -1894,12 +1995,20 @@ loads.post("/:id/unsplit-relay", requireCapability("loads.edit"), async (c) => {
     return c.json({ error: "drop_event_failed", detail: dropErr.message } satisfies ApiErrorResponse, 500);
   }
 
-  // 2. Update the kept event: clear relay_role, extend end to the later of the two
+  // 2. Update the kept leg: window covers both legs; role re-derived below
+  const newStart = keep.start < drop.start ? keep.start : drop.start;
   const newEnd = keep.end > drop.end ? keep.end : drop.end;
+  const remainingCount = existingEvents.length - 1;
+  const mergedIdx = Math.min(keepIdx, dropIdx);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { error: keepErr } = await supabase
     .from("events")
-    .update({ end: newEnd, relay_role: null } as any)
+    .update({
+      start:      newStart,
+      end:        newEnd,
+      leg_index:  mergedIdx,
+      relay_role: legRoleFor(mergedIdx, remainingCount) ?? null,
+    } as any)
     .eq("id", keep.id)
     .eq("org_id", orgId);
   if (keepErr) {
@@ -1908,35 +2017,79 @@ loads.post("/:id/unsplit-relay", requireCapability("loads.edit"), async (c) => {
     return c.json({ error: "keep_update_failed", detail: keepErr.message } satisfies ApiErrorResponse, 500);
   }
 
-  // 3. Drop the relay-marker stop from the kept event. Both legs share
-  //    the full stops list (split-relay duplicates them); the kept event
-  //    already has every real stop, so we just remove relay-type stops.
-  await supabase
-    .from("stops")
-    .delete()
-    .eq("event_id", keep.id)
-    .eq("org_id", orgId)
-    .eq("type", "relay");
-  // Re-sequence remaining stops (1..N).
-  const { data: remainingRaw } = await supabase
-    .from("stops")
-    .select("id")
-    .eq("event_id", keep.id)
-    .eq("org_id", orgId)
-    .order("sequence", { ascending: true });
-  const remaining = (remainingRaw ?? []) as Array<{ id: string }>;
-  for (let i = 0; i < remaining.length; i++) {
+  // 3. Renumber the remaining legs and re-derive roles (a transfer leg
+  //    that becomes last turns into the delivery leg, etc.). On a 2-leg
+  //    load this clears relay_role on the survivor entirely.
+  const finalOrder = existingEvents
+    .filter((_, i) => i !== dropIdx)
+    .map((e) => e.id);
+  for (let i = 0; i < finalOrder.length; i++) {
+    if (finalOrder[i] === keep.id) continue;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await supabase
-      .from("stops")
-      .update({ sequence: i + 1 } as any)
-      .eq("id", remaining[i].id)
+      .from("events")
+      .update({ leg_index: i, relay_role: legRoleFor(i, finalOrder.length) ?? null } as any)
+      .eq("id", finalOrder[i])
       .eq("org_id", orgId);
   }
+
+  // 4. Remove the collapsed handoff marker — the relay-type stop between
+  //    the two merged legs (ordinal = mergedIdx among relay stops) — from
+  //    EVERY remaining leg's stop copy, then re-sequence each.
+  for (const legId of finalOrder) {
+    const { data: relayStopsRaw } = await supabase
+      .from("stops")
+      .select("id")
+      .eq("event_id", legId)
+      .eq("org_id", orgId)
+      .eq("type", "relay")
+      .order("sequence", { ascending: true });
+    const relayStops = (relayStopsRaw ?? []) as Array<{ id: string }>;
+    const marker = relayStops[mergedIdx];
+    if (marker) {
+      await supabase.from("stops").delete().eq("id", marker.id).eq("org_id", orgId);
+    } else if (relayStops.length > 0 && finalOrder.length === 1) {
+      // Legacy 2-leg loads: just clear all markers on the lone survivor.
+      await supabase.from("stops").delete().eq("event_id", legId).eq("org_id", orgId).eq("type", "relay");
+    }
+    const { data: remainingRaw } = await supabase
+      .from("stops")
+      .select("id")
+      .eq("event_id", legId)
+      .eq("org_id", orgId)
+      .order("sequence", { ascending: true });
+    const remaining = (remainingRaw ?? []) as Array<{ id: string }>;
+    for (let i = 0; i < remaining.length; i++) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await supabase
+        .from("stops")
+        .update({ sequence: i + 1 } as any)
+        .eq("id", remaining[i].id)
+        .eq("org_id", orgId);
+    }
+  }
   // body.mergedStops is now ignored — the server reconstructs from the
-  // kept event's existing stops minus the relay marker. Field accepted
+  // kept legs' existing stops minus the collapsed marker. Field accepted
   // for API back-compat but not used.
   void body.mergedStops;
+
+  // 5. Handoff photos: docs on the collapsed handoff lose their ordinal
+  //    (kept as legacy load-level photos); later handoffs shift down 1.
+  const { data: handoffDocsRaw } = await supabase
+    .from("load_documents")
+    .select("id, handoff_index")
+    .eq("load_id", loadId)
+    .eq("org_id", orgId)
+    .eq("kind", "relay_handoff")
+    .gte("handoff_index", mergedIdx);
+  for (const doc of (handoffDocsRaw ?? []) as Array<{ id: string; handoff_index: number }>) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await supabase
+      .from("load_documents")
+      .update({ handoff_index: doc.handoff_index === mergedIdx ? null : doc.handoff_index - 1 } as any)
+      .eq("id", doc.id)
+      .eq("org_id", orgId);
+  }
 
   const joined = await fetchLoadJoined(loadId, orgId);
   const res: UnsplitRelayResponse = { loads: joined ?? [] };

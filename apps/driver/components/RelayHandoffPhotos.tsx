@@ -1,10 +1,17 @@
 /**
  * Relay handoff photos.
  *
- * Pickup driver leaves photos for the delivery driver — typically
+ * The outgoing driver leaves photos for the next driver — typically
  * "where the trailer is parked" + paperwork shots in case the
  * physical copies get lost. Lives on the load, scoped via
- * `kind='relay_handoff'`. Both legs see + can add to the same set.
+ * `kind='relay_handoff'`.
+ *
+ * N-leg: each photo is keyed to a handoff ordinal (`handoffIndex` —
+ * marker i sits between leg i and leg i+1). A leg's gallery shows the
+ * photos for ITS handoffs (inbound + outbound) plus legacy photos with
+ * no ordinal (shown on every handoff). Uploads are tagged with the
+ * relevant handoff ordinal so a 3-leg load's two exchange points don't
+ * mix photos.
  */
 import React, { useEffect, useState, useCallback } from "react";
 import {
@@ -32,14 +39,23 @@ interface DocLike {
   fileName: string;
   uploadedAt: string;
   signedUrl?: string;
+  /** 0-based handoff ordinal this photo belongs to; null/absent = legacy
+   *  load-level photo, shown on every handoff. */
+  handoffIndex?: number | null;
 }
 
 /**
  * Shared upload flow — exposed so the stop-card button below the
  * Navigate / Check In row can reuse the exact same camera/library
- * prompt without duplicating the picker glue.
+ * prompt without duplicating the picker glue. `handoffIndex` tags the
+ * photo to a specific handoff ordinal (multipart field the API reads);
+ * omit for legacy untagged uploads.
  */
-export async function uploadRelayHandoffPhoto(loadId: string, source: "camera" | "library"): Promise<void> {
+export async function uploadRelayHandoffPhoto(
+  loadId: string,
+  source: "camera" | "library",
+  handoffIndex?: number,
+): Promise<void> {
   const perm = source === "camera"
     ? await ImagePicker.requestCameraPermissionsAsync()
     : await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -60,23 +76,38 @@ export async function uploadRelayHandoffPhoto(loadId: string, source: "camera" |
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   form.append("file", { uri: a.uri, name: a.fileName ?? `relay-${Date.now()}.jpg`, type: a.mimeType ?? "image/jpeg" } as any);
   form.append("kind", "relay_handoff");
+  if (handoffIndex != null) form.append("handoffIndex", String(handoffIndex));
   await railway.uploadDocument(loadId, form);
 }
 
-export function promptRelayHandoffUpload(loadId: string, onUploaded?: () => void) {
+export function promptRelayHandoffUpload(
+  loadId: string,
+  handoffIndex: number | undefined,
+  onUploaded?: () => void,
+) {
   Alert.alert(
     "Add Relay Handoff Photo",
     "Trailer location, paperwork — leave it for the next driver.",
     [
-      { text: "Take Photo",          onPress: async () => { try { await uploadRelayHandoffPhoto(loadId, "camera");  onUploaded?.(); } catch (err) { Alert.alert("Upload failed", (err as Error).message); } } },
-      { text: "Choose from Library", onPress: async () => { try { await uploadRelayHandoffPhoto(loadId, "library"); onUploaded?.(); } catch (err) { Alert.alert("Upload failed", (err as Error).message); } } },
+      { text: "Take Photo",          onPress: async () => { try { await uploadRelayHandoffPhoto(loadId, "camera", handoffIndex);  onUploaded?.(); } catch (err) { Alert.alert("Upload failed", (err as Error).message); } } },
+      { text: "Choose from Library", onPress: async () => { try { await uploadRelayHandoffPhoto(loadId, "library", handoffIndex); onUploaded?.(); } catch (err) { Alert.alert("Upload failed", (err as Error).message); } } },
       { text: "Cancel", style: "cancel" },
     ],
     { cancelable: true },
   );
 }
 
-export function RelayHandoffPhotos({ loadId, reloadKey }: { loadId: string; reloadKey?: number }) {
+export function RelayHandoffPhotos({ loadId, reloadKey, handoffIndexes, uploadHandoffIndex }: {
+  loadId: string;
+  reloadKey?: number;
+  /** Handoff ordinals relevant to THIS leg (inbound + outbound). When
+   *  set, photos tagged to OTHER handoffs are hidden; untagged legacy
+   *  photos always show. Omit to show everything (2-leg behavior). */
+  handoffIndexes?: number[];
+  /** Ordinal to tag new uploads with — the leg's outbound handoff when
+   *  it has one, else its inbound. Omit to upload untagged. */
+  uploadHandoffIndex?: number;
+}) {
   const { C, SHADOW, ACCENT } = useTheme();
   const [photos,   setPhotos]   = useState<DocLike[]>([]);
   const [loading,  setLoading]  = useState(true);
@@ -90,7 +121,13 @@ export function RelayHandoffPhotos({ loadId, reloadKey }: { loadId: string; relo
       const all = (res.documents ?? []) as any[];
       const relay = all
         .filter(d => d?.kind === 'relay_handoff')
-        // Newest first — pickup driver's "where I left it" should
+        // Keep only THIS leg's handoffs when a filter is given. Photos
+        // with no handoffIndex are legacy (pre-N-leg) — show them on
+        // every handoff rather than orphaning them.
+        .filter(d => d?.handoffIndex == null
+          || handoffIndexes == null
+          || handoffIndexes.includes(d.handoffIndex))
+        // Newest first — the dropping driver's "where I left it" should
         // outrank an earlier doc if both exist.
         .sort((a, b) => String(b.uploadedAt).localeCompare(String(a.uploadedAt)));
       setPhotos(relay as DocLike[]);
@@ -99,7 +136,11 @@ export function RelayHandoffPhotos({ loadId, reloadKey }: { loadId: string; relo
     } finally {
       setLoading(false);
     }
-  }, [loadId]);
+    // Depend on the JOINED ordinals, not the array identity — callers
+    // pass inline arrays, and a fresh [] every render would loop the
+    // fetch effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadId, handoffIndexes?.join(",")]);
 
   useEffect(() => { void refresh(); }, [refresh, reloadKey]);
 
@@ -112,8 +153,8 @@ export function RelayHandoffPhotos({ loadId, reloadKey }: { loadId: string; relo
       "Add Relay Handoff Photo",
       "Trailer location, paperwork — leave it for the next driver.",
       [
-        { text: "Take Photo",          onPress: async () => { setBusy(true);  try { await uploadRelayHandoffPhoto(loadId, "camera");  await refresh(); } catch (err) { Alert.alert("Upload failed", (err as Error).message); } finally { setBusy(false); } } },
-        { text: "Choose from Library", onPress: async () => { setBusy(true);  try { await uploadRelayHandoffPhoto(loadId, "library"); await refresh(); } catch (err) { Alert.alert("Upload failed", (err as Error).message); } finally { setBusy(false); } } },
+        { text: "Take Photo",          onPress: async () => { setBusy(true);  try { await uploadRelayHandoffPhoto(loadId, "camera", uploadHandoffIndex);  await refresh(); } catch (err) { Alert.alert("Upload failed", (err as Error).message); } finally { setBusy(false); } } },
+        { text: "Choose from Library", onPress: async () => { setBusy(true);  try { await uploadRelayHandoffPhoto(loadId, "library", uploadHandoffIndex); await refresh(); } catch (err) { Alert.alert("Upload failed", (err as Error).message); } finally { setBusy(false); } } },
         { text: "Cancel", style: "cancel" },
       ],
       { cancelable: true },

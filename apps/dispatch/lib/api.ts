@@ -1,5 +1,6 @@
 import { supabase } from "./supabase";
 import { railway } from "./railway";
+import { byLegIndex } from "@fleetcal/types";
 import type { Asset, Driver, Load, LoadStatus, RefNum, Stop, StopType, Customer as ApiCustomer } from "./types";
 // All reads + writes go through Railway. The only remaining direct
 // Supabase usage is the rate-con PDF upload (uploadRateConPdf), which
@@ -135,29 +136,41 @@ export async function geocodeAddress(
 }
 
 export interface SplitRelayOptions {
+  /** The leg being split — the event the dispatcher is viewing. */
   eventId:            string;
   orgId:              string;
-  pickupEnd:          string; // YYYY-MM-DDTHH:mm — when Driver 1 drops at relay
+  pickupEnd:          string; // YYYY-MM-DDTHH:mm — when the current driver drops at relay
   deliveryStart:      string;
   deliveryEnd:        string;
   deliveryAssetId:    number;
   deliveryDriverId?:  number | null;
   deliveryDriverName?: string | null;
-  /** Full ordered stops list including the relay-type stop. */
+  /** Full ordered stops list including the NEW relay-type stop. */
   mergedStops:        Stop[];
+  /** Index of the NEW relay marker within mergedStops. Required when the
+   *  load is already a relay (the list may contain older relay markers —
+   *  a bare findIndex would pick the wrong one). Defaults to the first
+   *  relay stop for single-leg splits. */
+  relayStopIndex?:    number;
 }
 
 /**
- * Convert this single-event load into a relay pair via POST /v1/loads/:id/split-relay.
- * Returns the new delivery-leg event id.
+ * Split one leg of a load into two (N legs → N+1) via
+ * POST /v1/loads/:id/split-relay. `eventId` names the leg being split;
+ * the server inserts the new leg immediately after it and renumbers
+ * leg_index/relay_role across all legs. Returns the new leg's event id.
  */
 export async function splitIntoRelay(opts: SplitRelayOptions): Promise<string> {
   const { loads } = await railway.getEvent(opts.eventId);
   const self = loads.find(l => l.id === opts.eventId) ?? loads[0];
   if (!self?.loadId) throw new Error("Cannot split: event has no loadId");
+  const priorIds = new Set(loads.map(l => l.id));
 
-  const relayStopIndex = opts.mergedStops.findIndex(s => s.type === "relay");
-  if (relayStopIndex < 0) throw new Error("mergedStops must include a stop with type='relay'");
+  const relayStopIndex = opts.relayStopIndex
+    ?? opts.mergedStops.findIndex(s => s.type === "relay");
+  if (relayStopIndex < 0 || opts.mergedStops[relayStopIndex]?.type !== "relay") {
+    throw new Error("mergedStops must include a stop with type='relay'");
+  }
 
   const res = await railway.splitRelay(self.loadId, {
     pickupEnd:          opts.pickupEnd,
@@ -168,10 +181,15 @@ export async function splitIntoRelay(opts: SplitRelayOptions): Promise<string> {
     deliveryDriverName: opts.deliveryDriverName ?? null,
     mergedStops:        opts.mergedStops,
     relayStopIndex,
+    targetEventId:      opts.eventId,
   });
-  const delivery = res.loads.find(l => l.relayRole === "delivery");
-  if (!delivery) throw new Error("Server didn't return a delivery leg");
-  return delivery.id;
+  // The response is ALL legs in leg order. The inserted leg is the one we
+  // haven't seen before; fall back to "the leg right after the target" for
+  // safety (e.g. if the pre-split read raced another dispatcher's edit).
+  const inserted = res.loads.find(l => !priorIds.has(l.id))
+    ?? res.loads[(res.loads.findIndex(l => l.id === opts.eventId)) + 1];
+  if (!inserted) throw new Error("Server didn't return the new leg");
+  return inserted.id;
 }
 
 export interface DeletedLoadRow {
@@ -254,16 +272,25 @@ export async function fetchDeletedLoads(_orgId: string, days = 30): Promise<Dele
 }
 
 /**
- * Undo a relay split via POST /v1/loads/:id/unsplit-relay. Must be called
- * from the pickup-leg event id; the server merges stops, keeps the pickup,
- * soft-deletes the delivery leg.
+ * Collapse one relay handoff via POST /v1/loads/:id/unsplit-relay —
+ * merges two ADJACENT legs (N → N-1). `keepEventId` survives (its window
+ * extends over both legs); `mergeEventId` is absorbed and soft-deleted.
+ * `mergeEventId` may be omitted on 2-leg loads (the other leg is implied);
+ * the server requires it for 3+ legs. Merging is allowed around any
+ * handoff — no "must be the pickup leg" restriction.
  */
-export async function removeRelay(pickupEventId: string, _orgId: string): Promise<void> {
-  const { loads } = await railway.getEvent(pickupEventId);
-  const self = loads.find(l => l.id === pickupEventId) ?? loads[0];
+export async function removeRelay(
+  keepEventId: string,
+  _orgId: string,
+  mergeEventId?: string,
+): Promise<void> {
+  const { loads } = await railway.getEvent(keepEventId);
+  const self = loads.find(l => l.id === keepEventId) ?? loads[0];
   if (!self?.loadId) throw new Error("Cannot unsplit: event has no loadId");
-  if (self.relayRole !== "pickup") throw new Error("Call removeRelay from the pickup leg");
-  await railway.unsplitRelay(self.loadId, { keepEventId: pickupEventId });
+  await railway.unsplitRelay(self.loadId, {
+    keepEventId,
+    ...(mergeEventId ? { mergeEventId } : {}),
+  });
 }
 
 export interface RecentStop {
@@ -419,26 +446,39 @@ export async function searchLoads(_orgId: string, query: string): Promise<Load[]
   }
 }
 
-export async function fetchLoad(id: string, _orgId: string): Promise<Load | null> {
+/**
+ * Load detail shape: the requested leg plus, for relay loads, ALL legs of
+ * the load in leg order (including the requested one). `legs` is undefined
+ * for single-leg loads and for stale cached entries persisted before the
+ * N-leg upgrade — callers must handle both.
+ */
+export type LoadWithLegs = Load & { legs?: Load[] };
+
+export async function fetchLoad(id: string, _orgId: string): Promise<LoadWithLegs | null> {
   try {
     const { loads } = await railway.getEvent(id);
     if (loads.length === 0) return null;
     const self = loads.find(l => l.id === id) ?? loads[0];
-    const partner = loads.find(l => l.id !== self.id);
 
-    if (!partner) return self;
+    if (loads.length === 1) return self;
 
-    // Pull the partner-derived fields onto the returned Load so existing UI
-    // code (that reads load.partnerStops, load.partnerDriverName, etc.) keeps
-    // working without changes.
+    const legs = [...loads].sort(byLegIndex);
+    // Partner mirrors = the ADJACENT leg (next when one exists, else
+    // previous) so pre-N-leg readers of partnerStops/partnerDriverName/etc
+    // keep working — for a 2-leg load this is exactly the other leg.
+    const selfIdx = legs.findIndex(l => l.id === self.id);
+    const partner = legs[selfIdx + 1] ?? legs[selfIdx - 1];
+
     return {
       ...self,
-      partnerEventId:    partner.id,
-      partnerStops:      partner.stops,
-      partnerDriverName: partner.driverName,
-      partnerAssetName:  partner.assetName,
-      partnerDriverPay:  partner.driverPay,
-    } as Load;
+      legCount:          self.legCount ?? legs.length,
+      partnerEventId:    partner?.id,
+      partnerStops:      partner?.stops,
+      partnerDriverName: partner?.driverName,
+      partnerAssetName:  partner?.assetName,
+      partnerDriverPay:  partner?.driverPay,
+      legs,
+    } as LoadWithLegs;
   } catch (err) {
     console.error("fetchLoad:", err);
     return null;

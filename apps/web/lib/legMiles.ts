@@ -49,12 +49,34 @@ export function legMiles(event: Pick<CalendarEvent, 'stops' | 'loadedMiles'>): n
  * better than crediting the whole load to one asset and unfair to the
  * driver who hauled the other half. Uses cached routed miles when
  * available and falls back to haversine on a per-leg basis.
+ *
+ * Legacy pairwise form — prefer relayLegShareN for N-leg loads.
  */
 export function relayLegShare(thisLeg: CalendarEvent, partnerLeg: CalendarEvent): number {
   const a = legMiles(thisLeg);
   const b = legMiles(partnerLeg);
   if (a + b <= 0) return 0.5;
   return a / (a + b);
+}
+
+/**
+ * N-leg share (0..1) of a relay leg's revenue: this leg's miles over the
+ * sum of ALL legs' miles. `allLegs` is every leg of the load INCLUDING
+ * `thisLeg` (extra events from other loads are ignored via relayGroupId
+ * matching when present). Falls back to 1/N when the load has no usable
+ * miles. Matches the server's timeline proration exactly.
+ */
+export function relayLegShareN(
+  thisLeg: CalendarEvent,
+  allLegs: CalendarEvent[],
+): number {
+  const legs = thisLeg.relayGroupId
+    ? allLegs.filter((e) => e.relayGroupId === thisLeg.relayGroupId)
+    : allLegs;
+  if (legs.length <= 1) return 1;
+  const total = legs.reduce((sum, l) => sum + legMiles(l), 0);
+  if (total <= 0) return 1 / legs.length;
+  return legMiles(thisLeg) / total;
 }
 
 /**

@@ -8,6 +8,7 @@ import React from "react";
 import { View, Text } from "react-native";
 import Svg, { Defs, Pattern, Rect } from "react-native-svg";
 import type { Load, LoadStatus, Stop } from "./types";
+import { relayChipLabel } from "./relayLegs";
 
 // Driver app uses inline txt() helpers across files — duplicate the
 // shape here so this module doesn't depend on a shared font helper.
@@ -104,23 +105,23 @@ export function fmtStopAppt(stop?: Stop): string {
 /**
  * Time on a relay handoff stop relative to THIS driver's leg.
  *
- * The web app stores both times on the single relay stop row:
- *   - apptStart → driver 1 drop time (pickup-leg driver leaves the trailer)
- *   - apptEnd   → driver 2 pickup time (delivery-leg driver picks it up)
+ * The web app stores both times on the single relay marker row:
+ *   - apptStart → the earlier leg's drop time (driver leaves the trailer)
+ *   - apptEnd   → the later leg's pickup time (driver picks it up)
  *
  * On a load card, showing both as a range ("9a-10a") is confusing — the
- * driver only cares about THEIR own time. This helper returns just the
- * relevant one based on which leg the load is.
+ * driver only cares about THEIR own time. Direction is relative to MY
+ * leg (see lib/relayLegs.ts):
  *
- *   role='pickup'   (this driver is the pickup leg / driver 1) → drop time
- *   role='delivery' (this driver is the delivery leg / driver 2) → pickup time
+ *   'outbound' (marker legIndex — I drop here)      → drop time
+ *   'inbound'  (marker legIndex-1 — I pick up here) → pickup time
  */
 export function fmtRelayHandoffTime(
   stop: Stop | undefined,
-  role: "pickup" | "delivery",
+  direction: "inbound" | "outbound",
 ): string {
   if (!stop) return "";
-  const iso = role === "pickup"
+  const iso = direction === "outbound"
     ? stop.apptStart
     : (stop.apptEnd ?? stop.apptStart);
   if (!iso) return "";
@@ -128,13 +129,14 @@ export function fmtRelayHandoffTime(
 }
 
 /**
- * Sub-label for a relay handoff stop — "Drop" for pickup-leg drivers
- * (they're dropping the trailer at the handoff point) and "Pickup" for
- * delivery-leg drivers (they're picking it up). Pairs with the existing
- * "RELAY HANDOFF" label to form e.g. "RELAY HANDOFF · DROP · 9a".
+ * Sub-label for a relay handoff stop — "Drop" when it's MY outbound
+ * handoff (I leave the trailer there) and "Pickup" when it's MY inbound
+ * handoff (I collect it). Pairs with the existing "RELAY HANDOFF" label
+ * to form e.g. "RELAY HANDOFF · DROP · 9a". A middle (transfer) leg has
+ * one of each.
  */
-export function relayHandoffAction(role: "pickup" | "delivery"): "Drop" | "Pickup" {
-  return role === "pickup" ? "Drop" : "Pickup";
+export function relayHandoffAction(direction: "inbound" | "outbound"): "Drop" | "Pickup" {
+  return direction === "outbound" ? "Drop" : "Pickup";
 }
 
 /** "Mar 5" — short date for stop labels. */
@@ -281,20 +283,26 @@ export function NonRevChip({ size = "default" }: { size?: "default" | "small" })
 }
 
 /**
- * Pill-sized indicator for relay loads. `role` matches `Load.relayRole` —
- * "pickup" means this is the pickup leg of a relay (driver hands off),
- * "delivery" means the delivery leg (driver receives).
+ * Pill-sized indicator for relay legs — "LEG 1/2 · PICKUP",
+ * "LEG 2/3 · TRANSFER", etc. Position-based (leg i of N), so it works
+ * for any leg count; role text is derived from position via
+ * @fleetcal/types legRoleName. Pass the LegPosition from
+ * lib/relayLegs.ts `legPositionOf(load)`.
  */
 export function RelayChip({
-  role,
+  legIndex,
+  legCount,
   // `size` is kept for backwards-compatibility with existing callers
-  // but no longer changes the rendering — the chip now matches the
-  // Schedule screen's PICKUP LEG / DELIVERY LEG pill 1:1 so the same
-  // load reads consistently across Loads + Schedule.
+  // but no longer changes the rendering — the chip matches the
+  // Schedule screen's leg pill 1:1 so the same load reads
+  // consistently across Loads + Schedule.
 }: {
-  role: "pickup" | "delivery";
+  legIndex: number;
+  legCount: number;
   size?: "default" | "small";
 }) {
+  const label = relayChipLabel({ legIndex, legCount });
+  if (!label) return null;
   return (
     <View style={{
       height: 20, paddingHorizontal: 8, borderRadius: 7,
@@ -302,7 +310,7 @@ export function RelayChip({
       justifyContent: "center",
     }}>
       <Text style={[txt(800), { fontSize: 10, letterSpacing: 0.4, color: "#5b21b6" }]}>
-        {role === "pickup" ? "PICKUP LEG" : "DELIVERY LEG"}
+        {label}
       </Text>
     </View>
   );

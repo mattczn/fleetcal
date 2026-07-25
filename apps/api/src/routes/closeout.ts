@@ -337,14 +337,19 @@ closeout.get("/queue", async (c) => {
     }
     for (const [lid, legs] of byLoadId.entries()) {
       if (legs.length < 2) continue;
-      // Dedup prefers the pickup leg, so the partner of the survivor
-      // is the non-pickup leg (or the second leg when both share role).
+      // Dedup prefers the pickup leg, so the survivor's partners are
+      // every OTHER leg. With N legs the sidecar keeps its scalar wire
+      // shape by joining the other legs' drivers in leg order — the
+      // closeout cell renders the string as-is.
       const survivor = legs.find(l => l.relay_role === "pickup") ?? legs[0];
-      const partner = legs.find(l => l.id !== survivor.id);
-      if (!partner) continue;
+      const partners = legs.filter(l => l.id !== survivor.id);
+      if (partners.length === 0) continue;
+      const names = partners.map(p => p.driver_name).filter(Boolean) as string[];
       partnerByLoadId.set(lid, {
-        driverName: partner.driver_name ?? undefined,
-        assetId:    partner.asset_id   ?? undefined,
+        driverName: names.length ? names.join(" · ") : undefined,
+        // assetId keeps the FIRST partner's truck (used for the truck
+        // chip); additional trucks surface via the joined driver string.
+        assetId: partners.find(p => p.asset_id != null)?.asset_id ?? undefined,
       });
     }
   };

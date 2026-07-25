@@ -9,6 +9,8 @@ import { sanitizeTimezone, parseNaiveIsoInTz } from '@/lib/time-utils';
 import type { CalendarEvent, EventStatus, Asset } from '@/lib/types';
 import MapDrawer from './MapDrawer';
 import CopyChip from '@/components/ui/CopyChip';
+import { legPositionFor } from '@/lib/legDisplay';
+import { legLabel, legShortLabel } from '@fleetcal/types';
 import AppShell from '@/components/nav/AppShell';
 import WindowTimeline from '@/components/ui/WindowTimeline';
 import Tooltip from '@/components/ui/Tooltip';
@@ -197,6 +199,9 @@ function LoadCard({
   onHide: () => void;
 }) {
   const eldLocations = useCalendarStore(s => s.eldLocations);
+  // Full store event list — sibling-leg lookup for the relay chip's
+  // "Leg 1/3" position when the event row lacks legIndex/legCount.
+  const allEvents    = useCalendarStore(s => s.events);
   // store.calendarTimezone is the clean IANA string; sanitize is
   // defensive (handles legacy "Mountain Time (America/Denver)"-style
   // values and returns undefined for unparseable strings so
@@ -293,16 +298,21 @@ function LoadCard({
             </>
           )}
           {(!truckLoc || compact) && <div style={{ flex: 1 }} />}
-          {ev.relayGroupId && (
-            <span style={{
-              flexShrink: 0, fontSize: 11, fontWeight: 700, letterSpacing: '0.04em',
-              padding: '2px 6px', borderRadius: 6,
-              background: 'rgba(255,255,255,0.18)', color: white,
-              border: '1px solid rgba(255,255,255,0.3)', whiteSpace: 'nowrap',
-            }}>
-              ⇄ {ev.relayRole === 'pickup' ? 'Pickup' : ev.relayRole === 'delivery' ? 'Delivery' : 'Relay'}
-            </span>
-          )}
+          {ev.relayGroupId && (() => {
+            const pos = legPositionFor(ev, allEvents);
+            return (
+              <span
+                title={pos ? legLabel(pos.index, pos.count) : 'Relay leg'}
+                style={{
+                  flexShrink: 0, fontSize: 11, fontWeight: 700, letterSpacing: '0.04em',
+                  padding: '2px 6px', borderRadius: 6,
+                  background: 'rgba(255,255,255,0.18)', color: white,
+                  border: '1px solid rgba(255,255,255,0.3)', whiteSpace: 'nowrap',
+                }}>
+                ⇄ {pos ? legShortLabel(pos.index, pos.count) : 'Relay'}
+              </span>
+            );
+          })()}
           {ev.driverName && (
             <>
               <User size={12} style={{ color: whiteMuted, flexShrink: 0 }} />

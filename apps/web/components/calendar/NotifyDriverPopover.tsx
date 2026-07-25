@@ -45,7 +45,7 @@ interface ActionDef {
   push: (load: CalendarEvent | undefined) => { title: string; body: string };
   /** Optional gate — hide this action from the popover when it doesn't
    *  apply to the current event. Used for upload_handoff which only
-   *  makes sense on a relay pickup leg. */
+   *  makes sense on a non-final relay leg (pickup / transfer). */
   showFor?: (load: CalendarEvent | undefined) => boolean;
 }
 
@@ -126,10 +126,10 @@ const ACTIONS: ActionDef[] = [
     kind: 'upload_handoff', label: 'Report handoff',
     description: 'Prompt driver to upload trailer/paperwork photos + drop a pin.',
     icon: MapPinned,
-    // Relay pickup leg only — that's the driver who's about to drop
-    // the trailer at the handoff point. The relay delivery leg
-    // (downstream driver) doesn't have a trailer to report.
-    showFor: (load) => load?.relayRole === 'pickup',
+    // Any NON-FINAL relay leg (pickup or transfer) — those drivers
+    // drop the trailer at a handoff point. The final delivery leg
+    // (last driver) doesn't have a handoff to report.
+    showFor: (load) => load?.relayRole === 'pickup' || load?.relayRole === 'transfer',
     push: (load) => ({
       title: 'Trailer Handoff',
       body:  `${routeLabel(load)} — Upload photos and pin where you left the trailer.`,

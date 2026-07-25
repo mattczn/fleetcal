@@ -46,7 +46,7 @@ const STOP_COLS =
 
 const EVENT_COLS =
   "id,asset_id,driver_id,driver_name,title,start,end,status,priority," +
-  "notes,driver_pay,loaded_miles,relay_role,event_kind,non_revenue_type,trailer_id," +
+  "notes,driver_pay,loaded_miles,relay_role,leg_index,event_kind,non_revenue_type,trailer_id," +
   "trailer_type,deleted_at,load_id,created_at,updated_at," +
   "confirmed_at,confirmed_by,confirm_reminder_sent_at," +
   "trailer_dropoff_lat,trailer_dropoff_lng,trailer_dropoff_at," +
@@ -638,52 +638,69 @@ driver.get("/loads/:id", async (c) => {
 
   const [load] = buildLoads([ev], stopsByEvent, assetsById, trailersById);
 
+  // Relay legs — fetch ALL other legs of this load (leg order) up front so
+  // both the route cache and the partner mirrors know this leg's position.
+  type PartnerLegRow = {
+    id: string; driver_name: string | null; leg_index: number | null;
+    start: string | null;
+    trailer_dropoff_lat: number | null;
+    trailer_dropoff_lng: number | null;
+    trailer_dropoff_at:  string | null;
+    trailer_dropoff_address: string | null;
+  };
+  let otherLegs: PartnerLegRow[] = [];
+  if (loadRow && (loadRow as { id?: string }).id && ev.relay_role) {
+    const partnerLoadId = (loadRow as { id: string }).id;
+    const { data: partnersRaw } = await supabase
+      .from("events")
+      .select("id, driver_name, leg_index, start, trailer_dropoff_lat, trailer_dropoff_lng, trailer_dropoff_at, trailer_dropoff_address")
+      .eq("load_id", partnerLoadId)
+      .eq("org_id", orgId)
+      .neq("id", id)
+      .is("deleted_at", null)
+      .order("leg_index", { ascending: true })
+      .order("start", { ascending: true });
+    otherLegs = (partnersRaw ?? []) as unknown as PartnerLegRow[];
+  }
+  const legCount = otherLegs.length + 1;
+  if (otherLegs.length > 0) load.legCount = legCount;
+
   // Warm the route-geometry cache so the driver RouteMap draws from the
   // stored polyline instead of calling Google Directions on the device.
   const routeCache = await ensureEventRouteCached(id, stopsByEvent.get(id) ?? [], {
     routePolyline: load.routePolyline,
     routeStopsKey: (ev.route_stops_key as string | null) ?? null,
     loadedMiles:   load.loadedMiles ?? null,
-  }, load.relayRole ?? null);
+  }, load.relayRole ? { legIndex: load.legIndex ?? 0, legCount } : null);
   load.routePolyline = routeCache.routePolyline ?? undefined;
   load.loadedMiles   = routeCache.loadedMiles ?? undefined;
 
-  // Relay partner — same load_id, different event id. Surface stops + driver
-  // name so the driver knows where their leg hands off (or starts from).
-  // Also surface the partner's trailer-dropoff pin so the delivery driver
-  // can find the trailer at the handoff lot.
-  if (loadRow && (loadRow as { id?: string }).id && ev.relay_role) {
-    const partnerLoadId = (loadRow as { id: string }).id;
-    const { data: partner } = await supabase
-      .from("events")
-      .select("id, driver_name, trailer_dropoff_lat, trailer_dropoff_lng, trailer_dropoff_at, trailer_dropoff_address")
-      .eq("load_id", partnerLoadId)
-      .eq("org_id", orgId)
-      .neq("id", id)
-      .is("deleted_at", null)
-      .maybeSingle();
-    if (partner) {
-      const partnerEv = partner as unknown as {
-        id: string; driver_name: string | null;
-        trailer_dropoff_lat: number | null;
-        trailer_dropoff_lng: number | null;
-        trailer_dropoff_at:  string | null;
-        trailer_dropoff_address: string | null;
-      };
-      const { data: partnerStops } = await supabase
-        .from("stops")
-        .select(STOP_COLS)
-        .eq("event_id", partnerEv.id);
-      load.partnerEventId   = partnerEv.id;
-      load.partnerDriverName = partnerEv.driver_name ?? undefined;
-      load.partnerStops      = ((partnerStops ?? []) as unknown as StopRow[])
-        .map(rowToStop)
-        .sort((a, b) => a.sequence - b.sequence);
-      load.partnerTrailerDropoffLat     = partnerEv.trailer_dropoff_lat ?? undefined;
-      load.partnerTrailerDropoffLng     = partnerEv.trailer_dropoff_lng ?? undefined;
-      load.partnerTrailerDropoffAt      = partnerEv.trailer_dropoff_at  ?? undefined;
-      load.partnerTrailerDropoffAddress = partnerEv.trailer_dropoff_address ?? undefined;
-    }
+  // Partner mirrors. The driver-app cares about who hands the trailer TO
+  // them (previous leg — that's whose dropoff pin they need) and who they
+  // hand off to (next leg). partner* fields mirror the ADJACENT legs:
+  // partnerEventId/DriverName = next leg when there is one, else previous
+  // (matching the old 2-leg semantics where the pickup leg's partner is
+  // the delivery leg and vice versa); the trailer-dropoff pin always
+  // mirrors the PREVIOUS leg, since that's the driver who dropped for us.
+  if (otherLegs.length > 0) {
+    const myIdx = load.legIndex ?? 0;
+    const nextLeg = otherLegs.find((l) => (l.leg_index ?? 0) === myIdx + 1);
+    const prevLeg = otherLegs.find((l) => (l.leg_index ?? 0) === myIdx - 1);
+    const partnerEv = nextLeg ?? prevLeg ?? otherLegs[0];
+    const { data: partnerStops } = await supabase
+      .from("stops")
+      .select(STOP_COLS)
+      .eq("event_id", partnerEv.id);
+    load.partnerEventId    = partnerEv.id;
+    load.partnerDriverName = partnerEv.driver_name ?? undefined;
+    load.partnerStops      = ((partnerStops ?? []) as unknown as StopRow[])
+      .map(rowToStop)
+      .sort((a, b) => a.sequence - b.sequence);
+    const pinLeg = prevLeg ?? partnerEv;
+    load.partnerTrailerDropoffLat     = pinLeg.trailer_dropoff_lat ?? undefined;
+    load.partnerTrailerDropoffLng     = pinLeg.trailer_dropoff_lng ?? undefined;
+    load.partnerTrailerDropoffAt      = pinLeg.trailer_dropoff_at  ?? undefined;
+    load.partnerTrailerDropoffAddress = pinLeg.trailer_dropoff_address ?? undefined;
   }
 
   // documentCounts is denormalized on loads.document_counts and read
@@ -1551,6 +1568,7 @@ interface DocRow {
   mime_type: string | null;
   size_bytes: number | null;
   kind: string;
+  handoff_index: number | null;
   uploaded_at: string;
   uploaded_by_driver_id: number | null;
   notes: string | null;
@@ -1565,6 +1583,7 @@ function rowToDoc(r: DocRow) {
     mimeType:     r.mime_type ?? undefined,
     sizeBytes:    r.size_bytes ?? undefined,
     kind:         r.kind,
+    handoffIndex: r.handoff_index ?? undefined,
     uploadedAt:   r.uploaded_at,
     uploadedByDriverId: r.uploaded_by_driver_id ?? undefined,
     notes:        r.notes ?? undefined,
@@ -1695,14 +1714,22 @@ driver.post("/loads/:id/documents", async (c) => {
   const found = await loadDriverEvent(id, driverId, orgId);
   if (!found || found.row === null) return c.json({ error: "forbidden" }, 403);
 
-  let body: { file?: File; kind?: string };
-  try { body = await c.req.parseBody() as { file?: File; kind?: string }; }
+  let body: { file?: File; kind?: string; handoffIndex?: string };
+  try { body = await c.req.parseBody() as { file?: File; kind?: string; handoffIndex?: string }; }
   catch (err) {
     console.error("[POST /v1/driver/loads/:id/documents] parseBody:", err);
     return c.json({ error: "validation_failed", errors: ["multipart parse failed"] }, 400);
   }
   const file = body.file;
   const kind = (body.kind ?? "other").toString();
+  // relay_handoff docs are keyed to a specific handoff (0-based ordinal of
+  // the relay marker within the load). Optional: omitted = legacy
+  // load-level photo, shown on every handoff.
+  const handoffIndexRaw = body.handoffIndex != null ? Number(body.handoffIndex) : null;
+  const handoffIndex =
+    kind === "relay_handoff" && handoffIndexRaw != null && Number.isInteger(handoffIndexRaw) && handoffIndexRaw >= 0
+      ? handoffIndexRaw
+      : null;
   if (!file || typeof file === "string") {
     return c.json({ error: "validation_failed", errors: ["file required"] }, 400);
   }
@@ -1803,6 +1830,7 @@ driver.post("/loads/:id/documents", async (c) => {
       mime_type:             uploadMime || null,
       size_bytes:            bytes.length,
       kind,
+      handoff_index:         handoffIndex,
       uploaded_by_driver_id: driverId,
     } as never)
     .select("*")
@@ -2098,18 +2126,17 @@ driver.get("/loads/:id/truck-location", async (c) => {
   });
 });
 
-// POST /v1/driver/events/:id/trailer-dropoff — pickup-leg driver
+// POST /v1/driver/events/:id/trailer-dropoff — a dropping driver
 // stores their phone's GPS coords as the actual trailer-drop location
-// at a relay handoff. The delivery-leg driver reads this back via the
+// at a relay handoff. The next leg's driver reads this back via the
 // partnerTrailerDropoff* fields on their load detail.
 //
 // Body: { lat: number, lng: number }
 //
-// Authorization: the event must be assigned to the calling driver
-// AND have relay_role='pickup' — delivery-leg drivers can't save a
-// dropoff because they're not the one dropping anything. Non-relay
-// events get the same forbidden response; this endpoint is
-// relay-pickup-only.
+// Authorization: the event must be assigned to the calling driver AND
+// be a NON-FINAL relay leg (pickup or transfer) — the final delivery
+// leg's driver can't save a dropoff because they're not the one
+// dropping anything. Non-relay events get the same forbidden response.
 driver.post("/events/:id/trailer-dropoff", async (c) => {
   const driverId = c.get("driverId");
   const orgId    = c.get("orgId");
@@ -2126,7 +2153,7 @@ driver.post("/events/:id/trailer-dropoff", async (c) => {
     return c.json({ error: "validation_failed", errors: ["lat and lng required (numbers)"] }, 400);
   }
 
-  // Verify the event belongs to this driver + is a relay pickup leg.
+  // Verify the event belongs to this driver + is a non-final relay leg.
   const { data: ev } = await supabase
     .from("events")
     .select("id, driver_id, relay_role")
@@ -2136,8 +2163,8 @@ driver.post("/events/:id/trailer-dropoff", async (c) => {
   const evRow = ev as { id: string; driver_id: number | null; relay_role: string | null } | null;
   if (!evRow) return c.json({ error: "not_found" }, 404);
   if (evRow.driver_id !== driverId) return c.json({ error: "forbidden" }, 403);
-  if (evRow.relay_role !== "pickup") {
-    return c.json({ error: "not_relay_pickup", detail: "Trailer dropoff is only saved on relay pickup legs." }, 400);
+  if (evRow.relay_role !== "pickup" && evRow.relay_role !== "transfer") {
+    return c.json({ error: "not_relay_pickup", detail: "Trailer dropoff is only saved on legs that drop at a handoff (pickup/transfer)." }, 400);
   }
 
   const now = new Date().toISOString();

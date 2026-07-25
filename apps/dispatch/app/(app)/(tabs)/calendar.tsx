@@ -226,7 +226,7 @@ function LoadBlock({
       {(isNonRev || p.load.relayRole) ? (
         <View style={{ flexDirection: "row", gap: 4, marginTop: 3, flexWrap: "wrap" }}>
           {isNonRev ? <NonRevChip size="small" /> : null}
-          {p.load.relayRole ? <RelayChip role={p.load.relayRole} size="small" /> : null}
+          {p.load.relayRole ? <RelayChip load={p.load} size="small" /> : null}
         </View>
       ) : null}
       {p.height >= 48 && p.load.driverName ? (
@@ -285,7 +285,7 @@ function ScheduleCard({ load, assetColor }: { load: Load; assetColor?: string })
           {load.title}
         </Text>
         {isNonRev ? <NonRevChip /> : null}
-        {load.relayRole ? <RelayChip role={load.relayRole} /> : null}
+        {load.relayRole ? <RelayChip load={load} /> : null}
       </View>
       {load.driverName ? (
         <Text style={[txt(600), { fontSize: 12, color: "#3c4043", marginTop: 3 }]} numberOfLines={1}>
@@ -589,7 +589,7 @@ function TimelineLoadBlock({
         <Text style={[txt(800), { fontSize: 12, color: titleFg, flex: 1 }]} numberOfLines={1}>
           {p.load.title}
         </Text>
-        {p.load.relayRole ? <RelayChip role={p.load.relayRole} size="small" /> : null}
+        {p.load.relayRole ? <RelayChip load={p.load} size="small" /> : null}
         {isNonRev ? <NonRevChip size="small" /> : null}
       </View>
       {p.load.driverName ? (

@@ -62,7 +62,10 @@ export function printPayroll(opts: {
     // The on-screen PayrollView keeps the miles column for dispatchers.
     const loadRows = d.loads.map(l => {
       const date = parseDate(l.start).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-      const leg  = l.relayRole === 'pickup' ? 'Pickup' : l.relayRole === 'delivery' ? 'Delivery' : 'Both';
+      const leg  = l.relayRole === 'pickup' ? 'Pickup'
+                 : l.relayRole === 'transfer' ? 'Transfer'
+                 : l.relayRole === 'delivery' ? 'Delivery'
+                 : 'Both';
       return `<tr>
         <td>${date}</td>
         <td>${leg}</td>

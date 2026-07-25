@@ -12,6 +12,7 @@ import {
   fmtTimeRangeShort, fmtStopAppt, fmtShortDate, fmtScheduleType,
   fmtRelayHandoffTime, relayHandoffAction,
 } from "@/lib/loadCard";
+import { legPositionOf, splitStopsForLeg, type LegStopWindow } from "@/lib/relayLegs";
 import { f, SP, RADIUS } from "@/lib/theme";
 import { useTheme } from "@/lib/ThemeProvider";
 
@@ -19,36 +20,29 @@ type Props = { load: Load };
 
 /**
  * The "from" / "to" of this driver's leg — handles relays correctly.
+ * `load.stops` contains the WHOLE load (origin → handoffs → final
+ * delivery) on every leg of a relay, so we slice out this leg's window
+ * (between its two boundary relay markers — see lib/relayLegs.ts) and
+ * use its first/last stop as the card endpoints:
  *   - Single load:  first stop is pickup, last is delivery.
- *   - Pickup leg:   first stop is pickup, destination is the relay handoff.
- *   - Delivery leg: origin is the relay handoff, last stop is delivery.
- *
- * `load.stops` contains the WHOLE load (origin → handoff → final
- * delivery) for both legs of a relay, so we have to swap in the
- * relay stop for the leg's destination (pickup leg) or origin
- * (delivery leg). Matches the leg-aware Schedule logic on 2026-06-22.
+ *   - First leg:    origin is the real pickup, destination is my
+ *                   outbound relay marker.
+ *   - Middle leg:   BOTH endpoints are relay markers.
+ *   - Final leg:    origin is my inbound relay marker, last stop is
+ *                   the real delivery.
  */
-function originStop(load: Load): Stop | undefined {
-  if (load.relayRole === "delivery") {
-    const relay = load.stops.find((s) => s.type === "relay");
-    if (relay) return relay;
-  }
-  return load.stops[0];
+function legWindowOf(load: Load): LegStopWindow | null {
+  const pos = legPositionOf(load);
+  if (!pos) return null;
+  return splitStopsForLeg(load.stops, pos.legIndex);
 }
-function destinationStop(load: Load): Stop | undefined {
-  if (load.relayRole === "pickup") {
-    const relay = load.stops.find((s) => s.type === "relay");
-    if (relay) return relay;
-  }
-  return load.stops[load.stops.length - 1];
-}
-function originLabel(s: Stop | undefined, isRelayDelivery: boolean): string {
-  if (isRelayDelivery) return "RELAY HANDOFF";
+function originLabel(s: Stop | undefined, startsAtHandoff: boolean): string {
+  if (startsAtHandoff) return "RELAY HANDOFF";
   if (s?.type === "pickup") return "PICKUP";
   return "ORIGIN";
 }
-function destLabel(s: Stop | undefined, isRelayPickup: boolean): string {
-  if (isRelayPickup) return "RELAY HANDOFF";
+function destLabel(s: Stop | undefined, endsAtHandoff: boolean): string {
+  if (endsAtHandoff) return "RELAY HANDOFF";
   if (s?.type === "delivery" || s?.type === "drop_hook") return "DELIVERY";
   return "DESTINATION";
 }
@@ -96,10 +90,14 @@ export function LoadCard({ load }: Props) {
   const session = useDriverSession();
   const driver = session.status === "matched" ? session.driver : null;
 
-  const pickup = originStop(load);
-  const delivery = destinationStop(load);
-  const isRelayPickup = load.relayRole === "pickup";
-  const isRelayDelivery = load.relayRole === "delivery";
+  const legPos = legPositionOf(load);
+  const win    = legWindowOf(load);
+  const pickup   = win ? win.mine[0]                   : load.stops[0];
+  const delivery = win ? win.mine[win.mine.length - 1] : load.stops[load.stops.length - 1];
+  // Leg starts/ends at a relay marker — drives the RELAY HANDOFF labels
+  // + purple tinting. A middle (transfer) leg has both.
+  const startsAtHandoff = win?.inboundMarkerIdx  != null;
+  const endsAtHandoff   = win?.outboundMarkerIdx != null;
   const isNonRev = load.eventKind === "non_revenue";
   // Caution chip when this load still needs the driver's run-confirmation —
   // mirrors the green Confirm banner inside the load detail so the driver
@@ -110,11 +108,11 @@ export function LoadCard({ load }: Props) {
   // Pending dispatcher nudges (load_notifications WHERE acknowledged_at IS NULL).
   const pendingCount = (load.pendingNotificationKinds ?? []).length;
 
-  // Delivered-without-POD warning (skips TONU, non-rev, and the relay
-  // pickup leg, which isn't responsible for the POD).
+  // Delivered-without-POD warning (skips TONU, non-rev, and every
+  // non-final relay leg — only the final leg is responsible for the POD).
   const podCount = load.documentCounts?.pod ?? 0;
   const missingPaperwork =
-    load.status === "delivered" && !load.isTonu && !isNonRev && !isRelayPickup && podCount === 0;
+    load.status === "delivered" && !load.isTonu && !isNonRev && !endsAtHandoff && podCount === 0;
 
   const { data: orgSettings } = useQuery({
     queryKey: ["org-settings", driver?.orgId],
@@ -132,12 +130,14 @@ export function LoadCard({ load }: Props) {
   // it unconditionally.
   const metaLeft = fmtTimeRangeShort(load);
 
-  // Eyebrow trailing text (date + appt window) per leg.
-  const originExtra = isRelayDelivery
-    ? `${relayHandoffAction("delivery").toUpperCase()}${fmtRelayHandoffTime(pickup, "delivery") ? ` · ${fmtRelayHandoffTime(pickup, "delivery")}` : ""}`
+  // Eyebrow trailing text (date + appt window) per leg. Handoff endpoints
+  // show only THIS driver's time on the marker (inbound → pickup time,
+  // outbound → drop time) instead of the confusing two-driver range.
+  const originExtra = startsAtHandoff
+    ? `${relayHandoffAction("inbound").toUpperCase()}${fmtRelayHandoffTime(pickup, "inbound") ? ` · ${fmtRelayHandoffTime(pickup, "inbound")}` : ""}`
     : fmtStopAppt(pickup);
-  const destExtra = isRelayPickup
-    ? `${relayHandoffAction("pickup").toUpperCase()}${fmtRelayHandoffTime(delivery, "pickup") ? ` · ${fmtRelayHandoffTime(delivery, "pickup")}` : ""}`
+  const destExtra = endsAtHandoff
+    ? `${relayHandoffAction("outbound").toUpperCase()}${fmtRelayHandoffTime(delivery, "outbound") ? ` · ${fmtRelayHandoffTime(delivery, "outbound")}` : ""}`
     : fmtStopAppt(delivery);
 
   return (
@@ -186,7 +186,7 @@ export function LoadCard({ load }: Props) {
             </View>
           ) : null}
           {isNonRev ? <NonRevChip size="small" /> : null}
-          {load.relayRole ? <RelayChip role={load.relayRole} size="small" /> : null}
+          {legPos ? <RelayChip legIndex={legPos.legIndex} legCount={legPos.legCount} size="small" /> : null}
         </View>
       </View>
 
@@ -221,19 +221,19 @@ export function LoadCard({ load }: Props) {
       {/* Route timeline */}
       <View style={{ flexDirection: "row", gap: 12, padding: SP.cpad }}>
         <View style={{ alignItems: "center", paddingTop: 3 }}>
-          <RouteNode kind="origin" />
+          <RouteNode kind={startsAtHandoff ? "relay" : "origin"} />
           <View style={{ width: 2.5, flex: 1, minHeight: 26, marginVertical: 4, borderRadius: 2, borderLeftWidth: 2.5, borderColor: C.borderStrong, borderStyle: "dashed" }} />
-          <RouteNode kind={isRelayPickup ? "relay" : destKind === "relay" ? "relay" : "dest"} />
+          <RouteNode kind={endsAtHandoff ? "relay" : destKind === "relay" ? "relay" : "dest"} />
         </View>
 
         <View style={{ flex: 1, gap: 16 }}>
           {/* origin */}
           <View>
             <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 5 }}>
-              <Text style={[f(800), { fontSize: 10, letterSpacing: 0.5, color: isRelayDelivery ? C.purpleInk : C.greenInk }]}>
-                {originLabel(pickup, isRelayDelivery)} · {fmtShortDate(load.start)}{originExtra ? ` · ${originExtra}` : ""}
+              <Text style={[f(800), { fontSize: 10, letterSpacing: 0.5, color: startsAtHandoff ? C.purpleInk : C.greenInk }]}>
+                {originLabel(pickup, startsAtHandoff)} · {fmtShortDate(load.start)}{originExtra ? ` · ${originExtra}` : ""}
               </Text>
-              {!isRelayDelivery ? <MiniSched stop={pickup} /> : null}
+              {!startsAtHandoff ? <MiniSched stop={pickup} /> : null}
             </View>
             <Text style={[f(700), { fontSize: 15, color: C.t1, marginTop: 2, letterSpacing: -0.2 }]} numberOfLines={1}>
               {locLabel(pickup)}
@@ -246,10 +246,10 @@ export function LoadCard({ load }: Props) {
           {/* destination */}
           <View>
             <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 5 }}>
-              <Text style={[f(800), { fontSize: 10, letterSpacing: 0.5, color: isRelayPickup ? C.purpleInk : C.redInk }]}>
-                {destLabel(delivery, isRelayPickup)} · {fmtShortDate(load.end)}{destExtra ? ` · ${destExtra}` : ""}
+              <Text style={[f(800), { fontSize: 10, letterSpacing: 0.5, color: endsAtHandoff ? C.purpleInk : C.redInk }]}>
+                {destLabel(delivery, endsAtHandoff)} · {fmtShortDate(load.end)}{destExtra ? ` · ${destExtra}` : ""}
               </Text>
-              {!isRelayPickup && destKind !== "relay" ? <MiniSched stop={delivery} /> : null}
+              {!endsAtHandoff && destKind !== "relay" ? <MiniSched stop={delivery} /> : null}
             </View>
             <Text style={[f(700), { fontSize: 15, color: C.t1, marginTop: 2, letterSpacing: -0.2 }]} numberOfLines={1}>
               {locLabel(delivery)}

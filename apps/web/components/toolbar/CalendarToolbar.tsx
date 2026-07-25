@@ -17,6 +17,8 @@ import AssetsModal from '@/components/sidebar/AssetsModal';
 import RecentlyDeletedDetailModal from '@/components/calendar/RecentlyDeletedDetailModal';
 import SafetyEventsBell from '@/components/nav/SafetyEventsBell';
 import type { CalendarEvent } from '@/lib/types';
+import { legPositionFor } from '@/lib/legDisplay';
+import { legLabel } from '@fleetcal/types';
 
 function formatToolbarDate(d: Date, viewMode: 'day' | 'week'): string {
   if (viewMode === 'day') {
@@ -482,16 +484,21 @@ export default function CalendarToolbar() {
                       : { label: 'Cancelled', bg: '#fef3c7', fg: '#92400e' })
                   : null;
                 // Relay leg badge — search results don't visually
-                // distinguish pickup-leg vs delivery-leg of the same
-                // load, which makes the two rows look like duplicates.
-                // Show the leg as a purple chip (matches the calendar
-                // chip's relay styling: bg #f5f3ff, fg #7c3aed) so the
-                // dispatcher can pick the right leg at a glance.
-                const relayLeg = ev.relayRole === 'pickup'
-                  ? { label: 'Pickup Leg' }
-                  : ev.relayRole === 'delivery'
-                    ? { label: 'Delivery Leg' }
+                // distinguish the legs of the same load, which makes
+                // the N rows look like duplicates. Show the leg as a
+                // purple chip (matches the calendar chip's relay
+                // styling: bg #f5f3ff, fg #7c3aed) so the dispatcher
+                // can pick the right leg at a glance. Label comes from
+                // leg position ("Leg 1 · Pickup"); role-only fallback
+                // when the row predates legIndex/legCount.
+                const relayLegLabel = (() => {
+                  const pos = legPositionFor(ev, searchResults);
+                  if (pos) return legLabel(pos.index, pos.count);
+                  return ev.relayRole
+                    ? `${ev.relayRole.charAt(0).toUpperCase()}${ev.relayRole.slice(1)} Leg`
                     : null;
+                })();
+                const relayLeg = relayLegLabel ? { label: relayLegLabel } : null;
                 return (
                   <button key={ev.id} onClick={() => handleSelectResult(ev.id, ev.start)}
                     className="w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors"

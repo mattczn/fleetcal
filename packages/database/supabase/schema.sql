@@ -60,7 +60,8 @@ CREATE TABLE load_documents (
   kind                  text NOT NULL DEFAULT 'other',
   uploaded_at           timestamptz NOT NULL DEFAULT now(),
   uploaded_by_driver_id bigint REFERENCES drivers(id) ON DELETE SET NULL,
-  notes                 text
+  notes                 text,
+  handoff_index         integer                 -- relay_handoff docs: which handoff (20260720)
 );
 
 -- ── Push notification tokens (driver mobile app) ─────────
@@ -85,8 +86,9 @@ CREATE TABLE events (
   driver_name          text,
   driver_id            bigint REFERENCES drivers(id) ON DELETE SET NULL,
   status               text NOT NULL DEFAULT 'scheduled',
-  relay_group_id       uuid,
-  relay_role           text,                   -- 'pickup' | 'delivery'
+  -- relay_group_id was DROPPED (20260502); legs group by load_id.
+  relay_role           text,                   -- 'pickup' | 'delivery' (legacy; derived from leg_index)
+  leg_index            integer NOT NULL DEFAULT 0,  -- ordinal leg within the load (20260720)
 
   -- Load Info
   load_num             text,
@@ -204,7 +206,7 @@ CREATE INDEX idx_events_org         ON events(org_id);
 CREATE INDEX idx_events_asset       ON events(asset_id);
 CREATE INDEX idx_events_start       ON events(org_id, start);
 CREATE INDEX idx_events_active      ON events(org_id, asset_id) WHERE deleted_at IS NULL;
-CREATE INDEX idx_events_relay       ON events(relay_group_id) WHERE relay_group_id IS NOT NULL;
+CREATE INDEX idx_events_load_leg    ON events(load_id, leg_index) WHERE load_id IS NOT NULL;
 CREATE INDEX idx_events_org_driver  ON events(org_id, driver_id) WHERE driver_id IS NOT NULL;
 CREATE INDEX idx_events_pending_confirm_reminder ON events(start)
   WHERE status = 'scheduled' AND deleted_at IS NULL

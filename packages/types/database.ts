@@ -950,6 +950,7 @@ export type Database = {
           priority: boolean
           rate_con_pdf: string | null
           ref_nums: string | null
+          leg_index: number
           relay_group_id: string | null
           relay_role: string | null
           route_polyline: string | null
@@ -991,6 +992,7 @@ export type Database = {
           priority?: boolean
           rate_con_pdf?: string | null
           ref_nums?: string | null
+          leg_index?: number
           relay_group_id?: string | null
           relay_role?: string | null
           route_polyline?: string | null
@@ -1032,6 +1034,7 @@ export type Database = {
           priority?: boolean
           rate_con_pdf?: string | null
           ref_nums?: string | null
+          leg_index?: number
           relay_group_id?: string | null
           relay_role?: string | null
           route_polyline?: string | null
@@ -1276,6 +1279,7 @@ export type Database = {
         Row: {
           event_id: string
           file_name: string
+          handoff_index: number | null
           id: string
           invoice_id: string | null
           kind: string
@@ -1291,6 +1295,7 @@ export type Database = {
         Insert: {
           event_id: string
           file_name: string
+          handoff_index?: number | null
           id?: string
           invoice_id?: string | null
           kind?: string
@@ -1306,6 +1311,7 @@ export type Database = {
         Update: {
           event_id?: string
           file_name?: string
+          handoff_index?: number | null
           id?: string
           invoice_id?: string | null
           kind?: string

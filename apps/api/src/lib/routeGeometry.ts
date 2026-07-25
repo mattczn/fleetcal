@@ -18,7 +18,7 @@
  * short (well under the Static Maps URL length cap).
  */
 
-import type { Stop, RelayRole } from "@fleetcal/types";
+import type { Stop } from "@fleetcal/types";
 import { env } from "./env.js";
 import { supabase } from "./supabase.js";
 
@@ -54,24 +54,40 @@ function geocodedCoords(stops: Stop[]): { lat: number; lng: number }[] {
     .map((s) => ({ lat: s.lat as number, lng: s.lng as number }));
 }
 
+/** Which leg of its load an event is: 0-based position + total legs. */
+export interface LegPosition {
+  legIndex: number;
+  legCount: number;
+}
+
 /**
  * Stops that belong to this leg. Relay legs store the FULL merged stop
- * list on BOTH events; the relay-type stop is the handoff cutoff. The
- * pickup leg routes up to and including the relay, the delivery leg from
- * the relay onward — so each leg's `loaded_miles` reflects only the
- * distance that leg actually hauled (and the two legs sum to the whole
- * load instead of double-counting it). Mirrors the client's per-leg calc
- * in EventModal.tsx so server + client agree. Non-relay events (no relay
- * stop) route through every stop unchanged.
+ * list on EVERY event; relay-type stops are the handoff markers — marker
+ * i divides leg i from leg i+1. Leg i routes from marker i-1 (or the
+ * first stop) through marker i (or the last stop), both markers included
+ * as route endpoints, so each leg's `loaded_miles` reflects only the
+ * distance that leg actually hauled and all legs sum to the whole load.
+ * Mirrors the client's per-leg calc in EventModal.tsx so server + client
+ * agree. Non-relay events (no relay stop) route through every stop
+ * unchanged.
  */
-function legStops(stops: Stop[], relayRole: RelayRole | null): Stop[] {
-  const relayIdx = stops.findIndex((s) => s.type === "relay");
-  if (relayIdx === -1) return stops;
-  if (relayRole === "pickup") return stops.slice(0, relayIdx + 1);
-  if (relayRole === "delivery") return stops.slice(relayIdx);
-  // Relay marker present but this event isn't tagged as a leg — drop the
-  // marker and route the remaining real stops.
-  return stops.filter((s) => s.type !== "relay");
+function legStops(stops: Stop[], leg: LegPosition | null): Stop[] {
+  const markerIdxs: number[] = [];
+  stops.forEach((s, i) => {
+    if (s.type === "relay") markerIdxs.push(i);
+  });
+  if (markerIdxs.length === 0) return stops;
+  if (!leg) {
+    // Relay markers present but this event isn't tagged as a leg — drop
+    // the markers and route the remaining real stops.
+    return stops.filter((s) => s.type !== "relay");
+  }
+  const startIdx = leg.legIndex <= 0 ? 0 : (markerIdxs[leg.legIndex - 1] ?? 0);
+  const endIdx =
+    leg.legIndex >= markerIdxs.length
+      ? stops.length - 1
+      : markerIdxs[leg.legIndex];
+  return stops.slice(startIdx, endIdx + 1);
 }
 
 /** Call Mapbox Directions for the simplified driving route through `coords`. */
@@ -111,11 +127,11 @@ export async function ensureEventRouteCached(
   eventId: string,
   stops: Stop[],
   current: CurrentRoute,
-  relayRole: RelayRole | null = null,
+  leg: LegPosition | null = null,
 ): Promise<CachedRoute> {
   const storedPolyline = current.routePolyline ?? null;
   const storedMiles = current.loadedMiles ?? null;
-  const coords = geocodedCoords(legStops(stops, relayRole));
+  const coords = geocodedCoords(legStops(stops, leg));
 
   // Not routable (fewer than 2 geocoded stops). Clear a stale polyline if one
   // lingers from when the event previously had coordinates; otherwise no-op.

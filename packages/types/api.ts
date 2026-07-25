@@ -60,8 +60,10 @@ export interface CreateLoadRequestLoad {
 
 /**
  * Per-event (per-leg) fields. For a single-event load, send one entry.
- * For a relay load, send two — both with `relayRole` set, one 'pickup'
- * and one 'delivery'.
+ * For a relay load, send one entry per leg in leg order — the server
+ * assigns leg_index from array position and derives relay_role
+ * (first='pickup', last='delivery', middle='transfer'). An explicit
+ * `relayRole` is accepted for back-compat but position wins.
  */
 export interface CreateLoadRequestEvent {
   title: string;
@@ -71,7 +73,7 @@ export interface CreateLoadRequestEvent {
   driverId?: number;
   driverName?: string;
   status?: LoadStatus;          // defaults to 'scheduled'
-  relayRole?: RelayRole;        // required if events.length === 2
+  relayRole?: RelayRole;        // legacy hint; derived from position when multi-leg
   trailerId?: number;
   trailerType?: string;
   driverPay?: number;
@@ -83,7 +85,7 @@ export interface CreateLoadRequestEvent {
 
 export interface CreateLoadRequest {
   load: CreateLoadRequestLoad;
-  events: CreateLoadRequestEvent[]; // 1 or 2 entries
+  events: CreateLoadRequestEvent[]; // 1..N entries, in leg order
 }
 
 /**
@@ -192,50 +194,65 @@ export interface UpdateEventResponse {
 // ── POST /v1/loads/:id/split-relay ──────────────────────────────────────
 
 /**
- * Convert a single-event load into a relay (2-event) load.
+ * Split ONE leg of a load into two, adding a handoff (N legs → N+1).
  *
- * The existing event becomes the pickup leg (gets relay_role='pickup' and
- * its end clamped to `pickupEnd`). A new event is created as the delivery
- * leg with `relay_role='delivery'` and the supplied delivery scheduling +
- * driver/asset assignment. Stops are partitioned by `relayStopIndex`:
- * indices [0..relayStopIndex] go to the pickup leg, [relayStopIndex+1..end]
- * go to the delivery leg. The relay handoff stop is typically at index
- * `relayStopIndex`.
+ * `targetEventId` names the leg being split (optional — defaults to the
+ * load's only event, preserving the original single→relay behavior).
+ * The target leg keeps its position, gets its end clamped to `pickupEnd`,
+ * and a new leg is inserted immediately after it with the supplied
+ * scheduling + driver/asset assignment. leg_index is renumbered 0..N and
+ * relay_role re-derived (first='pickup', last='delivery', middle=
+ * 'transfer') across all legs. `mergedStops` is the full ordered stop
+ * list including the new relay handoff stop; every leg stores the full
+ * list, with per-leg windows derived from the relay markers.
+ *
+ * Field names keep their historical pickup/delivery spelling for wire
+ * compat: "pickup*" = the leg being split, "delivery*" = the new leg.
  */
 export interface SplitRelayRequest {
-  pickupEnd:           string;        // YYYY-MM-DDTHH:mm
-  deliveryStart:       string;
+  pickupEnd:           string;        // YYYY-MM-DDTHH:mm — new end of the split leg
+  deliveryStart:       string;        // start of the inserted leg
   deliveryEnd:         string;
   deliveryAssetId:     number;
   deliveryDriverId?:   number | null;
   deliveryDriverName?: string | null;
   /** Full ordered stop list after the split. */
   mergedStops:         Stop[];
-  /** Index of the last stop on the pickup leg (the relay handoff). */
+  /** Index of the new relay handoff stop within mergedStops. */
   relayStopIndex:      number;
+  /** Leg to split. Optional for back-compat; required when the load
+   *  already has more than one leg. */
+  targetEventId?:      string;
 }
 
 export interface SplitRelayResponse {
-  loads: Load[]; // 2 entries: pickup leg, delivery leg
+  loads: Load[]; // all legs of the load, in leg order
 }
 
 // ── POST /v1/loads/:id/unsplit-relay ────────────────────────────────────
 
 /**
- * Inverse of split-relay: collapse a 2-event relay load back to a single
- * event. `keepEventId` specifies which leg survives; the other is
- * soft-deleted. The kept event has `relay_role` cleared and its end
- * extended to the later of the two ends. If `mergedStops` is supplied
- * the kept event's stops are replaced with that list (sequence rewritten
- * 1..N); otherwise the kept event keeps its existing stops as-is.
+ * Inverse of split-relay: merge two ADJACENT legs into one (N → N-1).
+ *
+ * `keepEventId` names the surviving leg. `mergeEventId` names the
+ * adjacent leg to absorb; optional when the load has exactly two legs
+ * (the other leg is implied — the original unsplit behavior). The kept
+ * event's window extends to cover both legs, the absorbed event is
+ * soft-deleted, leg_index is renumbered and relay_role re-derived; on a
+ * 2-leg load this clears relay_role entirely. If `mergedStops` is
+ * supplied the kept event's stops are replaced with that list (sequence
+ * rewritten 1..N); otherwise stops are kept as-is minus the collapsed
+ * handoff marker.
  */
 export interface UnsplitRelayRequest {
   keepEventId: string;
+  /** Adjacent leg to merge into keepEventId. Required for 3+ legs. */
+  mergeEventId?: string;
   mergedStops?: Stop[];
 }
 
 export interface UnsplitRelayResponse {
-  loads: Load[]; // single entry — the surviving event with its load
+  loads: Load[]; // remaining legs of the load, in leg order
 }
 
 // ── DELETE /v1/loads/:id (soft-delete) ──────────────────────────────────
@@ -539,6 +556,10 @@ export interface DocumentSummary {
    *  the Make Primary button. Not a security concern; signed URLs
    *  already encode the same path. */
   storagePath?: string;
+  /** relay_handoff docs: 0-based ordinal of the handoff this photo
+   *  belongs to (marker i sits between leg i and leg i+1). null/absent =
+   *  legacy load-level photo — clients show it on every handoff. */
+  handoffIndex?: number | null;
 }
 
 // GET /v1/loads/:loadId/documents
@@ -2316,13 +2337,16 @@ export interface PerformanceEventMovement {
 // exports, and any consumer that thinks "one row per load."
 //
 // A relay load shows up exactly once, with the pickup leg in the headline
-// fields and both legs in `legs[]`.
+// fields and all legs in `legs[]`.
 
 /** One leg of a load. A non-relay load has exactly one leg with
- *  relayRole=undefined. A relay load has two legs (pickup, delivery). */
+ *  relayRole=undefined. A relay load has N legs ordered by legIndex:
+ *  first='pickup', last='delivery', middle='transfer'. */
 export interface LegSummary {
   eventId:     string;
-  relayRole?:  "pickup" | "delivery";
+  relayRole?:  "pickup" | "transfer" | "delivery";
+  /** 0-based position of this leg within the load. */
+  legIndex?:   number;
   /** ISO timestamp of this leg's start (= pickup time for the pickup leg). */
   start:       string;
   /** ISO timestamp of this leg's end. */
@@ -2346,7 +2370,7 @@ export interface LoadSummary {
   loadId:           string;
   internalLoadId:   number;
   loadNum?:         string;
-  /** True iff this load has two legs (relayGroupId set on the events). */
+  /** True iff this load has two or more legs (relay_role set on the events). */
   isRelay:          boolean;
   /** Pickup-leg title — surfaced here so single-row displays (accounting,
    *  reports) have a label without joining back to the events table.

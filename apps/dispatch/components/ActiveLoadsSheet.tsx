@@ -123,7 +123,7 @@ export function ActiveLoadsSheet({
                           {load.title}
                         </Text>
                         {isNonRev ? <NonRevChip size="small" /> : null}
-                        {load.relayRole ? <RelayChip role={load.relayRole} size="small" /> : null}
+                        {load.relayRole ? <RelayChip load={load} size="small" /> : null}
                       </View>
                       <Text style={[txt(600), { fontSize: 12, color: "#3c4043", marginTop: 2 }]} numberOfLines={1}>
                         {line2}

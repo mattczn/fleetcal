@@ -84,6 +84,9 @@ export * from "./domain";
 
 export * from "./enums";
 
+// Leg-position helpers (N-leg relay labels, role derivation).
+export * from "./legs";
+
 // ── Converters ──────────────────────────────────────────────────────────
 
 export {

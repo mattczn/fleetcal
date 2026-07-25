@@ -8,6 +8,7 @@ import React from "react";
 import { View, Text } from "react-native";
 import Svg, { Defs, Pattern, Rect } from "react-native-svg";
 import { Split } from "lucide-react-native";
+import { legLabel, legShortLabel } from "@fleetcal/types";
 import { txt } from "@/lib/font";
 import type { Load, LoadStatus } from "./types";
 
@@ -164,20 +165,27 @@ export function NonRevChip({ size = "default" }: { size?: "default" | "small" })
 }
 
 /**
- * Pill-sized indicator for relay loads. `role` matches `Load.relayRole` —
- * "pickup" means this is the pickup leg of a relay, "delivery" means the
- * delivery leg.
+ * Pill-sized indicator for relay legs. Reads the leg position off the load
+ * (`legIndex`/`legCount`, N-leg aware) and renders the shared leg label —
+ * "LEG 1 · PICKUP" (default) or "LEG 1/3" (small). Legs cached before the
+ * N-leg upgrade may lack legIndex/legCount; fall back to deriving a 2-leg
+ * position from relayRole so old cache entries still label correctly.
  */
 export function RelayChip({
-  role, size = "default",
+  load, size = "default",
 }: {
-  role: "pickup" | "delivery";
+  load: Pick<Load, "relayRole" | "legIndex" | "legCount">;
   size?: "default" | "small";
 }) {
   const iconSize = size === "small" ? 9  : 10;
   const fontSize = size === "small" ? 9  : 10;
   const padH     = size === "small" ? 5  : 6;
   const padV     = size === "small" ? 0  : 1;
+  const count = load.legCount ?? 2;
+  const idx   = load.legIndex
+    ?? (load.relayRole === "delivery" ? count - 1 : load.relayRole === "transfer" ? 1 : 0);
+  const label = size === "small" ? legShortLabel(idx, count) : legLabel(idx, count);
+  if (!label) return null;
   return (
     <View style={{
       flexDirection: "row", alignItems: "center", gap: 3,
@@ -187,7 +195,7 @@ export function RelayChip({
     }}>
       <Split size={iconSize} color="#5b21b6" strokeWidth={2.4} />
       <Text style={[txt(800), { fontSize, color: "#5b21b6", letterSpacing: 0.3 }]}>
-        RELAY · {role === "pickup" ? "PICKUP" : "DELIVERY"}
+        {label.toUpperCase()}
       </Text>
     </View>
   );

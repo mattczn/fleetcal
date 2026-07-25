@@ -41,6 +41,7 @@ import {
 } from '@/lib/timelineClusters';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { parseNaiveIsoInTz } from '@/lib/time-utils';
+import { legLabel, legShortLabel } from '@fleetcal/types';
 import type { SavedLocation } from '@/lib/types';
 import TimelineMap from './TimelineMap';
 
@@ -1142,20 +1143,24 @@ function EventBlock({
           >
             {event.title ?? (isNonRev ? event.nonRevenueType ?? 'Non-revenue' : 'Untitled')}
           </div>
-          {event.relayRole ? (
-            <span
-              className="font-extrabold uppercase tracking-wider px-1 rounded flex-shrink-0"
-              style={{
-                fontSize:   fs(9),
-                color:      '#ffffff',
-                background: 'rgba(0,0,0,0.25)',
-                marginTop:  1,
-              }}
-              title={event.relayRole === 'pickup' ? 'Pickup leg of a relay load' : 'Delivery leg of a relay load'}
-            >
-              {event.relayRole === 'pickup' ? 'PU LEG' : 'DEL LEG'}
-            </span>
-          ) : null}
+          {(() => {
+            const pos = timelineLegPos(event);
+            if (!pos) return null;
+            return (
+              <span
+                className="font-extrabold uppercase tracking-wider px-1 rounded flex-shrink-0"
+                style={{
+                  fontSize:   fs(9),
+                  color:      '#ffffff',
+                  background: 'rgba(0,0,0,0.25)',
+                  marginTop:  1,
+                }}
+                title={`${legLabel(pos.index, pos.count)} of a relay load`}
+              >
+                {legShortLabel(pos.index, pos.count)}
+              </span>
+            );
+          })()}
         </div>
         {fields.map((line, i) => {
           // Mirror CalendarEvent's stop-rendering-when-too-tall logic:
@@ -1199,15 +1204,45 @@ function shortTime(hhmm: string): string {
   return m === 0 ? `${h12}${ampm}` : `${h12}:${String(m).padStart(2, '0')}${ampm}`;
 }
 
-/** Filter an event's stops to only those relevant to its relay leg.
- *  Whole loads (no relayRole) show every stop. Pickup legs show pickup
- *  stops; delivery legs show delivery / drop / drop_hook stops. */
+/** Leg position (0-based index + total count) for a relay leg on the
+ *  timeline wire. The timeline payload doesn't carry legIndex/legCount,
+ *  but every leg carries the FULL merged stop list including the
+ *  `type:'relay'` handoff markers — marker i sits between leg i and
+ *  leg i+1, so legCount = markers + 1. The wire's relayRole is only
+ *  'pickup' | 'delivery' (transfer legs arrive as null and render as
+ *  whole loads), which pins the index to first or last. */
+function timelineLegPos(event: TimelineEvent): { index: number; count: number } | null {
+  if (!event.relayRole) return null;
+  const markers = event.stops.filter((s) => s.type === 'relay').length;
+  const count = Math.max(2, markers + 1);
+  return { index: event.relayRole === 'pickup' ? 0 : count - 1, count };
+}
+
+/** Filter an event's stops to the window belonging to its relay leg.
+ *  Whole loads (no relayRole) show every stop. Every leg carries the
+ *  full merged stop list with `type:'relay'` handoff markers; leg i's
+ *  window runs from marker i-1 (or the first stop) through marker i
+ *  (or the last stop), both boundary markers included. The wire only
+ *  distinguishes first/last legs (see timelineLegPos), so: pickup =
+ *  first stop → first marker, delivery = last marker → last stop.
+ *  Legacy relay legs without markers fall back to the old type-based
+ *  filter (pickups vs deliveries). */
 function stopsForLeg(event: TimelineEvent): TimelineEvent['stops'] {
   if (!event.relayRole) return event.stops;
-  if (event.relayRole === 'pickup') {
-    return event.stops.filter((s) => s.type === 'pickup');
+  const stops = event.stops;
+  const markerIdxs = stops
+    .map((s, i) => (s.type === 'relay' ? i : -1))
+    .filter((i) => i >= 0);
+  if (markerIdxs.length > 0) {
+    return event.relayRole === 'pickup'
+      ? stops.slice(0, markerIdxs[0] + 1)
+      : stops.slice(markerIdxs[markerIdxs.length - 1]);
   }
-  return event.stops.filter(
+  // Legacy fallback — no relay markers on this load's stops.
+  if (event.relayRole === 'pickup') {
+    return stops.filter((s) => s.type === 'pickup');
+  }
+  return stops.filter(
     (s) => s.type === 'delivery' || s.type === 'drop' || s.type === 'drop_hook',
   );
 }
@@ -1519,19 +1554,23 @@ function EventDetail({
         <h2 className="font-semibold flex-1 min-w-0" style={{ color: 'var(--gc-text-1)', fontSize: fs(16) }}>
           {event.title ?? (isNonRev ? event.nonRevenueType ?? 'Non-revenue' : 'Untitled')}
         </h2>
-        {event.relayRole ? (
-          <span
-            className="uppercase tracking-wider font-bold px-1.5 py-0.5 rounded flex-shrink-0"
-            style={{
-              fontSize:   fs(10),
-              background: color,
-              color:      '#ffffff',
-            }}
-            title={event.relayRole === 'pickup' ? 'Pickup leg of a relay load' : 'Delivery leg of a relay load'}
-          >
-            {event.relayRole === 'pickup' ? 'Pickup leg' : 'Delivery leg'}
-          </span>
-        ) : null}
+        {(() => {
+          const pos = timelineLegPos(event);
+          if (!pos) return null;
+          return (
+            <span
+              className="uppercase tracking-wider font-bold px-1.5 py-0.5 rounded flex-shrink-0"
+              style={{
+                fontSize:   fs(10),
+                background: color,
+                color:      '#ffffff',
+              }}
+              title={`${legLabel(pos.index, pos.count)} of a relay load`}
+            >
+              {legLabel(pos.index, pos.count)}
+            </span>
+          );
+        })()}
       </div>
       <div className="flex items-center gap-2" style={{ color: 'var(--gc-text-2)', fontSize: fs(12) }}>
         <Clock size={Math.max(10, fs(12))} />
@@ -1611,14 +1650,13 @@ function EventDetail({
       ) : null}
 
       {(() => {
-        // For relay legs, show only the stops relevant to this side
-        // of the relay (pickups for the pickup leg, deliveries for the
-        // delivery leg). Whole loads keep showing every stop.
+        // For relay legs, show only this leg's window of the merged
+        // stop list (handoff markers included). Whole loads keep
+        // showing every stop.
         const visibleStops = stopsForLeg(event);
         if (visibleStops.length === 0) return null;
-        const legNote = event.relayRole === 'pickup' ? ' · pickup leg'
-                      : event.relayRole === 'delivery' ? ' · delivery leg'
-                      : '';
+        const legPos = timelineLegPos(event);
+        const legNote = legPos ? ` · ${legLabel(legPos.index, legPos.count).toLowerCase()}` : '';
         return (
         <div>
           <div className="font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--gc-text-3)', fontSize: fs(11) }}>

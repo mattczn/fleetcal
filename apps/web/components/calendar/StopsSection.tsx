@@ -19,9 +19,26 @@ interface Props {
    *  already mounted in the page chrome and a separate route button
    *  would be redundant). */
   onMapRoute?: () => void;
+  /** "Split / Relay" (first handoff) or "Add handoff" (subsequent ones)
+   *  header button. Absent = affordance hidden. */
   onActivateRelay?: () => void;
+  /** True while an unsaved handoff is pending — hides the add button so
+   *  edit mode stays one-split-per-save. */
   relayActive?: boolean;
-  relayRole?: 'pickup' | 'delivery';
+  /** Legacy role of the viewed leg. Superseded by legIndex/legCount for
+   *  N-leg loads; still honored for 2-leg callers that don't pass them. */
+  relayRole?: 'pickup' | 'transfer' | 'delivery';
+  /** N-leg: 0-based position of the leg being viewed. Marker i sits
+   *  between leg i and leg i+1; the viewed leg's window runs from
+   *  marker i-1 (or first stop) to marker i (or last stop), boundary
+   *  markers included — stops outside that window render greyed. */
+  legIndex?: number;
+  /** Total legs on the load (drafts included). Enables the handoff
+   *  dividers even in create mode where relayRole isn't set yet. */
+  legCount?: number;
+  /** Driver name per leg, leg order — labels each handoff divider
+   *  ("Luis drops → Sarah picks up"; falls back to "Handoff N"). */
+  legDriverNames?: (string | undefined)[];
   eventStart?: string; // "YYYY-MM-DDTHH:mm" — for relay time bounds
   eventEnd?: string;
   loadedMiles?: number | null;
@@ -240,7 +257,7 @@ function CheckInChip({ stop }: { stop: Stop }) {
   );
 }
 
-export default function StopsSection({ stops, onChange, headerColor, onMapRoute, onActivateRelay, relayActive, relayRole, eventStart, eventEnd, loadedMiles, loadPrice, ratePerMile }: Props) {
+export default function StopsSection({ stops, onChange, headerColor, onMapRoute, onActivateRelay, relayActive, relayRole, legIndex, legCount, legDriverNames, eventStart, eventEnd, loadedMiles, loadPrice, ratePerMile }: Props) {
   const savedLocations    = useCalendarStore(s => s.savedLocations);
   const fetchSavedLocs    = useCalendarStore(s => s.fetchSavedLocations);
   const allEvents         = useCalendarStore(s => s.events);
@@ -479,7 +496,7 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
           Locations
         </span>
         <div className="flex items-center gap-2">
-          {onActivateRelay && !relayActive && !stops.some(s => s.type === 'relay') && (
+          {onActivateRelay && !relayActive && (
             <button
               type="button"
               onClick={onActivateRelay}
@@ -488,7 +505,7 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
               onMouseEnter={e => (e.currentTarget.style.background = '#f5f3ff')}
               onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
             >
-              <ArrowLeftRight size={11} /> Split / Relay
+              <ArrowLeftRight size={11} /> {stops.some(s => s.type === 'relay') ? 'Add handoff' : 'Split / Relay'}
             </button>
           )}
           {loadedMiles != null && (
@@ -521,24 +538,45 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
       {/* Stop rows */}
       <div className="space-y-2">
         {(() => {
-          const relayIdx = relayRole ? stops.findIndex(s => s.type === 'relay') : -1;
+          // Relay marker positions, sequence order. Marker i (0-based
+          // among relay stops) sits between leg i and leg i+1.
+          const markerIdxs = stops.reduce<number[]>((acc, s, i) => {
+            if (s.type === 'relay') acc.push(i);
+            return acc;
+          }, []);
+          // Viewed-leg position: explicit legIndex wins; legacy relayRole
+          // maps pickup=first, delivery=last, transfer=middle-of-3.
+          const viewedLeg = legIndex ?? (
+            relayRole === 'pickup'   ? 0
+            : relayRole === 'delivery' ? markerIdxs.length
+            : relayRole === 'transfer' ? Math.min(1, Math.max(0, markerIdxs.length - 1))
+            : undefined);
           const isThisLeg = (idx: number) => {
-            if (relayIdx === -1 || !relayRole) return true;
-            if (relayRole === 'pickup')   return idx <= relayIdx;
-            if (relayRole === 'delivery') return idx >= relayIdx;
-            return true;
+            if (viewedLeg == null || markerIdxs.length === 0) return true;
+            const lo = viewedLeg === 0 ? 0 : (markerIdxs[viewedLeg - 1] ?? 0);
+            const hi = viewedLeg >= markerIdxs.length ? stops.length - 1 : markerIdxs[viewedLeg];
+            // Boundary markers belong to both adjacent legs.
+            return idx >= lo && idx <= hi;
           };
+          const showDividers = viewedLeg != null || (legCount ?? 0) > 1;
           return stops.map((stop, idx) => {
           const cfg = TYPE_CONFIG[stop.type] ?? TYPE_CONFIG.stop;
           const thisLeg = isThisLeg(idx);
-          const isRelayHandoff = stop.type === 'relay' && relayRole != null;
-          // Divider before the relay handoff stop
+          const markerOrdinal = stop.type === 'relay' ? markerIdxs.indexOf(idx) : -1;
+          const isRelayHandoff = markerOrdinal >= 0 && showDividers;
+          // Divider before the relay handoff stop — labeled with who
+          // hands the load to whom when both legs' drivers are known.
+          const fromName = legDriverNames?.[markerOrdinal]?.trim();
+          const toName   = legDriverNames?.[markerOrdinal + 1]?.trim();
+          const dividerLabel = fromName && toName
+            ? `${fromName} drops → ${toName} picks up`
+            : `Handoff ${markerOrdinal + 1}`;
           const divider = isRelayHandoff ? (
             <div key={`divider-${stop.id}`} className="flex items-center gap-2 px-1 py-0.5">
               <div className="flex-1 h-px" style={{ background: '#ddd6fe' }} />
               <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-lg"
                 style={{ background: '#f5f3ff', color: '#7c3aed', border: '1px solid #ddd6fe' }}>
-                {relayRole === 'pickup' ? 'Pickup leg ends here' : 'Delivery leg starts here'}
+                {dividerLabel}
               </span>
               <div className="flex-1 h-px" style={{ background: '#ddd6fe' }} />
             </div>
@@ -872,7 +910,7 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
                 {stop.type === 'relay' ? (
                   <>
                     <div>
-                      <div style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#6d28d9', marginBottom: 3 }}>Driver 1 drop</div>
+                      <div style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#6d28d9', marginBottom: 3 }}>{fromName ? `${fromName} drops` : 'Driver 1 drop'}</div>
                       <ApptInput
                         value={toView(stop.apptStart)}
                         onChange={v => {
@@ -889,7 +927,7 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
                       />
                     </div>
                     <div>
-                      <div style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#6d28d9', marginBottom: 3 }}>Driver 2 pickup</div>
+                      <div style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#6d28d9', marginBottom: 3 }}>{toName ? `${toName} picks up` : 'Driver 2 pickup'}</div>
                       <ApptInput
                         value={toView(stop.apptEnd)}
                         onChange={v => {

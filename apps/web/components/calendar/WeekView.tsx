@@ -6,6 +6,8 @@ import { useCalendarStore } from '@/store/useCalendarStore';
 import { CalendarEvent } from '@/lib/types';
 import { localDateStr, todayStrInTz, naiveHomeToView, naiveViewToHome } from '@/lib/time-utils';
 import { isActiveInRange, dateKeyInTz } from '@/lib/lifecycle';
+import { legPositionFor } from '@/lib/legDisplay';
+import { legShortLabel, legLabel } from '@fleetcal/types';
 
 const ASSET_GUTTER = 140;
 const HEADER_H     = 68;
@@ -325,16 +327,21 @@ export default function WeekView() {
                           <span className="text-[11px] font-extrabold text-white truncate leading-tight" style={{ paddingRight: event.relayGroupId ? 22 : 0 }}>
                             {event.title}
                           </span>
-                          {event.relayGroupId && (
-                            <div style={{ position: 'absolute', top: 2, right: 4, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
-                              <span style={{ fontSize: 16, fontWeight: 900, lineHeight: 1, color: '#fff', textShadow: '0 1px 4px rgba(0,0,0,0.4)' }}>⇄</span>
-                              {event.relayRole && (
-                                <span style={{ fontSize: 8, fontWeight: 800, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.9)', lineHeight: 1 }}>
-                                  {event.relayRole === 'pickup' ? 'Pickup' : 'Delivery'}
-                                </span>
-                              )}
-                            </div>
-                          )}
+                          {event.relayGroupId && (() => {
+                            const pos = legPositionFor(event, events);
+                            return (
+                              <div
+                                title={pos ? legLabel(pos.index, pos.count) : 'Relay leg'}
+                                style={{ position: 'absolute', top: 2, right: 4, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
+                                <span style={{ fontSize: 16, fontWeight: 900, lineHeight: 1, color: '#fff', textShadow: '0 1px 4px rgba(0,0,0,0.4)' }}>⇄</span>
+                                {pos && (
+                                  <span style={{ fontSize: 8, fontWeight: 800, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.9)', lineHeight: 1, whiteSpace: 'nowrap' }}>
+                                    {legShortLabel(pos.index, pos.count)}
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </div>
                       </div>
                     );

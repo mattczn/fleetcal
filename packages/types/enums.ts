@@ -98,9 +98,13 @@ export const EVENT_KINDS = ["revenue", "non_revenue"] as const;
 export type EventKind = (typeof EVENT_KINDS)[number];
 
 // ── Relay role ──────────────────────────────────────────────────────────
-// events.relay_role column. Only set when relay_group_id is non-null.
+// events.relay_role column. Set on every leg of a relay load (events
+// sharing a load_id); null on single-leg loads. DERIVED from leg_index:
+// leg 0 = 'pickup', last leg = 'delivery', anything between = 'transfer'.
+// Kept alongside leg_index so pre-N-leg readers (which branch on
+// pickup-vs-delivery) keep working; 'transfer' reads as pickup-ish there.
 
-export const RELAY_ROLES = ["pickup", "delivery"] as const;
+export const RELAY_ROLES = ["pickup", "transfer", "delivery"] as const;
 
 export type RelayRole = (typeof RELAY_ROLES)[number];
 

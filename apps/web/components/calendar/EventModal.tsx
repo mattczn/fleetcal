@@ -31,22 +31,17 @@ import { ALL_FIELDS, FieldDef, getEnabledFieldsForSection, SECTION_LABELS } from
 import DatePicker from './DatePicker';
 import TimePicker from './TimePicker';
 import StopsSection from './StopsSection';
+import RelayLegsEditor, { RelayLegView, RelayHandoffView, RelayHandoffPhoto } from './RelayLegsEditor';
+import { legRoleFor, legLabel, byLegIndex } from '@fleetcal/types';
+import { legStraightMiles } from '@/lib/legMiles';
 import RouteMapPanel from './RouteMapPanel';
 import DriverSummaryPanel from './DriverSummaryPanel';
 import NotifyDriverPopover from './NotifyDriverPopover';
 import { uploadRateCon } from '@/lib/storage';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 import CheckCallsSection from '@/components/calendar/CheckCallsSection';
-import { HandoffPhotosButton } from '@/components/calendar/RelayHandoffPhotos';
 
 const RELAY_COLOR = '#7c3aed';
-
-function fmtRelayTime(iso: string): string {
-  const m = iso.match(/T(\d{2}):(\d{2})$/);
-  if (!m) return iso;
-  const h = parseInt(m[1]), min = m[2];
-  return `${h % 12 || 12}:${min} ${h >= 12 ? 'PM' : 'AM'}`;
-}
 
 function driverDisplayName(d: Driver): string {
   const full = `${d.firstName ?? ''} ${d.lastName ?? ''}`.trim();
@@ -1751,7 +1746,7 @@ export default function EventModal() {
     refetchEvent, refetchingEventIds,
     addEvent, updateEvent, removeEvent, cancelEventKeepLoad, closeModal,
     openEditModal, openCreateModal,
-    createRelayPair, splitToRelay, saveRelayBoth, removeRelay,
+    createRelayLegs, splitToRelay, saveRelayLegs, removeRelay,
     fieldSettings, sectionOrder, promptInstructions, promptVariables,
     batchItems, batchIndex, batchNext, clearBatch,
     orgId, dispatchers, customers, addCustomer, addCustomerAlias, addCustomerContact, updateCustomer,
@@ -1919,12 +1914,11 @@ export default function EventModal() {
   // asset (or vice versa), we surface a small inline chip below the
   // field they touched — clicking it applies the swap; clicking ✕
   // dismisses. Creating a fresh load auto-applies instead (no chip).
-  // Separate state for the main row and the relay-delivery row so
-  // the two rows can't cross-talk.
+  // (The relay legs editor applies driver↔truck prefs silently on
+  // draft legs instead of chip-suggesting, so only the main row keeps
+  // suggestion state.)
   const [suggestAssetSwap,            setSuggestAssetSwap]            = useState<number | null>(null);
   const [suggestDriverSwap,           setSuggestDriverSwap]           = useState<string | null>(null);
-  const [suggestRelayDelivAssetSwap,  setSuggestRelayDelivAssetSwap]  = useState<number | null>(null);
-  const [suggestRelayDelivDriverSwap, setSuggestRelayDelivDriverSwap] = useState<string | null>(null);
   const [status,     setStatus]     = useState<EventStatus>('scheduled');
   const [priority,   setPriority]   = useState(false);
   const [eventKind,  setEventKind]  = useState<'revenue' | 'non_revenue'>('revenue');
@@ -2039,7 +2033,9 @@ export default function EventModal() {
   const [parseState, setParseState] = useState<'idle' | 'parsing' | 'done' | 'error'>('idle');
   const [reparsing, setReparsing] = useState(false);
   const [loadedMiles,        setLoadedMiles]        = useState<number | null>(null);
-  const [partnerLoadedMiles, setPartnerLoadedMiles] = useState<number | null>(null);
+  /** Computed road miles for the OTHER legs of a relay, keyed by event
+   *  id — feeds the whole-haul header total + per-leg share chips. */
+  const [otherLegMiles,      setOtherLegMiles]      = useState<Record<string, number>>({});
   const [parseError, setParseError] = useState('');
   const [brokerMatch, setBrokerMatch] = useState<CustomerMatchResult>({ status: 'none' });
   const [brokerSaveBlocked, setBrokerSaveBlocked] = useState(false);
@@ -2221,55 +2217,78 @@ export default function EventModal() {
   }, [rateConPdf, showPdfViewer, pdfRetryKey, modalEventId, events]);
 
 
-  // Relay state
+  // Relay state — N-leg model. The legs themselves are DERIVED from the
+  // store (every event sharing the load's load_id, in leg order); the
+  // modal keeps only the edit buffers:
+  //   legPays   — per-leg driver pay, keyed by event id ('leg0' for the
+  //               first leg of a load being created, draft key for
+  //               not-yet-saved legs).
+  //   legEdits  — driver/truck overrides for persisted NON-viewed legs.
+  //   draftLegs — legs that don't exist server-side yet (create-mode
+  //               splits, or the single pending handoff in edit mode).
+  //   pendingSplitStopId — the unsaved relay marker created by "Add
+  //               handoff" in edit mode; Save turns it into a
+  //               POST /split-relay against the viewed leg.
   const [relayGroupId,       setRelayGroupId]       = useState<string | undefined>(undefined);
-  const [relayRole,          setRelayRole]          = useState<'pickup' | 'delivery' | undefined>(undefined);
-  const [relayActive,        setRelayActive]        = useState(false);
-  const [confirmRelayRemove, setConfirmRelayRemove] = useState(false);
-  const [relayPartner,       setRelayPartner]       = useState<CalendarEvent | null>(null);
+  const [relayRole,          setRelayRole]          = useState<'pickup' | 'transfer' | 'delivery' | undefined>(undefined);
+  const [legPays,            setLegPays]            = useState<Record<string, number | ''>>({});
+  const [legEdits,           setLegEdits]           = useState<Record<string, { assetId?: number; driverName?: string }>>({});
+  const [draftLegs,          setDraftLegs]          = useState<Array<{ key: string; assetId: number; driverName: string }>>([]);
+  const [pendingSplitStopId, setPendingSplitStopId] = useState<string | null>(null);
 
-  const [relayDelivAssetId,       setRelayDelivAssetId]       = useState(assets[0]?.id ?? 1);
-  const [relayDelivDriverName,    setRelayDelivDriverName]    = useState('');
-  // Per-leg driver pay for relay loads. The single fieldValues['driverPay']
-  // is hidden when in relay context; these two drive both UI and save.
-  const [pickupDriverPay,   setPickupDriverPay]   = useState<number | ''>('');
-  const [deliveryDriverPay, setDeliveryDriverPay] = useState<number | ''>('');
+  const isExistingRelayLeg = isEdit && !!relayRole;
+  const isRelayContext = draftLegs.length > 0 || isExistingRelayLeg;
 
-  const isPickupLeg   = isEdit && relayRole === 'pickup';
-  const isDeliveryLeg = isEdit && relayRole === 'delivery';
-  const isRelayContext = relayActive || isPickupLeg || isDeliveryLeg;
+  // All legs of the viewed load, leg order, straight from the store —
+  // GET /v1/events/:id returns every leg and the open-effect backfills
+  // any that fell outside the calendar's loaded window.
+  const currentEv = isEdit && modalEventId ? events.find(e => e.id === modalEventId) : undefined;
+  const relayLegs = useMemo<CalendarEvent[]>(() => {
+    if (!isEdit || !currentEv?.loadId || !currentEv.relayRole) return [];
+    return events.filter(e => e.loadId === currentEv.loadId).sort(byLegIndex);
+  }, [events, isEdit, currentEv]);
+  const viewedArrIdx = relayLegs.findIndex(l => l.id === modalEventId);
+  const otherLegs = useMemo(
+    () => relayLegs.filter(l => l.id !== modalEventId),
+    [relayLegs, modalEventId],
+  );
+  // Marker-relative position of the viewed leg (drives the per-leg
+  // stops window + miles slice). Explicit legIndex wins; fall back to
+  // array position, then to the legacy role mapping.
+  const viewedLegIdx: number | undefined = isExistingRelayLeg
+    ? (currentEv?.legIndex ?? (viewedArrIdx >= 0 && relayLegs.length > 1
+        ? viewedArrIdx
+        : relayRole === 'pickup' ? 0
+        : relayRole === 'delivery' ? Math.max(1, (currentEv?.legCount ?? 2) - 1)
+        : 1))
+    : undefined;
+  // ── Finalized-pay gate (solo loads) ───────────────────────────────
+  // Relay legs get their own per-card gate inside RelayLegsEditor.
+  const soloFinalized = useLoadPayFinalized(driverName, startDate);
 
-  // ── Finalized-pay gates ────────────────────────────────────────────
-  // Hook results drive both the Finalized banner display AND the
-  // disabled state on the driver-pay input — same rule, lifted here
-  // so the input + banner stay in lockstep.
-  const pickupFinalizedDriverName   = isPickupLeg   ? driverName : (relayPartner?.driverName ?? '');
-  const deliveryFinalizedDriverName = isDeliveryLeg ? driverName : (relayPartner?.driverName ?? '');
-  const pickupFinalizedStart   = isPickupLeg   ? startDate : (relayPartner?.start ?? '');
-  const deliveryFinalizedStart = isDeliveryLeg ? startDate : (relayPartner?.start ?? '');
-  const pickupFinalized   = useLoadPayFinalized(pickupFinalizedDriverName,   pickupFinalizedStart);
-  const deliveryFinalized = useLoadPayFinalized(deliveryFinalizedDriverName, deliveryFinalizedStart);
-  const soloFinalized     = useLoadPayFinalized(driverName, startDate);
+  // Slice a full merged stop list down to one leg's window: marker i
+  // sits between leg i and leg i+1; leg i runs from marker i-1 (or the
+  // first stop) through marker i (or the last stop), boundary markers
+  // included. legIdx==null → whole route minus the markers (create mode
+  // editing the whole load).
+  const legWindowSlice = (list: Stop[], legIdx: number | undefined): Stop[] => {
+    const markerIdxs = list.reduce<number[]>((acc, s, i) => { if (s.type === 'relay') acc.push(i); return acc; }, []);
+    if (markerIdxs.length === 0) return list;
+    if (legIdx == null) return list.filter(s => s.type !== 'relay');
+    const lo = legIdx === 0 ? 0 : (markerIdxs[legIdx - 1] ?? 0);
+    const hi = legIdx >= markerIdxs.length ? list.length - 1 : markerIdxs[legIdx];
+    return list.slice(lo, hi + 1);
+  };
 
   // Compute loaded mileage from geocoded stops via Mapbox Directions.
-  // For relay legs, only count stops up to (pickup) or from (delivery) the relay handoff.
+  // For relay legs, only count stops inside the viewed leg's window.
   // Skipped when status is 'tonu' or 'cancelled' (load didn't move → 0 miles).
   useEffect(() => {
     if (status === 'tonu' || status === 'cancelled') {
       setLoadedMiles(0);
       return;
     }
-    const relayIdx = stops.findIndex(s => s.type === 'relay');
-    let legStops: typeof stops;
-    if (relayIdx === -1) {
-      legStops = stops;
-    } else if (relayRole === 'pickup') {
-      legStops = stops.slice(0, relayIdx + 1);
-    } else if (relayRole === 'delivery') {
-      legStops = stops.slice(relayIdx);
-    } else {
-      legStops = stops.filter(s => s.type !== 'relay');
-    }
+    const legStops = legWindowSlice(stops, viewedLegIdx);
     const geocoded = legStops
       .filter(s => s.lat != null && s.lng != null)
       .map(s => ({ lat: s.lat!, lng: s.lng! }));
@@ -2279,24 +2298,44 @@ export default function EventModal() {
       calcRoadMiles(geocoded).then(miles => { if (!cancelled) setLoadedMiles(miles); })
     );
     return () => { cancelled = true; };
-  }, [stops, relayRole, status]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stops, viewedLegIdx, status]);
 
-  // Partner leg miles — for relay loads only, to compute total rate/mile correctly
+  // Other legs' miles — relay loads only, so the header can show the
+  // whole-haul total (Σ legs) and each leg card its share. Keyed by
+  // event id. Recomputes only when a sibling leg's geometry actually
+  // changes (stable key below), not on every store identity churn.
+  const otherLegsGeomKey = useMemo(
+    () => JSON.stringify(otherLegs.map(l => [
+      l.id, l.legIndex,
+      (l.stops ?? []).map(s => [s.type, s.lat, s.lng]),
+    ])),
+    [otherLegs],
+  );
   useEffect(() => {
-    if (!relayPartner?.stops?.length || !relayRole) { setPartnerLoadedMiles(null); return; }
-    const ps = relayPartner.stops;
-    const relayIdx = ps.findIndex(s => s.type === 'relay');
-    const legStops = relayRole === 'pickup'
-      ? (relayIdx === -1 ? ps : ps.slice(relayIdx))         // partner is delivery: from relay onward
-      : (relayIdx === -1 ? ps : ps.slice(0, relayIdx + 1)); // partner is pickup: up to relay
-    const geocoded = legStops.filter(s => s.lat != null && s.lng != null).map(s => ({ lat: s.lat!, lng: s.lng! }));
-    if (geocoded.length < 2) { setPartnerLoadedMiles(null); return; }
+    if (otherLegs.length === 0) { setOtherLegMiles({}); return; }
     let cancelled = false;
-    import('@/lib/directions').then(({ calcRoadMiles }) =>
-      calcRoadMiles(geocoded).then(m => { if (!cancelled) setPartnerLoadedMiles(m); })
-    );
+    void import('@/lib/directions').then(({ calcRoadMiles }) => {
+      for (const leg of otherLegs) {
+        const ls = leg.stops ?? [];
+        const mIdxs = ls.reduce<number[]>((acc, s, i) => { if (s.type === 'relay') acc.push(i); return acc; }, []);
+        const li = leg.legIndex ?? (
+          leg.relayRole === 'pickup' ? 0
+          : leg.relayRole === 'delivery' ? mIdxs.length
+          : Math.min(1, Math.max(0, mIdxs.length - 1)));
+        const slice = legWindowSlice(ls, li)
+          .filter(s => s.lat != null && s.lng != null)
+          .map(s => ({ lat: s.lat!, lng: s.lng! }));
+        if (slice.length < 2) continue;
+        void calcRoadMiles(slice).then(m => {
+          if (cancelled || m == null) return;
+          setOtherLegMiles(prev => (prev[leg.id] === m ? prev : { ...prev, [leg.id]: m }));
+        });
+      }
+    });
     return () => { cancelled = true; };
-  }, [relayPartner, relayRole]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [otherLegsGeomKey]);
 
   // ── Lazy cache: persist routed loadedMiles back to events.loaded_miles
   // so reports / dashboards can pull from the column instead of re-running
@@ -2329,13 +2368,20 @@ export default function EventModal() {
     void updateEvent(modalEventId, { loadedMiles: next });
   }, [loadedMiles, isEdit, modalEventId, events, updateEvent]);
 
+  // Persist the other legs' computed miles back to events.loaded_miles
+  // — same lazy-cache rule as the viewed leg above (0.1 mi threshold
+  // keeps this from ping-ponging with its own optimistic write).
   useEffect(() => {
-    if (!relayPartner || partnerLoadedMiles == null) return;
-    const stored = relayPartner.loadedMiles ?? null;
-    const next   = Math.round(partnerLoadedMiles * 10) / 10;
-    if (stored != null && Math.abs(stored - next) < 0.1) return;
-    void updateEvent(relayPartner.id, { loadedMiles: next });
-  }, [partnerLoadedMiles, relayPartner, updateEvent]);
+    for (const leg of otherLegs) {
+      const computed = otherLegMiles[leg.id];
+      if (computed == null) continue;
+      const stored = leg.loadedMiles ?? null;
+      const next   = Math.round(computed * 10) / 10;
+      if (stored != null && Math.abs(stored - next) < 0.1) continue;
+      void updateEvent(leg.id, { loadedMiles: next });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [otherLegMiles]);
 
   // Auto-fill driver pay from percentage setting whenever load price changes.
   // Handles loadPrice as either number or numeric string (AI parses sometimes
@@ -2417,12 +2463,12 @@ export default function EventModal() {
   };
 
   useEffect(() => {
-    if (!modalOpen) { setConfirmDel(false); setConfirmRelayRemove(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setRateConOriginal(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setPartnerLoadedMiles(null); setShowDriverSummary(false); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setLoadInvoices([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); setInternalNotes([]); setOriginalInternalNotes([]); setNoteComposer(''); setNoteComposerOpen(false); setPendingNewBroker(null); setPickupDriverPay(''); setDeliveryDriverPay(''); setSuggestAssetSwap(null); setSuggestDriverSwap(null); setSuggestRelayDelivAssetSwap(null); setSuggestRelayDelivDriverSwap(null); return; }
+    if (!modalOpen) { setConfirmDel(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setRateConOriginal(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setOtherLegMiles({}); setShowDriverSummary(false); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setLoadInvoices([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); setInternalNotes([]); setOriginalInternalNotes([]); setNoteComposer(''); setNoteComposerOpen(false); setPendingNewBroker(null); setLegPays({}); setLegEdits({}); setDraftLegs([]); setPendingSplitStopId(null); setSuggestAssetSwap(null); setSuggestDriverSwap(null); return; }
     setParseState('idle'); setParseError('');
     setRateConPdf(undefined); setRateConOriginal(undefined); setShowPdfViewer(false); setShowMapPanel(modalShowMap);
     setIsDirty(false); setShowSavePrompt(false);
     setRelayGroupId(undefined); setRelayRole(undefined);
-    setRelayActive(false); setRelayPartner(null);
+    setLegPays({}); setLegEdits({}); setDraftLegs([]); setPendingSplitStopId(null);
     setAccessorials([]);
     // Internal notes are scoped to a single load — never carry across
     // duplicate / +1 Week / drag-create transitions. The edit branch
@@ -2480,41 +2526,18 @@ export default function EventModal() {
       if (groupKey && ev.relayRole) {
         setRelayGroupId(groupKey);
         setRelayRole(ev.relayRole);
-        const localPartner = events.find(e =>
-          e.id !== ev.id && (
-            (ev.loadId && e.loadId === ev.loadId) ||
-            (ev.relayGroupId && e.relayGroupId === ev.relayGroupId)
-          ),
-        ) ?? null;
-        setRelayPartner(localPartner);
-        if (ev.relayRole === 'pickup' && localPartner) {
-          setRelayDelivAssetId(localPartner.assetId);
-          setRelayDelivDriverName(localPartner.driverName ?? '');
-        }
-        // Seed both per-leg pays from whichever leg is which.
-        if (ev.relayRole === 'pickup') {
-          setPickupDriverPay(ev.driverPay ?? '');
-          setDeliveryDriverPay(localPartner?.driverPay ?? '');
-        } else if (ev.relayRole === 'delivery') {
-          setDeliveryDriverPay(ev.driverPay ?? '');
-          setPickupDriverPay(localPartner?.driverPay ?? '');
-        }
-        // Fallback: partner not in the loaded events window → fetch the load.
-        if (!localPartner && ev.loadId) {
-          import('@/lib/railway').then(({ railway }) => railway.getLoad(ev.loadId!))
-            .then(({ loads }) => {
-              const partner = loads.find(l => l.id !== ev.id) as CalendarEvent | undefined;
-              if (!partner) return;
-              setRelayPartner(partner);
-              if (ev.relayRole === 'pickup') {
-                setRelayDelivAssetId(partner.assetId);
-                setRelayDelivDriverName(partner.driverName ?? '');
-                setDeliveryDriverPay(partner.driverPay ?? '');
-              } else if (ev.relayRole === 'delivery') {
-                setPickupDriverPay(partner.driverPay ?? '');
-              }
-            })
-            .catch(err => console.error('relay-partner fetch:', err));
+        // Sibling legs come straight from the store (relayLegs derives
+        // from `events`); legPays seeds from them in the effect below.
+        // Fallback: legs outside the calendar's loaded window → fetch
+        // the whole load and merge every leg into the store.
+        if (ev.loadId) {
+          const cachedLegCount = events.filter(e => e.loadId === ev.loadId).length;
+          const expected = ev.legCount ?? 2;
+          if (cachedLegCount < expected) {
+            import('@/lib/railway').then(({ railway }) => railway.getLoad(ev.loadId!))
+              .then(({ loads }) => mergeEvents(loads as CalendarEvent[]))
+              .catch(err => console.error('relay-legs fetch:', err));
+          }
         }
       }
     } else if (isBatch) {
@@ -2541,7 +2564,6 @@ export default function EventModal() {
           setEndDate(ed); setEndTime(et.slice(0, 5));
         }
         setStatus('scheduled');
-        setRelayDelivAssetId(assets[1]?.id ?? assets[0]?.id ?? 1);
         const vals: Record<string, string | number | boolean | string[] | RefNum[]> = {};
         ALL_FIELDS.forEach(f => {
           const v = p[f.id];
@@ -2621,7 +2643,6 @@ export default function EventModal() {
       setStartDate(sd); setStartTime(st.slice(0, 5));
       setEndDate(ed);   setEndTime(et.slice(0, 5));
       setStatus('scheduled');
-      setRelayDelivAssetId(assets[1]?.id ?? assets[0]?.id ?? 1);
 
       // Seed optional fields from defaults; auto-fill default dispatcher
       const vals: Record<string, string | number | boolean | string[] | RefNum[]> = {};
@@ -2637,7 +2658,6 @@ export default function EventModal() {
       }
     }
     setConfirmDel(false);
-    setConfirmRelayRemove(false);
     setConfirmSkip(false);
     setConfirmBatchCancel(false);
     // Drain the cross-page handoff buffer if it was set (e.g. user
@@ -2647,6 +2667,23 @@ export default function EventModal() {
     // Otherwise clear, so a previous session's selections don't leak.
     setPendingWorkOrderLinks(prefillWorkOrderLinkIds ?? []);
   }, [modalOpen, modalEventId, batchIndex]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Seed per-leg pay from each leg's stored driver_pay as legs land in
+  // the store (including the async whole-load backfill above). Only
+  // ADDS missing keys — a value the dispatcher already typed (even a
+  // deliberate clear to '') is never clobbered by late-arriving data.
+  useEffect(() => {
+    if (!modalOpen || !isExistingRelayLeg) return;
+    setLegPays(prev => {
+      let changed = false;
+      const next = { ...prev };
+      for (const leg of relayLegs) {
+        if (!(leg.id in next)) { next[leg.id] = leg.driverPay ?? ''; changed = true; }
+      }
+      return changed ? next : prev;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modalOpen, isExistingRelayLeg, relayLegs.map(l => l.id).join(',')]);
 
   // Auto-recover loads that landed in the cache with empty stops. The
   // user reported opening a load and seeing "+ Add Stop" instead of
@@ -3101,57 +3138,100 @@ export default function EventModal() {
     // reports, etc.) had to limp along matching by name — which breaks
     // the moment a driver is renamed. Same logic for the relay's
     // delivery leg.
-    const driverId          = findDriverByName(driverName)?.id          ?? undefined;
-    const relayDelivDriverId = findDriverByName(relayDelivDriverName)?.id ?? undefined;
+    const driverId = findDriverByName(driverName)?.id ?? undefined;
 
-    const relayStop = stops.find(s => s.type === 'relay');
-    const pickupLegEnd      = relayStop?.apptStart ?? `${endDate}T${endTime}`;
-    const deliveryLegStart  = relayStop?.apptEnd   ?? pickupLegEnd;
+    // Relay markers in sequence order. Marker i sits between leg i and
+    // leg i+1: apptStart = the earlier driver's drop, apptEnd = the next
+    // driver's pickup. Leg i runs from marker i-1 (or the load start) to
+    // marker i (or the load end).
+    const relayMarkers = stops.filter(s => s.type === 'relay');
+    // Per-leg driver pay from the legs editor. Empty input ⇒ undefined
+    // so the API treats it as "no value" instead of zero.
+    const legPayOf = (key: string): number | undefined => {
+      const v = legPays[key];
+      return v === '' || v == null ? undefined : v;
+    };
 
-    // Per-leg driver pay derived from the dual inputs. Empty input ⇒
-    // undefined so the API treats it as "no value" instead of zero.
-    const pickupPay   = pickupDriverPay   === '' ? undefined : pickupDriverPay;
-    const deliveryPay = deliveryDriverPay === '' ? undefined : deliveryDriverPay;
+    if (isEdit && isExistingRelayLeg && modalEventId && !pendingSplitStopId) {
+      // ── Existing relay: patch EVERY leg in one action ──────────────
+      // Load-level fields ride on each leg's updates; saveRelayLegs
+      // merges them with leg 0 winning (they're identical here anyway).
+      const legsPayload = relayLegs.map((leg, i) => {
+        const isViewed = leg.id === modalEventId;
+        const edits = legEdits[leg.id] ?? {};
+        const legDriverName = isViewed
+          ? (driverName || undefined)
+          : ((edits.driverName ?? resolveDriverNameForEvent(leg)) || undefined);
+        // Boundary rule: handoff-adjacent boundaries come from the
+        // marker times; outer boundaries come from the form (viewed
+        // leg) or stay as-is (other legs).
+        const start = i === 0
+          ? (isViewed ? `${startDate}T${startTime}` : leg.start)
+          : (relayMarkers[i - 1]?.apptEnd ?? relayMarkers[i - 1]?.apptStart
+              ?? (isViewed ? `${startDate}T${startTime}` : leg.start));
+        const end = i === relayLegs.length - 1
+          ? (isViewed ? `${endDate}T${endTime}` : leg.end)
+          : (relayMarkers[i]?.apptStart
+              ?? (isViewed ? `${endDate}T${endTime}` : leg.end));
+        const updates: Partial<Omit<CalendarEvent, 'id'>> = {
+          ...shared,
+          assetId: isViewed ? assetId : (edits.assetId ?? leg.assetId),
+          driverName: legDriverName,
+          driverId: findDriverByName(legDriverName)?.id ?? undefined,
+          start, end,
+          driverPay: legPayOf(leg.id),
+          status: isViewed ? status : (leg.status ?? 'scheduled'),
+          relayGroupId: relayGroupId ?? leg.loadId,
+          relayRole: legRoleFor(i, relayLegs.length),
+        };
+        return { id: leg.id, updates };
+      });
+      saveRelayLegs(legsPayload);
 
-    if (isPickupLeg && relayPartner && relayGroupId) {
-      const pickupUpdates: Partial<Omit<CalendarEvent, 'id'>> = {
+    } else if (isEdit && isExistingRelayLeg && modalEventId && pendingSplitStopId) {
+      // ── Existing relay + pending handoff: split the viewed leg ─────
+      const draft = draftLegs[0]; // edit mode allows one pending handoff per save
+      const marker = stops.find(s => s.id === pendingSplitStopId);
+      if (!draft || !marker?.apptStart) return;
+      // Persist the OTHER legs' event-level edits (driver/truck/pay)
+      // first — splitToRelay only touches the split leg + load-level.
+      const otherPayload = otherLegs.map(leg => {
+        const edits = legEdits[leg.id] ?? {};
+        const legDriverName = (edits.driverName ?? resolveDriverNameForEvent(leg)) || undefined;
+        const updates: Partial<Omit<CalendarEvent, 'id'>> = {
+          assetId: edits.assetId ?? leg.assetId,
+          driverName: legDriverName,
+          driverId: findDriverByName(legDriverName)?.id ?? undefined,
+          driverPay: legPayOf(leg.id),
+        };
+        return { id: leg.id, updates };
+      });
+      if (otherPayload.length > 0) saveRelayLegs(otherPayload);
+      const targetUpdates: Partial<Omit<CalendarEvent, 'id'>> = {
         ...shared, assetId, driverName: driverName || undefined, driverId,
-        start: `${startDate}T${startTime}`, end: pickupLegEnd,
-        driverPay: pickupPay,
-        status, relayGroupId, relayRole: 'pickup',
+        start: `${startDate}T${startTime}`,
+        end: marker.apptStart,
+        driverPay: legPayOf(modalEventId),
+        status,
       };
-      const deliveryUpdates: Partial<Omit<CalendarEvent, 'id'>> = {
+      const newLegData: Omit<CalendarEvent, 'id'> = {
         ...shared,
-        assetId: relayDelivAssetId, driverName: relayDelivDriverName || undefined, driverId: relayDelivDriverId,
-        start: deliveryLegStart,
-        end: relayPartner.end,
-        driverPay: deliveryPay,
-        status: relayPartner.status ?? 'scheduled',
-        relayGroupId, relayRole: 'delivery',
+        assetId: draft.assetId,
+        driverName: draft.driverName || undefined,
+        driverId: findDriverByName(draft.driverName)?.id ?? undefined,
+        start: marker.apptEnd ?? marker.apptStart,
+        end: `${endDate}T${endTime}`,
+        driverPay: legPayOf(draft.key),
+        status: 'scheduled',
+        createdByName: currentUserName,
       };
-      saveRelayBoth(modalEventId!, pickupUpdates, relayPartner.id, deliveryUpdates);
+      splitToRelay(modalEventId, targetUpdates, newLegData, delivId, { relayStopId: pendingSplitStopId });
 
-    } else if (isDeliveryLeg && relayPartner && relayGroupId) {
-      const deliveryUpdates: Partial<Omit<CalendarEvent, 'id'>> = {
-        ...shared, assetId, driverName: driverName || undefined, driverId,
-        start: `${startDate}T${startTime}`, end: `${endDate}T${endTime}`,
-        driverPay: deliveryPay,
-        status, relayGroupId, relayRole: 'delivery',
-      };
-      const pickupUpdates: Partial<Omit<CalendarEvent, 'id'>> = {
-        ...shared,
-        assetId: relayPartner.assetId, driverName: relayPartner.driverName, driverId: relayPartner.driverId,
-        start: relayPartner.start, end: pickupLegEnd,
-        driverPay: pickupPay,
-        status: relayPartner.status ?? 'scheduled',
-        relayGroupId, relayRole: 'pickup',
-      };
-      saveRelayBoth(relayPartner.id, pickupUpdates, modalEventId!, deliveryUpdates);
-
-    } else if (relayActive) {
-      if (!relayStop?.apptStart) return;
+    } else if (draftLegs.length > 0) {
+      // ── Create-mode splits (or single→relay conversion in edit) ────
+      if (relayMarkers.length !== draftLegs.length) return;
+      if (relayMarkers.some(m => !m.apptStart)) return;
       const rgId = crypto.randomUUID();
-      const delivEndDate = deliveryLegStart.split('T')[0] > endDate ? deliveryLegStart.split('T')[0] : endDate;
       const existingEv = isEdit && modalEventId ? events.find(e => e.id === modalEventId) : undefined;
       // Pre-resolve display names so the audit entry survives later
       // customer/trailer deletes — same pattern as the non-relay
@@ -3194,28 +3274,52 @@ export default function EventModal() {
             currentUserName,
           ))
         : undefined;
-      const pickupData: Omit<CalendarEvent, 'id'> = {
-        ...shared, assetId, driverName: driverName || undefined, driverId,
-        start: `${startDate}T${startTime}`, end: pickupLegEnd,
-        driverPay: pickupPay,
-        status, relayGroupId: rgId, relayRole: 'pickup',
-        createdByName: isEdit ? (existingEv?.createdByName ?? currentUserName) : currentUserName,
-        ...(isEdit ? { auditLog: relayAuditLog } : {}),
+      // Build every leg in leg order. Leg i starts at marker i-1's
+      // pickup time (or the form start) and ends at marker i's drop time
+      // (or the form end, date-extended when the last leg starts later).
+      const n = draftLegs.length + 1;
+      const legStartOf = (i: number): string =>
+        i === 0
+          ? `${startDate}T${startTime}`
+          : (relayMarkers[i - 1].apptEnd ?? relayMarkers[i - 1].apptStart!);
+      const legEndOf = (i: number): string => {
+        if (i < n - 1) return relayMarkers[i].apptStart!;
+        const lastStartDate = legStartOf(i).split('T')[0];
+        const delivEndDate = lastStartDate > endDate ? lastStartDate : endDate;
+        return `${delivEndDate}T${endTime}`;
       };
-      const deliveryData: Omit<CalendarEvent, 'id'> = {
-        ...shared,
-        assetId: relayDelivAssetId, driverName: relayDelivDriverName || undefined, driverId: relayDelivDriverId,
-        start: deliveryLegStart, end: `${delivEndDate}T${endTime}`,
-        driverPay: deliveryPay,
-        status: 'scheduled', relayGroupId: rgId, relayRole: 'delivery',
-        createdByName: currentUserName,
-      };
+      const legsData: Array<Omit<CalendarEvent, 'id'>> = [
+        {
+          ...shared, assetId, driverName: driverName || undefined, driverId,
+          start: legStartOf(0), end: legEndOf(0),
+          driverPay: legPayOf('leg0'),
+          status, relayGroupId: rgId, relayRole: 'pickup',
+          createdByName: isEdit ? (existingEv?.createdByName ?? currentUserName) : currentUserName,
+          ...(isEdit ? { auditLog: relayAuditLog } : {}),
+        },
+        ...draftLegs.map((d, di) => {
+          const i = di + 1;
+          return {
+            ...shared,
+            assetId: d.assetId,
+            driverName: d.driverName || undefined,
+            driverId: findDriverByName(d.driverName)?.id ?? undefined,
+            start: legStartOf(i), end: legEndOf(i),
+            driverPay: legPayOf(d.key),
+            status: 'scheduled' as EventStatus,
+            relayGroupId: rgId,
+            relayRole: legRoleFor(i, n),
+            createdByName: currentUserName,
+          };
+        }),
+      ];
       if (isEdit && modalEventId) {
-        // Convert existing single load → relay. Both legs end up on the same
-        // load (server-side via /v1/loads/:id/split-relay).
-        splitToRelay(modalEventId, pickupData, deliveryData, delivId);
+        // Convert existing single load → relay. Both legs end up on the
+        // same load (server-side via /v1/loads/:id/split-relay). Edit
+        // mode allows one handoff per save, so legsData is exactly two.
+        splitToRelay(modalEventId, legsData[0], legsData[1], delivId, { relayStopId: relayMarkers[0]?.id });
       } else {
-        createRelayPair(pickupData, deliveryData, pickupId, delivId);
+        createRelayLegs(legsData, [pickupId, delivId]);
       }
 
     } else {
@@ -3331,8 +3435,10 @@ export default function EventModal() {
   const handleDelete = () => {
     if (!confirmDel) { setConfirmDel(true); return; }
     if (modalEventId) {
-      if (relayGroupId && relayPartner) {
-        updateEvent(relayPartner.id, { ...relayPartner, relayGroupId: undefined, relayRole: undefined });
+      // Unlink EVERY sibling leg locally before the load-level delete
+      // cascades server-side.
+      for (const leg of otherLegs) {
+        updateEvent(leg.id, { ...leg, relayGroupId: undefined, relayRole: undefined });
       }
       const deleteEntry: LoadAuditEntry = { changedAt: new Date().toISOString(), changedByName: currentUserName, loadDeleted: true };
       removeEvent(modalEventId, deleteEntry);
@@ -3385,13 +3491,13 @@ export default function EventModal() {
       driverPay: 0,
       auditLog: appendAuditEntry(auditLog, entry),
     });
-    if (relayGroupId && relayPartner) {
-      updateEvent(relayPartner.id, {
+    for (const leg of otherLegs) {
+      updateEvent(leg.id, {
         status: 'cancelled',
         loadPrice: 0,
         loadedMiles: 0,
         driverPay: 0,
-        auditLog: appendAuditEntry(relayPartner.auditLog ?? [], entry),
+        auditLog: appendAuditEntry(leg.auditLog ?? [], entry),
       });
     }
     setCancelDialogOpen(false);
@@ -3399,18 +3505,20 @@ export default function EventModal() {
   };
   const handleCancelRemoveEvent = () => {
     if (!modalEventId) return;
-    if (relayGroupId && relayPartner) {
-      // Drop the relay link on the partner first so it doesn't end up
-      // half-orphaned, and zero its financials — the whole load is
+    if (otherLegs.length > 0) {
+      // Drop the relay link on every sibling leg first so none ends up
+      // half-orphaned, and zero their financials — the whole load is
       // being removed.
-      updateEvent(relayPartner.id, {
-        ...relayPartner,
-        relayGroupId: undefined,
-        relayRole: undefined,
-        loadPrice: 0,
-        loadedMiles: 0,
-        driverPay: 0,
-      });
+      for (const leg of otherLegs) {
+        updateEvent(leg.id, {
+          ...leg,
+          relayGroupId: undefined,
+          relayRole: undefined,
+          loadPrice: 0,
+          loadedMiles: 0,
+          driverPay: 0,
+        });
+      }
     } else {
       // Single-leg load: zero rate on the load record before the
       // event row is deleted so the preserved load reads as cancelled.
@@ -3435,8 +3543,8 @@ export default function EventModal() {
   };
   const handleCancelPermanent = () => {
     if (!modalEventId) return;
-    if (relayGroupId && relayPartner) {
-      updateEvent(relayPartner.id, { ...relayPartner, relayGroupId: undefined, relayRole: undefined });
+    for (const leg of otherLegs) {
+      updateEvent(leg.id, { ...leg, relayGroupId: undefined, relayRole: undefined });
     }
     removeEvent(modalEventId, buildCancelAuditEntry('permanent'));
     setCancelDialogOpen(false);
@@ -3507,69 +3615,168 @@ export default function EventModal() {
       ...(prevDP != null ? { driverPay: prevDP } : {}),
       auditLog: appendAuditEntry(auditLog, entry),
     });
-    if (relayGroupId && relayPartner) {
-      const partnerEntry: LoadAuditEntry = {
+    for (const leg of otherLegs) {
+      const legEntry: LoadAuditEntry = {
         changedAt: new Date().toISOString(),
         changedByName: currentUserName,
         loadReinstated: true,
         prevStatus: 'cancelled' as EventStatus,
         newStatus: prevStatus,
       };
-      updateEvent(relayPartner.id, {
+      updateEvent(leg.id, {
         status: prevStatus,
         ...(prevLP != null ? { loadPrice: prevLP } : {}),
         ...(prevLM != null ? { loadedMiles: prevLM } : {}),
         ...(prevDP != null ? { driverPay: prevDP } : {}),
-        auditLog: appendAuditEntry(relayPartner.auditLog ?? [], partnerEntry),
+        auditLog: appendAuditEntry(leg.auditLog ?? [], legEntry),
       });
     }
     closeModal();
   };
 
-  const handleRelayRemove = () => {
-    if (!confirmRelayRemove) { setConfirmRelayRemove(true); return; }
-    if (modalEventId) {
-      const existingEv = events.find(e => e.id === modalEventId);
-      const entry: LoadAuditEntry = { changedAt: new Date().toISOString(), changedByName: currentUserName, relayRemoved: true };
-      const nextAuditLog = existingEv ? appendAuditEntry(auditLog, entry) : [entry];
-      removeRelay(modalEventId, nextAuditLog);
+  /** Undo one handoff. Draft markers (not yet saved) just vanish
+   *  locally; persisted handoffs merge the two legs around the marker
+   *  via unsplit-relay (keep = earlier leg, absorb = later leg — the
+   *  2-leg case keeps the old pickup-keeps behavior). Confirm handled
+   *  inside RelayLegsEditor. */
+  const handleRemoveHandoff = (handoffIdx: number) => {
+    const h = relayHandoffViews[handoffIdx];
+    if (!h) return;
+    if (h.isDraft) {
+      setStops(prev => prev.filter(s => s.id !== h.stop.id).map((s, i) => ({ ...s, sequence: i + 1 })));
+      if (isExistingRelayLeg || pendingSplitStopId) {
+        // Edit mode: the single pending handoff + its draft leg.
+        setDraftLegs([]);
+        setPendingSplitStopId(null);
+      } else {
+        // Create mode: marker m maps 1:1 to draftLegs[m].
+        setDraftLegs(prev => prev.filter((_, i) => i !== handoffIdx));
+      }
+      markDirty();
+      return;
     }
+    if (!h.keepEventId || !h.mergeEventId) return;
+    const entry: LoadAuditEntry = { changedAt: new Date().toISOString(), changedByName: currentUserName, relayRemoved: true };
+    removeRelay(h.keepEventId, { mergeEventId: h.mergeEventId, auditLog: appendAuditEntry(auditLog, entry) });
     closeModal();
   };
 
-  const activateRelay = () => {
-    setRelayActive(true);
-    const delivAsset = assets.find(a => a.id !== assetId)?.id ?? assetId;
-    setRelayDelivAssetId(delivAsset);
-    setRelayDelivDriverName(preferredDriverName(delivAsset));
-
-    // Insert a relay stop between the last leg-1 stop and first delivery stop
-    // Default: Driver 2 pickup = 1hr before event end, Driver 1 drop = 1hr before that
-    // Both are clamped to [eventStart, eventEnd] so short loads stay valid
+  /** "Add handoff" — generalizes the old single→relay split. Splits the
+   *  VIEWED leg in edit mode (one pending handoff per save), or the
+   *  LAST leg in create mode (repeatable: each call appends a leg). */
+  const addHandoff = () => {
+    if (isEdit && pendingSplitStopId) return; // one unsaved handoff at a time
     const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}T${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
-    const startDt = new Date(`${startDate}T${startTime}`);
-    const endDt   = new Date(`${endDate || startDate}T${endTime || startTime}`);
-    const spanMs  = endDt.getTime() - startDt.getTime();
-    // For short loads, split the span into thirds instead of fixed 1-hr offsets
-    const unit        = Math.min(60 * 60 * 1000, Math.floor(spanMs / 3));
-    const driver2Pickup = new Date(Math.max(startDt.getTime(), endDt.getTime() - unit));
-    const driver1Drop   = new Date(Math.max(startDt.getTime(), endDt.getTime() - 2 * unit));
+    const markerIdxsAll = stops.reduce<number[]>((acc, s, i) => { if (s.type === 'relay') acc.push(i); return acc; }, []);
+    const markers = markerIdxsAll.map(i => stops[i]);
+
+    // Window being split. Edit mode: the viewed leg's own start/end (the
+    // form fields hold them). Create mode: from the last marker's pickup
+    // time (or the load start) to the load end.
+    let windowStartIso: string;
+    let windowEndIso: string;
+    let markerOrdinal: number; // ordinal the NEW marker will take
+    if (isEdit && isExistingRelayLeg) {
+      windowStartIso = `${startDate}T${startTime}`;
+      windowEndIso   = `${endDate || startDate}T${endTime || startTime}`;
+      markerOrdinal  = Math.min(viewedLegIdx ?? 0, markerIdxsAll.length);
+    } else {
+      const lastMarker = markers[markers.length - 1];
+      windowStartIso = lastMarker ? (lastMarker.apptEnd ?? lastMarker.apptStart ?? `${startDate}T${startTime}`) : `${startDate}T${startTime}`;
+      windowEndIso   = `${endDate || startDate}T${endTime || startTime}`;
+      markerOrdinal  = markers.length;
+    }
+    // Default times inside the window: next driver's pickup = 1hr before
+    // the window end, drop = 1hr before that; short windows split into
+    // thirds instead. Both clamp to the window start.
+    const startDt = new Date(windowStartIso);
+    const endDt   = new Date(windowEndIso);
+    const spanMs  = Math.max(0, endDt.getTime() - startDt.getTime());
+    const unit    = Math.min(60 * 60 * 1000, Math.floor(spanMs / 3));
+    const nextPickup = new Date(Math.max(startDt.getTime(), endDt.getTime() - unit));
+    const prevDrop   = new Date(Math.max(startDt.getTime(), endDt.getTime() - 2 * unit));
     const relayStop: Stop = {
       id: crypto.randomUUID(),
       eventId: '',
       sequence: 0,
       type: 'relay',
       geocodeStatus: 'pending',
-      apptStart: fmt(driver1Drop),
-      apptEnd:   fmt(driver2Pickup),
+      apptStart: fmt(prevDrop),
+      apptEnd:   fmt(nextPickup),
     };
-    let insertIdx = stops.length;
-    for (let i = stops.length - 1; i >= 0; i--) {
+    // Insert position: end of the window being split, walking back past
+    // any trailing delivery-flavored stops (old heuristic, scoped to the
+    // window so mid-load splits don't jump legs).
+    const windowStartIdx = markerOrdinal === 0 ? 0 : (markerIdxsAll[markerOrdinal - 1] + 1);
+    const windowEndIdxExcl = markerOrdinal < markerIdxsAll.length ? markerIdxsAll[markerOrdinal] : stops.length;
+    let insertIdx = windowEndIdxExcl;
+    for (let i = windowEndIdxExcl - 1; i >= windowStartIdx; i--) {
       if (stops[i].type !== 'delivery' && stops[i].type !== 'drop_hook' && stops[i].type !== 'drop') { insertIdx = i + 1; break; }
       insertIdx = i;
     }
     const next = [...stops.slice(0, insertIdx), relayStop, ...stops.slice(insertIdx)];
     setStops(next.map((s, i) => ({ ...s, sequence: i + 1 })));
+
+    // New leg defaults: a different truck than the leg being split, and
+    // that truck's preferred driver.
+    const splitLegAsset = (!isEdit && draftLegs.length > 0) ? draftLegs[draftLegs.length - 1].assetId : assetId;
+    const newAsset = assets.find(a => a.id !== splitLegAsset)?.id ?? splitLegAsset;
+    const draft = { key: crypto.randomUUID(), assetId: newAsset, driverName: preferredDriverName(newAsset) };
+    if (isEdit) {
+      setDraftLegs([draft]);
+      setPendingSplitStopId(relayStop.id);
+    } else {
+      setDraftLegs(prev => [...prev, draft]);
+    }
+    markDirty();
+  };
+
+  /** Per-leg edits from RelayLegsEditor. The viewed leg routes to the
+   *  main form state; drafts get the driver↔truck pref auto-applied
+   *  (same silent-apply rule as create mode's main row); persisted
+   *  non-viewed legs buffer in legEdits until Save. */
+  const handleLegChange = (key: string, patch: { assetId?: number; driverName?: string; pay?: number | '' }) => {
+    markDirty();
+    if (patch.pay !== undefined) {
+      const pay = patch.pay;
+      setLegPays(prev => ({ ...prev, [key]: pay }));
+    }
+    const isViewedKey = key === 'leg0' || key === modalEventId;
+    const draft = draftLegs.find(d => d.key === key);
+    if (patch.driverName !== undefined) {
+      const name = patch.driverName;
+      if (isViewedKey) {
+        setDriverName(name);
+      } else if (draft) {
+        const prefAid = preferredAssetForDriverName(name);
+        setDraftLegs(prev => prev.map(d => d.key === key
+          ? { ...d, driverName: name, ...(prefAid != null ? { assetId: prefAid } : {}) }
+          : d));
+      } else {
+        setLegEdits(prev => ({ ...prev, [key]: { ...prev[key], driverName: name } }));
+      }
+    }
+    if (patch.assetId !== undefined) {
+      const aid = patch.assetId;
+      if (isViewedKey) {
+        setAssetId(aid);
+      } else if (draft) {
+        const suggested = preferredDriverName(aid);
+        setDraftLegs(prev => prev.map(d => d.key === key
+          ? { ...d, assetId: aid, ...(suggested ? { driverName: suggested } : {}) }
+          : d));
+      } else {
+        setLegEdits(prev => ({ ...prev, [key]: { ...prev[key], assetId: aid } }));
+      }
+    }
+  };
+
+  /** Re-pull the load's documents after a handoff-photo upload. */
+  const refreshHandoffDocs = async () => {
+    const lid = currentEv?.loadId;
+    if (!lid || !orgId) return;
+    const { fetchLoadDocuments } = await import('@/lib/db');
+    setLoadDocuments(await fetchLoadDocuments(lid, orgId));
   };
 
   /** Strip the driver-check-in runtime fields off a stop. Used by
@@ -3963,12 +4170,16 @@ export default function EventModal() {
     : null;
   const ACC_COLOR     = '#16a34a';
   const iStyle        = inputStyle();
-  const rStyle        = inputStyle();
   const focusH        = focusColor(headerColor);
-  const focusR        = focusColor(RELAY_COLOR);
 
-  const endLabel   = isPickupLeg ? 'Drop at Yard' : 'End';
-  const startLabel = isDeliveryLeg ? 'Pickup from Yard' : 'Start';
+  // Boundary legs get yard-flavored labels: any non-final leg ENDS at a
+  // handoff, any non-first leg STARTS at one. (Count from primitives —
+  // the view models aren't built yet at this point in the component.)
+  const relayLegCountTotal = isExistingRelayLeg
+    ? Math.max(relayLegs.length + (pendingSplitStopId ? 1 : 0), currentEv?.legCount ?? 2)
+    : draftLegs.length + 1;
+  const endLabel   = isExistingRelayLeg && viewedLegIdx != null && viewedLegIdx < relayLegCountTotal - 1 ? 'Drop at Yard' : 'End';
+  const startLabel = isExistingRelayLeg && (viewedLegIdx ?? 0) > 0 ? 'Pickup from Yard' : 'Start';
 
   const driverPayPctValue = (() => {
     const lp = typeof fieldValues['loadPrice'] === 'number' ? fieldValues['loadPrice'] : parseFloat(String(fieldValues['loadPrice'] ?? '')) || 0;
@@ -4037,14 +4248,109 @@ export default function EventModal() {
     </span>
   ) : null;
 
+  // ── Relay leg view models ──────────────────────────────────────────
+  // Everything the RelayLegsEditor renders, assembled from store legs +
+  // the modal's edit buffers. The viewed leg's driver/truck mirror the
+  // main form fields; other persisted legs read legEdits overrides;
+  // draft legs read draftLegs.
+  const relayMarkersInStops = stops.filter(s => s.type === 'relay');
+  // Cheap haversine estimate for draft legs (no cached routed miles yet).
+  const draftLegMilesEstimate = (legIdx: number): number | null => {
+    const slice = legWindowSlice(stops, legIdx);
+    const mi = legStraightMiles({ stops: slice });
+    return mi > 0 ? mi : null;
+  };
+  const relayLegViews: RelayLegView[] = (() => {
+    if (!isRelayContext) return [];
+    if (isExistingRelayLeg) {
+      const views: RelayLegView[] = relayLegs.map((leg, i) => {
+        const isViewed = leg.id === modalEventId;
+        const edits = legEdits[leg.id] ?? {};
+        return {
+          key: leg.id,
+          eventId: leg.id,
+          legIndex: i,
+          assetId: isViewed ? assetId : (edits.assetId ?? leg.assetId),
+          driverName: isViewed ? driverName : (edits.driverName ?? resolveDriverNameForEvent(leg)),
+          pay: legPays[leg.id] ?? '',
+          startIso: isViewed ? startDate : leg.start,
+          miles: isViewed ? loadedMiles : (leg.loadedMiles ?? otherLegMiles[leg.id] ?? null),
+          isViewed,
+        };
+      });
+      if (pendingSplitStopId && draftLegs[0]) {
+        const marker = stops.find(s => s.id === pendingSplitStopId);
+        const insertAt = (viewedArrIdx >= 0 ? viewedArrIdx : views.length - 1) + 1;
+        views.splice(insertAt, 0, {
+          key: draftLegs[0].key,
+          legIndex: insertAt,
+          assetId: draftLegs[0].assetId,
+          driverName: draftLegs[0].driverName,
+          pay: legPays[draftLegs[0].key] ?? '',
+          startIso: marker?.apptEnd ?? marker?.apptStart,
+          miles: draftLegMilesEstimate(insertAt),
+          isViewed: false,
+          isDraft: true,
+        });
+        views.forEach((v, i) => { v.legIndex = i; });
+      }
+      return views;
+    }
+    // Create mode (or single→relay conversion drafts in edit mode).
+    return [
+      {
+        key: 'leg0', legIndex: 0, assetId, driverName,
+        pay: legPays['leg0'] ?? '', startIso: startDate,
+        miles: draftLegMilesEstimate(0), isViewed: true,
+      },
+      ...draftLegs.map((d, i) => ({
+        key: d.key, legIndex: i + 1, assetId: d.assetId, driverName: d.driverName,
+        pay: legPays[d.key] ?? '',
+        startIso: relayMarkersInStops[i]?.apptEnd ?? relayMarkersInStops[i]?.apptStart,
+        miles: draftLegMilesEstimate(i + 1), isViewed: false, isDraft: true as const,
+      })),
+    ];
+  })();
+  // Handoff photos, tagged with the marker ordinal when the driver app
+  // supplied one (null = legacy photo, shown on every handoff).
+  const relayHandoffPhotos: RelayHandoffPhoto[] = loadDocuments
+    .filter(d => d.kind === 'relay_handoff')
+    .map(d => ({
+      id: d.id,
+      uploadedAt: d.uploadedAt,
+      handoffIndex: (d as { handoffIndex?: number | null }).handoffIndex ?? null,
+    }));
+  // Marker i sits between relayLegViews[i] and [i+1].
+  const relayHandoffViews: RelayHandoffView[] = isRelayContext
+    ? relayMarkersInStops.map((stop, m) => ({
+        stop,
+        isDraft: isExistingRelayLeg ? stop.id === pendingSplitStopId : true,
+        keepEventId: relayLegViews[m]?.eventId,
+        mergeEventId: relayLegViews[m + 1]?.eventId,
+      }))
+    : [];
+  // Whole-haul miles for the Locations header: Σ every leg (viewed leg's
+  // live computation + siblings' cached/computed values). null while any
+  // leg is still unknown so the header shows "—" instead of a per-leg
+  // number that makes the RPM look wrong.
+  const relayTotalMilesForHeader: number | null = (() => {
+    if (!isExistingRelayLeg || relayLegs.length < 2) return loadedMiles;
+    if (loadedMiles == null) return null;
+    let sum = loadedMiles;
+    for (const leg of otherLegs) {
+      const mi = leg.loadedMiles ?? otherLegMiles[leg.id];
+      if (mi == null) return null;
+      sum += mi;
+    }
+    return sum;
+  })();
+
   // ── Relay totals — used to swap the regular Driver Pay slot for a
   // read-only "Total Driver Pay" tile when the modal is in relay context.
   const relayLp = typeof fieldValues['loadPrice'] === 'number'
     ? fieldValues['loadPrice']
     : parseFloat(String(fieldValues['loadPrice'] ?? '')) || 0;
-  const relayPickupNum   = pickupDriverPay   === '' ? 0 : pickupDriverPay;
-  const relayDeliveryNum = deliveryDriverPay === '' ? 0 : deliveryDriverPay;
-  const relayTotalPay    = relayPickupNum + relayDeliveryNum;
+  const relayTotalPay    = relayLegViews.reduce((sum, l) => sum + (typeof l.pay === 'number' ? l.pay : 0), 0);
   const relayTotalPct    = relayLp > 0 && relayTotalPay > 0
     ? Math.round((relayTotalPay / relayLp) * 1000) / 10
     : null;
@@ -4222,7 +4528,6 @@ export default function EventModal() {
     ),
   };
 
-  const relayPartnerAsset = relayPartner ? assets.find(a => a.id === relayPartner.assetId) : null;
   const assetLabel = (a: { name: string; unit?: string } | null | undefined) =>
     a ? (a.unit ? `${a.name} - ${a.unit}` : a.name) : '—';
 
@@ -4857,10 +5162,10 @@ export default function EventModal() {
                     </>
                   );
                 })()}
-                {(isPickupLeg || isDeliveryLeg) && (
+                {isExistingRelayLeg && viewedLegIdx != null && (
                   <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-lg"
                     style={{ background: RELAY_COLOR, color: 'white' }}>
-                    ⇄ {isPickupLeg ? 'Pickup Leg' : 'Delivery Leg'}
+                    ⇄ {legLabel(viewedLegIdx, Math.max(relayLegViews.length, currentEv?.legCount ?? 2)) || 'Relay Leg'}
                   </span>
                 )}
                 {/* Cancelled-state pill. Picks up both cancel modes
@@ -5709,298 +6014,39 @@ export default function EventModal() {
               if (section === 'load') return null; // pinned above
               if (section === 'locations') return (
                 <div key="locations">
-                  {/* Relay block */}
-                  {(isDeliveryLeg || isPickupLeg || relayActive) && (
+                  {/* Relay legs editor — one card per leg with a handoff
+                      divider (relay point + photos + per-handoff undo)
+                      between consecutive legs. Replaces the old fixed
+                      pickup/delivery block. */}
+                  {isRelayContext && (
                     <div style={{ borderTop: '1px solid var(--gc-border-light)', paddingTop: 20 }}>
-                      {isDeliveryLeg && (() => {
-                        const relayStop = stops.find(s => s.type === 'relay');
-                        const pickupAssetName = assetLabel(relayPartnerAsset);
-                        const delivAssetName  = assetLabel(assets.find(a => a.id === assetId));
-                        return (
-                          <div className="rounded-xl p-6 space-y-5" style={{ background: '#f5f3ff', border: '1px solid #ddd6fe' }}>
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <ArrowLeftRight size={15} style={{ color: RELAY_COLOR }} />
-                                <span className="text-sm font-semibold" style={{ color: RELAY_COLOR }}>Delivery Leg</span>
-                                {relayPartner && (
-                                  <button type="button" onClick={() => { if (isDirty) { setSavePromptAfterNav(relayPartner.id); setShowSavePrompt(true); } else { openEditModal(relayPartner.id); } }}
-                                    className="text-xs font-medium underline-offset-2"
-                                    style={{ color: RELAY_COLOR, textDecoration: 'underline' }}>
-                                    Open pickup leg →
-                                  </button>
-                                )}
-                              </div>
-                              <button type="button" onClick={handleRelayRemove}
-                                className="text-xs px-3 py-1.5 rounded-lg font-medium transition-colors shrink-0"
-                                style={confirmRelayRemove ? { background: '#d93025', color: 'white' } : { color: '#d93025' }}
-                                onMouseEnter={e => { if (!confirmRelayRemove) e.currentTarget.style.background = 'rgba(217,48,37,.1)'; }}
-                                onMouseLeave={e => { if (!confirmRelayRemove) e.currentTarget.style.background = 'transparent'; }}>
-                                {confirmRelayRemove ? 'Confirm remove?' : 'Remove split'}
-                              </button>
-                            </div>
-                            <div style={{ background: '#ede9fe', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: '#5b21b6', display: 'flex', alignItems: 'center', gap: 8 }}>
-                              <ArrowLeftRight size={14} style={{ flexShrink: 0 }} />
-                              <span style={{ flex: 1 }}>
-                                {relayStop?.address
-                                  ? <>Relay point: <strong>{relayStop.address}</strong>{relayStop.apptStart ? ` · Drop ${fmtRelayTime(relayStop.apptStart)}` : ''}{relayStop.apptEnd ? ` → Pickup ${fmtRelayTime(relayStop.apptEnd)}` : ''}</>
-                                  : 'No relay point set on the pickup leg.'
-                                }
-                              </span>
-                              {(() => {
-                                const currentEv = events.find(e => e.id === modalEventId);
-                                if (!currentEv?.loadId) return null;
-                                const handoffPhotos = loadDocuments
-                                  .filter(d => d.kind === 'relay_handoff')
-                                  .map(d => ({ id: d.id, uploadedAt: d.uploadedAt }));
-                                return (
-                                  <HandoffPhotosButton
-                                    loadId={currentEv.loadId}
-                                    photos={handoffPhotos}
-                                    onSelectInPanel={(docId) => {
-                                      setShowPdfViewer(true);
-                                      setShowMapPanel(false);
-                                      setDocsTab('uploaded');
-                                      setSelectedDocId(docId);
-                                    }}
-                                    onUploaded={async () => {
-                                      if (!currentEv.loadId || !orgId) return;
-                                      const { fetchLoadDocuments } = await import('@/lib/db');
-                                      const fresh = await fetchLoadDocuments(currentEv.loadId, orgId);
-                                      setLoadDocuments(fresh);
-                                    }}
-                                  />
-                                );
-                              })()}
-                            </div>
-                            <div className="grid grid-cols-2 gap-4">
-                              <div>
-                                <div style={{ fontSize: 11, fontWeight: 700, color: '#7c3aed', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Pickup Asset</div>
-                                <div style={{ fontSize: 13, fontWeight: 600, color: '#5b21b6', background: '#ede9fe', borderRadius: 6, padding: '6px 10px' }}>{pickupAssetName}{relayPartner?.driverName ? ` · ${relayPartner.driverName}` : ''}</div>
-                              </div>
-                              <div>
-                                <div style={{ fontSize: 11, fontWeight: 700, color: '#7c3aed', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Delivery Asset</div>
-                                <div style={{ fontSize: 13, fontWeight: 600, color: '#5b21b6', background: '#ede9fe', borderRadius: 6, padding: '6px 10px' }}>{delivAssetName}</div>
-                              </div>
-                            </div>
-                            {/* Trailer pin viewer hidden 2026-05-22 —
-                                feature was too complex for the prototype.
-                                Schema + relayPartner trailer fields are
-                                preserved; just uncomment to re-enable. */}
-                            {/* {relayPartner?.trailerDropoffLat != null && (
-                              <TrailerLocationCard
-                                editable={false}
-                                address={relayPartner?.trailerDropoffAddress}
-                                pinLat={relayPartner?.trailerDropoffLat}
-                                pinLng={relayPartner?.trailerDropoffLng}
-                                pinAt={relayPartner?.trailerDropoffAt}
-                                tz={calendarTimezone}
-                              />
-                            )} */}
-                          </div>
-                        );
-                      })()}
-                      {(isPickupLeg || relayActive) && (
-                        <div className="rounded-xl p-6 space-y-5" style={{ background: '#f5f3ff', border: '1px solid #ddd6fe' }}>
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <ArrowLeftRight size={15} style={{ color: RELAY_COLOR }} />
-                              <span className="text-sm font-semibold" style={{ color: RELAY_COLOR }}>
-                                {isPickupLeg ? 'Pickup Leg' : 'Split Load'} — Delivery Details
-                              </span>
-                              {isPickupLeg && relayPartner && (
-                                <button type="button" onClick={() => { if (isDirty) { setSavePromptAfterNav(relayPartner.id); setShowSavePrompt(true); } else { openEditModal(relayPartner.id); } }}
-                                  className="text-xs font-medium underline-offset-2"
-                                  style={{ color: RELAY_COLOR, textDecoration: 'underline' }}>
-                                  Open delivery leg →
-                                </button>
-                              )}
-                            </div>
-                            <button type="button"
-                              onClick={isPickupLeg
-                                ? handleRelayRemove
-                                : confirmRelayRemove
-                                  ? () => { setRelayActive(false); setConfirmRelayRemove(false); setStops(prev => prev.filter(s => s.type !== 'relay')); }
-                                  : () => setConfirmRelayRemove(true)
-                              }
-                              className="text-xs px-3 py-1.5 rounded-lg font-medium transition-colors"
-                              style={confirmRelayRemove ? { background: '#d93025', color: 'white' } : { color: '#d93025' }}
-                              onMouseEnter={e => { if (!confirmRelayRemove) e.currentTarget.style.background = 'rgba(217,48,37,.1)'; }}
-                              onMouseLeave={e => { if (!confirmRelayRemove) e.currentTarget.style.background = 'transparent'; }}>
-                              {confirmRelayRemove ? 'Confirm cancel?' : isPickupLeg ? 'Remove split' : 'Cancel split'}
-                            </button>
-                          </div>
-                          {/* Delivery Driver / Asset row — same Driver-first
-                              layout and same loop-safe asymmetric auto-fill
-                              as the main row above. See that row's comment
-                              for the full reasoning. */}
-                          <div className="grid grid-cols-2 gap-4">
-                            <Field label="Delivery Driver">
-                              <div className="flex items-center gap-2" style={{ minWidth: 0 }}>
-                                <div style={{ flex: 1, minWidth: 0 }}>
-                                  <StyledSelect value={relayDelivDriverName} onChange={e => {
-                                      const nextName = e.target.value;
-                                      setRelayDelivDriverName(nextName);
-                                      // Manual driver pick clears any
-                                      // pending driver-suggestion chip.
-                                      setSuggestRelayDelivDriverSwap(null);
-                                      const sel = drivers.find(d =>
-                                        canonicalDriverName(d) === nextName || d.name === nextName,
-                                      );
-                                      if (!sel) { setSuggestRelayDelivAssetSwap(null); return; }
-                                      let targetAid: number | null = null;
-                                      for (const [aidStr, did] of Object.entries(driverPrefs)) {
-                                        if (did === sel.id) { targetAid = Number(aidStr); break; }
-                                      }
-                                      if (targetAid == null) {
-                                        for (const [aidStr, did] of Object.entries(driverPrefsSecondary)) {
-                                          if (did === sel.id) { targetAid = Number(aidStr); break; }
-                                        }
-                                      }
-                                      if (targetAid == null || targetAid === relayDelivAssetId) {
-                                        setSuggestRelayDelivAssetSwap(null);
-                                        return;
-                                      }
-                                      if (!isEdit) {
-                                        setRelayDelivAssetId(targetAid);
-                                        setSuggestRelayDelivAssetSwap(null);
-                                        return;
-                                      }
-                                      setSuggestRelayDelivAssetSwap(targetAid);
-                                    }}
-                                    style={{ ...rStyle, cursor: 'pointer' }} onFocus={focusR} onBlur={blurColor}>
-                                    <option value="">— No driver —</option>
-                                    {drivers
-                                      .filter(d => isActiveOn(d, startDate) || canonicalDriverName(d) === relayDelivDriverName)
-                                      .map(d => {
-                                        const display = canonicalDriverName(d);
-                                        return <option key={d.id} value={display}>{display}</option>;
-                                      })}
-                                  </StyledSelect>
-                                </div>
-                                {/* Driver-side chip — offers to swap
-                                    the delivery driver to the primary
-                                    of the just-picked delivery asset. */}
-                                {suggestRelayDelivDriverSwap && (
-                                  <SuggestionChip
-                                    label={`Use ${suggestRelayDelivDriverSwap}?`}
-                                    onApply={() => { setRelayDelivDriverName(suggestRelayDelivDriverSwap); setSuggestRelayDelivDriverSwap(null); }}
-                                    onDismiss={() => setSuggestRelayDelivDriverSwap(null)}
-                                  />
-                                )}
-                              </div>
-                            </Field>
-                            <Field label="Delivery Truck *">
-                              <div className="flex items-center gap-2" style={{ minWidth: 0 }}>
-                                <div style={{ flex: 1, minWidth: 0 }}>
-                                  <AssetSelect
-                                    value={relayDelivAssetId}
-                                    options={assets.filter(a => isActiveOn(a, startDate) || a.id === relayDelivAssetId)}
-                                    onChange={(aid) => {
-                                      setRelayDelivAssetId(aid);
-                                      setSuggestRelayDelivAssetSwap(null);
-                                      const suggested = preferredDriverName(aid);
-                                      if (!suggested || suggested === relayDelivDriverName) {
-                                        setSuggestRelayDelivDriverSwap(null);
-                                        return;
-                                      }
-                                      if (!isEdit) {
-                                        setRelayDelivDriverName(suggested);
-                                        setSuggestRelayDelivDriverSwap(null);
-                                        return;
-                                      }
-                                      setSuggestRelayDelivDriverSwap(suggested);
-                                    }}
-                                    style={rStyle}
-                                    focusColor={RELAY_COLOR}
-                                  />
-                                </div>
-                                {/* Asset-side chip — offers to swap
-                                    the delivery asset to the truck
-                                    the just-picked delivery driver
-                                    drives. */}
-                                {suggestRelayDelivAssetSwap != null && (() => {
-                                  const targetAsset = assets.find(a => a.id === suggestRelayDelivAssetSwap);
-                                  if (!targetAsset) return null;
-                                  return (
-                                    <SuggestionChip
-                                      label={`Use ${assetLabel(targetAsset)}?`}
-                                      onApply={() => { setRelayDelivAssetId(suggestRelayDelivAssetSwap); setSuggestRelayDelivAssetSwap(null); }}
-                                      onDismiss={() => setSuggestRelayDelivAssetSwap(null)}
-                                    />
-                                  );
-                                })()}
-                              </div>
-                            </Field>
-                          </div>
-                          {(() => {
-                            const relayStop = stops.find(s => s.type === 'relay');
-                            const currentEv = events.find(e => e.id === modalEventId);
-                            const handoffPhotos = currentEv?.loadId
-                              ? loadDocuments
-                                  .filter(d => d.kind === 'relay_handoff')
-                                  .map(d => ({ id: d.id, uploadedAt: d.uploadedAt }))
-                              : [];
-                            return (
-                              <div style={{ background: '#ede9fe', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: '#5b21b6', display: 'flex', alignItems: 'center', gap: 8 }}>
-                                <ArrowLeftRight size={14} style={{ flexShrink: 0 }} />
-                                <span style={{ flex: 1 }}>
-                                  {relayStop?.address
-                                    ? <>Relay point: <strong>{relayStop.address}</strong>{relayStop.apptStart ? ` · Drop ${fmtRelayTime(relayStop.apptStart)}` : ''}{relayStop.apptEnd ? ` → Pickup ${fmtRelayTime(relayStop.apptEnd)}` : ''}</>
-                                    : <>Set the relay point and drop/pickup times in the <strong>Locations</strong> section below.</>
-                                  }
-                                </span>
-                                {currentEv?.loadId && (
-                                  <HandoffPhotosButton
-                                    loadId={currentEv.loadId}
-                                    photos={handoffPhotos}
-                                    onSelectInPanel={(docId) => {
-                                      setShowPdfViewer(true);
-                                      setShowMapPanel(false);
-                                      setDocsTab('uploaded');
-                                      setSelectedDocId(docId);
-                                    }}
-                                    onUploaded={async () => {
-                                      if (!currentEv.loadId || !orgId) return;
-                                      const { fetchLoadDocuments } = await import('@/lib/db');
-                                      const fresh = await fetchLoadDocuments(currentEv.loadId, orgId);
-                                      setLoadDocuments(fresh);
-                                    }}
-                                  />
-                                )}
-                              </div>
-                            );
-                          })()}
-                          {/* Trailer drop section — ONLY rendered after
-                              the driver has captured a GPS pin from
-                              the mobile app. Until then there's nothing
-                              real to show. Once the pin lands, the
-                              section appears and the dispatcher can
-                              type the street address that pairs with
-                              the pin (primary), with the pin shown
-                              underneath as the verification layer. */}
-                          {/* Trailer pin editor hidden 2026-05-22 — pair
-                              with the driver-app RelayTrailerLocation
-                              removal. Re-enable by uncommenting. */}
-                          {/* {(() => {
-                            const currentEv = events.find(e => e.id === modalEventId);
-                            if (currentEv?.trailerDropoffLat == null) return null;
-                            return (
-                              <TrailerLocationCard
-                                editable
-                                address={currentEv?.trailerDropoffAddress}
-                                onAddressChange={(next) => {
-                                  if (!modalEventId) return;
-                                  updateEvent(modalEventId, { trailerDropoffAddress: next || undefined });
-                                }}
-                                pinLat={currentEv?.trailerDropoffLat}
-                                pinLng={currentEv?.trailerDropoffLng}
-                                pinAt={currentEv?.trailerDropoffAt}
-                                tz={calendarTimezone}
-                              />
-                            );
-                          })()} */}
-                        </div>
-                      )}
+                      <RelayLegsEditor
+                        legs={relayLegViews}
+                        handoffs={relayHandoffViews}
+                        loadPrice={canViewPrice && relayLp > 0 ? relayLp : null}
+                        assets={assets}
+                        drivers={drivers}
+                        startDate={startDate}
+                        canViewDriverPay={canViewDriverPay}
+                        disabled={isReadOnly}
+                        loadId={currentEv?.loadId}
+                        handoffPhotos={relayHandoffPhotos}
+                        onSelectPhoto={(docId) => {
+                          setShowPdfViewer(true);
+                          setShowMapPanel(false);
+                          setDocsTab('uploaded');
+                          setSelectedDocId(docId);
+                        }}
+                        onPhotosUploaded={refreshHandoffDocs}
+                        canonicalDriverName={canonicalDriverName}
+                        onChangeLeg={handleLegChange}
+                        onOpenLeg={(eventId) => {
+                          if (isDirty) { setSavePromptAfterNav(eventId); setShowSavePrompt(true); }
+                          else { openEditModal(eventId); }
+                        }}
+                        onAddHandoff={!isBatch && !(isEdit && pendingSplitStopId) ? addHandoff : undefined}
+                        onRemoveHandoff={handleRemoveHandoff}
+                      />
                     </div>
                   )}
                   {/* Stops section */}
@@ -6026,56 +6072,32 @@ export default function EventModal() {
                       onChange={next => { setStops(next); markDirty(); }}
                       headerColor={headerColor}
                       onMapRoute={() => { setShowMapPanel(true); setShowPdfViewer(false); }}
-                      onActivateRelay={!isPickupLeg && !isDeliveryLeg && !isBatch ? activateRelay : undefined}
-                      relayActive={relayActive}
+                      onActivateRelay={!isBatch ? addHandoff : undefined}
+                      relayActive={isEdit ? pendingSplitStopId != null : false}
                       relayRole={relayRole}
+                      legIndex={viewedLegIdx}
+                      legCount={isRelayContext ? relayLegViews.length : undefined}
+                      legDriverNames={isRelayContext ? relayLegViews.map(v => v.driverName || undefined) : undefined}
                       eventStart={startDate && startTime ? `${startDate}T${startTime}` : undefined}
                       eventEnd={endDate && endTime ? `${endDate}T${endTime}` : undefined}
-                      loadedMiles={(() => {
-                        // On a relay leg, show the WHOLE-HAUL miles in the
-                        // header (this leg + partner leg). RPM is computed
-                        // from load price / total miles, so showing only the
-                        // leg's own miles makes the displayed RPM look wrong
-                        // (e.g. "4 mi · $2.08/mi" on a tiny delivery leg of a
-                        // 1200-mile haul). Both legs render the same number.
-                        //
-                        // Stale-data guard: prefer the partner event's
-                        // server-stored loadedMiles (present immediately when
-                        // relayPartner arrives) over the async-computed
-                        // partnerLoadedMiles (which falls behind by a Google
-                        // Directions round-trip). If neither is known yet,
-                        // return null so the header shows "—" instead of
-                        // briefly displaying the per-leg-only mileage.
-                        if ((isPickupLeg || isDeliveryLeg) && relayPartner && loadedMiles != null) {
-                          const partnerMi = relayPartner.loadedMiles ?? partnerLoadedMiles;
-                          if (partnerMi == null) return null;
-                          return partnerMi + loadedMiles;
-                        }
-                        return loadedMiles;
-                      })()}
+                      // Whole-haul miles (Σ every leg) in the header. RPM is
+                      // load price / total miles, so showing only the leg's
+                      // own miles makes the displayed RPM look wrong (e.g.
+                      // "4 mi · $2.08/mi" on a tiny delivery leg of a
+                      // 1200-mile haul). Every leg renders the same number;
+                      // null until every sibling leg's miles are known.
+                      loadedMiles={relayTotalMilesForHeader}
                       loadPrice={canViewPrice && typeof fieldValues['loadPrice'] === 'number' ? fieldValues['loadPrice'] : null}
                       ratePerMile={canViewPrice ? (() => {
+                        // loadPrice is stored at the LOAD level (every leg
+                        // shares the same value — see LOAD_LEVEL_KEYS in
+                        // lib/loadFieldSplit.ts). Don't sum per-leg prices;
+                        // the denominator is the whole-haul miles so every
+                        // leg shows the same load-level RPM.
                         const thisPrice = typeof fieldValues['loadPrice'] === 'number' ? fieldValues['loadPrice'] : null;
-                        if (thisPrice == null || loadedMiles == null || loadedMiles === 0) return null;
-                        // For relay loads, loadPrice is stored at the LOAD level
-                        // (both legs share the same value — see LOAD_LEVEL_KEYS
-                        // in lib/loadFieldSplit.ts). Don't sum the partner's
-                        // price or we'd double-count. The denominator is the
-                        // total trip miles (this leg + partner leg) so both
-                        // legs show the same load-level RPM.
-                        //
-                        // Stale-data guard: same as loadedMiles above —
-                        // partnerLoadedMiles updates asynchronously, so prefer
-                        // the partner's cached loaded_miles column and bail
-                        // out with null if we genuinely don't know yet.
-                        if ((isPickupLeg || isDeliveryLeg) && relayPartner) {
-                          const partnerMi = relayPartner.loadedMiles ?? partnerLoadedMiles;
-                          if (partnerMi == null) return null;
-                          const totalMiles = partnerMi + loadedMiles;
-                          if (totalMiles === 0) return null;
-                          return Math.round((thisPrice / totalMiles) * 100) / 100;
-                        }
-                        return Math.round((thisPrice / loadedMiles) * 100) / 100;
+                        const total = relayTotalMilesForHeader;
+                        if (thisPrice == null || total == null || total === 0) return null;
+                        return Math.round((thisPrice / total) * 100) / 100;
                       })() : null}
                     />
                   </div>
@@ -6127,73 +6149,10 @@ export default function EventModal() {
                     labelSuffixes={dispatcherLabelSuffixes}
                     noLabelFields={isRelayContext && section === 'financial' ? new Set(['driverPay']) : new Set()}
                   />
-                  {/* Dual driver-pay inputs for relay loads — Total + chip
-                      lives next to Load Price via the override above.
-                      Gated on loads.view_driver_pay so Dispatcher /
-                      Maintenance never see what either leg's driver
-                      was paid. */}
-                  {section === 'financial' && isRelayContext && canViewDriverPay && (() => {
-                    const pctOf = (n: number) => (relayLp > 0 && n > 0 ? Math.round((n / relayLp) * 1000) / 10 : null);
-                    const pickupPct   = pctOf(relayPickupNum);
-                    const deliveryPct = pctOf(relayDeliveryNum);
-                    const fmtPct = (p: number) => `${p % 1 === 0 ? p.toFixed(0) : p.toFixed(1)}%`;
-                    const pctChip = (p: number | null) => p === null ? null : (
-                      <span className="px-1.5 py-0.5 rounded-lg normal-case tracking-normal font-semibold"
-                        style={{ fontSize: 10, background: '#f1f3f4', color: 'var(--gc-text-3)', border: '1px solid var(--gc-border-light)' }}>
-                        {fmtPct(p)}
-                      </span>
-                    );
-                    // Per-leg driver name + start to drive the
-                    // Finalized banner. `relayPartner` holds the OTHER
-                    // leg; combined with relayRole we can resolve which
-                    // is pickup vs delivery without re-doing the join.
-                    // The view-in-the-modal start is split across
-                    // startDate/startTime; payrollWeekStartFor only
-                    // needs the date portion so we pass that directly.
-                    const pickupDriverName   = isPickupLeg   ? driverName : relayPartner?.driverName ?? '';
-                    const deliveryDriverName = isDeliveryLeg ? driverName : relayPartner?.driverName ?? '';
-                    const pickupStart        = isPickupLeg   ? startDate : relayPartner?.start ?? '';
-                    const deliveryStart      = isDeliveryLeg ? startDate : relayPartner?.start ?? '';
-                    const pickupPayNum   = typeof pickupDriverPay   === 'number' ? pickupDriverPay   : null;
-                    const deliveryPayNum = typeof deliveryDriverPay === 'number' ? deliveryDriverPay : null;
-                    const finalizedHint = 'Locked — driver pay has been finalized for this week. Reopen the payroll record on the Payroll page to edit.';
-                    return (
-                      <div className="mt-3 grid grid-cols-2 gap-3">
-                        <Field label="Pickup Driver Pay" labelSuffix={pctChip(pickupPct)}>
-                          <NumberInputWithDollar
-                            value={pickupDriverPay}
-                            onChange={v => { setPickupDriverPay(v); markDirty(); }}
-                            headerColor={headerColor}
-                            disabled={pickupFinalized.finalized}
-                            disabledTitle={finalizedHint}
-                          />
-                          <div className="mt-1.5">
-                            <FinalizedPayBanner
-                              driverName={pickupDriverName}
-                              pickupIso={pickupStart}
-                              driverPay={pickupPayNum}
-                            />
-                          </div>
-                        </Field>
-                        <Field label="Delivery Driver Pay" labelSuffix={pctChip(deliveryPct)}>
-                          <NumberInputWithDollar
-                            value={deliveryDriverPay}
-                            onChange={v => { setDeliveryDriverPay(v); markDirty(); }}
-                            headerColor={headerColor}
-                            disabled={deliveryFinalized.finalized}
-                            disabledTitle={finalizedHint}
-                          />
-                          <div className="mt-1.5">
-                            <FinalizedPayBanner
-                              driverName={deliveryDriverName}
-                              pickupIso={deliveryStart}
-                              driverPay={deliveryPayNum}
-                            />
-                          </div>
-                        </Field>
-                      </div>
-                    );
-                  })()}
+                  {/* Per-leg driver-pay inputs live in the Relay legs
+                      editor (Locations section) — the financial grid
+                      keeps only the read-only Total Driver Pay tile
+                      next to Load Price via the override above. */}
 
                   {/* Non-relay finalized banner — visually aligned under
                       the Driver Pay column (right side of the 2-col
@@ -6269,12 +6228,13 @@ export default function EventModal() {
                             </button>
                           </div>
                           {(() => {
-                            // Build the list of drivers that can receive this accessorial pay
+                            // Build the list of drivers that can receive this
+                            // accessorial pay — the viewed leg's driver plus
+                            // every other leg's (drafts included), leg order.
                             const payOpts: string[] = [];
                             if (driverName) payOpts.push(driverName);
-                            if (relayGroupId) {
-                              if (relayDelivDriverName && !payOpts.includes(relayDelivDriverName)) payOpts.push(relayDelivDriverName);
-                              if (relayPartner?.driverName && !payOpts.includes(relayPartner.driverName)) payOpts.push(relayPartner.driverName);
+                            for (const lv of relayLegViews) {
+                              if (lv.driverName && !payOpts.includes(lv.driverName)) payOpts.push(lv.driverName);
                             }
                             return (
                               <>
@@ -6621,7 +6581,7 @@ export default function EventModal() {
                         {confirmDel ? 'Confirm?' : 'Delete'}
                       </button>
                     )}
-                    {!isPickupLeg && !isDeliveryLeg && (
+                    {!isExistingRelayLeg && (
                       <>
                         <button type="button" onClick={handleDuplicate}
                           className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-[13px] font-medium transition-all"
@@ -6657,7 +6617,7 @@ export default function EventModal() {
                     style={{ background: 'var(--gc-blue)' }}
                     onMouseEnter={e => { if (title.trim()) e.currentTarget.style.background = 'var(--gc-blue-hover)'; }}
                     onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-blue)')}>
-                    {isEdit ? 'Save changes' : relayActive ? 'Create relay' : eventKind === 'non_revenue' ? 'Create event' : 'Create load'}
+                    {isEdit ? 'Save changes' : draftLegs.length > 0 ? 'Create relay' : eventKind === 'non_revenue' ? 'Create event' : 'Create load'}
                   </button>
                 )}
               </div>
@@ -6824,14 +6784,11 @@ export default function EventModal() {
     {reviewQueueOpen && (() => {
       const currentEv = modalEventId ? events.find(e => e.id === modalEventId) : undefined;
       if (!currentEv) return null;
+      // On any non-first leg, resolve to leg 0 (the pickup leg) —
+      // ReviewQueue's meta + relay lookups assume it.
       const reviewLoad: CalendarEvent =
-        currentEv.relayRole === 'delivery' && currentEv.relayGroupId
-          ? (events.find(e =>
-              e.id !== currentEv.id &&
-              e.relayRole === 'pickup' &&
-              ((currentEv.loadId && e.loadId === currentEv.loadId) ||
-               (currentEv.relayGroupId && e.relayGroupId === currentEv.relayGroupId)),
-            ) ?? currentEv)
+        currentEv.relayRole && currentEv.relayRole !== 'pickup' && currentEv.loadId
+          ? (events.filter(e => e.loadId === currentEv.loadId).sort(byLegIndex)[0] ?? currentEv)
           : currentEv;
       return (
         <ReviewQueue

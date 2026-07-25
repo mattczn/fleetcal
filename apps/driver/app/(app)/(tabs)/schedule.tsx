@@ -14,6 +14,7 @@ import { useDriverSession } from "@/lib/useDriverSession";
 import { useLoadsRealtime } from "@/lib/useLoadsRealtime";
 import { useOrgTz, todayKeyInTz, nowInTz } from "@/lib/orgTz";
 import { fmtTimeShort } from "@/lib/loadCard";
+import { legPositionOf, splitStopsForLeg, relayChipLabel } from "@/lib/relayLegs";
 import type { Load, Stop } from "@/lib/types";
 import { Glass } from "@/components/Glass";
 import { EmptyState } from "@/components/EmptyState";
@@ -45,34 +46,36 @@ function spanDays(startIso: string, endIso: string): string[] {
 }
 function fmtHour(h: number): string { const ap = h < 12 ? "a" : "p"; return `${h % 12 || 12}${ap}`; }
 
-type Kind = "full" | "pickup" | "delivery";
+// Leg kind — relayRole IS positional now (first = pickup, last =
+// delivery, middle = transfer), so it maps 1:1. "full" = single-leg.
+type Kind = "full" | "pickup" | "transfer" | "delivery";
 function kindOf(l: Load): Kind {
-  return l.relayRole === "pickup" ? "pickup" : l.relayRole === "delivery" ? "delivery" : "full";
+  return l.relayRole ?? "full";
 }
 function cityOf(s?: Stop): string {
   if (!s) return "—";
   if (s.city && s.state) return `${s.city}, ${s.state}`;
   return s.city ?? s.facilityName ?? "—";
 }
-function kindChips(C: Colors): Record<Kind, { label: string | null; bg: string; fg: string }> {
-  // Relay legs (pickup + delivery) always wear the relay purple so the
-  // driver immediately recognizes "this is a handoff load" regardless
-  // of which leg they're seeing. The leg text (PICKUP LEG vs DELIVERY
-  // LEG) already distinguishes which side they're on.
-  return {
-    full:     { label: null,           bg: C.blueBg,   fg: C.blueInk },
-    pickup:   { label: "PICKUP LEG",   bg: C.purpleBg, fg: C.purpleInk },
-    delivery: { label: "DELIVERY LEG", bg: C.purpleBg, fg: C.purpleInk },
-  };
+// Relay legs always wear the relay purple so the driver immediately
+// recognizes "this is a handoff load" regardless of which leg they're
+// seeing. The chip text ("LEG 1/2 · PICKUP", "LEG 2/3 · TRANSFER")
+// tells them which leg is theirs.
+function chipFor(C: Colors, load: Load): { label: string | null; bg: string; fg: string } {
+  const pos = legPositionOf(load);
+  if (!pos) return { label: null, bg: C.blueBg, fg: C.blueInk };
+  return { label: relayChipLabel(pos), bg: C.purpleBg, fg: C.purpleInk };
 }
 function kindBars(C: Colors, accent: string): Record<Kind, string> {
-  return { full: accent, pickup: C.green, delivery: C.red };
+  return { full: accent, pickup: C.green, transfer: C.purple, delivery: C.red };
 }
-// route dots: [origin, destination] colors per leg kind
+// route dots: [origin, destination] colors per leg kind. Handoff
+// endpoints are purple; real pickup/delivery endpoints keep green/red.
 function kindDots(C: Colors): Record<Kind, [string, string]> {
   return {
     full:     [C.green,  C.red],
     pickup:   [C.green,  C.purple],
+    transfer: [C.purple, C.purple],
     delivery: [C.purple, C.red],
   };
 }
@@ -300,7 +303,7 @@ function EventCard({ item, onOpen }: { item: Item; onOpen: (id: string) => void 
   const { C, SHADOW, ACCENT } = useTheme();
   const { load, dayKeySel } = item;
   const kind = kindOf(load);
-  const chip = kindChips(C)[kind];
+  const chip = chipFor(C, load);
   const [dotFrom, dotTo] = kindDots(C)[kind];
   const days = spanDays(load.start, load.end);
   const multi = days.length > 1;
@@ -313,19 +316,24 @@ function EventCard({ item, onOpen }: { item: Item; onOpen: (id: string) => void 
   else timeText = "All day";
 
   // Relay-leg-aware endpoints. The load.stops array includes the
-  // WHOLE load (origin → handoff → final delivery) for both legs of
+  // WHOLE load (origin → handoffs → final delivery) on every leg of
   // a relay. Showing first/last for a relay leg would mislabel the
-  // bottom city stripe — e.g. a pickup-leg driver would see the final
+  // bottom city stripe — e.g. an origin-leg driver would see the final
   // delivery city as their destination when they actually drop the
-  // trailer at the handoff. Swap in the relay stop for the leg's
-  // destination (pickup leg) or origin (delivery leg).
-  const relayStop = load.stops.find((s) => s.type === "relay");
-  const from =
-    kind === "delivery" && relayStop ? relayStop : load.stops[0];
-  const to =
-    kind === "pickup"   && relayStop ? relayStop : load.stops[load.stops.length - 1];
+  // trailer at the handoff. Slice out THIS leg's window (between its
+  // boundary relay markers) and use its endpoints; a middle (transfer)
+  // leg gets a marker at BOTH ends.
+  const pos = legPositionOf(load);
+  const win = pos ? splitStopsForLeg(load.stops, pos.legIndex) : null;
+  const from = win ? win.mine[0]                   : load.stops[0];
+  const to   = win ? win.mine[win.mine.length - 1] : load.stops[load.stops.length - 1];
   const miles = load.loadedMiles ?? load.miles;
   const isRelay = kind !== "full";
+  // partnerDriverName mirrors the ADJACENT leg — the NEXT leg when one
+  // exists (whom I hand off to), else the PREVIOUS (whom I take over
+  // from). So on non-final legs it's the hand-off target; on the final
+  // leg it's the driver bringing the trailer to me.
+  const isFinalLeg = pos != null && pos.legIndex >= pos.legCount - 1;
 
   return (
     <TouchableOpacity
@@ -381,9 +389,11 @@ function EventCard({ item, onOpen }: { item: Item; onOpen: (id: string) => void 
         <View style={{ flexDirection: "row", alignItems: "center", gap: 7, marginTop: 9, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 10, backgroundColor: C.purpleBg }}>
           <Split size={13} color={C.purpleInk} strokeWidth={2.2} />
           <Text style={[f(700), { fontSize: 12, color: C.purpleInk, flex: 1 }]}>
-            {kind === "pickup" ? "Hand off to " : "Take over from "}
+            {isFinalLeg ? "Take over from " : "Hand off to "}
             <Text style={f(800)}>{load.partnerDriverName}</Text>
-            {to ? ` at ${cityOf(to)}` : ""}
+            {isFinalLeg
+              ? (from ? ` at ${cityOf(from)}` : "")
+              : (to ? ` at ${cityOf(to)}` : "")}
           </Text>
         </View>
       ) : null}
@@ -427,7 +437,6 @@ function DayGrid({ items, onOpen, showNow, nowMin, selectedKey }: {
 }) {
   const scrollRef = useRef<ScrollView>(null);
   const { C, SHADOW, ACCENT } = useTheme();
-  const chips = kindChips(C);
   const bars = kindBars(C, ACCENT);
   const evWidth = SCREEN_W - EV_LEFT - SP.screenPx;
 
@@ -472,7 +481,7 @@ function DayGrid({ items, onOpen, showNow, nowMin, selectedKey }: {
           const compact = height < 78;
           const colW = evWidth / b.cols;
           const left = EV_LEFT + b.col * colW;
-          const chip = chips[kind];
+          const chip = chipFor(C, b.load);
           const miles = b.load.loadedMiles ?? b.load.miles;
           return (
             <TouchableOpacity

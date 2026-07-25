@@ -29,6 +29,7 @@ import { railway } from '@/lib/railway';
 import Link from 'next/link';
 import type { Load, CalendarEvent } from '@/lib/types';
 import { buildRelayMilesMap } from '@/lib/legMiles';
+import { byLegIndex } from '@fleetcal/types';
 import AppShell from '@/components/nav/AppShell';
 import { displayBrokerName } from '@/lib/customerMatch';
 import ReviewQueue from './ReviewQueue';
@@ -372,17 +373,22 @@ export default function CloseoutView() {
     await Promise.all([fetchAndCache(false), refreshBucketTotals()]);
   };
 
-  // Dedup relays — one row per load (the pickup leg wins).
+  // Dedup relays — one row per load (the earliest leg present wins:
+  // pickup when it's in the page, otherwise the first later leg).
   const dedup = useMemo(() => {
-    const pickupGroups = new Set(
-      rows.filter(r => r.relayGroupId && r.relayRole === 'pickup').map(r => r.relayGroupId!),
+    const groups = new Map<string, QueueRow[]>();
+    for (const r of rows) {
+      if (!r.relayGroupId) continue;
+      const arr = groups.get(r.relayGroupId);
+      if (arr) arr.push(r); else groups.set(r.relayGroupId, [r]);
+    }
+    const keeperByGroup = new Map<string, string>(); // relayGroupId → event id
+    for (const [gid, legs] of groups) {
+      keeperByGroup.set(gid, [...legs].sort(byLegIndex)[0].id);
+    }
+    return rows.filter(r =>
+      !r.relayGroupId || keeperByGroup.get(r.relayGroupId) === r.id,
     );
-    return rows.filter(r => {
-      if (!r.relayGroupId) return true;
-      if (r.relayRole === 'pickup') return true;
-      if (r.relayRole === 'delivery') return !pickupGroups.has(r.relayGroupId);
-      return true;
-    });
   }, [rows]);
 
   // For relay loads the kept row is the pickup leg, but its `end` is
@@ -400,7 +406,9 @@ export default function CloseoutView() {
     return m;
   }, [rows]);
   const effectiveDeliveryEnd = (load: QueueRow): string => {
-    if (load.relayGroupId && load.relayRole === 'pickup' && load.loadId) {
+    // Any non-final relay leg (pickup OR transfer) ends at a handoff,
+    // not the real delivery — swap in the delivery leg's end.
+    if (load.relayGroupId && load.relayRole && load.relayRole !== 'delivery' && load.loadId) {
       return deliveryEndByLoadId.get(load.loadId) ?? load.end;
     }
     return load.end;
@@ -715,25 +723,32 @@ export default function CloseoutView() {
       sortable: true,
       sortValue: r => r.driverName ?? '',
       render: r => {
-        // Try the local rows lookup first (works when both legs are in
-        // the visible page), then fall back to the server-provided
+        // Try the local rows lookup first (works when the sibling legs
+        // are in the visible page), then fall back to the server-provided
         // relayPartners sidecar for the common case where server-side
-        // dedup dropped the partner leg before it reached the client.
-        const localPartner = r.relayGroupId
-          ? rows.find(x => x.id !== r.id && x.relayGroupId === r.relayGroupId)
-          : null;
-        const partnerDriverName =
-          localPartner?.driverName
-          ?? (r.loadId ? relayPartners[r.loadId]?.driverName : undefined);
+        // dedup dropped the partner legs before they reached the client.
+        // NB: on 3+ leg loads the sidecar's driverName may itself be
+        // several names joined with " · " — rendered verbatim.
         const drivers: string[] = [];
         if (r.driverName) drivers.push(r.driverName);
-        if (partnerDriverName && partnerDriverName !== r.driverName) drivers.push(partnerDriverName);
+        if (r.relayGroupId) {
+          const siblings = rows
+            .filter(x => x.id !== r.id && x.relayGroupId === r.relayGroupId)
+            .sort(byLegIndex);
+          for (const s of siblings) {
+            if (s.driverName && !drivers.includes(s.driverName)) drivers.push(s.driverName);
+          }
+          if (siblings.length === 0 && r.loadId) {
+            const sidecar = relayPartners[r.loadId]?.driverName;
+            if (sidecar && !drivers.includes(sidecar)) drivers.push(sidecar);
+          }
+        }
         if (drivers.length === 0) return <span style={{ color: 'var(--gc-text-3)' }}>Unassigned</span>;
         if (drivers.length === 1) return <span>{drivers[0]}</span>;
         return (
           <div>
             <div className="text-[12.5px]">{drivers[0]}</div>
-            <div className="text-[10.5px]" style={{ color: 'var(--gc-text-3)' }}>+ {drivers[1]}</div>
+            <div className="text-[10.5px]" style={{ color: 'var(--gc-text-3)' }}>+ {drivers.slice(1).join(' · ')}</div>
           </div>
         );
       },
@@ -744,21 +759,26 @@ export default function CloseoutView() {
       sortable: true,
       sortValue: r => r.assetName ?? '',
       render: r => {
-        // Mirror the Driver column's relay-aware lookup so the second
-        // leg's truck shows alongside the pickup leg's. Local rows
-        // lookup first (both legs visible on the same page); fall back
-        // to the server-provided relayPartners sidecar for the common
-        // case where server-side dedup dropped the partner leg before
-        // it reached the client.
-        const localPartner = r.relayGroupId
-          ? rows.find(x => x.id !== r.id && x.relayGroupId === r.relayGroupId)
-          : null;
-        const partnerAssetName =
-          localPartner?.assetName
-          ?? (r.loadId ? relayPartners[r.loadId]?.assetName : undefined);
+        // Mirror the Driver column's relay-aware lookup so the other
+        // legs' trucks show alongside this leg's. Local rows lookup
+        // first (sibling legs visible on the same page); fall back to
+        // the server-provided relayPartners sidecar for the common
+        // case where server-side dedup dropped the partner legs before
+        // they reached the client.
         const trucks: string[] = [];
         if (r.assetName) trucks.push(r.assetName);
-        if (partnerAssetName && partnerAssetName !== r.assetName) trucks.push(partnerAssetName);
+        if (r.relayGroupId) {
+          const siblings = rows
+            .filter(x => x.id !== r.id && x.relayGroupId === r.relayGroupId)
+            .sort(byLegIndex);
+          for (const s of siblings) {
+            if (s.assetName && !trucks.includes(s.assetName)) trucks.push(s.assetName);
+          }
+          if (siblings.length === 0 && r.loadId) {
+            const sidecar = relayPartners[r.loadId]?.assetName;
+            if (sidecar && !trucks.includes(sidecar)) trucks.push(sidecar);
+          }
+        }
         if (trucks.length === 0) return <span style={{ color: 'var(--gc-text-3)' }}>—</span>;
         if (trucks.length === 1) {
           return <span className="font-semibold tabular-nums">{trucks[0]}</span>;
@@ -766,7 +786,7 @@ export default function CloseoutView() {
         return (
           <div>
             <div className="text-[12.5px] font-semibold tabular-nums">{trucks[0]}</div>
-            <div className="text-[10.5px] tabular-nums" style={{ color: 'var(--gc-text-3)' }}>+ {trucks[1]}</div>
+            <div className="text-[10.5px] tabular-nums" style={{ color: 'var(--gc-text-3)' }}>+ {trucks.slice(1).join(' · ')}</div>
           </div>
         );
       },

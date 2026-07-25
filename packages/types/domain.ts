@@ -993,15 +993,25 @@ export interface Load {
   // Stops — always an array; converters return [] when not yet loaded.
   stops: Stop[];
 
-  // Relay (split loads)
+  // Relay (split loads). A relay is N events sharing a load_id, ordered
+  // by legIndex. relayRole is derived from position (see legRoleFor):
+  // first = 'pickup', last = 'delivery', middle = 'transfer'.
   relayGroupId?: string;
-  relayRole?: "pickup" | "delivery";
+  relayRole?: "pickup" | "transfer" | "delivery";
+  /** 0-based position of this leg within its load. 0 for single-leg loads. */
+  legIndex?: number;
+  /** Total legs on this load, when the reading endpoint joined them. */
+  legCount?: number;
+  /** Adjacent-leg mirrors. For middle legs these describe the NEXT leg
+   *  (the driver you hand off to); prev-leg context comes from the
+   *  handoff stop + legs[] payloads. Pre-N-leg readers treat them as
+   *  "the other leg of the pair", which stays correct for 2-leg loads. */
   partnerEventId?: string;
   partnerStops?: Stop[];
   partnerDriverName?: string;
   partnerAssetName?: string;
-  /** Driver pay on the OTHER leg of the relay. Used by detail UIs that
-   *  show pickup + delivery driver pay side-by-side. */
+  /** Driver pay on the adjacent leg. Used by detail UIs that
+   *  show two legs' driver pay side-by-side. */
   partnerDriverPay?: number;
 
   /** Trailer-drop pin saved by THIS event's driver (pickup leg only —

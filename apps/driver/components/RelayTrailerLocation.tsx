@@ -2,17 +2,22 @@
  * Relay trailer-location pin.
  *
  * Rendered alongside the relay handoff photos block on a relay leg's
- * load detail screen. Two modes, gated on relayRole:
+ * load detail screen. Two views, gated on the leg's POSITION (leg i of
+ * N — see lib/relayLegs.ts), not a binary role:
  *
- *   pickup leg → "Save Trailer Location" button. Captures device GPS,
- *     POSTs to /v1/driver/events/:id/trailer-dropoff. Once saved, the
+ *   non-final leg → "Save Trailer Location" button. Captures device
+ *     GPS, POSTs to /v1/driver/events/:id/trailer-dropoff (the API
+ *     accepts any non-final leg — pickup OR transfer). Once saved, the
  *     button switches to "Update" so the driver can re-pin if they
  *     bumped the trailer to a different spot.
  *
- *   delivery leg → read-only card showing the partner's pin (if the
- *     pickup driver has saved one yet) with Navigate / View on Map
- *     actions, mirroring AssignedTruckCard. If the pickup driver
- *     hasn't pinned yet, shows a "Waiting on pickup driver" hint.
+ *   non-first leg → read-only card showing the PREVIOUS leg's pin
+ *     (partnerTrailerDropoff* mirrors the previous leg) with Navigate
+ *     actions, mirroring AssignedTruckCard. If that driver hasn't
+ *     pinned yet, shows a "Waiting on the trailer drop location" hint.
+ *
+ * A middle (transfer) leg renders BOTH — it reads where the previous
+ * driver left the trailer AND pins where it drops for the next one.
  */
 
 import React, { useState } from "react";
@@ -45,35 +50,49 @@ function relTime(iso: string | undefined): string {
 }
 
 interface Props {
-  eventId:   string;
-  relayRole: "pickup" | "delivery";
-  /** Own dropoff (rendered + updatable when relayRole='pickup'). */
+  eventId:  string;
+  /** 0-based position of this leg within the load (lib/relayLegs.ts
+   *  legPositionOf). Non-final legs drop a pin; non-first legs read the
+   *  previous leg's pin; middle legs do both. */
+  legIndex: number;
+  legCount: number;
+  /** Own dropoff (rendered + updatable on non-final legs). */
   trailerDropoffLat?: number;
   trailerDropoffLng?: number;
   trailerDropoffAt?:  string;
-  /** Partner's dropoff (rendered when relayRole='delivery'). */
+  /** PREVIOUS leg's dropoff (rendered on non-first legs) — the API's
+   *  partner* mirror always carries the previous leg's pin. */
   partnerTrailerDropoffLat?:     number;
   partnerTrailerDropoffLng?:     number;
   partnerTrailerDropoffAt?:      string;
-  /** Dispatcher-set address from the relay partner (pickup leg).
+  /** Dispatcher-set address for the previous leg's drop point.
    *  Primary location source — shown above the driver's GPS pin. */
   partnerTrailerDropoffAddress?: string;
   /** Fired after a successful save so the parent can refetch the
-   *  load and refresh the partner's view in real time. */
+   *  load and refresh the next leg's view in real time. */
   onSaved?: () => void;
 }
 
 export function RelayTrailerLocation(props: Props) {
-  if (props.relayRole === "pickup") return <PickupView {...props} />;
-  return <DeliveryView {...props} />;
+  const isFirstLeg = props.legIndex <= 0;
+  const isFinalLeg = props.legIndex >= props.legCount - 1;
+  return (
+    <>
+      {/* Incoming first — where I collect the trailer precedes where I
+          leave it, matching the leg's stop order. */}
+      {!isFirstLeg ? <IncomingView {...props} /> : null}
+      {!isFinalLeg ? <DropView {...props} /> : null}
+    </>
+  );
 }
 
-// ── Pickup-leg view ─────────────────────────────────────────────────
+// ── Drop view (non-final legs) ──────────────────────────────────────
 //
-// The driver dropping the trailer. They tap a button, we ask for
-// location permission once, capture coords, POST to the API.
+// The driver dropping the trailer at their outbound handoff. They tap
+// a button, we ask for location permission once, capture coords, POST
+// to the API.
 
-function PickupView({ eventId, trailerDropoffLat, trailerDropoffLng, trailerDropoffAt, onSaved }: Props) {
+function DropView({ eventId, trailerDropoffLat, trailerDropoffLng, trailerDropoffAt, onSaved }: Props) {
   const [saving, setSaving] = useState(false);
   const hasPin = trailerDropoffLat != null && trailerDropoffLng != null;
 
@@ -175,13 +194,13 @@ function PickupView({ eventId, trailerDropoffLat, trailerDropoffLng, trailerDrop
   );
 }
 
-// ── Delivery-leg view ───────────────────────────────────────────────
+// ── Incoming view (non-first legs) ──────────────────────────────────
 //
-// The driver coming to pick up the trailer. Shows the partner's pin
-// + Navigate + View on Map actions. When the partner hasn't pinned
-// yet, shows a 'waiting' hint instead of empty space.
+// The driver coming to pick up the trailer at their inbound handoff.
+// Shows the PREVIOUS leg's pin + Navigate actions. When that driver
+// hasn't pinned yet, shows a 'waiting' hint instead of empty space.
 
-function DeliveryView({ partnerTrailerDropoffLat, partnerTrailerDropoffLng, partnerTrailerDropoffAt, partnerTrailerDropoffAddress }: Props) {
+function IncomingView({ partnerTrailerDropoffLat, partnerTrailerDropoffLng, partnerTrailerDropoffAt, partnerTrailerDropoffAddress }: Props) {
   const hasPin     = partnerTrailerDropoffLat != null && partnerTrailerDropoffLng != null;
   const hasAddress = !!(partnerTrailerDropoffAddress?.trim());
 
@@ -262,7 +281,7 @@ function DeliveryView({ partnerTrailerDropoffLat, partnerTrailerDropoffLng, part
               <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
                 <Pin size={12} color="#6b21a8" strokeWidth={2.4} />
                 <Text style={[txt(700), { flex: 1, fontSize: 12, color: "#581c87" }]}>
-                  {hasAddress ? "Driver pin" : "Pinned by pickup driver"} · {relTime(partnerTrailerDropoffAt)}
+                  {hasAddress ? "Driver pin" : "Pinned by the previous driver"} · {relTime(partnerTrailerDropoffAt)}
                 </Text>
               </View>
               <Text style={[txt(500), { fontSize: 11, color: "#7e22ce", marginTop: 2, paddingLeft: 20 }]}>
@@ -297,7 +316,7 @@ function DeliveryView({ partnerTrailerDropoffLat, partnerTrailerDropoffLng, part
           }}>
             <AlertTriangle size={11} color="#a16207" strokeWidth={2.2} style={{ marginTop: 1 }} />
             <Text style={[txt(500), { flex: 1, fontSize: 11, color: "#854d0e", lineHeight: 16 }]}>
-              The address is from dispatch{hasPin ? "; the pin is the pickup driver's reported drop spot" : ""}. Confirm the trailer is where you expect before assuming it hasn't moved.
+              The address is from dispatch{hasPin ? "; the pin is the previous driver's reported drop spot" : ""}. Confirm the trailer is where you expect before assuming it hasn't moved.
             </Text>
           </View>
         </View>
@@ -308,7 +327,7 @@ function DeliveryView({ partnerTrailerDropoffLat, partnerTrailerDropoffLng, part
         }}>
           <MapPin size={14} color="#9ca3af" strokeWidth={2.2} />
           <Text style={[txt(500), { flex: 1, fontSize: 12, color: "#6b7280", lineHeight: 16 }]}>
-            Waiting on the trailer drop location — dispatch sets the address, the pickup driver pins the spot.
+            Waiting on the trailer drop location — dispatch sets the address, the previous driver pins the spot.
           </Text>
         </View>
       )}

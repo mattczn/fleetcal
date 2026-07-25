@@ -1,8 +1,10 @@
 'use client';
 
 import { useState, useRef } from 'react';
-import { Star, CheckCircle2, FileCheck2, ArrowUpFromLine, ArrowDownToLine } from 'lucide-react';
+import { Star, CheckCircle2, FileCheck2 } from 'lucide-react';
 import { CalendarEvent as EventType, Asset, Driver, EventStatus } from '@/lib/types';
+import { legRoleFor, legLabel, legShortLabel } from '@fleetcal/types';
+import { legPositionFor } from '@/lib/legDisplay';
 import { CARD_FIELD_DEFS } from '@/lib/cardFields';
 import { timeToPixels, timeHeightPixels, localDateStr, naiveHomeToView } from '@/lib/time-utils';
 import { useCalendarStore } from '@/store/useCalendarStore';
@@ -68,11 +70,13 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
   const driverPhone = matchedDriver?.phone ?? null;
 
   const isRelay = !!event.relayGroupId;
-  const relayRole = event.relayRole ?? (() => {
-    if (!isRelay) return null;
-    const partner = events.find(e => e.relayGroupId === event.relayGroupId && e.id !== event.id);
-    return partner ? (event.start <= partner.start ? 'pickup' : 'delivery') : null;
-  })();
+  // Leg position from data (legIndex/legCount, or siblings in the
+  // store) — no more inferring role from start-time ordering, which
+  // broke whenever legs were dragged out of chronological order and
+  // can't represent N-leg loads at all.
+  const legPos = isRelay ? legPositionFor(event, events) : null;
+  const relayRole = event.relayRole
+    ?? (legPos ? legRoleFor(legPos.index, legPos.count) ?? null : null);
 
   // TONU + cancelled loads render gray in the calendar — they didn't
   // actually run, so the asset's primary color would mislead the
@@ -253,12 +257,12 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
                 - Confirmed checkmark renders on BOTH legs independently —
                   `event.confirmedAt` is per-event, so each driver's own
                   confirmation lights up only their leg.
-                - POD icon renders on the DELIVERY leg only. The pickup
-                  driver hasn't dropped yet when the POD goes up, so a
-                  POD badge on the pickup card would mis-suggest "this
-                  leg is done". Same `documentCounts` data is on both
-                  legs (shared via load_id), we just don't surface it
-                  on the pickup card. */}
+                - POD icon renders on the FINAL (delivery) leg only.
+                  Upstream drivers haven't dropped yet when the POD
+                  goes up, so a POD badge on an earlier leg would
+                  mis-suggest "this leg is done". Same `documentCounts`
+                  data is on every leg (shared via load_id), we just
+                  only surface it on the last one. */}
           {(() => {
             const podCount      = event.documentCounts?.pod ?? 0;
             const showCheck     = event.confirmedAt && showConfirmedOverlay;
@@ -289,34 +293,32 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
               card body) or some other treatment. The store flag
               showBillingOverlay is preserved for easy re-enable. */}
           {/* Relay overlay — top-right corner.
-              Glyph-only role indicator: ArrowUpFromLine for pickup
-              ("load lifts off the dock into the truck"),
-              ArrowDownToLine for delivery ("load comes down out of
-              the truck onto the dock"). Wrapped in a white badge
-              with a purple outline + purple icon stroke so it reads
-              as RELAY at a glance no matter what color the card
-              underneath is (truck colors vary, so a transparent
-              purple icon would disappear on some cards). Purple
-              tone matches the canonical relay color #7c3aed used
-              across EventModal, RouteMapPanel, ReviewQueue, etc.
-              Native title tooltip preserves the explicit label
-              for dispatchers learning the convention. */}
-          {isRelay && relayRole && (
+              Compact leg-position chip ("Leg 1/3") in a white badge
+              with a purple outline so it reads as RELAY at a glance
+              no matter what color the card underneath is (truck
+              colors vary, so a transparent purple label would
+              disappear on some cards). Purple tone matches the
+              canonical relay color #7c3aed used across EventModal,
+              RouteMapPanel, ReviewQueue, etc. Native title tooltip
+              carries the full "Leg 1 · Pickup" label for dispatchers
+              learning the convention. */}
+          {isRelay && legPos && (
             <div
-              title={relayRole === 'pickup' ? 'Relay pickup leg' : 'Relay delivery leg'}
+              title={legLabel(legPos.index, legPos.count)}
               style={{
                 position: 'absolute', top: 4, right: 4,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                width: 18, height: 18,
+                height: 15,
+                padding: '0 4px',
                 background: '#fff',
                 border: '1.5px solid #7c3aed',
                 borderRadius: 5,
                 boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
                 pointerEvents: 'auto',
               }}>
-              {relayRole === 'pickup'
-                ? <ArrowUpFromLine size={11} strokeWidth={2.8} color="#7c3aed" />
-                : <ArrowDownToLine size={11} strokeWidth={2.8} color="#7c3aed" />}
+              <span style={{ fontSize: 8.5, fontWeight: 800, letterSpacing: '0.02em', color: '#7c3aed', lineHeight: 1, whiteSpace: 'nowrap' }}>
+                {legShortLabel(legPos.index, legPos.count)}
+              </span>
             </div>
           )}
           {/* Height-budget allocation for title + fields.
@@ -379,7 +381,7 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
                     className="font-extrabold leading-tight break-words min-w-0"
                     style={{
                       color: 'white',
-                      paddingRight: isRelay ? 22 : 0,
+                      paddingRight: isRelay ? 42 : 0,
                       fontSize: fsTitle,
                       display: '-webkit-box',
                       WebkitBoxOrient: 'vertical',

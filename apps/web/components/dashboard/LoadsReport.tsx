@@ -5,7 +5,8 @@ import { useRouter } from 'next/navigation';
 import { Download, FileSpreadsheet, Loader2, Filter, Calendar, Star } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { railway } from '@/lib/railway';
-import type { LoadSummary } from '@fleetcal/types';
+import type { LoadSummary, LegSummary } from '@fleetcal/types';
+import { byLegIndex } from '@fleetcal/types';
 import { usePermissions } from '@/lib/usePermissions';
 import { useUser } from '@clerk/nextjs';
 import DatePicker from '@/components/calendar/DatePicker';
@@ -104,19 +105,55 @@ function stopLabel(load: LoadSummary, type: 'pickup' | 'delivery'): string {
   return s.facilityName ?? s.city ?? s.address ?? '';
 }
 
-// Helper for the Truck column: build the relay-aware label (e.g. "Truck 7
-// #234 → Truck 12 #501"). Single-leg loads fall back to just the pickup
-// asset. Used by both the get() — for sort + export — and the cell
-// render in tableColumns.
+/** All legs of the load in leg order. Empty array when the summary
+ *  predates legs[] — callers fall back to the pickup/delivery scalar
+ *  pair in that case. */
+function orderedLegs(load: LoadSummary): LegSummary[] {
+  return [...(load.legs ?? [])].sort(byLegIndex);
+}
+
+/** Collapse consecutive duplicates so "A → A → B" reads "A → B" while a
+ *  legitimate round-trip "A → B → A" keeps all three hops. */
+function chain<T>(values: (T | undefined | null)[], same: (a: T, b: T) => boolean): T[] {
+  const out: T[] = [];
+  for (const v of values) {
+    if (v == null) continue;
+    if (out.length === 0 || !same(out[out.length - 1], v)) out.push(v);
+  }
+  return out;
+}
+
+/** Per-leg asset ids in leg order, consecutive duplicates collapsed.
+ *  Falls back to the pickup/delivery scalar pair when legs[] is empty. */
+function truckChainIds(load: LoadSummary): number[] {
+  const legs = orderedLegs(load);
+  const ids = legs.length > 0
+    ? legs.map(g => g.assetId)
+    : (load.isRelay ? [load.pickupAssetId, load.deliveryAssetId] : [load.pickupAssetId]);
+  return chain(ids, (a, b) => a === b);
+}
+
+/** Per-leg driver names in leg order, consecutive duplicates collapsed.
+ *  Falls back to the pickup/delivery scalar pair when legs[] is empty. */
+function driverChainNames(load: LoadSummary): string[] {
+  const legs = orderedLegs(load);
+  const names = legs.length > 0
+    ? legs.map(g => g.driverName)
+    : (load.isRelay ? [load.pickupDriverName, load.deliveryDriverName] : [load.pickupDriverName]);
+  return chain(names.map(n => n?.trim() || undefined), (a, b) => a === b);
+}
+
+// Helper for the Truck column: build the relay-aware chain label (e.g.
+// "Truck 7 #234 → Truck 12 #501 → Truck 3 #100"). Single-leg loads fall
+// back to just the pickup asset. Used by both the get() — for sort +
+// export — and the cell render in tableColumns.
 function truckLabel(load: LoadSummary, ctx: ColumnCtx): string {
-  const pickup = ctx.assets.find(x => x.id === load.pickupAssetId);
   const fmt = (a?: { name: string; unit?: string }) =>
     a ? (a.unit ? `${a.name} #${a.unit}` : a.name) : '';
-  if (!load.isRelay) return fmt(pickup);
-  const delivery = ctx.assets.find(x => x.id === load.deliveryAssetId);
-  const a = fmt(pickup);
-  const b = fmt(delivery);
-  return a && b && a !== b ? `${a} → ${b}` : (a || b);
+  return truckChainIds(load)
+    .map(id => fmt(ctx.assets.find(x => x.id === id)))
+    .filter(Boolean)
+    .join(' → ');
 }
 
 const COLUMNS: ColumnDef[] = [
@@ -134,13 +171,10 @@ const COLUMNS: ColumnDef[] = [
     return (c?.shortName?.trim() || c?.name) ?? l.broker ?? '';
   } },
   { id: 'driver',       label: 'Driver',      get: (l) => {
-    // Show BOTH drivers on relay loads ("Pickup → Delivery") so a
-    // dispatcher reading the row sees both legs at once. Non-relay
-    // loads keep the single name.
-    if (!l.isRelay) return l.pickupDriverName ?? '';
-    const a = l.pickupDriverName ?? '';
-    const b = l.deliveryDriverName ?? '';
-    return a && b && a !== b ? `${a} → ${b}` : a || b;
+    // Show EVERY leg's driver on relay loads ("A → B → C") so a
+    // dispatcher reading the row sees the full chain at once.
+    // Non-relay loads keep the single name.
+    return driverChainNames(l).join(' → ');
   } },
   // Truck — relay-aware. truckLabel() returns "Truck A → Truck B" for
   // relays, single name otherwise. Cell render below mirrors the same
@@ -553,10 +587,6 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
             const resolveDriver = (driverId?: number, name?: string) =>
               (driverId != null ? drivers.find(d => d.id === driverId) : undefined) ??
               (name ? drivers.find(d => d.name === name) : undefined);
-            const pickupRec   = resolveDriver(load.pickupDriverId,   load.pickupDriverName);
-            const deliveryRec = load.isRelay
-              ? resolveDriver(load.deliveryDriverId, load.deliveryDriverName)
-              : undefined;
             const fullName = (rec: { firstName?: string; lastName?: string; name: string }) =>
               `${rec.firstName ?? ''} ${rec.lastName ?? ''}`.trim() || rec.name;
             const DriverLink = ({ rec }: { rec: { id: number; firstName?: string; lastName?: string; name: string } }) => (
@@ -570,24 +600,36 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
                 {fullName(rec)}
               </button>
             );
-            // Relay loads show BOTH drivers separated by "→"; each
-            // driver is independently clickable so the dispatcher can
-            // jump straight to either leg's driver modal.
-            if (deliveryRec && pickupRec && deliveryRec.id !== pickupRec.id) {
-              return (
-                <span className="inline-flex items-center gap-1">
-                  <DriverLink rec={pickupRec} />
-                  <span style={{ color: 'var(--gc-text-3)' }}>→</span>
-                  <DriverLink rec={deliveryRec} />
-                </span>
-              );
-            }
-            if (pickupRec) return <DriverLink rec={pickupRec} />;
-            return load.pickupDriverName || <span style={{ color: 'var(--gc-text-3)' }}>—</span>;
+            // Per-leg driver chain (legs[] when present, pickup/delivery
+            // scalar fallback for legacy rows) joined by "→". Each
+            // resolved driver is independently clickable so the
+            // dispatcher can jump straight to any leg's driver modal.
+            const legList = orderedLegs(load);
+            const legDrivers = legList.length > 0
+              ? legList.map(g => ({ rec: resolveDriver(g.driverId, g.driverName), name: g.driverName }))
+              : (load.isRelay
+                  ? [
+                      { rec: resolveDriver(load.pickupDriverId,   load.pickupDriverName),   name: load.pickupDriverName },
+                      { rec: resolveDriver(load.deliveryDriverId, load.deliveryDriverName), name: load.deliveryDriverName },
+                    ]
+                  : [{ rec: resolveDriver(load.pickupDriverId, load.pickupDriverName), name: load.pickupDriverName }]);
+            const links = chain(
+              legDrivers.filter(d => d.rec || d.name),
+              (a, b) => (a.rec && b.rec) ? a.rec.id === b.rec.id : a.name === b.name,
+            );
+            if (links.length === 0) return <span style={{ color: 'var(--gc-text-3)' }}>—</span>;
+            return (
+              <span className="inline-flex items-center gap-1 flex-wrap">
+                {links.map((d, i) => (
+                  <span key={i} className="inline-flex items-center gap-1">
+                    {i > 0 && <span style={{ color: 'var(--gc-text-3)' }}>→</span>}
+                    {d.rec ? <DriverLink rec={d.rec} /> : <span>{d.name}</span>}
+                  </span>
+                ))}
+              </span>
+            );
           }
           if (c.id === 'asset') {
-            const pickup   = assets.find(x => x.id === load.pickupAssetId);
-            const delivery = load.isRelay ? assets.find(x => x.id === load.deliveryAssetId) : undefined;
             const fmt = (a?: { name: string; unit?: string }) =>
               a ? (a.unit ? `${a.name} #${a.unit}` : a.name) : null;
             const TruckLink = ({ asset }: { asset: { id: number; name: string; unit?: string } }) => (
@@ -601,20 +643,25 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
                 {fmt(asset)}
               </button>
             );
-            // Relay loads show BOTH trucks separated by "→"; each truck
-            // is independently clickable so a dispatcher can open the
-            // delivery-leg's asset modal without having to click
-            // through the pickup truck first.
-            if (delivery && pickup && delivery.id !== pickup.id) {
+            // Relay loads show EVERY leg's truck ("A → B → C"); each
+            // truck is independently clickable so a dispatcher can open
+            // any leg's asset modal without having to click through the
+            // pickup truck first. Consecutive same-truck legs collapse.
+            const chainAssets = truckChainIds(load)
+              .map(id => assets.find(x => x.id === id))
+              .filter((a): a is typeof assets[number] => !!a);
+            if (chainAssets.length > 0) {
               return (
-                <span className="inline-flex items-center gap-1">
-                  <TruckLink asset={pickup} />
-                  <span style={{ color: 'var(--gc-text-3)' }}>→</span>
-                  <TruckLink asset={delivery} />
+                <span className="inline-flex items-center gap-1 flex-wrap">
+                  {chainAssets.map((a, i) => (
+                    <span key={`${a.id}-${i}`} className="inline-flex items-center gap-1">
+                      {i > 0 && <span style={{ color: 'var(--gc-text-3)' }}>→</span>}
+                      <TruckLink asset={a} />
+                    </span>
+                  ))}
                 </span>
               );
             }
-            if (pickup) return <TruckLink asset={pickup} />;
           }
           // Accessorials — render the same chip + hover-list as
           // billing/paperwork (component lives in queue primitives).
@@ -759,9 +806,10 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
       key: 'driver',
       label: 'Driver',
       options: driverOptions.map(d => ({ value: d.name, label: d.name })),
-      // Match either leg's driver so a relay surfaces under either name.
+      // Match ANY leg's driver so a relay surfaces under every name.
       predicate: (load, v) =>
-        load.pickupDriverName === v || load.deliveryDriverName === v,
+        (load.legs ?? []).some(g => g.driverName === v)
+        || load.pickupDriverName === v || load.deliveryDriverName === v,
     },
     {
       kind: 'select',
@@ -771,8 +819,10 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
         .filter(a => !a.hidden)
         .map(a => ({ value: String(a.id), label: a.unit ? `${a.name} #${a.unit}` : a.name }))
         .sort((a, b) => a.label.localeCompare(b.label)),
+      // Match ANY leg's truck so a relay surfaces under every unit.
       predicate: (load, v) =>
-        String(load.pickupAssetId) === v || String(load.deliveryAssetId) === v,
+        (load.legs ?? []).some(g => String(g.assetId) === v)
+        || String(load.pickupAssetId) === v || String(load.deliveryAssetId) === v,
     },
     {
       kind: 'select',

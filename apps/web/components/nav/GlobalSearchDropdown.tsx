@@ -24,6 +24,7 @@ import { useCalendarStore } from '@/store/useCalendarStore';
 import { useGlobalDirectory } from '@/lib/useGlobalDirectory';
 import { railway } from '@/lib/railway';
 import type { Load } from '@/lib/types';
+import { byLegIndex } from '@fleetcal/types';
 
 /** Minimum chars before we run any search. Shorter queries are noisy. */
 const MIN_QUERY = 2;
@@ -65,15 +66,16 @@ export default function GlobalSearchDropdown({ query, anchorRef, onClose, onSeeA
       railway.searchLoads(query.trim(), 20)
         .then(res => {
           if (cancelled) return;
-          // The endpoint may return both legs of a relay. Dedupe by
+          // The endpoint may return every leg of a relay. Dedupe by
           // loadId so each load surfaces once in the dropdown. For
-          // relays we prefer the pickup leg (earlier `start`) so the
-          // displayed date is the actual pickup, not the delivery.
+          // relays we prefer the FIRST leg (lowest legIndex, start-time
+          // tiebreak) so the displayed date is the actual pickup, not a
+          // handoff or the delivery.
           const byKey = new Map<string, Load>();
           for (const l of res.loads ?? []) {
             const key = l.loadId ?? l.id;
             const existing = byKey.get(key);
-            if (!existing || new Date(l.start).getTime() < new Date(existing.start).getTime()) {
+            if (!existing || byLegIndex(l, existing) < 0) {
               byKey.set(key, l);
             }
           }

@@ -18,7 +18,8 @@ import { railway } from '@/lib/railway';
 import DataLoader from '@/components/DataLoader';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 import AppShell from '@/components/nav/AppShell';
-import { relayLegShare } from '@/lib/legMiles';
+import { relayLegShareN } from '@/lib/legMiles';
+import { byLegIndex } from '@fleetcal/types';
 import { isActiveInRange, dateKeyOf } from '@/lib/lifecycle';
 import { type Period, PERIODS, getPeriodRange, currentWeekStartISO } from '@/lib/periodRange';
 import { PeriodSelector } from '@/components/ui/PeriodSelector';
@@ -686,24 +687,28 @@ export default function DashboardView() {
 
   // Deduplicate relay (split) loads so they are counted as ONE load.
   //
-  // Both legs of a relay share the same loadPrice. Without this step, a relay
-  // whose pickup AND delivery both fall in the period would be double-counted.
+  // Every leg of a relay shares the same loadPrice. Without this step, a
+  // relay with several legs falling in the period would be counted once
+  // per leg.
   //
-  // Rule: keep the pickup leg when it is present in the filtered set; otherwise
-  // keep the delivery leg (i.e. pickup was in a prior period, delivery is now).
+  // Rule: keep the EARLIEST leg (by legIndex) present in the filtered
+  // set — leg 1 when it's in the window, otherwise the first later leg
+  // that is (e.g. pickup was in a prior period, a later leg is now).
   // Non-relay events pass through unchanged.
   const deduped = useMemo(() => {
-    const pickupGroupIds = new Set(
-      filtered
-        .filter(e => e.relayGroupId && e.relayRole === 'pickup')
-        .map(e => e.relayGroupId as string),
+    const groups = new Map<string, CalendarEvent[]>(); // relayGroupId → legs in window
+    for (const e of filtered) {
+      if (!e.relayGroupId) continue;
+      const arr = groups.get(e.relayGroupId);
+      if (arr) arr.push(e); else groups.set(e.relayGroupId, [e]);
+    }
+    const keeperByGroup = new Map<string, string>(); // relayGroupId → event id
+    for (const [gid, legs] of groups) {
+      keeperByGroup.set(gid, [...legs].sort(byLegIndex)[0].id);
+    }
+    return filtered.filter(e =>
+      !e.relayGroupId || keeperByGroup.get(e.relayGroupId) === e.id,
     );
-    return filtered.filter(e => {
-      if (!e.relayGroupId) return true;                          // normal load
-      if (e.relayRole === 'pickup') return true;                  // keep pickup leg
-      if (e.relayRole === 'delivery') return !pickupGroupIds.has(e.relayGroupId); // keep delivery only if pickup absent
-      return true;                                               // relay without role — keep
-    });
   }, [filtered]);
 
   // ── KPI summary (sourced from /v1/reports/loads — one row per load) ──
@@ -837,12 +842,15 @@ export default function DashboardView() {
   }, [loadSummaries]);
 
   const revenueByAsset = useMemo(() => {
-    // Index relay legs by group so we can find the partner cheaply.
-    const partnerByGroup = new Map<string, CalendarEvent>();
-    for (const e of filtered) {
-      if (e.relayGroupId && e.relayRole) {
-        partnerByGroup.set(`${e.relayGroupId}-${e.relayRole}`, e);
-      }
+    // Index relay legs by group so each leg can be prorated against ALL
+    // of its siblings (N-leg aware). Built from the full store event
+    // list — a sibling leg outside the filtered window still counts
+    // toward the load's mileage total.
+    const legsByGroup = new Map<string, CalendarEvent[]>();
+    for (const e of events) {
+      if (!e.relayGroupId) continue;
+      const arr = legsByGroup.get(e.relayGroupId);
+      if (arr) arr.push(e); else legsByGroup.set(e.relayGroupId, [e]);
     }
 
     // Only count assets that were active for AT LEAST ONE DAY during
@@ -871,23 +879,25 @@ export default function DashboardView() {
         let revenue = 0;
         let loads   = 0;
         for (const e of ae) {
-          if (!e.relayGroupId || !e.relayRole) {
+          if (!e.relayGroupId) {
             revenue += eventRevenue(e);
             loads += 1;
             continue;
           }
-          const partner = partnerByGroup.get(
-            `${e.relayGroupId}-${e.relayRole === 'pickup' ? 'delivery' : 'pickup'}`,
-          );
-          // Partner not in the filtered window — credit the leg's
-          // straight-line proportion but use 0.5 if its miles also failed.
-          const share = partner
-            ? relayLegShare(e, partner)
-            : 0.5;
+          const legs = legsByGroup.get(e.relayGroupId) ?? [e];
+          // Leg count for load-fraction accounting: prefer the actual
+          // sibling list, fall back to the API's legCount, floor at 2
+          // (a relay leg always has at least one sibling even when the
+          // store hasn't loaded it).
+          const legCount = Math.max(legs.length, e.legCount ?? 0, 2);
+          // Miles-share across ALL legs; when siblings aren't loaded we
+          // can't prorate, so assume an even 1/N split rather than
+          // crediting this asset the whole load.
+          const share = legs.length > 1 ? relayLegShareN(e, legs) : 1 / legCount;
           revenue += eventRevenue(e) * share;
-          // Count relay legs as 0.5 of a load each so totals stay sane;
+          // Count each relay leg as 1/N of a load so totals stay sane;
           // the dashboard "loads" KPI uses the dedup'd list separately.
-          loads += 0.5;
+          loads += 1 / legCount;
         }
         const fuel    = fuelByAsset.get(asset.id) ?? 0;
         const payroll = payrollByAsset.get(asset.id) ?? 0;
@@ -931,16 +941,33 @@ export default function DashboardView() {
         };
       })
       .sort((a, b) => b.revenue - a.revenue);
-  }, [assets, filtered, unassignedAssetId, pStart, pEnd, fuelByAsset, payrollByAsset, eldMilesByAsset, eldMilesSourceByAsset, loadedMilesByAsset, deadheadPct]);
+  }, [assets, filtered, events, unassignedAssetId, pStart, pEnd, fuelByAsset, payrollByAsset, eldMilesByAsset, eldMilesSourceByAsset, loadedMilesByAsset, deadheadPct]);
 
+
+  // Map relayGroupId → ALL legs in leg order (used to get every leg's
+  // driver + pay in the table and export — N-leg aware). Declared
+  // BEFORE weekLoads: the sort comparator below runs synchronously
+  // inside that memo, so this binding must already be initialized.
+  const relayLegsMap = useMemo(() => {
+    const map = new Map<string, CalendarEvent[]>();
+    for (const e of events) {
+      if (!e.relayGroupId) continue;
+      const arr = map.get(e.relayGroupId);
+      if (arr) arr.push(e); else map.set(e.relayGroupId, [e]);
+    }
+    for (const legs of map.values()) legs.sort(byLegIndex);
+    return map;
+  }, [events]);
 
   // ── Sortable weekly loads list ──
   const weekLoads = useMemo(() => {
     const rows = [...deduped];
     const { field, dir } = weekSort;
-    const partnerOf = (e: CalendarEvent) => e.relayGroupId && e.relayRole
-      ? relayPartnerMap.get(`${e.relayGroupId}-${e.relayRole === 'pickup' ? 'delivery' : 'pickup'}`)
-      : undefined;
+    // Every leg of the row's relay group (including the row itself);
+    // single-leg loads return just [e] so the pay sum below is uniform.
+    const legsOf = (e: CalendarEvent) => (e.relayGroupId
+      ? relayLegsMap.get(e.relayGroupId)
+      : undefined) ?? [e];
     rows.sort((a, b) => {
       let va: string | number, vb: string | number;
       switch (field) {
@@ -951,9 +978,9 @@ export default function DashboardView() {
         case 'driver':     va = a.driverName ?? ''; vb = b.driverName ?? ''; break;
         case 'loadPrice':  va = a.loadPrice ?? 0; vb = b.loadPrice ?? 0; break;
         case 'driverPay': {
-          const pa = partnerOf(a); const pb = partnerOf(b);
-          va = (a.driverPay ?? 0) + (pa?.driverPay ?? 0);
-          vb = (b.driverPay ?? 0) + (pb?.driverPay ?? 0);
+          // Sum EVERY leg's pay — the row represents the whole load.
+          va = legsOf(a).reduce((s, l) => s + (l.driverPay ?? 0), 0);
+          vb = legsOf(b).reduce((s, l) => s + (l.driverPay ?? 0), 0);
           break;
         }
         case 'accessorials': va = billableAcc(a); vb = billableAcc(b); break;
@@ -964,15 +991,7 @@ export default function DashboardView() {
       return 0;
     });
     return rows;
-  }, [deduped, weekSort]);
-  // Map relayGroupId → partner event (used to get the other leg's driver + pay in the table)
-  const relayPartnerMap = useMemo(() => {
-    const map = new Map<string, CalendarEvent>(); // "{groupId}-{role}" → event
-    for (const e of events) {
-      if (e.relayGroupId && e.relayRole) map.set(`${e.relayGroupId}-${e.relayRole}`, e);
-    }
-    return map;
-  }, [events]);
+  }, [deduped, weekSort, relayLegsMap]);
 
   const maxAssetRev = Math.max(...revenueByAsset.map(a => a.revenue), 1);
 
@@ -1128,14 +1147,18 @@ export default function DashboardView() {
       : ['Pickup Date', 'Load #', 'Customer', 'Title', 'Driver(s)', 'Truck', 'Status', 'Linehaul', 'Accessorials'];
 
     const rows = weekLoads.map(load => {
-      const partner = load.relayGroupId && load.relayRole
-        ? relayPartnerMap.get(`${load.relayGroupId}-${load.relayRole === 'pickup' ? 'delivery' : 'pickup'}`)
-        : undefined;
+      // Every leg of the load in leg order — single-leg loads collapse
+      // to just the row itself so the joins below stay uniform.
+      const legs = (load.relayGroupId ? relayLegsMap.get(load.relayGroupId) : undefined) ?? [load];
       const date = parseEventDate(load.start).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
       const asset = assets.find(a => a.id === load.assetId);
       const status = load.status ? (STATUS_LABELS[load.status] ?? load.status) : 'Scheduled';
-      const drivers = [load.driverName, partner?.driverName].filter(Boolean).join(' / ');
-      const totalDriverPay = (load.driverPay ?? 0) + (partner?.driverPay ?? 0);
+      const driverNames: string[] = [];
+      for (const l of legs) {
+        if (l.driverName && !driverNames.includes(l.driverName)) driverNames.push(l.driverName);
+      }
+      const drivers = driverNames.join(' / ');
+      const totalDriverPay = legs.reduce((s, l) => s + (l.driverPay ?? 0), 0);
       const base: (string | number)[] = [
         date,
         load.loadNum   ?? '',

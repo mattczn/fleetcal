@@ -61,6 +61,7 @@ import { DocumentsView } from "@/components/DocumentsView";
 import { ExpandableInstructions } from "@/components/ExpandableInstructions";
 import { useDriverSession } from "@/lib/useDriverSession";
 import { ScheduleTypeChip } from "@/lib/loadCard";
+import { legPositionOf, splitStopsForLeg, handoffDirectionFor, myHandoffOrdinals } from "@/lib/relayLegs";
 import { needsRunConfirmation } from "@/lib/loadStatus";
 import type { LoadStatus, Stop } from "@/lib/types";
 import { isModuleEnabled } from "@fleetcal/types";
@@ -210,10 +211,21 @@ function IdentifierRow({ label, value, onCopied }: { label: string; value: strin
   );
 }
 
+/**
+ * Handoff banner, one per handoff the driver is involved in, relative
+ * to MY leg:
+ *   outbound → I drop the trailer at my end marker for the next driver.
+ *   inbound  → the previous driver brings the trailer to my start marker.
+ * First leg: outbound only. Final leg: inbound only. A middle (transfer)
+ * leg renders BOTH — inbound at the top of its stop window, outbound at
+ * the bottom. partnerDriverName mirrors the ADJACENT leg (next when one
+ * exists) so it's only passed where it names the right driver; the
+ * inbound banner degrades to a nameless line otherwise.
+ */
 function RelayHandoffBanner({
   mode, partnerDriverName,
 }: {
-  mode: "pickup" | "delivery"; partnerDriverName?: string;
+  mode: "inbound" | "outbound"; partnerDriverName?: string;
 }) {
   const { C } = useTheme();
   return (
@@ -237,15 +249,17 @@ function RelayHandoffBanner({
           RELAY HANDOFF
         </Text>
         <Text style={[txt(700), { fontSize: 14, color: C.redInk, marginTop: 2 }]}>
-          {mode === "pickup" ? "This is where you leave the load." : "You take over here."}
+          {mode === "outbound" ? "This is where you leave the load." : "You take over here."}
         </Text>
-        {partnerDriverName ? (
-          <Text style={[txt(500), { fontSize: 12, color: C.redInk, marginTop: 2 }]}>
-            {mode === "pickup"
-              ? `${partnerDriverName} continues from here.`
-              : `${partnerDriverName} brought it to this point.`}
-          </Text>
-        ) : null}
+        <Text style={[txt(500), { fontSize: 12, color: C.redInk, marginTop: 2 }]}>
+          {mode === "outbound"
+            ? (partnerDriverName
+                ? `${partnerDriverName} continues from here.`
+                : "The next driver continues from here.")
+            : (partnerDriverName
+                ? `${partnerDriverName} brings it to this point.`
+                : "The previous driver brings it to this point.")}
+        </Text>
       </View>
     </View>
   );
@@ -572,7 +586,7 @@ function TimeAnchor({
 
 function StopCardInner({
   stop, index, onAddressCopied, orgId, onCheckedIn, eventId, driverName,
-  loadId, onPhotoUploaded, relayRole, onViewDocuments,
+  loadId, onPhotoUploaded, relayHandoff, handoffIndex, onViewDocuments,
 }: {
   stop: Stop;
   index: number;
@@ -588,11 +602,16 @@ function StopCardInner({
   // treats :id as event id.
   loadId?: string;
   onPhotoUploaded?: () => void;
-  // Pickup driver leaves handoff photos for the delivery driver, so
-  // the button flips based on which leg this is:
-  //   pickup    → "Upload Pictures" (file picker)
-  //   delivery  → "View Handoff Photos" (jumps to Documents tab)
-  relayRole?: "pickup" | "delivery";
+  // Which of MY handoffs this relay marker is (see lib/relayLegs.ts):
+  //   outbound → I drop the trailer here for the next driver
+  //              ("Upload Pictures" file picker, DROP time)
+  //   inbound  → the previous driver leaves it here for me
+  //              ("View Handoff Photos" jumps to Documents, PICKUP time)
+  // A middle (transfer) leg's window has one marker of each.
+  relayHandoff?: "inbound" | "outbound";
+  // 0-based handoff ordinal of this marker within the load — tags
+  // photo uploads so each exchange point keeps its own set.
+  handoffIndex?: number;
   onViewDocuments?: () => void;
 }) {
   // Defensive lookup — if a new StopType ever gets added server-side
@@ -608,16 +627,16 @@ function StopCardInner({
   const facility = stop.facilityName ?? stop.city ?? stop.address ?? "—";
   const copyValue = stop.address ?? stop.city ?? stop.facilityName ?? "";
   // Relay handoff stops carry two times in one row: apptStart = the
-  // pickup-leg driver's drop, apptEnd = the delivery-leg driver's
-  // pickup. Show only the time relevant to THIS driver instead of the
+  // dropping driver's time, apptEnd = the receiving driver's pickup.
+  // Show only the time relevant to THIS driver instead of the
   // confusing "9a – 10a" range. Pair with a "DROP" / "PICKUP" subtype
   // label below so the role is unambiguous.
-  const isRelayStop = stop.type === "relay" && !!relayRole;
+  const isRelayStop = stop.type === "relay" && !!relayHandoff;
   const relayActionLabel = isRelayStop
-    ? (relayRole === "pickup" ? "DROP" : "PICKUP")
+    ? (relayHandoff === "outbound" ? "DROP" : "PICKUP")
     : null;
   const relayTimeIso = isRelayStop
-    ? (relayRole === "pickup" ? stop.apptStart : (stop.apptEnd ?? stop.apptStart))
+    ? (relayHandoff === "outbound" ? stop.apptStart : (stop.apptEnd ?? stop.apptStart))
     : null;
   const window = isRelayStop
     ? fmtTime(relayTimeIso ?? undefined)
@@ -736,11 +755,12 @@ function StopCardInner({
           : <CheckInButton stop={stop} orgId={orgId} onCheckedIn={onCheckedIn} eventId={eventId} driverName={driverName} />}
       </View>
 
-      {/* Relay handoff: pickup leg uploads photos for the partner;
-          delivery leg jumps to the documents viewer to see what the
-          partner left behind (trailer location, paperwork, etc.). */}
+      {/* Relay handoff: at my OUTBOUND marker I upload photos for the
+          next driver; at my INBOUND marker I jump to the documents
+          viewer to see what the previous driver left behind (trailer
+          location, paperwork, etc.). */}
       {stop.type === "relay" && loadId ? (
-        relayRole === "delivery" && onViewDocuments ? (
+        relayHandoff === "inbound" && onViewDocuments ? (
           <TouchableOpacity
             onPress={onViewDocuments}
             activeOpacity={0.85}
@@ -759,7 +779,7 @@ function StopCardInner({
           </TouchableOpacity>
         ) : (
           <TouchableOpacity
-            onPress={() => promptRelayHandoffUpload(loadId, onPhotoUploaded)}
+            onPress={() => promptRelayHandoffUpload(loadId, handoffIndex, onPhotoUploaded)}
             activeOpacity={0.85}
             style={{
               flexDirection: "row", alignItems: "center", justifyContent: "center",
@@ -810,13 +830,14 @@ function StopCardInner({
  * toast state.
  */
 const StopCard = React.memo(StopCardInner, (prev, next) => (
-  prev.stop       === next.stop       &&
-  prev.index      === next.index      &&
-  prev.relayRole  === next.relayRole  &&
-  prev.driverName === next.driverName &&
-  prev.orgId      === next.orgId      &&
-  prev.eventId    === next.eventId    &&
-  prev.loadId     === next.loadId
+  prev.stop         === next.stop         &&
+  prev.index        === next.index        &&
+  prev.relayHandoff === next.relayHandoff &&
+  prev.handoffIndex === next.handoffIndex &&
+  prev.driverName   === next.driverName   &&
+  prev.orgId        === next.orgId        &&
+  prev.eventId      === next.eventId      &&
+  prev.loadId       === next.loadId
 ));
 
 export default function LoadDetailScreen() {
@@ -969,6 +990,12 @@ export default function LoadDetailScreen() {
   // advance, so dispatch sees the acknowledgment either way.
   const nextStatus  = STATUS_TRANSITIONS[load.status];
   const ctaLabel    = STATUS_CTA[load.status];
+
+  // Leg position within an N-leg relay (null for single-leg loads) —
+  // drives the stop-window slicing, the handoff banners, and the
+  // Details-tab relay copy + photo-gallery scoping.
+  const legPos      = legPositionOf(load);
+  const legHandoffs = legPos ? myHandoffOrdinals(legPos) : null;
 
   // First geocoded pickup stop — used to auto-fire picked_up on its check-in.
   const firstPickupStopId = load.stops.find((s) => s.type === "pickup")?.id;
@@ -1376,12 +1403,14 @@ export default function LoadDetailScreen() {
             No stops on this load yet.
           </Text>
         ) : (() => {
-          const relayIdx = load.relayGroupId
-            ? load.stops.findIndex((s) => s.type === "relay")
-            : -1;
+          // N-leg relay windowing (lib/relayLegs.ts): my window = stops
+          // between marker legIndex-1 and marker legIndex, both boundary
+          // markers included. Stops before are earlier legs, stops after
+          // are later legs — both collapsed + non-interactive.
+          const win = legPos ? splitStopsForLeg(load.stops, legPos.legIndex) : null;
 
-          if (relayIdx === -1) {
-            return load.stops.map((s, i) => <StopCard key={s.id} stop={s} index={i} onAddressCopied={() => showToast("Address copied")}
+          const interactiveCard = (s: Stop, idx: number, handoff?: "inbound" | "outbound", handoffOrd?: number) => (
+            <StopCard key={s.id} stop={s} index={idx} onAddressCopied={() => showToast("Address copied")}
                 orgId={driver?.orgId}
                 onCheckedIn={(action) => {
                   queryClient.invalidateQueries({ queryKey: ["load", id] });
@@ -1391,121 +1420,81 @@ export default function LoadDetailScreen() {
                 eventId={load.id}
                 driverName={driver?.name}
                 loadId={load.id}
-                onPhotoUploaded={() => { showToast("Photo uploaded"); setRelayPhotosReloadKey(k => k + 1); }} />);
+                relayHandoff={handoff}
+                handoffIndex={handoffOrd}
+                onViewDocuments={handoff === "inbound" ? () => selectTab(2) : undefined}
+                onPhotoUploaded={() => { showToast("Photo uploaded"); setRelayPhotosReloadKey(k => k + 1); }} />
+          );
+
+          if (!legPos || !win || !legHandoffs
+              || (win.inboundMarkerIdx == null && win.outboundMarkerIdx == null)) {
+            return load.stops.map((s, i) => interactiveCard(s, i));
           }
 
-          const isPickupLeg = load.relayRole !== "delivery";
+          // Other-leg stops: dimmed, non-interactive, with an opaque rail
+          // mask. The faded card wrapper is 35% opacity, so the timeline
+          // rail bleeds through both the gap between cards and the cards
+          // themselves — the mask sits between the rail and the dimmed
+          // content at the rail's x-column.
+          const dimmedSection = (label: string, stops: Stop[], baseIndex: number) => (
+            <>
+              <Text
+                style={[
+                  txt(800),
+                  { fontSize: 11, letterSpacing: 1.1, color: C.t4, marginBottom: 10, textTransform: "uppercase" },
+                ]}
+              >
+                {label}
+              </Text>
+              <View style={{ position: "relative" }}>
+                <View
+                  pointerEvents="none"
+                  style={{ position: "absolute", left: 28, width: 12, top: 0, bottom: 0, backgroundColor: C.bg }}
+                />
+                <View style={{ opacity: 0.35 }} pointerEvents="none">
+                  {stops.map((s, i) => (
+                    <StopCard key={s.id} stop={s} index={baseIndex + i} />
+                  ))}
+                </View>
+              </View>
+            </>
+          );
 
-          if (isPickupLeg) {
-            const mine = load.stops.slice(0, relayIdx + 1);
-            const partner = load.stops.slice(relayIdx + 1);
-            return (
-              <>
-                {mine.map((s, i) => <StopCard key={s.id} stop={s} index={i} onAddressCopied={() => showToast("Address copied")}
-                orgId={driver?.orgId}
-                onCheckedIn={(action) => {
-                  queryClient.invalidateQueries({ queryKey: ["load", id] });
-                  showToast(action === "undo" ? "Check In Undone" : "Checked in");
-                  if (action !== "undo") handleAfterCheckIn(s.id);
-                }}
-                eventId={load.id}
-                driverName={driver?.name}
-                loadId={load.id}
-                relayRole="pickup"
-                onPhotoUploaded={() => { showToast("Photo uploaded"); setRelayPhotosReloadKey(k => k + 1); }} />)}
-                <RelayHandoffBanner mode="pickup" partnerDriverName={load.partnerDriverName} />
-                {partner.length > 0 ? (
-                  <>
-                    <Text
-                      style={[
-                        txt(800),
-                        { fontSize: 11, letterSpacing: 1.1, color: C.t4, marginBottom: 10, textTransform: "uppercase" },
-                      ]}
-                    >
-                      Continued by partner
-                    </Text>
-                    {/* relative wrapper + opaque rail mask. The faded card
-                        wrapper below is 35% opacity, so the timeline rail
-                        bleeds through both the gap between cards and the
-                        cards themselves. This mask sits between the rail
-                        and the dimmed content at the rail's x-column. */}
-                    <View style={{ position: "relative" }}>
-                      <View
-                        pointerEvents="none"
-                        style={{ position: "absolute", left: 28, width: 12, top: 0, bottom: 0, backgroundColor: C.bg }}
-                      />
-                      <View style={{ opacity: 0.35 }} pointerEvents="none">
-                        {partner.map((s, i) => (
-                          <StopCard key={s.id} stop={s} index={mine.length + i} />
-                        ))}
-                      </View>
-                    </View>
-                  </>
-                ) : null}
-              </>
-            );
-          }
+          // 2-leg loads keep the familiar "partner" wording; 3+ legs may
+          // have several drivers on the far side, so the label goes
+          // positional.
+          const isTwoLeg     = legPos.legCount === 2;
+          const beforeLabel  = isTwoLeg ? "Completed by partner" : "Earlier legs";
+          const afterLabel   = isTwoLeg ? "Continued by partner" : "After your handoff";
+          // partnerDriverName mirrors the ADJACENT leg — the NEXT leg
+          // when one exists, else the previous. So it names the right
+          // driver on the outbound banner always, but on the inbound
+          // banner only for the FINAL leg (a middle leg's partner is the
+          // next driver, not the one bringing the trailer).
+          const isFinalLeg = legPos.legIndex >= legPos.legCount - 1;
 
-          const partner = load.stops.slice(0, relayIdx);
-          const mine    = load.stops.slice(relayIdx);
           return (
             <>
-              {partner.length > 0 ? (
-                <>
-                  <Text
-                    style={[
-                      txt(800),
-                      { fontSize: 11, letterSpacing: 1.1, color: C.t4, marginBottom: 10, textTransform: "uppercase" },
-                    ]}
-                  >
-                    Completed by partner
-                  </Text>
-                  {/* Mask the timeline rail behind the dimmed partner
-                      section — see matching block in the pickup-leg path. */}
-                  <View style={{ position: "relative" }}>
-                    <View
-                      pointerEvents="none"
-                      style={{ position: "absolute", left: 28, width: 12, top: 0, bottom: 0, backgroundColor: C.bg }}
-                    />
-                    <View style={{ opacity: 0.35 }} pointerEvents="none">
-                      {partner.map((s, i) => (
-                        <StopCard key={s.id} stop={s} index={i} onAddressCopied={() => showToast("Address copied")}
-                orgId={driver?.orgId}
-                onCheckedIn={(action) => {
-                  queryClient.invalidateQueries({ queryKey: ["load", id] });
-                  showToast(action === "undo" ? "Check In Undone" : "Checked in");
-                  if (action !== "undo") handleAfterCheckIn(s.id);
-                }}
-                eventId={load.id}
-                driverName={driver?.name}
-                loadId={load.id}
-                onPhotoUploaded={() => { showToast("Photo uploaded"); setRelayPhotosReloadKey(k => k + 1); }} />
-                      ))}
-                    </View>
-                  </View>
-                </>
-              ) : null}
-              <RelayHandoffBanner mode="delivery" partnerDriverName={load.partnerDriverName} />
-              {mine.map((s, i) => (
-                <StopCard
-                  key={s.id}
-                  stop={s}
-                  index={partner.length + i}
-                  onAddressCopied={() => showToast("Address copied")}
-                  orgId={driver?.orgId}
-                  onCheckedIn={(action) => {
-                    queryClient.invalidateQueries({ queryKey: ["load", id] });
-                    showToast(action === "undo" ? "Check In Undone" : "Checked in");
-                    if (action !== "undo") handleAfterCheckIn(s.id);
-                  }}
-                  eventId={load.id}
-                  driverName={driver?.name}
-                  loadId={load.id}
-                  relayRole="delivery"
-                  onViewDocuments={() => selectTab(2)}
-                  onPhotoUploaded={() => { showToast("Photo uploaded"); setRelayPhotosReloadKey(k => k + 1); }}
+              {win.before.length > 0 ? dimmedSection(beforeLabel, win.before, 0) : null}
+              {legHandoffs.inbound != null ? (
+                <RelayHandoffBanner
+                  mode="inbound"
+                  partnerDriverName={isFinalLeg ? load.partnerDriverName : undefined}
                 />
-              ))}
+              ) : null}
+              {win.mine.map((s, i) => {
+                const dir = handoffDirectionFor(win, s);
+                const ord = dir === "inbound" ? legHandoffs.inbound
+                          : dir === "outbound" ? legHandoffs.outbound
+                          : undefined;
+                return interactiveCard(s, win.before.length + i, dir, ord);
+              })}
+              {legHandoffs.outbound != null ? (
+                <RelayHandoffBanner mode="outbound" partnerDriverName={load.partnerDriverName} />
+              ) : null}
+              {win.after.length > 0
+                ? dimmedSection(afterLabel, win.after, win.before.length + win.mine.length)
+                : null}
             </>
           );
         })()}
@@ -1517,11 +1506,13 @@ export default function LoadDetailScreen() {
 
       {/* Details tab */}
       <ScrollView style={{ width: SCREEN_W, backgroundColor: C.bg }} contentContainerStyle={{ padding: 16, paddingBottom: 120 }} nestedScrollEnabled>
-        {/* Relay disclaimer + handoff photos. Photos are shared
-            across both legs (`kind='relay_handoff'` on load_documents).
-            Pickup driver leaves "where I parked the trailer" / paperwork
-            shots; delivery driver picks them up. */}
-        {load.relayGroupId && load.loadId ? (
+        {/* Relay disclaimer + handoff photos. Photos live on the load
+            (`kind='relay_handoff'` on load_documents), keyed to a handoff
+            ordinal — the gallery shows this leg's handoffs (inbound +
+            outbound) plus legacy untagged photos. The dropping driver
+            leaves "where I parked the trailer" / paperwork shots; the
+            receiving driver picks them up. */}
+        {legPos && legHandoffs && load.loadId ? (
           <View
             style={{
               backgroundColor: C.purpleBg,
@@ -1535,20 +1526,31 @@ export default function LoadDetailScreen() {
               <Repeat2 size={20} color={C.purpleInk} strokeWidth={2.2} style={{ marginTop: 2 }} />
               <View style={{ flex: 1 }}>
                 <Text style={[txt(800), { fontSize: 13, color: C.purpleInk, letterSpacing: 0.2 }]}>
-                  Relay Load — {load.relayRole === "pickup" ? "First Leg" : "Second Leg"}
+                  Relay Load — Leg {legPos.legIndex + 1} of {legPos.legCount}
                 </Text>
                 <Text style={[txt(500), { fontSize: 13, color: C.purpleInk, lineHeight: 19, marginTop: 4, opacity: 0.95 }]}>
-                  {load.relayRole === "pickup"
+                  {legPos.legIndex === 0
                     ? `You haul this load to the relay handoff point, then ${load.partnerDriverName ?? "another driver"} takes it the rest of the way.`
-                    : `${load.partnerDriverName ?? "Another driver"} starts this load. You pick it up at the relay point and finish the delivery.`}
+                    : legPos.legIndex < legPos.legCount - 1
+                    ? `A previous driver hands this load to you at your first relay point. You haul it to the next handoff, where ${load.partnerDriverName ?? "another driver"} takes over.`
+                    : legPos.legCount === 2
+                    ? `${load.partnerDriverName ?? "Another driver"} starts this load. You pick it up at the relay point and finish the delivery.`
+                    : `${load.partnerDriverName ?? "Another driver"} brings this load to the relay point. You pick it up and finish the delivery.`}
                 </Text>
               </View>
             </View>
-            <RelayHandoffPhotos loadId={load.id} reloadKey={relayPhotosReloadKey} />
+            <RelayHandoffPhotos
+              loadId={load.id}
+              reloadKey={relayPhotosReloadKey}
+              handoffIndexes={[legHandoffs.inbound, legHandoffs.outbound].filter((n): n is number => n != null)}
+              uploadHandoffIndex={legHandoffs.outbound ?? legHandoffs.inbound}
+            />
             {/* RelayTrailerLocation (the trailer-drop pin feature) was
                 hidden 2026-05-22 — too complex for the prototype.
-                Component + API + schema stay in place so re-enabling
-                is just uncommenting this block. */}
+                Component + API + schema stay in place (now N-leg aware:
+                non-final legs pin, non-first legs read the previous
+                leg's pin) so re-enabling is just uncommenting this
+                block. */}
           </View>
         ) : null}
 

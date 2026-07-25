@@ -22,14 +22,25 @@ import type { Asset, Driver, Stop } from "@/lib/types";
 interface Props {
   visible:       boolean;
   orgId:         string;
-  /** ISO end of the original load — used as default delivery-leg end. */
+  /** ISO end of the leg being split — used as default new-leg end. */
   loadEndIso:    string;
-  stops:         Stop[];      // current stops list (used for position picker)
+  stops:         Stop[];      // FULL merged stops list (used for position picker)
   assets:        Asset[];
   drivers:       Driver[];
   driverPrefs?:  Record<number, number>;
   pickupAssetId: number;
   saving:        boolean;
+  /** Driver currently on the leg being split — personalizes the handoff copy
+   *  ("Luis drops" instead of "Driver 1 drop"). */
+  currentDriverName?: string | null;
+  /** Label of the leg being split when the load is ALREADY a relay
+   *  (e.g. "Leg 2 · Transfer"). Present → title/copy read "Split Leg 2 ·
+   *  Transfer"; absent → the original "Split into Relay". */
+  splitLegLabel?: string;
+  /** Allowed insertAfterIdx range for the new handoff. When splitting one
+   *  leg of an existing relay this confines the marker to that leg's stop
+   *  window (boundary markers included). Defaults to the whole list. */
+  insertRange?: { min: number; max: number };
   onClose:       () => void;
   onConfirm: (opts: {
     deliveryAssetId:     number;
@@ -66,13 +77,20 @@ function stopShort(s: Stop, idx: number): string {
 
 export function RelaySplitSheet({
   visible, orgId, loadEndIso, stops, assets, drivers, driverPrefs,
-  pickupAssetId, saving, onClose, onConfirm,
+  pickupAssetId, saving, currentDriverName, splitLegLabel, insertRange,
+  onClose, onConfirm,
 }: Props) {
   const { getToken } = useAuth();
   const eligibleAssets = useMemo(
     () => assets.filter((a) => a.id !== pickupAssetId),
     [assets, pickupAssetId],
   );
+  // Handoff-position bounds (insertAfterIdx space). Unconstrained default:
+  // anywhere in the list, defaulting to just before the last stop.
+  const minInsertIdx = Math.max(0, insertRange?.min ?? 0);
+  const maxInsertIdx = Math.max(minInsertIdx, insertRange?.max ?? stops.length - 2);
+  const driver1Label = (currentDriverName?.trim() || "Driver 1");
+  const driver2Fallback = splitLegLabel ? "New driver" : "Driver 2";
 
   // Driver/asset
   const [delivAssetId,    setDelivAssetId]    = useState<number | null>(null);
@@ -94,9 +112,9 @@ export function RelaySplitSheet({
   const [verifying,    setVerifying]    = useState(false);
 
   // Position
-  // Default: insert AFTER the second-to-last stop ("before last stop").
-  const defaultInsertIdx = Math.max(0, stops.length - 2);
-  const [insertAfterIdx, setInsertAfterIdx] = useState(defaultInsertIdx);
+  // Default: insert AFTER the second-to-last stop of the allowed window
+  // ("before the window's last stop").
+  const [insertAfterIdx, setInsertAfterIdx] = useState(maxInsertIdx);
 
   // Sub-sheets
   const [assetPickerVisible,  setAssetPickerVisible]  = useState(false);
@@ -137,7 +155,7 @@ export function RelaySplitSheet({
     setAddress("");
     setLat(undefined); setLng(undefined); setTimezone(undefined);
     setVerifyState("unverified"); setVerifiedAddress("");
-    setInsertAfterIdx(Math.max(0, stops.length - 2));
+    setInsertAfterIdx(maxInsertIdx);
     setShow(false); setPlaceResults([]);
 
     // Default split times: drop = end - 1h, pickup = end - 30m
@@ -150,7 +168,7 @@ export function RelaySplitSheet({
     } else {
       setPickupEnd(""); setDeliveryStart("");
     }
-  }, [visible, loadEndIso, stops.length]);
+  }, [visible, loadEndIso, stops.length, maxInsertIdx]);
 
   // Stale verify check
   useEffect(() => {
@@ -287,20 +305,20 @@ export function RelaySplitSheet({
   const delivAsset  = assets.find((a) => a.id === delivAssetId);
   const beforeStop  = stops[insertAfterIdx];
   const afterStop   = stops[insertAfterIdx + 1];
-  const canMoveLeft  = insertAfterIdx > 0;
-  const canMoveRight = insertAfterIdx < stops.length - 2;
+  const canMoveLeft  = insertAfterIdx > minInsertIdx;
+  const canMoveRight = insertAfterIdx < maxInsertIdx;
 
   function handleReviewAndConfirm() {
     if (!ready || delivAssetId == null) return;
     const summary =
-      `Delivery driver: ${delivDriverName ?? "(none)"} — ${delivAsset?.name ?? ""}\n` +
-      `Driver 1 drops: ${fmtFullDateTime(pickupEnd)}\n` +
-      `Driver 2 picks up: ${fmtFullDateTime(deliveryStart)}\n` +
+      `New driver: ${delivDriverName ?? "(none)"} — ${delivAsset?.name ?? ""}\n` +
+      `${driver1Label} drops: ${fmtFullDateTime(pickupEnd)}\n` +
+      `${delivDriverName ?? driver2Fallback} picks up: ${fmtFullDateTime(deliveryStart)}\n` +
       `Relay location: ${facilityName.trim() || address.trim() || "(not set)"}\n` +
       `Position: between "${beforeStop ? stopShort(beforeStop, insertAfterIdx) : "—"}" ` +
       `and "${afterStop ? stopShort(afterStop, insertAfterIdx + 1) : "—"}"`;
     Alert.alert(
-      "Confirm relay split",
+      splitLegLabel ? `Confirm split — ${splitLegLabel}` : "Confirm relay split",
       summary,
       [
         { text: "Back", style: "cancel" },
@@ -352,7 +370,7 @@ export function RelaySplitSheet({
           }}>
             <Repeat2 size={18} color="#6b21a8" strokeWidth={2.4} />
             <Text style={[txt(800), { fontSize: 16, color: "#202124", flex: 1 }]}>
-              Split into Relay
+              {splitLegLabel ? `Split ${splitLegLabel}` : "Split into Relay"}
             </Text>
             <TouchableOpacity onPress={onClose} hitSlop={10}>
               <X size={20} color="#5f6368" strokeWidth={2.2} />
@@ -360,9 +378,9 @@ export function RelaySplitSheet({
           </View>
 
           <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingHorizontal: 18, paddingTop: 14, paddingBottom: 8 }}>
-            {/* Delivery driver */}
+            {/* Driver taking over after the handoff */}
             <Text style={[txt(800), { fontSize: 11, color: "#5f6368", letterSpacing: 0.6, marginBottom: 8 }]}>
-              DELIVERY DRIVER
+              {splitLegLabel ? "NEW DRIVER · TAKES OVER AFTER HANDOFF" : "DELIVERY DRIVER"}
             </Text>
             <TouchableOpacity
               onPress={() => setAssetPickerVisible(true)}
@@ -412,11 +430,11 @@ export function RelaySplitSheet({
             >
               <Clock size={15} color="#5f6368" strokeWidth={2.2} />
               <View style={{ flex: 1 }}>
-                <Text style={[txt(600), { fontSize: 11, color: "#5f6368", letterSpacing: 0.4 }]}>DRIVER 1 DROP</Text>
+                <Text style={[txt(600), { fontSize: 11, color: "#5f6368", letterSpacing: 0.4 }]}>{driver1Label.toUpperCase()} DROP</Text>
                 <Text style={[txt(700), { fontSize: 14, color: pickupEnd ? "#202124" : "#9aa0a6" }]} numberOfLines={1}>
                   {fmtFullDateTime(pickupEnd)}
                 </Text>
-                <Text style={[txt(600), { fontSize: 11, color: "#5f6368", letterSpacing: 0.4, marginTop: 4 }]}>DRIVER 2 PICKUP</Text>
+                <Text style={[txt(600), { fontSize: 11, color: "#5f6368", letterSpacing: 0.4, marginTop: 4 }]}>{(delivDriverName ?? driver2Fallback).toUpperCase()} PICKUP</Text>
                 <Text style={[txt(700), { fontSize: 14, color: deliveryStart ? "#202124" : "#9aa0a6" }]} numberOfLines={1}>
                   {fmtFullDateTime(deliveryStart)}
                 </Text>
@@ -637,7 +655,9 @@ export function RelaySplitSheet({
               </TouchableOpacity>
             </View>
             <Text style={[txt(500), { fontSize: 11, color: "#9aa0a6", paddingHorizontal: 4, marginBottom: 8 }]}>
-              Default: just before the last stop.
+              {splitLegLabel
+                ? "Default: just before this leg's last stop. The handoff stays within the leg being split."
+                : "Default: just before the last stop."}
             </Text>
           </ScrollView>
 

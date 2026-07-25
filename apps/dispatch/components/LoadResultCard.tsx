@@ -37,7 +37,7 @@ export function LoadResultCard({ load }: { load: Load }) {
           {load.title}
         </Text>
         {isNonRev ? <NonRevChip /> : null}
-        {load.relayRole ? <RelayChip role={load.relayRole} /> : null}
+        {load.relayRole ? <RelayChip load={load} /> : null}
       </View>
 
       {load.assetName || load.driverName ? (

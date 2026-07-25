@@ -167,7 +167,10 @@ export const railway = {
     }>("GET", `/v1/driver/notifications${q ? `?${q}` : ""}`);
   },
 
-  // Loads
+  // Loads. Each entry is ONE leg (event) assigned to this driver — an
+  // N-leg relay surfaces as up to N separate entries, each carrying
+  // relayRole ('pickup' | 'transfer' | 'delivery'), legIndex/legCount,
+  // and the FULL merged stop list (slice with lib/relayLegs.ts).
   listLoads(query?: { from?: string; to?: string }) {
     const qs = new URLSearchParams(
       Object.fromEntries(Object.entries(query ?? {}).filter(([, v]) => v != null)) as Record<string, string>,
@@ -206,10 +209,13 @@ export const railway = {
     );
   },
 
-  /** Relay handoff: pickup-leg driver pins the actual trailer-drop
-   *  location with their phone GPS. The delivery-leg driver then reads
-   *  it back via partnerTrailerDropoff* on the load detail. Endpoint
-   *  rejects with 400 if the event isn't a relay pickup. */
+  /** Relay handoff: the dropping driver pins the actual trailer-drop
+   *  location with their phone GPS. The NEXT leg's driver then reads
+   *  it back via partnerTrailerDropoff* on the load detail (that
+   *  mirror always carries the PREVIOUS leg's pin). Allowed on any
+   *  non-final leg — relay_role 'pickup' OR 'transfer'; the endpoint
+   *  rejects with 400 only for final (delivery) legs and non-relay
+   *  events. */
   saveTrailerDropoff(eventId: string, body: { lat: number; lng: number }) {
     return req<{ trailerDropoffLat: number; trailerDropoffLng: number; trailerDropoffAt: string }>(
       "POST",
@@ -218,7 +224,11 @@ export const railway = {
     );
   },
 
-  // Documents
+  // Documents. relay_handoff docs carry `handoffIndex` (0-based handoff
+  // ordinal; null = legacy photo shown on every handoff). Upload accepts
+  // a matching multipart `handoffIndex` field — append it to the
+  // FormData (see uploadRelayHandoffPhoto) to key a photo to one
+  // exchange point on an N-leg relay.
   listDocuments(loadId: string) {
     return req<{ documents: unknown[] }>("GET", `/v1/driver/loads/${loadId}/documents`);
   },

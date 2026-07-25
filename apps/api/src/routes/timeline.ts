@@ -201,8 +201,11 @@ interface TimelineEvent {
   status: string | null;
   eventKind: string | null;
   nonRevenueType: string | null;
-  /** 'pickup' / 'delivery' for relay legs, null for whole loads. */
-  relayRole: 'pickup' | 'delivery' | null;
+  /** 'pickup' / 'transfer' / 'delivery' for relay legs, null for whole
+   *  loads. Derived from leg position: first / middle / last. */
+  relayRole: 'pickup' | 'transfer' | 'delivery' | null;
+  /** 0-based leg position within the load; null for whole loads. */
+  legIndex: number | null;
   loadPrice: number | null;
   /** Server-computed: linehaul + billable accessorials. UI shows it
    *  only when it differs from loadPrice. Maintained by the
@@ -311,7 +314,7 @@ timeline.get("/assets/:assetId", async (c) => {
   // loads on the timeline.
   const { data: events, error: eErr } = await sb
     .from("events")
-    .select("id, load_id, title, start, \"end\", status, event_kind, non_revenue_type, relay_role, driver_name, driver_pay, loaded_miles, load:loads(load_price, total_billable, load_num)")
+    .select("id, load_id, title, start, \"end\", status, event_kind, non_revenue_type, relay_role, leg_index, driver_name, driver_pay, loaded_miles, load:loads(load_price, total_billable, load_num)")
     .eq("org_id", orgId)
     .eq("asset_id", assetId)
     .is("deleted_at", null)
@@ -362,14 +365,12 @@ timeline.get("/assets/:assetId", async (c) => {
   // proration needs: loaded_miles + relay_role keyed by load_id.
   //
   // Share formula matches the dashboard's revenueByAsset chart:
-  //   share = thisLeg.loaded_miles / (thisLeg.loaded_miles + partner.loaded_miles)
-  // Falls back to 0.5 if either side has no loaded_miles set — better
+  //   share = thisLeg.loaded_miles / Σ(all legs' loaded_miles)
+  // Falls back to 1/N if the load has no loaded_miles set — better
   // than crediting the whole load to one leg.
   const relayLoadIds = new Set<string>();
   for (const e of ((events ?? []) as Array<{ load_id: string | null; relay_role: string | null }>)) {
-    if (e.relay_role === 'pickup' || e.relay_role === 'delivery') {
-      if (e.load_id) relayLoadIds.add(e.load_id);
-    }
+    if (e.relay_role && e.load_id) relayLoadIds.add(e.load_id);
   }
   const relayShareByEventId = new Map<string, number>();
   if (relayLoadIds.size > 0) {
@@ -390,17 +391,13 @@ timeline.get("/assets/:assetId", async (c) => {
         legsByLoad.get(r.load_id)!.push({ id: r.id, loaded_miles: r.loaded_miles });
       }
       for (const [, legs] of legsByLoad) {
-        if (legs.length !== 2) continue; // not a relay or data issue — skip
-        const [a, b] = legs;
-        const ma = a.loaded_miles ?? 0;
-        const mb = b.loaded_miles ?? 0;
-        const total = ma + mb;
-        if (total > 0) {
-          relayShareByEventId.set(a.id, ma / total);
-          relayShareByEventId.set(b.id, mb / total);
-        } else {
-          relayShareByEventId.set(a.id, 0.5);
-          relayShareByEventId.set(b.id, 0.5);
+        if (legs.length < 2) continue; // not a relay or data issue — skip
+        const total = legs.reduce((sum, l) => sum + (l.loaded_miles ?? 0), 0);
+        for (const leg of legs) {
+          relayShareByEventId.set(
+            leg.id,
+            total > 0 ? (leg.loaded_miles ?? 0) / total : 1 / legs.length,
+          );
         }
       }
     }
@@ -409,7 +406,7 @@ timeline.get("/assets/:assetId", async (c) => {
   const eventsOut: TimelineEvent[] = ((events ?? []) as Array<{
     id: string; title: string | null; start: string; end: string;
     status: string | null; event_kind: string | null; non_revenue_type: string | null;
-    relay_role: string | null;
+    relay_role: string | null; leg_index: number | null;
     driver_name: string | null; driver_pay: number | null; loaded_miles: number | null;
     load: { load_price: number | null; total_billable: number | null; load_num: string | null } | null;
   }>).map((e) => ({
@@ -420,9 +417,10 @@ timeline.get("/assets/:assetId", async (c) => {
     status:         e.status,
     eventKind:      e.event_kind,
     nonRevenueType: e.non_revenue_type,
-    relayRole:      e.relay_role === 'pickup' || e.relay_role === 'delivery'
+    relayRole:      e.relay_role === 'pickup' || e.relay_role === 'transfer' || e.relay_role === 'delivery'
                       ? e.relay_role
                       : null,
+    legIndex:       e.relay_role != null ? (e.leg_index ?? null) : null,
     loadPrice:      e.load?.load_price ?? null,
     totalBillable:  e.load?.total_billable ?? null,
     loadNum:        e.load?.load_num   ?? null,
@@ -1638,7 +1636,7 @@ timeline.get("/assets/:assetId/week-summary", async (c) => {
   // totalRevenue double-counts every relay it touches.
   const weekRelayShareByEventId = new Map<string, number>();
   const weekRelayLoadIds = [...new Set(
-    eventList.filter(e => e.relay_role === 'pickup' || e.relay_role === 'delivery')
+    eventList.filter(e => e.relay_role != null)
              .map(e => e.load_id)
              .filter((x): x is string => x != null)
   )];
@@ -1655,15 +1653,13 @@ timeline.get("/assets/:assetId/week-summary", async (c) => {
       legsByLoad.get(r.load_id)!.push({ id: r.id, loaded_miles: r.loaded_miles });
     }
     for (const [, legs] of legsByLoad) {
-      if (legs.length !== 2) continue;
-      const [a, b] = legs;
-      const total = (a.loaded_miles ?? 0) + (b.loaded_miles ?? 0);
-      if (total > 0) {
-        weekRelayShareByEventId.set(a.id, (a.loaded_miles ?? 0) / total);
-        weekRelayShareByEventId.set(b.id, (b.loaded_miles ?? 0) / total);
-      } else {
-        weekRelayShareByEventId.set(a.id, 0.5);
-        weekRelayShareByEventId.set(b.id, 0.5);
+      if (legs.length < 2) continue;
+      const total = legs.reduce((sum, l) => sum + (l.loaded_miles ?? 0), 0);
+      for (const leg of legs) {
+        weekRelayShareByEventId.set(
+          leg.id,
+          total > 0 ? (leg.loaded_miles ?? 0) / total : 1 / legs.length,
+        );
       }
     }
   }

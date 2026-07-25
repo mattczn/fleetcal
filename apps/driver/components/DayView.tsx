@@ -12,6 +12,7 @@ import {
 } from "@/lib/loadCard";
 import { useDriverSession } from "@/lib/useDriverSession";
 import { useOrgTz, nowInTz, todayKeyInTz } from "@/lib/orgTz";
+import { legPositionOf } from "@/lib/relayLegs";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
   fontFamily:
@@ -186,6 +187,7 @@ function EventBlock({ ev, paneWidth }: { ev: PositionedEvent; paneWidth: number 
   const { load, top, height, spansBefore, spansAfter, lane, laneCount } = ev;
   const needsAction = needsConfirmation(load);
   const isNonRev   = load.eventKind === "non_revenue";
+  const legPos     = legPositionOf(load);
   const spans      = spansBefore || spansAfter;
   const stripeColor = needsAction ? "#dc2626" : "#1a73e8";
 
@@ -220,10 +222,10 @@ function EventBlock({ ev, paneWidth }: { ev: PositionedEvent; paneWidth: number 
       <Text style={[txt(800), { fontSize: 13, color: "#1a3060" }]} numberOfLines={2}>
         {load.title}
       </Text>
-      {(isNonRev || load.relayRole) ? (
+      {(isNonRev || legPos) ? (
         <View style={{ flexDirection: "row", gap: 4, marginTop: 3, flexWrap: "wrap" }}>
           {isNonRev ? <NonRevChip size="small" /> : null}
-          {load.relayRole ? <RelayChip role={load.relayRole} size="small" /> : null}
+          {legPos ? <RelayChip legIndex={legPos.legIndex} legCount={legPos.legCount} size="small" /> : null}
         </View>
       ) : null}
       {height >= 48 && load.assetName ? (

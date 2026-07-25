@@ -10,7 +10,8 @@ import {
   Briefcase, Info, ChevronDown, ChevronUp, ChevronRight, CircleDot, Copy, Check,
   Repeat2, HandCoins, CheckCircle2, Route, Pencil, Lock, Trash2, Plus, Split,
 } from "lucide-react-native";
-import { fetchLoad, updateLoadStatus, updateLoadTrailer, updateLoadFields, fetchAssets, fetchDrivers, fetchDriverAssetPrefs, fetchCustomers, displayBrokerName, saveStops, splitIntoRelay, removeRelay, softDeleteLoad } from "@/lib/api";
+import { fetchLoad, updateLoadStatus, updateLoadTrailer, updateLoadFields, fetchAssets, fetchDrivers, fetchDriverAssetPrefs, fetchCustomers, displayBrokerName, saveStops, splitIntoRelay, removeRelay, softDeleteLoad, type LoadWithLegs } from "@/lib/api";
+import { legLabel } from "@fleetcal/types";
 import { supabase } from "@/lib/supabase";
 import { fetchMotiveLocations, distanceMiles, type MotiveLocation } from "@/lib/motive";
 import { env } from "@/lib/env";
@@ -58,6 +59,39 @@ function fmtFullDateTime(iso: string): string {
 }
 function fmtMoney(n: number): string {
   return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+/**
+ * Effective leg position for a load. Reads legIndex/legCount off the row;
+ * entries cached before the N-leg upgrade may lack them, so fall back to
+ * deriving a 2-leg position from relayRole.
+ */
+function legPos(load: Load): { legIndex: number; legCount: number } {
+  const legCount = load.legCount ?? (load.relayRole ? 2 : 1);
+  const legIndex = load.legIndex ?? (
+    load.relayRole === "delivery" ? legCount - 1 :
+    load.relayRole === "transfer" ? Math.min(1, legCount - 1) : 0
+  );
+  return { legIndex, legCount };
+}
+
+/**
+ * Stop-index window [start, end] (inclusive) for a leg within the FULL
+ * merged stop list. Relay marker i (0-based, in sequence order) sits
+ * between leg i and leg i+1, so leg i's window runs from marker i-1 (or
+ * the first stop) through marker i (or the last stop), boundary markers
+ * included. Falls back to the whole list when the marker count doesn't
+ * line up with legCount (mid-edit or stale data).
+ */
+function legStopWindow(stops: Stop[], legIndex: number, legCount: number): { start: number; end: number } {
+  const markers: number[] = [];
+  stops.forEach((s, i) => { if (s.type === "relay") markers.push(i); });
+  if (legCount <= 1 || markers.length < legCount - 1) {
+    return { start: 0, end: stops.length - 1 };
+  }
+  const start = legIndex <= 0 ? 0 : markers[legIndex - 1];
+  const end   = legIndex >= legCount - 1 ? stops.length - 1 : markers[legIndex];
+  return { start, end };
 }
 
 // ── Inline components ─────────────────────────────────────────────────────────
@@ -494,7 +528,7 @@ function Card({ children }: { children: React.ReactNode }) {
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 
 interface StopsTabProps {
-  load:        Load;
+  load:        LoadWithLegs;
   width:       number;
   truckLoc?:   MotiveLocation | null;
   /** Asset color used to tint the live truck pin on the route map. */
@@ -521,7 +555,7 @@ interface StopsTabProps {
   canSplitRelay: boolean;
   onRemoveRelay?: () => void;       // shown only when this is a relay leg
   removingRelay?: boolean;
-  onOpenPartner?: () => void;
+  onOpenLeg?: (eventId: string) => void;
   /** Switches the parent's tabbed view to Documents — used by the
    *  inline "View Handoff Photos" button in the relay disclaimer. */
   onViewDocuments?: () => void;
@@ -722,14 +756,32 @@ function StopCard({
   );
 }
 
-function RelayDisclaimer({ load, onOpenPartner, onViewDocuments }: { load: Load; onOpenPartner?: () => void; onViewDocuments?: () => void }) {
+function RelayDisclaimer({ load, onOpenLeg, onViewDocuments }: { load: LoadWithLegs; onOpenLeg?: (eventId: string) => void; onViewDocuments?: () => void }) {
   if (!load.relayGroupId) return null;
-  const isPickup = load.relayRole !== "delivery";
-  const me      = load.driverName  ?? load.assetName ?? "This driver";
-  const partner = load.partnerDriverName ?? load.partnerAssetName ?? "Another driver";
-  const sentence = isPickup
-    ? `${me} picks up · ${partner} delivers`
-    : `${partner} picks up · ${me} delivers`;
+  const { legIndex, legCount } = legPos(load);
+
+  // All legs in leg order when the fetch joined them; entries cached before
+  // the N-leg upgrade lack `legs`, so synthesize the 2-leg pair from the
+  // partner mirrors (exact for 2-leg loads, the only shape old caches hold).
+  const legEntries: { id: string; legIndex: number; name: string }[] = load.legs
+    ? load.legs.map((l, i) => ({
+        id:       l.id,
+        legIndex: l.legIndex ?? i,
+        name:     l.driverName ?? l.assetName ?? `Leg ${(l.legIndex ?? i) + 1}`,
+      }))
+    : [
+        { id: load.id, legIndex, name: load.driverName ?? load.assetName ?? "This driver" },
+        ...(load.partnerEventId ? [{
+          id:       load.partnerEventId,
+          legIndex: legIndex < legCount - 1 ? legIndex + 1 : legIndex - 1,
+          name:     load.partnerDriverName ?? load.partnerAssetName ?? "Another driver",
+        }] : []),
+      ].sort((a, b) => a.legIndex - b.legIndex);
+
+  // Handoff chain: "Luis → Sarah → Dave".
+  const sentence = legEntries.map((l) => l.name).join(" → ");
+  const otherLegs = legEntries.filter((l) => l.id !== load.id);
+
   return (
     <View
       style={{
@@ -744,16 +796,17 @@ function RelayDisclaimer({ load, onOpenPartner, onViewDocuments }: { load: Load;
         <Repeat2 size={20} color="#6b21a8" strokeWidth={2.2} style={{ marginTop: 2 }} />
         <View style={{ flex: 1 }}>
           <Text style={[txt(800), { fontSize: 13, color: "#6b21a8", letterSpacing: 0.2 }]}>
-            Relay Load — {isPickup ? "Pickup Leg" : "Delivery Leg"}
+            Relay Load — {legLabel(legIndex, legCount) || "Relay Leg"}
           </Text>
           <Text style={[txt(600), { fontSize: 13, color: "#6b21a8", lineHeight: 19, marginTop: 4 }]}>
             {sentence}
           </Text>
         </View>
       </View>
-      {onOpenPartner && load.partnerEventId ? (
+      {onOpenLeg ? otherLegs.map((l) => (
         <TouchableOpacity
-          onPress={onOpenPartner}
+          key={l.id}
+          onPress={() => onOpenLeg(l.id)}
           activeOpacity={0.8}
           style={{
             flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
@@ -762,14 +815,19 @@ function RelayDisclaimer({ load, onOpenPartner, onViewDocuments }: { load: Load;
             borderWidth: 1, borderColor: "#ddd6fe",
           }}
         >
-          <Text style={[txt(800), { fontSize: 12, color: "#6b21a8", letterSpacing: 0.3 }]}>
-            Open {isPickup ? "delivery" : "pickup"} leg
+          <Text style={[txt(800), { fontSize: 12, color: "#6b21a8", letterSpacing: 0.3 }]} numberOfLines={1}>
+            Open {legLabel(l.legIndex, legCount) || "other leg"} — {l.name}
           </Text>
           <ChevronRight size={14} color="#6b21a8" strokeWidth={2.4} />
         </TouchableOpacity>
-      ) : null}
+      )) : null}
       {load.loadId ? (
-        <HandoffPhotosButton loadId={load.loadId} onViewDocuments={onViewDocuments} />
+        <HandoffPhotosButton
+          loadId={load.loadId}
+          legIndex={legIndex}
+          legCount={legCount}
+          onViewDocuments={onViewDocuments}
+        />
       ) : null}
     </View>
   );
@@ -806,7 +864,7 @@ function StopsTab({
   onCopied,
   editMode, draftStops, dirty, isSaving,
   onMoveStop, onDeleteStop, onTapStop, onAddStop, onSplitRelay, canSplitRelay,
-  onRemoveRelay, removingRelay, onOpenPartner, onViewDocuments,
+  onRemoveRelay, removingRelay, onOpenLeg, onViewDocuments,
   onCancelEdit, onSaveEdit,
 }: StopsTabProps) {
   // In edit mode, render the draft list flat (no relay dimming) so the user
@@ -864,7 +922,7 @@ function StopsTab({
           >
             <Split size={14} color="#6b21a8" strokeWidth={2.4} />
             <Text style={[txt(800), { fontSize: 12, color: "#6b21a8", letterSpacing: 0.3 }]}>
-              Split into relay
+              {load.relayGroupId ? "Split this leg" : "Split into relay"}
             </Text>
           </TouchableOpacity>
         ) : null}
@@ -887,7 +945,7 @@ function StopsTab({
               ? <ActivityIndicator size="small" color="#b91c1c" />
               : <Repeat2 size={14} color="#b91c1c" strokeWidth={2.4} />}
             <Text style={[txt(800), { fontSize: 12, color: "#b91c1c", letterSpacing: 0.3 }]}>
-              Remove relay split
+              {(load.legCount ?? 2) > 2 ? "Merge relay legs" : "Remove relay split"}
             </Text>
           </TouchableOpacity>
         ) : null}
@@ -944,20 +1002,22 @@ function StopsTab({
   }
 
   const isRelay  = !!load.relayGroupId;
-  const isPickup = load.relayRole !== "delivery";
+  const { legIndex, legCount } = legPos(load);
+  const isFirstLeg = legIndex <= 0;
+  const isLastLeg  = legIndex >= legCount - 1;
   const stops    = load.stops;
-  // The event's stop list already contains the full journey (pickup → relay → delivery).
-  // Relay role determines which side of the relay stop is "mine":
-  //   pickup leg   → stops up to and including the relay are highlighted
-  //   delivery leg → stops from the relay onward are highlighted
-  const relayIdx = isRelay ? stops.findIndex((s) => s.type === "relay") : -1;
+  // The event's stop list already contains the full journey — every leg
+  // stores the merged list, with relay markers between legs. "Mine" =
+  // stops inside THIS leg's window: from marker legIndex-1 (or the first
+  // stop) through marker legIndex (or the last stop), both boundary
+  // markers included.
+  const win = isRelay ? legStopWindow(stops, legIndex, legCount) : null;
 
   type Entry = { stop: Stop; mine: boolean };
-  const combined: Entry[] = stops.map((s, i) => {
-    if (!isRelay || relayIdx === -1) return { stop: s, mine: true };
-    const mine = isPickup ? i <= relayIdx : i >= relayIdx;
-    return { stop: s, mine };
-  });
+  const combined: Entry[] = stops.map((s, i) => ({
+    stop: s,
+    mine: !win || (i >= win.start && i <= win.end),
+  }));
 
   return (
     <ScrollView style={{ width, backgroundColor: "#f8f9fa" }} contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
@@ -981,7 +1041,7 @@ function StopsTab({
         />
       </View>
 
-      <RelayDisclaimer load={load} onOpenPartner={onOpenPartner} onViewDocuments={onViewDocuments} />
+      <RelayDisclaimer load={load} onOpenLeg={onOpenLeg} onViewDocuments={onViewDocuments} />
 
       <View style={{ position: "relative" }}>
         <View
@@ -1010,12 +1070,12 @@ function StopsTab({
           const out: React.ReactNode[] = [];
 
           combined.forEach(({ stop, mine }, i) => {
-            // On a delivery leg, place Start anchor right before the first "mine" stop.
-            if (isRelay && !isPickup && i === firstMine) {
+            // On a later leg, place Start anchor right before the first "mine" stop.
+            if (isRelay && !isFirstLeg && i === firstMine) {
               out.push(<TimeAnchor key="start" kind="start" iso={load.start} />);
             }
-            // On a non-relay or pickup-leg load, Start anchor leads off the timeline.
-            if (i === 0 && (!isRelay || isPickup)) {
+            // On a non-relay or first-leg load, Start anchor leads off the timeline.
+            if (i === 0 && (!isRelay || isFirstLeg)) {
               out.push(<TimeAnchor key="start" kind="start" iso={load.start} />);
             }
 
@@ -1043,12 +1103,12 @@ function StopsTab({
               </View>
             );
 
-            // On a pickup leg, drop End anchor immediately after the last "mine" stop.
-            if (isRelay && isPickup && i === lastMine) {
+            // On a non-final leg, drop End anchor immediately after the last "mine" stop.
+            if (isRelay && !isLastLeg && i === lastMine) {
               out.push(<TimeAnchor key="end" kind="end" iso={load.end} />);
             }
-            // On a non-relay or delivery-leg load, End anchor closes the timeline.
-            if (i === combined.length - 1 && (!isRelay || !isPickup)) {
+            // On a non-relay or final-leg load, End anchor closes the timeline.
+            if (i === combined.length - 1 && (!isRelay || isLastLeg)) {
               out.push(<TimeAnchor key="end" kind="end" iso={load.end} />);
             }
           });
@@ -1082,7 +1142,7 @@ function DetailsTab({
   onApplyAssetSwap, onApplyDriverSwap,
   onDismissAssetSwap, onDismissDriverSwap,
 }: {
-  load: Load;
+  load: LoadWithLegs;
   width: number;
   onCopied: (msg: string) => void;
   onPickTrailer: () => void;
@@ -1317,33 +1377,47 @@ function DetailsTab({
                 onEdit={editLoadPrice}
               />
               {load.relayRole ? (() => {
-                // Relay context: show pickup + delivery pay separately. Only
-                // THIS leg's pay is editable here — the partner leg lives on
-                // a different load detail page.
-                const isPickup       = load.relayRole === "pickup";
-                const myPay          = load.driverPay         ?? null;
-                const partnerPay     = load.partnerDriverPay  ?? null;
-                const pickupPayVal   = isPickup ? myPay : partnerPay;
-                const deliveryPayVal = isPickup ? partnerPay : myPay;
-                const total = (myPay ?? 0) + (partnerPay ?? 0);
+                // Relay context: one pay row per leg ("Leg 1 · Pickup Pay",
+                // …), total = Σ. Only THIS leg's pay is editable here — the
+                // other legs live on their own load detail pages.
+                const { legIndex: myIdx, legCount } = legPos(load);
+                type PayLeg = { id: string; legIndex: number; pay: number | null };
+                const payLegs: PayLeg[] = load.legs
+                  ? load.legs.map((l, i) => ({
+                      id:       l.id,
+                      legIndex: l.legIndex ?? i,
+                      // The viewed leg reads pay from `load` so edit-mode
+                      // drafts reflect immediately; other legs from legs[].
+                      pay: (l.id === load.id ? load.driverPay : l.driverPay) ?? null,
+                    }))
+                  : // Stale cache without legs[] — synthesize the 2-leg pair
+                    // from the partner mirrors.
+                    [
+                      { id: load.id, legIndex: myIdx, pay: load.driverPay ?? null },
+                      ...(load.partnerEventId ? [{
+                        id:       load.partnerEventId,
+                        legIndex: myIdx < legCount - 1 ? myIdx + 1 : myIdx - 1,
+                        pay:      load.partnerDriverPay ?? null,
+                      }] : []),
+                    ].sort((a, b) => a.legIndex - b.legIndex);
+                const total = payLegs.reduce((sum, l) => sum + (l.pay ?? 0), 0);
                 return (
                   <>
-                    <EditableRow
-                      Icon={DollarSign} label="Pickup Driver Pay"
-                      value={pickupPayVal != null ? fmtMoney(pickupPayVal) : null}
-                      color="#15803d"
-                      editing={editMode && isPickup}
-                      modified={isPickup && dirty.has("driver_pay")}
-                      onEdit={isPickup ? editDriverPay : () => { /* read-only on this leg */ }}
-                    />
-                    <EditableRow
-                      Icon={DollarSign} label="Delivery Driver Pay"
-                      value={deliveryPayVal != null ? fmtMoney(deliveryPayVal) : null}
-                      color="#15803d"
-                      editing={editMode && !isPickup}
-                      modified={!isPickup && dirty.has("driver_pay")}
-                      onEdit={!isPickup ? editDriverPay : () => { /* read-only on this leg */ }}
-                    />
+                    {payLegs.map((l) => {
+                      const isMine = l.id === load.id;
+                      return (
+                        <EditableRow
+                          key={l.id}
+                          Icon={DollarSign}
+                          label={`${legLabel(l.legIndex, legCount) || `Leg ${l.legIndex + 1}`} Pay`}
+                          value={l.pay != null ? fmtMoney(l.pay) : null}
+                          color="#15803d"
+                          editing={editMode && isMine}
+                          modified={isMine && dirty.has("driver_pay")}
+                          onEdit={isMine ? editDriverPay : () => { /* read-only on this leg */ }}
+                        />
+                      );
+                    })}
                     <EditableRow
                       Icon={DollarSign} label="Total Driver Pay"
                       value={total > 0 ? fmtMoney(total) : null}
@@ -1824,15 +1898,23 @@ export default function LoadDetail() {
       ],
     );
   }
-  // Relay-split available whenever this isn't already a relay leg, no relay
-  // stop exists in the draft, and there are at least 2 stops to split between.
-  // Auto-insertion rule handles where the relay goes regardless of stop types.
+  // Relay-split availability. Single-leg loads: need 2+ stops to insert a
+  // handoff between (original behavior). Already-relay loads: splitting is
+  // allowed too — it splits the CURRENTLY VIEWED leg, inserting a new
+  // handoff inside that leg's stop window. Only blocked when the window
+  // can't fit a handoff (fewer than 2 stops to insert between — boundary
+  // relay markers count) or the load is at the server's 10-leg cap.
   function canSplitRelay(): boolean {
     if (!load) return false;
-    if (load.relayGroupId) return false;
     const list = stopsDraft ?? load.stops;
-    if (list.some((s) => s.type === "relay")) return false;
-    return list.length >= 2;
+    if (!load.relayGroupId) {
+      if (list.some((s) => s.type === "relay")) return false;
+      return list.length >= 2;
+    }
+    const { legIndex, legCount } = legPos(load);
+    if (legCount >= 10) return false;
+    const win = legStopWindow(list, legIndex, legCount);
+    return win.end - win.start >= 1;
   }
 
   const { mutate: splitRelay, isPending: isSplittingRelay } = useMutation({
@@ -1850,8 +1932,8 @@ export default function LoadDetail() {
       const list = stopsDraft ?? load.stops;
       const at = Math.min(Math.max(opts.insertAfterIdx + 1, 1), list.length);
       const merged = [...list.slice(0, at), opts.relayStop, ...list.slice(at)];
-      const deliveryId = await splitIntoRelay({
-        eventId:           id!,
+      const newLegId = await splitIntoRelay({
+        eventId:           id!,   // the leg being split (targetEventId)
         orgId:             orgId!,
         pickupEnd:         opts.pickupEndIso,
         deliveryStart:     opts.deliveryStartIso,
@@ -1860,8 +1942,11 @@ export default function LoadDetail() {
         deliveryDriverId:  opts.deliveryDriverId,
         deliveryDriverName: opts.deliveryDriverName,
         mergedStops:       merged,
+        // Index of the NEW marker — the list may already hold older relay
+        // markers on an existing relay, so findIndex can't be trusted.
+        relayStopIndex:    at,
       });
-      return deliveryId;
+      return newLegId;
     },
     onMutate: stampSelf,
     onSuccess: () => {
@@ -1899,33 +1984,70 @@ export default function LoadDetail() {
   }
 
   const { mutate: undoRelay, isPending: isRemovingRelay } = useMutation({
-    mutationFn: () => removeRelay(id!, orgId!),
+    mutationFn: (opts: { keepEventId: string; mergeEventId?: string }) =>
+      removeRelay(opts.keepEventId, orgId!, opts.mergeEventId),
     onMutate: stampSelf,
-    onSuccess: () => {
+    onSuccess: (_data, opts) => {
       queryClient.invalidateQueries({ queryKey: ["load", id] });
       queryClient.invalidateQueries({ queryKey: ["loads", orgId] });
       setStopsDraft(null);
       setStopsEditMode(false);
-      showToast("Relay removed");
+      showToast("Relay legs merged");
+      // If the leg we were viewing was the one absorbed, hop to the
+      // surviving leg so the screen doesn't dead-end on "Load not found".
+      if (opts.keepEventId !== id) {
+        router.replace(`/load/${opts.keepEventId}`);
+      }
     },
     onError: (err) => Alert.alert("Couldn't remove relay", err instanceof Error ? err.message : "Unknown error"),
   });
   function confirmRemoveRelay() {
     if (!load) return;
-    if (load.relayRole !== "pickup") {
+    const { legIndex, legCount } = legPos(load);
+    const legs = load.legs;
+
+    // 2 legs (or stale cache without legs[]): single confirm, original
+    // semantics — the pickup leg survives, the delivery leg is absorbed.
+    if (legCount <= 2 || !legs) {
+      const keepId = legs?.[0]?.id
+        ?? (legIndex === 0 ? load.id : load.partnerEventId);
+      if (!keepId) return;
       Alert.alert(
-        "Edit pickup leg to remove",
-        "Open the pickup leg of this relay to remove the split.",
+        "Remove relay split?",
+        "The two legs will be merged back into one load. The delivery leg will be removed.",
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Remove", style: "destructive", onPress: () => undoRelay({ keepEventId: keepId }) },
+        ],
       );
       return;
     }
+
+    // 3+ legs: the dispatcher picks which adjacent handoff to collapse.
+    // The viewed leg survives and absorbs the neighbor (this leg's driver
+    // keeps the combined window).
+    const prev = legs.find((l) => (l.legIndex ?? -1) === legIndex - 1);
+    const next = legs.find((l) => (l.legIndex ?? -1) === legIndex + 1);
+    const buttons: Array<{ text: string; style?: "cancel" | "destructive" | "default"; onPress?: () => void }> = [];
+    if (prev) {
+      buttons.push({
+        text: `Merge with previous leg${prev.driverName ? ` (${prev.driverName})` : ""}`,
+        style: "destructive",
+        onPress: () => undoRelay({ keepEventId: load.id, mergeEventId: prev.id }),
+      });
+    }
+    if (next) {
+      buttons.push({
+        text: `Merge with next leg${next.driverName ? ` (${next.driverName})` : ""}`,
+        style: "destructive",
+        onPress: () => undoRelay({ keepEventId: load.id, mergeEventId: next.id }),
+      });
+    }
+    buttons.push({ text: "Cancel", style: "cancel" });
     Alert.alert(
-      "Remove relay split?",
-      "The two legs will be merged back into one load. The delivery leg will be removed.",
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: "Remove", style: "destructive", onPress: () => undoRelay() },
-      ],
+      "Merge relay legs",
+      `This load has ${legCount} legs. Merge ${legLabel(legIndex, legCount)} with an adjacent leg — this leg's driver keeps the combined leg.`,
+      buttons,
     );
   }
 
@@ -2000,12 +2122,16 @@ export default function LoadDetail() {
   const accessorialsCurrent: Accessorial[] = load?.accessorials ?? [];
   const accPayOpts: string[] = useMemo(() => {
     const opts: string[] = [];
-    if (load?.driverName) opts.push(load.driverName);
-    if (load?.partnerDriverName && !opts.includes(load.partnerDriverName)) {
-      opts.push(load.partnerDriverName);
-    }
+    const push = (name?: string) => {
+      if (name && !opts.includes(name)) opts.push(name);
+    };
+    push(load?.driverName);
+    // All legs' drivers (N-leg relays); partner mirror covers stale cache
+    // entries fetched before legs[] existed.
+    for (const leg of load?.legs ?? []) push(leg.driverName);
+    push(load?.partnerDriverName);
     return opts;
-  }, [load?.driverName, load?.partnerDriverName]);
+  }, [load]);
   function commitAccessorial(acc: Accessorial) {
     const idx = accessorialsCurrent.findIndex((a) => a.id === acc.id);
     const next = idx >= 0
@@ -2069,10 +2195,10 @@ export default function LoadDetail() {
   }
 
   // Merge draft over the loaded event so edit-mode rows reflect pending changes.
-  const viewLoad: Load | undefined = useMemo(() => {
+  const viewLoad: LoadWithLegs | undefined = useMemo(() => {
     if (!load) return undefined;
     if (Object.keys(draft).length === 0) return load;
-    const v: Load = { ...load };
+    const v: LoadWithLegs = { ...load };
     if ("load_num" in draft)             v.loadNum             = (draft.load_num as string | null) ?? undefined;
     if ("broker" in draft)               v.broker              = (draft.broker as string | null) ?? undefined;
     if ("trailer_type" in draft)         v.trailerType         = (draft.trailer_type as string | null) ?? undefined;
@@ -2296,9 +2422,7 @@ export default function LoadDetail() {
           canSplitRelay={canSplitRelay()}
           onRemoveRelay={load.relayGroupId ? confirmRemoveRelay : undefined}
           removingRelay={isRemovingRelay}
-          onOpenPartner={load.partnerEventId
-            ? () => guardLeave(() => router.push(`/load/${load.partnerEventId}`))
-            : undefined}
+          onOpenLeg={(eventId) => guardLeave(() => router.push(`/load/${eventId}`))}
           onViewDocuments={() => selectTab(2)}
           onCancelEdit={cancelStopsEditMode}
           onSaveEdit={commitStopsEditMode}
@@ -2468,21 +2592,32 @@ export default function LoadDetail() {
         />
       ) : null}
 
-      {orgId && load ? (
-        <RelaySplitSheet
-          visible={relaySplitOpen}
-          orgId={orgId}
-          loadEndIso={load.end}
-          stops={stopsDraft ?? load.stops}
-          assets={visiblePickerAssets}
-          drivers={drivers}
-          driverPrefs={driverPrefs?.primary}
-          pickupAssetId={load.assetId}
-          saving={isSplittingRelay}
-          onClose={() => setRelaySplitOpen(false)}
-          onConfirm={(opts) => splitRelay(opts)}
-        />
-      ) : null}
+      {orgId && load ? (() => {
+        // When the load is already a relay, the sheet splits the CURRENTLY
+        // VIEWED leg — confine the new handoff to that leg's stop window
+        // and personalize the copy with this leg's driver.
+        const splitList = stopsDraft ?? load.stops;
+        const { legIndex, legCount } = legPos(load);
+        const win = load.relayGroupId ? legStopWindow(splitList, legIndex, legCount) : null;
+        return (
+          <RelaySplitSheet
+            visible={relaySplitOpen}
+            orgId={orgId}
+            loadEndIso={load.end}
+            stops={splitList}
+            assets={visiblePickerAssets}
+            drivers={drivers}
+            driverPrefs={driverPrefs?.primary}
+            pickupAssetId={load.assetId}
+            saving={isSplittingRelay}
+            currentDriverName={load.driverName ?? null}
+            splitLegLabel={load.relayGroupId ? (legLabel(legIndex, legCount) || undefined) : undefined}
+            insertRange={win ? { min: win.start, max: Math.max(win.start, win.end - 1) } : undefined}
+            onClose={() => setRelaySplitOpen(false)}
+            onConfirm={(opts) => splitRelay(opts)}
+          />
+        );
+      })() : null}
 
       <StopEditSheet
         visible={stopEditingIdx !== null}

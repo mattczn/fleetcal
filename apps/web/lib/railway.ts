@@ -200,8 +200,9 @@ export interface TimelineEvent {
   /** Server-computed: linehaul + billable accessorials. Read-only. */
   totalBillable:    number | null;
   loadNum:          string | null;     // loads.load_num
-  /** 'pickup' / 'delivery' for relay legs, null for whole loads. */
-  relayRole:        'pickup' | 'delivery' | null;
+  /** 'pickup' / 'transfer' / 'delivery' for relay legs (first / middle /
+   *  last leg of an N-leg relay), null for whole loads. */
+  relayRole:        'pickup' | 'transfer' | 'delivery' | null;
   driverPay:        number | null;     // events.driver_pay
   loadedMiles:      number | null;     // events.loaded_miles (quoted)
   driverName:       string | null;
@@ -610,9 +611,15 @@ class RailwayClient {
   updateLoadEvent(loadId: string, eventId: string, body: UpdateEventRequest) {
     return this.req<UpdateEventResponse>('PATCH', `/v1/loads/${loadId}/events/${eventId}`, body);
   }
+  /** Split ONE leg into two (N legs → N+1). body.targetEventId names the
+   *  leg being split — required once the load already has >1 leg.
+   *  Response `loads` = ALL legs of the load in leg order. */
   splitRelay(loadId: string, body: SplitRelayRequest) {
     return this.req<SplitRelayResponse>('POST', `/v1/loads/${loadId}/split-relay`, body);
   }
+  /** Merge two ADJACENT legs (N legs → N-1). body.mergeEventId is
+   *  required for 3+ legs; implied on 2-leg loads. Response `loads` =
+   *  the remaining legs in leg order. */
   unsplitRelay(loadId: string, body: UnsplitRelayRequest) {
     return this.req<UnsplitRelayResponse>('POST', `/v1/loads/${loadId}/unsplit-relay`, body);
   }
@@ -622,7 +629,8 @@ class RailwayClient {
   // ── Events (non-revenue + load-id-agnostic ops) ──────────────────────
   createEvent(req: CreateEventRequest)            { return this.req<CreateEventResponse>('POST',     '/v1/events', req); }
   /** Fetch a single event by id, with its load + stops. Returns 1 entry
-   *  for a single load, 2 entries for a relay (this leg + partner). */
+   *  for a single load; for a relay, ALL legs of the load — the
+   *  requested leg first, then the remaining legs in leg order. */
   getEvent(id: string)                            { return this.req<GetEventResponse>('GET',        `/v1/events/${id}`); }
   updateEvent(id: string, body: UpdateEventByIdRequest) {
     return this.req<UpdateEventByIdResponse>('PATCH',   `/v1/events/${id}`, body);

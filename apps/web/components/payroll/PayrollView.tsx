@@ -60,10 +60,13 @@ function buildWeekOptions(): { label: string; sat: Date; fri: Date }[] {
 function LegBadge({ role }: { role: CalendarEvent['relayRole'] }) {
   const cfg = role === 'pickup'
     ? { label: 'Pickup',   bg: '#1a73e81a', color: '#1a73e8',
-        tip: <>This driver ran the <strong>pickup leg</strong> of a relay load. They picked up from the shipper and handed off to the delivery driver. Pay is split: this driver gets their leg&rsquo;s share of revenue and their own driverPay.</> }
+        tip: <>This driver ran the <strong>pickup leg</strong> of a relay load. They picked up from the shipper and handed off to the next driver. Pay is split: this driver gets their leg&rsquo;s share of revenue and their own driverPay.</> }
+    : role === 'transfer'
+    ? { label: 'Transfer', bg: '#7c3aed1a', color: '#7c3aed',
+        tip: <>This driver ran a <strong>transfer leg</strong> of a relay load — took the freight from one handoff to the next. Pay is split: this driver gets their leg&rsquo;s share of revenue and their own driverPay.</> }
     : role === 'delivery'
     ? { label: 'Delivery', bg: '#1e8e3e1a', color: '#1e8e3e',
-        tip: <>This driver ran the <strong>delivery leg</strong> of a relay load. They took the freight from the pickup driver to the consignee. Pay is split: this driver gets their leg&rsquo;s share of revenue and their own driverPay.</> }
+        tip: <>This driver ran the <strong>delivery leg</strong> of a relay load. They took the freight from the previous driver to the consignee. Pay is split: this driver gets their leg&rsquo;s share of revenue and their own driverPay.</> }
     : { label: 'Both',     bg: 'var(--gc-hover)', color: 'var(--gc-text-2)',
         tip: <>Non-relay load — one driver ran the <strong>full load from pickup to delivery</strong>. Full loadPrice and full driverPay belong to this driver.</> };
   return (
@@ -586,17 +589,18 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
     return { sat: s, fri: f };
   }), [sat]);
 
-  // Relay pickup legs where the delivery partner falls after fri (spanning weekend)
+  // Non-final relay legs (pickup or transfer) whose FINAL delivery leg
+  // falls after fri (spanning weekend).
   const spanningRelayLoadIds = useMemo(() => {
     const ids = new Set<string>();
     for (const load of row.loads) {
-      if (load.relayRole !== 'pickup' || !load.relayGroupId) continue;
-      const partner = allEvents.find(e =>
+      if (!load.relayGroupId || !load.relayRole || load.relayRole === 'delivery') continue;
+      const finalLeg = allEvents.find(e =>
         e.relayGroupId === load.relayGroupId &&
         e.relayRole === 'delivery' &&
         e.id !== load.id
       );
-      if (partner && parseDate(partner.start) > fri) ids.add(load.id);
+      if (finalLeg && parseDate(finalLeg.start) > fri) ids.add(load.id);
     }
     return ids;
   }, [row.loads, allEvents, fri]);

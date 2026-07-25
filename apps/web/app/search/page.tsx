@@ -32,6 +32,7 @@ import { useCalendarStore } from '@/store/useCalendarStore';
 import { useGlobalDirectory } from '@/lib/useGlobalDirectory';
 import { railway } from '@/lib/railway';
 import type { Load } from '@/lib/types';
+import { byLegIndex } from '@fleetcal/types';
 
 /** Server caps responses at 50; ask for that so a focused query can
  *  show the full set instead of a slice. */
@@ -97,12 +98,13 @@ function SearchBody() {
     railway.searchLoads(q, LOAD_LIMIT)
       .then(res => {
         if (cancelled) return;
-        // Dedupe relays by loadId, prefer pickup leg.
+        // Dedupe relays by loadId, prefer the first leg (lowest
+        // legIndex, start-time tiebreak — byLegIndex handles both).
         const byKey = new Map<string, Load>();
         for (const l of res.loads ?? []) {
           const key = l.loadId ?? l.id;
           const existing = byKey.get(key);
-          if (!existing || new Date(l.start).getTime() < new Date(existing.start).getTime()) {
+          if (!existing || byLegIndex(l, existing) < 0) {
             byKey.set(key, l);
           }
         }

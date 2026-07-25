@@ -36,7 +36,7 @@ import Tooltip from '@/components/ui/Tooltip';
 import { fetchLoadDocuments, getLoadDocumentSignedUrl } from '@/lib/db';
 import { railway, RailwayError } from '@/lib/railway';
 import { useCalendarStore } from '@/store/useCalendarStore';
-import { isDocIncludedInPacket, resolveAutoIncludeKinds } from '@fleetcal/types';
+import { isDocIncludedInPacket, resolveAutoIncludeKinds, byLegIndex } from '@fleetcal/types';
 import { displayBrokerName } from '@/lib/customerMatch';
 import PdfCanvas from '@/components/pdf/PdfCanvas';
 import DocViewer from './DocViewer';
@@ -1601,48 +1601,42 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   const cust = displayBrokerName(current.broker, customers);
   const stops = current.stops ?? [];
 
-  // Combined-stops list for the Stops view in the left panel. For
-  // non-relays this is just the load's stops; for relays we append
-  // the delivery-leg's stops so the panel shows the entire journey.
-  const allStopsForView: typeof stops = (() => {
-    const own = current.stops ?? [];
-    if (current.relayRole === 'pickup' && current.relayGroupId) {
-      const partner = allEvents.find(e =>
-        e.id !== current.id &&
-        e.relayRole === 'delivery' &&
-        ((current.loadId && e.loadId === current.loadId) ||
-         (current.relayGroupId && e.relayGroupId === current.relayGroupId)),
-      );
-      if (partner?.stops?.length) {
-        return [...own, ...partner.stops];
-      }
-    }
-    return own;
-  })();
+  // Stops list for the Stops view in the left panel. Every leg of a
+  // relay carries the COMPLETE merged stop list (relay handoff markers
+  // included) — so one leg's list already shows the entire journey.
+  // No partner-stop appending: that would duplicate every stop now.
+  const allStopsForView: typeof stops = current.stops ?? [];
+
+  // All sibling legs of the current load in leg order (empty for
+  // non-relays / when the store hasn't loaded them).
+  const siblingLegs = current.relayGroupId
+    ? allEvents
+        .filter(e =>
+          e.id !== current.id &&
+          ((current.loadId && e.loadId === current.loadId) ||
+           e.relayGroupId === current.relayGroupId))
+        .sort(byLegIndex)
+    : [];
 
   // Pickup date = pickup leg's start. For non-relays it's also delivery
   // start; for relays we want the *actual* delivery date which lives on
-  // the delivery leg's end. If we can find the partner in the calendar
-  // store, use it; otherwise fall back to current.end (correct for
-  // non-relays and acceptable degraded info for orphan pickup legs).
+  // the FINAL leg's end (relay_role='delivery' is always the last leg).
+  // If we can find that leg in the calendar store, use it; otherwise
+  // fall back to current.end (correct for non-relays and for the final
+  // leg itself; acceptable degraded info for orphan earlier legs).
   const pickupDate = current.start;
-  const deliveryPartner = (current.relayGroupId && current.relayRole === 'pickup')
-    ? allEvents.find(e =>
-        e.id !== current.id &&
-        e.relayRole === 'delivery' &&
-        ((current.loadId && e.loadId === current.loadId) ||
-         (current.relayGroupId && e.relayGroupId === current.relayGroupId)),
-      )
+  const deliveryPartner = (current.relayRole && current.relayRole !== 'delivery')
+    ? siblingLegs.find(e => e.relayRole === 'delivery') ?? null
     : null;
   const deliveryDate = deliveryPartner?.end ?? current.end;
 
-  // Driver(s) — pickup leg's driver, plus the delivery leg's driver for
-  // relays when distinct. Falls back to "Unassigned" so a missing driver
-  // is visible rather than the line collapsing.
+  // Driver(s) — every leg's driver in leg order, deduped. Falls back to
+  // "Unassigned" so a missing driver is visible rather than the line
+  // collapsing.
   const drivers: string[] = [];
   if (current.driverName) drivers.push(current.driverName);
-  if (deliveryPartner?.driverName && deliveryPartner.driverName !== current.driverName) {
-    drivers.push(deliveryPartner.driverName);
+  for (const leg of siblingLegs) {
+    if (leg.driverName && !drivers.includes(leg.driverName)) drivers.push(leg.driverName);
   }
 
   return (
@@ -3274,7 +3268,7 @@ function CopyLoadNum({ value }: { value: string }) {
 
 /**
  * StopsView — left-panel alternate that lists every stop on the load
- * (pickup leg + delivery leg for relays). Helps the dispatcher verify
+ * (the full merged list incl. relay handoff markers). Helps the dispatcher verify
  * delivery against the planned route when the rate-con doesn't carry
  * the appointment / facility detail clearly.
  */

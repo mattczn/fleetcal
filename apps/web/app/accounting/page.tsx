@@ -48,6 +48,7 @@ import type {
   Invoice, InvoiceStatus, Customer, LoadSummary,
   BatchGenerateInvoicesResponse, BatchSendInvoicesResponse,
 } from '@fleetcal/types';
+import { byLegIndex } from '@fleetcal/types';
 
 // ─── Buckets ────────────────────────────────────────────────────────────
 
@@ -498,11 +499,12 @@ function AccountingPageInner() {
     return customers.find(c => c.name === l.broker || (c.aliases ?? []).includes(l.broker ?? ''));
   }
 
-  /** Calendar event id for the load — the pickup leg's eventId.
-   *  Used to open the load in EventModal (which keys on events). */
+  /** Calendar event id for the load — the FIRST leg's eventId (leg
+   *  index 0 = the pickup leg on relays). Used to open the load in
+   *  EventModal (which keys on events). */
   function pickupEventId(l: LoadSummary): string | undefined {
-    return l.legs.find(g => g.relayRole === 'pickup' || !g.relayRole)?.eventId
-        ?? l.legs[0]?.eventId;
+    const ordered = [...(l.legs ?? [])].sort(byLegIndex);
+    return (ordered.find(g => g.relayRole === 'pickup' || !g.relayRole) ?? ordered[0])?.eventId;
   }
 
   const allRowsRaw: Row[] = useMemo(() => loads.map(l => ({
@@ -1315,13 +1317,15 @@ function AccountingPageInner() {
         predicate: (r, v) => (r.customer?.name ?? r.load.broker ?? '') === v },
       { kind: 'select', key: 'driver', label: 'Driver',
         options: driverOpts,
-        // Match either leg's driver — relays carry two drivers so the
-        // user expects either name to surface the load.
-        predicate: (r, v) => (r.load.pickupDriverName ?? '') === v
+        // Match ANY leg's driver — relays carry several drivers so the
+        // user expects every name to surface the load.
+        predicate: (r, v) => (r.load.legs ?? []).some(g => (g.driverName ?? '') === v)
+          || (r.load.pickupDriverName ?? '') === v
           || (r.load.deliveryDriverName ?? '') === v },
       { kind: 'select', key: 'truck', label: 'Truck',
         options: truckOpts,
-        predicate: (r, v) => (assetNameById.get(r.load.pickupAssetId) ?? '') === v
+        predicate: (r, v) => (r.load.legs ?? []).some(g => (assetNameById.get(g.assetId) ?? '') === v)
+          || (assetNameById.get(r.load.pickupAssetId) ?? '') === v
           || (assetNameById.get(r.load.deliveryAssetId) ?? '') === v },
       { kind: 'select', key: 'method',   label: 'Method',
         options: [

@@ -56,7 +56,7 @@ const STOP_COLS =
 
 const EVENT_COLS =
   "id,asset_id,driver_id,driver_name,title,start,end,status,priority," +
-  "notes,driver_pay,loaded_miles,relay_role,event_kind,non_revenue_type,trailer_id," +
+  "notes,driver_pay,loaded_miles,relay_role,leg_index,event_kind,non_revenue_type,trailer_id," +
   "trailer_type,deleted_at,load_id,created_at,updated_at," +
   "confirmed_at,confirmed_by,confirm_reminder_sent_at," +
   "trailer_dropoff_lat,trailer_dropoff_lng,trailer_dropoff_at,trailer_dropoff_address," +
@@ -146,6 +146,20 @@ async function fetchEventJoined(
 
   const joined = joinEventLoadToApp(evRow, loadRow);
   joined.stops = stops;
+  // Relay legs need their position within the load to slice the shared
+  // stop list into this leg's window for routing.
+  let legPosition: { legIndex: number; legCount: number } | null = null;
+  if (joined.relayRole && joined.loadId) {
+    const { count } = await supabase
+      .from("events")
+      .select("id", { count: "exact", head: true })
+      .eq("load_id", joined.loadId)
+      .eq("org_id", orgId)
+      .is("deleted_at", null);
+    const legCount = count ?? 2;
+    joined.legCount = legCount;
+    legPosition = { legIndex: joined.legIndex ?? 0, legCount };
+  }
   // Warm the route-geometry cache (route_polyline + loaded_miles) so map
   // clients draw from the stored polyline instead of calling Google Directions.
   // No-op on a cache hit; one Mapbox call on a miss; never throws.
@@ -153,7 +167,7 @@ async function fetchEventJoined(
     routePolyline: joined.routePolyline,
     routeStopsKey: (evRow.route_stops_key as string | null) ?? null,
     loadedMiles:   joined.loadedMiles ?? null,
-  }, joined.relayRole ?? null);
+  }, legPosition);
   joined.routePolyline = cached.routePolyline ?? undefined;
   joined.loadedMiles   = cached.loadedMiles ?? undefined;
   // documentCounts is denormalized onto loads.document_counts and
@@ -180,7 +194,10 @@ events.get("/:id", async (c) => {
   const joined = await fetchEventJoined(id, orgId);
   if (!joined) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
 
-  // For relay events, also pull the partner leg (events sharing the same load_id).
+  // For relay events, also pull every other leg (events sharing the same
+  // load_id), in leg order. Response shape: the requested event first,
+  // then the remaining legs by leg_index — legacy 2-leg consumers read
+  // loads[1] as "the partner", which stays correct.
   if (joined.loadId && joined.relayRole) {
     const { data: partnerRowsRaw } = await supabase
       .from("events")
@@ -189,30 +206,39 @@ events.get("/:id", async (c) => {
       .eq("org_id", orgId)
       .neq("id", id)
       .is("deleted_at", null)
-      .maybeSingle();
-    if (partnerRowsRaw) {
-      const pRow = partnerRowsRaw as unknown as Record<string, unknown> & { load?: Record<string, unknown>[] | Record<string, unknown> | null; id: string };
-      const pLoadRow = Array.isArray(pRow.load) ? (pRow.load[0] ?? null) : (pRow.load ?? null);
-      const partnerJoined = joinEventLoadToApp(pRow, pLoadRow);
-      const { data: pStopsRaw } = await supabase
-        .from("stops")
-        .select(STOP_COLS)
-        .eq("event_id", pRow.id);
-      partnerJoined.stops = ((pStopsRaw ?? []) as unknown as StopRow[])
-        .map(rowToStop)
-        .sort((a, b) => a.sequence - b.sequence);
-      const pCached = await ensureEventRouteCached(pRow.id, partnerJoined.stops, {
-        routePolyline: partnerJoined.routePolyline,
-        routeStopsKey: (pRow.route_stops_key as string | null) ?? null,
-        loadedMiles:   partnerJoined.loadedMiles ?? null,
-      }, partnerJoined.relayRole ?? null);
-      partnerJoined.routePolyline = pCached.routePolyline ?? undefined;
-      partnerJoined.loadedMiles   = pCached.loadedMiles ?? undefined;
-      // No need to mirror documentCounts onto the partner — both legs
-      // share load_id, and joinEventLoadToApp pulls document_counts
-      // directly from the load row, so partnerJoined already has
-      // the same counts as joined.
-      return c.json({ loads: [joined, partnerJoined] } satisfies GetEventResponse);
+      .order("leg_index", { ascending: true })
+      .order("start", { ascending: true });
+    const partnerRows = (partnerRowsRaw ?? []) as unknown as Array<
+      Record<string, unknown> & { load?: Record<string, unknown>[] | Record<string, unknown> | null; id: string }
+    >;
+    if (partnerRows.length > 0) {
+      const legCount = partnerRows.length + 1;
+      joined.legCount = legCount;
+      const partners: Load[] = [];
+      for (const pRow of partnerRows) {
+        const pLoadRow = Array.isArray(pRow.load) ? (pRow.load[0] ?? null) : (pRow.load ?? null);
+        const partnerJoined = joinEventLoadToApp(pRow, pLoadRow);
+        partnerJoined.legCount = legCount;
+        const { data: pStopsRaw } = await supabase
+          .from("stops")
+          .select(STOP_COLS)
+          .eq("event_id", pRow.id);
+        partnerJoined.stops = ((pStopsRaw ?? []) as unknown as StopRow[])
+          .map(rowToStop)
+          .sort((a, b) => a.sequence - b.sequence);
+        const pCached = await ensureEventRouteCached(pRow.id, partnerJoined.stops, {
+          routePolyline: partnerJoined.routePolyline,
+          routeStopsKey: (pRow.route_stops_key as string | null) ?? null,
+          loadedMiles:   partnerJoined.loadedMiles ?? null,
+        }, partnerJoined.relayRole ? { legIndex: partnerJoined.legIndex ?? 0, legCount } : null);
+        partnerJoined.routePolyline = pCached.routePolyline ?? undefined;
+        partnerJoined.loadedMiles   = pCached.loadedMiles ?? undefined;
+        // No need to mirror documentCounts onto the partners — all legs
+        // share load_id, and joinEventLoadToApp pulls document_counts
+        // directly from the load row.
+        partners.push(partnerJoined);
+      }
+      return c.json({ loads: [joined, ...partners] } satisfies GetEventResponse);
     }
   }
 

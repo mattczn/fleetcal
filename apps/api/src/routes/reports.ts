@@ -107,6 +107,7 @@ interface EventRow {
   status:       string;
   priority:     boolean | null;
   relay_role:   string | null;
+  leg_index:    number | null;
   loaded_miles: number | null;
   trailer_id:   number | null;
   trailer_type: string | null;
@@ -144,7 +145,7 @@ const LOAD_COLS =
 
 const EVENT_COLS =
   "id,load_id,title,asset_id,driver_id,driver_name,driver_pay,start,end,status,priority," +
-  "relay_role,loaded_miles,trailer_id,trailer_type";
+  "relay_role,leg_index,loaded_miles,trailer_id,trailer_type";
 
 const STOP_COLS =
   "id,event_id,sequence,type,facility_name,address,city,state,timezone," +
@@ -189,7 +190,8 @@ function rowToStop(s: StopRow): Stop {
 function eventToLeg(e: EventRow, stops: Stop[]): LegSummary {
   return {
     eventId:     e.id,
-    relayRole:   (e.relay_role as "pickup" | "delivery" | null) ?? undefined,
+    relayRole:   (e.relay_role as "pickup" | "transfer" | "delivery" | null) ?? undefined,
+    legIndex:    e.leg_index ?? undefined,
     start:       e.start,
     end:         e.end,
     status:      e.status as LoadStatus,
@@ -246,15 +248,20 @@ function sumLenient(values: Array<number | null | undefined>): number | undefine
 }
 
 function buildLoadSummary(load: LoadRow, events: EventRow[], stopsByEvent: Map<string, Stop[]>): LoadSummary {
-  const sortedEvents = [...events].sort((a, b) => a.start.localeCompare(b.start));
+  const sortedEvents = [...events].sort(
+    (a, b) => (a.leg_index ?? 0) - (b.leg_index ?? 0) || a.start.localeCompare(b.start),
+  );
   const { pickup, delivery } = partitionLegs(sortedEvents);
   const isRelay = sortedEvents.length > 1;
 
   const legs: LegSummary[] = sortedEvents.map(e => eventToLeg(e, stopsByEvent.get(e.id) ?? []));
 
-  // Flatten stops in leg order. No deduplication needed — each stop
-  // belongs to exactly one event in the DB schema, even on relays.
-  const stops: Stop[] = legs.flatMap(l => l.stops);
+  // Load-level stop list. Relay legs each carry their OWN COPY of the
+  // full merged stop list (split-relay duplicates it), so flattening all
+  // legs would repeat every stop N times — take the first leg's copy
+  // instead; it already contains the whole route including the relay
+  // handoff markers. Single-leg loads keep the plain flatten.
+  const stops: Stop[] = isRelay ? (legs[0]?.stops ?? []) : legs.flatMap(l => l.stops);
 
   return {
     loadId:           load.id,

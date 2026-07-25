@@ -2,7 +2,7 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { TRAILER_CATEGORIES } from '@fleetcal/types';
+import { TRAILER_CATEGORIES, legRoleFor, byLegIndex } from '@fleetcal/types';
 import { Asset, CalendarEvent, Driver, Dispatcher, Customer, SavedLocation, Trailer } from '@/lib/types';
 import { buildDefaultFieldSettings, DEFAULT_SECTION_ORDER, FieldSection } from '@/lib/fields';
 import { CardFieldKey, DEFAULT_CARD_FIELDS } from '@/lib/cardFields';
@@ -300,11 +300,29 @@ interface CalendarStore extends ModalState {
   clearTrash: () => void;
   autoExpireTrash: () => void;
 
-  createRelayPair: (pickup: Omit<CalendarEvent, 'id'>, delivery: Omit<CalendarEvent, 'id'>, presetPickupId?: string, presetDeliveryId?: string) => void;
-  /** Convert an existing single-event load into a relay (pickup keeps its loadId; delivery is a new event on the same load). */
-  splitToRelay: (pickupEventId: string, pickupUpdates: Partial<Omit<CalendarEvent, 'id'>>, deliveryData: Omit<CalendarEvent, 'id'>, presetDeliveryId?: string) => void;
-  saveRelayBoth: (pickupId: string, pickupUpdates: Partial<Omit<CalendarEvent, 'id'>>, deliveryId: string, deliveryUpdates: Partial<Omit<CalendarEvent, 'id'>>) => void;
-  removeRelay: (legId: string, auditLog?: import('@/lib/types').LoadAuditEntry[]) => void;
+  /** Create an N-leg relay load: one POST /v1/loads with every leg in
+   *  LEG ORDER (2..10 entries). legs[0] supplies the load-level fields.
+   *  presetIds are optimistic local ids (one per leg) swapped for the
+   *  server uuids on response. */
+  createRelayLegs: (legs: Array<Omit<CalendarEvent, 'id'>>, presetIds?: string[]) => void;
+  /** Split ONE leg of a load into two (single→relay, or add a handoff
+   *  to an existing relay; N legs → N+1). `targetEventId` is the leg
+   *  being split — it keeps its position and gets its end clamped to
+   *  the new marker's drop time; the new leg is inserted immediately
+   *  after. opts.relayStopId names the NEW relay marker inside the
+   *  merged stop list (defaults to the first relay-type stop, which is
+   *  the legacy single→relay behavior). */
+  splitToRelay: (targetEventId: string, targetUpdates: Partial<Omit<CalendarEvent, 'id'>>, newLegData: Omit<CalendarEvent, 'id'>, presetNewLegId?: string, opts?: { relayStopId?: string }) => void;
+  /** Patch every leg of a relay load in one action. `legs` must be in
+   *  leg order — load-level fields are merged across legs with leg 0
+   *  winning conflicts (generalizes the old "pickup wins" rule). */
+  saveRelayLegs: (legs: Array<{ id: string; updates: Partial<Omit<CalendarEvent, 'id'>> }>) => void;
+  /** Merge the two legs around a handoff (N legs → N-1). keepEventId
+   *  survives (its window extends over both legs); mergeEventId is the
+   *  adjacent leg absorbed into it (soft-deleted server-side). On a
+   *  2-leg load mergeEventId may be omitted — the other leg is implied,
+   *  preserving the original unsplit behavior. */
+  removeRelay: (keepEventId: string, opts?: { mergeEventId?: string; auditLog?: import('@/lib/types').LoadAuditEntry[] }) => void;
 
   setCurrentDate: (date: Date) => void;
   setResourceWidth: (width: number, userInitiated?: boolean) => void;
@@ -2100,121 +2118,121 @@ export const useCalendarStore = create<CalendarStore>()(
   },
 
   // ── Relay ─────────────────────────────────────────────────────────────────
-  createRelayPair: (pickup, delivery, presetPickupId?, presetDeliveryId?) => {
+  createRelayLegs: (legs, presetIds) => {
+    if (legs.length < 2) return;
+    const n = legs.length;
     // Optimistic insert with temp ids; swapped on Railway response.
-    const tempPickupId   = presetPickupId   ?? crypto.randomUUID();
-    const tempDeliveryId = presetDeliveryId ?? crypto.randomUUID();
+    const tempIds = legs.map((_, i) => presetIds?.[i] ?? crypto.randomUUID());
     set((state) => ({
       events: [
         ...state.events,
-        { ...pickup,   relayRole: 'pickup'   as const, id: tempPickupId   },
-        { ...delivery, relayRole: 'delivery' as const, id: tempDeliveryId },
+        ...legs.map((leg, i) => ({
+          ...leg,
+          relayRole: legRoleFor(i, n),
+          legIndex:  i,
+          legCount:  n,
+          id: tempIds[i],
+        })),
       ],
     }));
     const { orgId } = get();
     if (!orgId) return;
     const drivers = get().drivers;
-    const resolvedPickup   = withResolvedDriverId(pickup,   drivers);
-    const resolvedDelivery = withResolvedDriverId(delivery, drivers);
+    const resolved = legs.map((leg) => withResolvedDriverId(leg, drivers));
 
-    // POST /v1/loads with two events. Load-level fields come from the
-    // pickup leg (in practice both legs carry the same load-level data
-    // from the modal save).
-    const { load } = buildCreateLoadBody({ ...pickup, driverId: resolvedPickup.driverId, driverName: resolvedPickup.driverName });
+    // POST /v1/loads with every leg in leg order — the server assigns
+    // leg_index by position and derives relay_role. Load-level fields
+    // come from the first leg (in practice every leg carries the same
+    // load-level data from the modal save).
+    const { load } = buildCreateLoadBody({ ...legs[0], driverId: resolved[0].driverId, driverName: resolved[0].driverName });
     railway.createLoad({
       load,
-      events: [
-        {
-          title:        pickup.title,
-          start:        pickup.start,
-          end:          pickup.end,
-          assetId:      pickup.assetId,
-          driverId:     resolvedPickup.driverId,
-          driverName:   resolvedPickup.driverName ?? undefined,
-          status:       pickup.status,
-          relayRole:    'pickup',
-          trailerId:    pickup.trailerId,
-          trailerType:  pickup.trailerType,
-          driverPay:    pickup.driverPay,
-          priority:     pickup.priority,
-          stops:        pickup.stops,
-        },
-        {
-          title:        delivery.title,
-          start:        delivery.start,
-          end:          delivery.end,
-          assetId:      delivery.assetId,
-          driverId:     resolvedDelivery.driverId,
-          driverName:   resolvedDelivery.driverName ?? undefined,
-          status:       delivery.status,
-          relayRole:    'delivery',
-          trailerId:    delivery.trailerId,
-          trailerType:  delivery.trailerType,
-          driverPay:    delivery.driverPay,
-          priority:     delivery.priority,
-          stops:        delivery.stops,
-        },
-      ],
+      events: resolved.map((leg, i) => ({
+        title:        leg.title,
+        start:        leg.start,
+        end:          leg.end,
+        assetId:      leg.assetId,
+        driverId:     leg.driverId,
+        driverName:   leg.driverName ?? undefined,
+        status:       leg.status,
+        relayRole:    legRoleFor(i, n),
+        trailerId:    leg.trailerId,
+        trailerType:  leg.trailerType,
+        driverPay:    leg.driverPay,
+        priority:     leg.priority,
+        stops:        leg.stops,
+      })),
     })
       .then((res) => {
-        const pickupRes   = res.loads.find((l) => l.relayRole === 'pickup');
-        const deliveryRes = res.loads.find((l) => l.relayRole === 'delivery');
-        if (!pickupRes || !deliveryRes) return;
+        if (res.loads.length === 0) return;
         // Drop temps + any prior insertions of the real ids, then add the
         // server-returned rows. Robust against realtime/refetch racing.
-        const realIds = new Set([pickupRes.id, deliveryRes.id]);
+        const realIds = new Set(res.loads.map((l) => l.id));
         set((state) => ({
           events: [
             ...state.events.filter(
-              (e) => e.id !== tempPickupId && e.id !== tempDeliveryId && !realIds.has(e.id),
+              (e) => !tempIds.includes(e.id) && !realIds.has(e.id),
             ),
-            pickupRes,
-            deliveryRes,
+            ...res.loads,
           ],
         }));
       })
-      .catch((err) => console.error('createRelayPair:', err));
+      .catch((err) => console.error('createRelayLegs:', err));
   },
 
-  splitToRelay: (pickupEventId, pickupUpdates, deliveryData, presetDeliveryId) => {
+  splitToRelay: (targetEventId, targetUpdates, newLegData, presetNewLegId, opts) => {
     const state = get();
-    const ev = state.events.find(e => e.id === pickupEventId);
+    const ev = state.events.find(e => e.id === targetEventId);
     if (!ev) {
-      console.error('splitToRelay: event not found', pickupEventId);
+      console.error('splitToRelay: event not found', targetEventId);
       return;
     }
     if (!ev.loadId) {
-      console.error('splitToRelay: event has no loadId; cannot split', pickupEventId);
+      console.error('splitToRelay: event has no loadId; cannot split', targetEventId);
       return;
     }
     if (state.isDemo) return;
     const { orgId } = state;
     if (!orgId) return;
 
-    const tempDeliveryId = presetDeliveryId ?? crypto.randomUUID();
-    const stops = pickupUpdates.stops ?? deliveryData.stops ?? ev.stops ?? [];
-    const relayIdx = stops.findIndex(s => s.type === 'relay');
+    const tempNewLegId = presetNewLegId ?? crypto.randomUUID();
+    const stops = targetUpdates.stops ?? newLegData.stops ?? ev.stops ?? [];
+    // The NEW relay marker — named by id when the load already has
+    // markers, first relay stop otherwise (legacy single→relay path).
+    const relayIdx = opts?.relayStopId
+      ? stops.findIndex(s => s.id === opts.relayStopId)
+      : stops.findIndex(s => s.type === 'relay');
     if (relayIdx < 0) {
-      console.error('splitToRelay: no relay-type stop in stops list');
+      console.error('splitToRelay: relay marker not found in stops list');
       return;
     }
 
-    // Optimistic state: existing event becomes the pickup leg; add a temp
-    // delivery on the same loadId. Both legs share the full stops list
-    // (relay-marker is the handoff cutoff in the modal display). Server
-    // mirrors this in /v1/loads/:id/split-relay.
-    const updatedPickup: CalendarEvent = {
+    // Current legs of the load, in leg order — decides the optimistic
+    // roles/indexes and whether targetEventId must go on the wire
+    // (required once the load already has more than one leg).
+    const legs = state.events.filter(e => e.loadId === ev.loadId).sort(byLegIndex);
+    const targetIdx = Math.max(0, legs.findIndex(l => l.id === targetEventId));
+    const nextCount = legs.length + 1;
+    const targetWasLast = targetIdx === legs.length - 1;
+
+    // Optimistic state: the target keeps its slot (role re-derived for
+    // the new count); the new leg lands immediately after it. Every leg
+    // shares the full merged stop list (markers are the per-leg window
+    // cutoffs). Server mirrors this in /v1/loads/:id/split-relay.
+    const updatedTarget: CalendarEvent = {
       ...ev,
-      ...pickupUpdates,
-      relayRole: 'pickup',
+      ...targetUpdates,
+      relayRole: legRoleFor(targetIdx, nextCount),
+      legIndex: targetIdx,
+      legCount: nextCount,
       relayGroupId: ev.loadId,
       stops,
     };
-    const tempDelivery: CalendarEvent = {
-      ...(deliveryData as CalendarEvent),
-      id: tempDeliveryId,
+    const tempNewLeg: CalendarEvent = {
+      ...(newLegData as CalendarEvent),
+      id: tempNewLegId,
       loadId: ev.loadId,
-      // Propagate the existing load's load-level fields so the delivery leg
+      // Propagate the existing load's load-level fields so the new leg
       // displays #internalLoadId, broker, accessorials, etc. immediately —
       // before the API swap. Real values come back via the .then below.
       internalLoadId: ev.internalLoadId,
@@ -2223,57 +2241,76 @@ export const useCalendarStore = create<CalendarStore>()(
       customerId:     ev.customerId,
       dispatcher:     ev.dispatcher,
       loadPrice:      ev.loadPrice,
-      // Mirror the load-level total_billable onto the shadow delivery
-      // leg so display surfaces (chip render, side strips) read the
-      // same number on both legs of a relay. Write paths are unaffected
+      // Mirror the load-level total_billable onto the shadow leg so
+      // display surfaces (chip render, side strips) read the same
+      // number on every leg of a relay. Write paths are unaffected
       // — the field is server-computed.
       totalBillable:  ev.totalBillable,
       rateConPdf:     ev.rateConPdf,
       accessorials:   ev.accessorials,
       refNums:        ev.refNums,
       notes:          ev.notes,
-      relayRole: 'delivery',
+      relayRole: targetWasLast ? 'delivery' : 'transfer',
+      legIndex: targetIdx + 1,
+      legCount: nextCount,
       relayGroupId: ev.loadId,
       stops,
     };
     set(s => ({
-      events: [...s.events.map(e => e.id === pickupEventId ? updatedPickup : e), tempDelivery],
+      events: [
+        ...s.events.map(e => {
+          if (e.id === targetEventId) return updatedTarget;
+          // Later legs shift down one slot until the server response lands.
+          if (e.loadId === ev.loadId) {
+            const li = e.legIndex ?? 0;
+            return li > targetIdx
+              ? { ...e, legIndex: li + 1, legCount: nextCount, relayRole: legRoleFor(li + 1, nextCount) }
+              : { ...e, legCount: nextCount, relayRole: legRoleFor(li, nextCount) };
+          }
+          return e;
+        }),
+        tempNewLeg,
+      ],
     }));
 
     // 1. Apply load-level edits (broker, accessorials, notes, etc.) — splitRelay
     //    only touches event/stop rows.
     const drivers = state.drivers;
-    const resolvedPickup = withResolvedDriverId({ ...ev, ...pickupUpdates }, drivers);
-    const resolvedDelivery = withResolvedDriverId(deliveryData, drivers);
+    const resolvedTarget = withResolvedDriverId({ ...ev, ...targetUpdates }, drivers);
+    const resolvedNewLeg = withResolvedDriverId(newLegData, drivers);
 
     const promises: Promise<unknown>[] = [];
-    const { loadUpdates } = splitForUpdate(resolvedPickup);
+    const { loadUpdates } = splitForUpdate(resolvedTarget);
     if (Object.keys(loadUpdates).length) {
       promises.push(railway.updateLoad(ev.loadId, loadUpdates));
     }
 
-    // 2. Convert single → relay via the API. The server partitions stops at
-    //    relayStopIndex into pickup/delivery legs and creates the delivery.
+    // 2. Split via the API. Field names keep their historical spelling:
+    //    "pickup*" = the leg being split, "delivery*" = the inserted leg.
     promises.push(
       railway.splitRelay(ev.loadId, {
-        pickupEnd:           updatedPickup.end,
-        deliveryStart:       (deliveryData.start as string),
-        deliveryEnd:         (deliveryData.end as string),
-        deliveryAssetId:     resolvedDelivery.assetId as number,
-        deliveryDriverId:    resolvedDelivery.driverId ?? null,
-        deliveryDriverName:  resolvedDelivery.driverName ?? null,
+        pickupEnd:           updatedTarget.end,
+        deliveryStart:       (newLegData.start as string),
+        deliveryEnd:         (newLegData.end as string),
+        deliveryAssetId:     resolvedNewLeg.assetId as number,
+        deliveryDriverId:    resolvedNewLeg.driverId ?? null,
+        deliveryDriverName:  resolvedNewLeg.driverName ?? null,
         mergedStops:         stops,
         relayStopIndex:      relayIdx,
+        // Required once the load already has >1 leg; omitted for the
+        // single→relay path so the wire request is unchanged there.
+        ...(legs.length > 1 ? { targetEventId } : {}),
       }).then(res => {
-        const realPickup   = res.loads.find(l => l.relayRole === 'pickup');
-        const realDelivery = res.loads.find(l => l.relayRole === 'delivery');
-        if (!realPickup || !realDelivery) return;
-        const realIds = new Set([realPickup.id, realDelivery.id]);
+        // Response = ALL legs of the load in leg order (with the
+        // server's renumbered leg_index / relay_role). Replace every
+        // cached leg wholesale.
+        if (res.loads.length === 0) return;
+        const realIds = new Set(res.loads.map(l => l.id));
+        for (const l of res.loads) markSelfWrite(l.id);
         set(s => ({
           events: [
-            ...s.events.filter(e => e.id !== tempDeliveryId && e.id !== pickupEventId && !realIds.has(e.id)),
-            realPickup,
-            realDelivery,
+            ...s.events.filter(e => e.id !== tempNewLegId && e.loadId !== ev.loadId && !realIds.has(e.id)),
+            ...res.loads,
           ],
         }));
       }),
@@ -2282,12 +2319,12 @@ export const useCalendarStore = create<CalendarStore>()(
     Promise.all(promises).catch(err => console.error('splitToRelay:', err));
   },
 
-  saveRelayBoth: (pickupId, pickupUpdates, deliveryId, deliveryUpdates) => {
+  saveRelayLegs: (legs) => {
+    if (legs.length === 0) return;
     set((state) => ({
       events: state.events.map((e) => {
-        if (e.id === pickupId)   return { ...e, ...pickupUpdates };
-        if (e.id === deliveryId) return { ...e, ...deliveryUpdates };
-        return e;
+        const m = legs.find((l) => l.id === e.id);
+        return m ? { ...e, ...m.updates } : e;
       }),
     }));
     if (get().isDemo) return;
@@ -2295,103 +2332,147 @@ export const useCalendarStore = create<CalendarStore>()(
     if (!orgId) return;
 
     const evts = get().events;
-    const pu = evts.find((e) => e.id === pickupId);
-    const de = evts.find((e) => e.id === deliveryId);
-    if (!pu || !de) return;
     const drivers = get().drivers;
-    const resolvedPu = withResolvedDriverId({ ...pu, ...pickupUpdates },   drivers);
-    const resolvedDe = withResolvedDriverId({ ...de, ...deliveryUpdates }, drivers);
-
-    // Apply driver resolution for the API payloads
-    const puPayload: typeof pickupUpdates   = { ...pickupUpdates };
-    const dePayload: typeof deliveryUpdates = { ...deliveryUpdates };
-    if ('driverId' in pickupUpdates || 'driverName' in pickupUpdates) {
-      puPayload.driverId   = resolvedPu.driverId   ?? undefined;
-      puPayload.driverName = resolvedPu.driverName ?? undefined;
+    const rows: Array<{ id: string; ev: CalendarEvent; updates: Partial<Omit<CalendarEvent, 'id'>> }> = [];
+    for (const l of legs) {
+      const ev = evts.find((e) => e.id === l.id);
+      if (!ev) {
+        console.error('saveRelayLegs: leg missing from cache; ignoring write', l.id);
+        return;
+      }
+      rows.push({ id: l.id, ev, updates: l.updates });
     }
-    if ('driverId' in deliveryUpdates || 'driverName' in deliveryUpdates) {
-      dePayload.driverId   = resolvedDe.driverId   ?? undefined;
-      dePayload.driverName = resolvedDe.driverName ?? undefined;
-    }
-
-    if (!pu.loadId || !de.loadId) {
-      console.error('saveRelayBoth: a leg is missing loadId; ignoring write', { pickupId, deliveryId });
+    const loadId = rows[0].ev.loadId;
+    if (!loadId || rows.some((r) => r.ev.loadId !== loadId)) {
+      console.error('saveRelayLegs: legs do not share a loadId; ignoring write', legs.map((l) => l.id));
       return;
     }
 
-    // Both legs share the same loadId. Split each leg's updates into
-    // load-level + event-level. Load-level should match across legs (the
-    // modal shows one input for the whole load), but defensively prefer
-    // the pickup leg's values when they conflict.
-    const { loadUpdates: pickupLoadUpdates, eventUpdates: pickupEventUpdates } = splitForUpdate(puPayload);
-    const { loadUpdates: deliveryLoadUpdates, eventUpdates: deliveryEventUpdates } = splitForUpdate(dePayload);
-    const combinedLoadUpdates = { ...deliveryLoadUpdates, ...pickupLoadUpdates }; // pickup wins
+    // Every leg's updates split into load-level + event-level. Load-level
+    // should match across legs (the modal shows one input for the whole
+    // load), but defensively let LEG 0 win conflicts — the N-leg
+    // generalization of the old "pickup wins" rule (callers pass legs in
+    // leg order).
+    let combinedLoadUpdates: ReturnType<typeof splitForUpdate>['loadUpdates'] = {};
+    const perLegEventUpdates: Array<{ id: string; eventUpdates: ReturnType<typeof splitForUpdate>['eventUpdates']; stops?: CalendarEvent['stops'] }> = [];
+    for (const r of rows) {
+      const resolved = withResolvedDriverId({ ...r.ev, ...r.updates }, drivers);
+      const payload: Partial<Omit<CalendarEvent, 'id'>> = { ...r.updates };
+      if ('driverId' in r.updates || 'driverName' in r.updates) {
+        payload.driverId   = resolved.driverId   ?? undefined;
+        payload.driverName = resolved.driverName ?? undefined;
+      }
+      const { loadUpdates, eventUpdates } = splitForUpdate(payload);
+      // Spread order: earlier legs' values survive conflicts (leg 0 wins).
+      combinedLoadUpdates = { ...loadUpdates, ...combinedLoadUpdates };
+      perLegEventUpdates.push({
+        id: r.id,
+        eventUpdates,
+        stops: 'stops' in r.updates ? r.updates.stops : undefined,
+      });
+    }
 
     const promises: Promise<unknown>[] = [];
     if (Object.keys(combinedLoadUpdates).length) {
-      promises.push(railway.updateLoad(pu.loadId, combinedLoadUpdates));
+      promises.push(railway.updateLoad(loadId, combinedLoadUpdates));
     }
-    if (Object.keys(pickupEventUpdates).length) {
-      promises.push(railway.updateLoadEvent(pu.loadId, pickupId, pickupEventUpdates));
+    for (const l of perLegEventUpdates) {
+      if (Object.keys(l.eventUpdates).length) {
+        promises.push(railway.updateLoadEvent(loadId, l.id, l.eventUpdates));
+      }
+      if (l.stops) {
+        promises.push(railway.replaceStops(l.id, { stops: l.stops }));
+      }
     }
-    if (Object.keys(deliveryEventUpdates).length) {
-      promises.push(railway.updateLoadEvent(de.loadId, deliveryId, deliveryEventUpdates));
-    }
-    if ('stops' in pickupUpdates && pickupUpdates.stops) {
-      promises.push(railway.replaceStops(pickupId, { stops: pickupUpdates.stops }));
-    }
-    if ('stops' in deliveryUpdates && deliveryUpdates.stops) {
-      promises.push(railway.replaceStops(deliveryId, { stops: deliveryUpdates.stops }));
-    }
-    Promise.all(promises).catch((err) => console.error('saveRelayBoth:', err));
+    Promise.all(promises).catch((err) => console.error('saveRelayLegs:', err));
   },
 
-  removeRelay: (legId, auditLog) => {
+  removeRelay: (keepEventId, opts) => {
     const state = get();
-    const leg = state.events.find((e) => e.id === legId);
-    if (!leg) return;
+    const keep = state.events.find((e) => e.id === keepEventId);
+    if (!keep?.loadId) return;
 
-    // Two events with the same load_id and relay_role set ARE the relay.
-    let partner: CalendarEvent | undefined;
-    if (leg.loadId) {
-      partner = state.events.find((e) => e.loadId === leg.loadId && e.id !== legId);
+    // All legs of the load, in leg order. Events with the same load_id
+    // and relay_role set ARE the relay.
+    const legs = state.events.filter((e) => e.loadId === keep.loadId).sort(byLegIndex);
+    if (legs.length < 2) return;
+    const merge = opts?.mergeEventId
+      ? legs.find((l) => l.id === opts.mergeEventId)
+      : legs.find((l) => l.id !== keepEventId);
+    if (!merge || merge.id === keepEventId) return;
+
+    const keepIdx  = legs.findIndex((l) => l.id === keepEventId);
+    const mergeIdx = legs.findIndex((l) => l.id === merge.id);
+    if (keepIdx < 0 || mergeIdx < 0 || Math.abs(keepIdx - mergeIdx) !== 1) {
+      console.error('removeRelay: legs are not adjacent; ignoring', { keepEventId, mergeEventId: merge.id });
+      return;
     }
-    if (!partner) return;
+    // Marker i (0-based among relay stops, sequence order) sits between
+    // leg i and leg i+1 — the collapsed handoff is the one between the
+    // earlier of the two legs and its successor.
+    const firstIdx = Math.min(keepIdx, mergeIdx);
+    const fullStops = ((keep.stops?.length ? keep.stops : merge.stops) ?? []);
+    let markerOrdinal = -1;
+    const mergedStops = legs.length === 2
+      // 2-leg load: drop every marker (legacy behavior — there's only
+      // one real handoff, but stray markers shouldn't survive a merge).
+      ? fullStops.filter((s) => s.type !== 'relay')
+      : fullStops.filter((s) => (s.type === 'relay' ? ++markerOrdinal !== firstIdx : true));
 
-    const pickup   = leg.relayRole === 'pickup'   ? leg : partner;
-    const delivery = leg.relayRole === 'delivery' ? leg : partner;
-    if (!pickup || !delivery) return;
-
-    const mergedStops = (pickup.stops ?? []).filter((s) => s.type !== 'relay');
+    const remaining = legs.length - 1;
     const merged: CalendarEvent = {
-      ...pickup,
-      end:           delivery.end,
-      relayGroupId:  undefined,
-      relayRole:     undefined,
-      stops:         mergedStops,
-      ...(auditLog !== undefined ? { auditLog } : {}),
+      ...keep,
+      start: legs[firstIdx].start,
+      end:   legs[firstIdx + 1].end,
+      stops: mergedStops,
+      ...(remaining <= 1
+        ? { relayGroupId: undefined, relayRole: undefined, legIndex: undefined, legCount: undefined }
+        : { legIndex: firstIdx, legCount: remaining, relayRole: legRoleFor(firstIdx, remaining) }),
+      ...(opts?.auditLog !== undefined ? { auditLog: opts.auditLog } : {}),
     };
     const deletedAt = new Date().toISOString();
     const trashed: DeletedEvent = {
-      ...delivery,
+      ...merge,
       deletedAt,
       relayGroupId: undefined,
       relayRole:    undefined,
     };
     set((s) => ({
-      events:        s.events.filter((e) => e.id !== delivery.id).map((e) => (e.id === pickup.id ? merged : e)),
+      events: s.events
+        .filter((e) => e.id !== merge.id)
+        .map((e) => {
+          if (e.id === keepEventId) return merged;
+          if (e.loadId === keep.loadId) {
+            // Renumber the surviving siblings until the server response
+            // (or realtime echo) replaces them with canonical rows.
+            const li = e.legIndex ?? 0;
+            const next = li > firstIdx ? li - 1 : li;
+            return { ...e, legIndex: next, legCount: remaining, relayRole: legRoleFor(next, remaining) };
+          }
+          return e;
+        }),
       deletedEvents: [trashed, ...s.deletedEvents],
     }));
     if (get().isDemo) return;
     const { orgId } = get();
     if (!orgId) return;
 
-    if (!pickup.loadId || !delivery.loadId || pickup.loadId !== delivery.loadId) {
-      console.error('removeRelay: legs do not share a loadId; ignoring', { pickupId: pickup.id, deliveryId: delivery.id });
-      return;
-    }
     railway
-      .unsplitRelay(pickup.loadId, { keepEventId: pickup.id, mergedStops })
+      .unsplitRelay(keep.loadId, {
+        keepEventId,
+        // Required for 3+ legs; omitted on 2-leg loads so the wire
+        // request matches the original unsplit behavior exactly.
+        ...(legs.length > 2 ? { mergeEventId: merge.id } : {}),
+        mergedStops,
+      })
+      .then((res) => {
+        // Response = remaining legs in leg order with the server's
+        // renumbered leg_index / relay_role — upsert so local state
+        // matches exactly. Self-write marks keep the conflict banner
+        // quiet on our own echo.
+        for (const l of res.loads) markSelfWrite(l.id);
+        for (const l of res.loads) get().updateEventFromRemote(l);
+      })
       .catch((err) => console.error('removeRelay:', err));
   },
 

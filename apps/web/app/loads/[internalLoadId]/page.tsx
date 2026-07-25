@@ -65,6 +65,7 @@ import { railway, RailwayError } from '@/lib/railway';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { displayBrokerName } from '@/lib/customerMatch';
 import type { Load, Invoice, Customer, InternalNote, LoadStatus } from '@fleetcal/types';
+import { byLegIndex, legLabel } from '@fleetcal/types';
 
 const moneyFmt = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 
@@ -223,11 +224,12 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
     'notes' | 'specialInstructions' | 'internalNotes' |
     'accessorials' | 'refNums' | 'stops'>>;
   const [draft, setDraft] = useState<LoadDraft>({});
-  // Partner-leg draft holds the per-leg fields the page can edit on the
-  // partner load (right now just driverPay for the relay delivery leg).
-  // We separate it from `draft` so handleSave knows to PATCH the partner
-  // load row vs the primary one without diffing key sets.
-  const [partnerDraft, setPartnerDraft] = useState<Partial<Pick<Load, 'driverPay'>>>({});
+  // Per-leg pay drafts, keyed by the leg's EVENT id. driverPay is the
+  // only per-leg field this page edits; everything else per-leg stays
+  // calendar-modal-only. Kept apart from `draft` so handleSave knows
+  // which event each pay edit belongs to without diffing key sets.
+  // null = clear the leg's pay.
+  const [legPayDrafts, setLegPayDrafts] = useState<Record<string, number | null>>({});
   const [saving, setSaving] = useState(false);
   // Name the dispatcher typed in the broker combobox that doesn't match
   // any existing customer. When set, NewBrokerReviewModal opens with
@@ -239,10 +241,10 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
   }
   function discardDraft() {
     setDraft({});
-    setPartnerDraft({});
+    setLegPayDrafts({});
   }
-  function patchPartnerDraft(patch: Partial<Pick<Load, 'driverPay'>>) {
-    setPartnerDraft(d => ({ ...d, ...patch }));
+  function patchLegPay(eventId: string, value: number | null) {
+    setLegPayDrafts(d => ({ ...d, [eventId]: value }));
   }
 
   const internalIdNum = useMemo(() => {
@@ -296,14 +298,13 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadEditTick]);
 
-  const primaryLeg = useMemo<Load | undefined>(() => {
-    if (!legs?.length) return undefined;
-    return legs.find(l => l.relayRole === 'pickup' || !l.relayRole) ?? legs[0];
-  }, [legs]);
-  const partnerLeg = useMemo<Load | undefined>(() => {
-    if (!legs || legs.length < 2 || !primaryLeg) return undefined;
-    return legs.find(l => l.id !== primaryLeg.id);
-  }, [legs, primaryLeg]);
+  // All legs of the load in leg order (leg 1 = pickup first). The
+  // pickup leg is "primary" — load-level fields render/edit through it.
+  const sortedLegs = useMemo<Load[]>(
+    () => legs ? [...legs].sort(byLegIndex) : [],
+    [legs],
+  );
+  const primaryLeg: Load | undefined = sortedLegs[0];
 
   const customerById = useMemo(() => new Map(customers.map(c => [c.id, c])), [customers]);
 
@@ -311,19 +312,27 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
   // resets to the persisted state. Without this, refresh-after-save
   // would visibly leave the user's input on top of the saved row.
   const primaryLoadId = primaryLeg?.loadId;
-  const partnerLoadId = partnerLeg?.loadId;
-  useEffect(() => { setDraft({}); setPartnerDraft({}); }, [primaryLoadId, partnerLoadId]);
+  useEffect(() => { setDraft({}); setLegPayDrafts({}); }, [primaryLoadId]);
 
   // Effective load = persisted row + any pending edits on top.
   const effective: Load | undefined = useMemo(
     () => primaryLeg ? { ...primaryLeg, ...draft } : undefined,
     [primaryLeg, draft],
   );
-  const effectivePartner: Load | undefined = useMemo(
-    () => partnerLeg ? { ...partnerLeg, ...partnerDraft } : undefined,
-    [partnerLeg, partnerDraft],
+  // Effective legs list — primary gets the full draft overlay, every
+  // other leg gets its pending pay draft (the only per-leg field this
+  // page edits).
+  const effectiveLegs = useMemo<Load[]>(
+    () => sortedLegs.map((l, i) => {
+      if (i === 0) return { ...l, ...draft };
+      if (l.id in legPayDrafts) {
+        return { ...l, driverPay: legPayDrafts[l.id] ?? undefined };
+      }
+      return l;
+    }),
+    [sortedLegs, draft, legPayDrafts],
   );
-  const isDirty = Object.keys(draft).length > 0 || Object.keys(partnerDraft).length > 0;
+  const isDirty = Object.keys(draft).length > 0 || Object.keys(legPayDrafts).length > 0;
 
   // Save flow. Routes load-level fields through PATCH /v1/loads/:id and
   // stops through replaceStops on the primary event. Stops live event-
@@ -335,28 +344,28 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
     setSaving(true);
     try {
       useCalendarStore.getState().markLoadSelfWrite(primaryLeg.loadId);
-      if (partnerLeg?.loadId) {
-        useCalendarStore.getState().markLoadSelfWrite(partnerLeg.loadId);
-      }
-      const { stops: nextStops, ...loadPatch } = draft;
+      // driverPay is EVENT-level (per-leg) — route it through the
+      // event PATCH instead of the load PATCH, whose whitelist doesn't
+      // carry it. Everything else in the draft is load-level.
+      const { stops: nextStops, driverPay: primaryPay, ...loadPatch } = draft;
       if (Object.keys(loadPatch).length > 0) {
         await railway.updateLoad(primaryLeg.loadId, loadPatch);
       }
       if (nextStops !== undefined) {
         await railway.replaceStops(primaryLeg.id, { stops: nextStops });
       }
-      // Partner driver pay is the only partner-side field the page
-      // currently edits. PATCH the partner's load row directly — the
-      // other relay assignment fields (driver/asset/stops) stay
-      // calendar-modal-only on this page.
-      if (partnerLeg?.loadId && Object.keys(partnerDraft).length > 0) {
-        // Cast: UpdateLoadRequest's driverPay is number|null whereas
-        // Load.driverPay is number|undefined. Same shape on the wire,
-        // just a narrower union — safe to widen back here.
-        await railway.updateLoad(partnerLeg.loadId, partnerDraft as Parameters<typeof railway.updateLoad>[1]);
+      if ('driverPay' in draft) {
+        await railway.updateLoadEvent(primaryLeg.loadId, primaryLeg.id, { driverPay: primaryPay ?? null });
+      }
+      // Per-leg pay drafts — driverPay is the only per-leg field this
+      // page edits; the other assignment fields (driver/asset/stops)
+      // stay calendar-modal-only. Serial PATCHes, one per edited leg.
+      for (const [eventId, value] of Object.entries(legPayDrafts)) {
+        if (eventId === primaryLeg.id) continue; // primary handled above
+        await railway.updateLoadEvent(primaryLeg.loadId, eventId, { driverPay: value });
       }
       setDraft({});
-      setPartnerDraft({});
+      setLegPayDrafts({});
       bumpLoadEditTick();
       await refresh({ silent: true });
     } catch (e) {
@@ -405,13 +414,12 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
       if (primaryLeg.loadId) {
         useCalendarStore.getState().markLoadSelfWrite(primaryLeg.loadId);
       }
-      // events.status is the lifecycle source-of-truth. PATCH both legs
+      // events.status is the lifecycle source-of-truth. PATCH EVERY leg
       // on a relay load so the chips and reports stay aligned — a relay
-      // with one leg in en_route and the other still scheduled would
+      // with one leg in en_route and another still scheduled would
       // confuse downstream views.
-      await railway.updateEvent(primaryLeg.id, { status: next });
-      if (partnerLeg?.id) {
-        await railway.updateEvent(partnerLeg.id, { status: next });
+      for (const leg of sortedLegs) {
+        await railway.updateEvent(leg.id, { status: next });
       }
       bumpLoadEditTick();
       await refresh({ silent: true });
@@ -553,7 +561,7 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
   const headerTitle = brokerLoadNum
     ? `Load #${internalIdLabel} · ${brokerLoadNum}`
     : `Load #${internalIdLabel}`;
-  const isRelay = !!partnerLeg;
+  const isRelay = sortedLegs.length > 1;
 
   return (
     <AppShell title={headerTitle} icon={Truck}>
@@ -572,46 +580,21 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
             <ArrowLeft size={12} /> Back
           </button>
           {/* Calendar nav. For a solo load there's just one event so we
-              show a single "View in Calendar" pill. For relays we surface
-              both legs, since each owns its own driver/asset/stops and
-              the dispatcher might want to jump to either. Buttons stash
-              the target event-id in the calendar store (openEditModal)
-              then route to "/" so the modal opens on first paint. */}
-          {!isRelay && (
-            <button
-              onClick={() => {
-                useCalendarStore.getState().openEditModal(primaryLeg.id);
-                router.push('/');
-              }}
-              className="text-[12px] font-medium px-2.5 py-1.5 rounded-lg inline-flex items-center gap-1.5 transition-colors"
-              style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)' }}>
-              <CalendarIcon size={12} /> View in Calendar
-            </button>
-          )}
-          {isRelay && (
-            <>
-              <button
-                onClick={() => {
-                  // Pickup leg = primary in our load model — that's the
-                  // leg the URL slug lands on. Open it directly.
-                  useCalendarStore.getState().openEditModal(primaryLeg.id);
-                  router.push('/');
-                }}
-                className="text-[12px] font-medium px-2.5 py-1.5 rounded-lg inline-flex items-center gap-1.5 transition-colors"
-                style={{ background: '#f5f3ff', border: '1px solid #ddd6fe', color: '#6d28d9' }}>
-                <CalendarIcon size={12} /> View Pickup Leg
-              </button>
-              <button
-                onClick={() => {
-                  useCalendarStore.getState().openEditModal(partnerLeg!.id);
-                  router.push('/');
-                }}
-                className="text-[12px] font-medium px-2.5 py-1.5 rounded-lg inline-flex items-center gap-1.5 transition-colors"
-                style={{ background: '#f5f3ff', border: '1px solid #ddd6fe', color: '#6d28d9' }}>
-                <CalendarIcon size={12} /> View Delivery Leg
-              </button>
-            </>
-          )}
+              show a single "View in Calendar" pill. Relay loads get
+              per-leg "View leg" actions inside the Relay Legs card in
+              the form pane instead (N legs would crowd this bar), so
+              here they only get the same single pill opening leg 1. */}
+          <button
+            onClick={() => {
+              useCalendarStore.getState().openEditModal(primaryLeg.id);
+              router.push('/');
+            }}
+            className="text-[12px] font-medium px-2.5 py-1.5 rounded-lg inline-flex items-center gap-1.5 transition-colors"
+            style={isRelay
+              ? { background: '#f5f3ff', border: '1px solid #ddd6fe', color: '#6d28d9' }
+              : { background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)' }}>
+            <CalendarIcon size={12} /> View in Calendar
+          </button>
           {/* Review opens the closeout review panel — same UI the
               calendar surfaces via the "Review" button in the load
               modal. Resolves to the pickup leg before launch so the
@@ -676,7 +659,7 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
               style={{ ['--ui-scale' as keyof React.CSSProperties]: 1 } as React.CSSProperties}>
               <LoadFormPane
                 primary={effective ?? primaryLeg}
-                partner={effectivePartner ?? partnerLeg}
+                legs={effectiveLegs}
                 customerById={customerById}
                 assets={assets}
                 drivers={drivers}
@@ -686,7 +669,11 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
                 driverPayPct={driverPayPct}
                 onOpenCustomerProfile={setCustomerProfileId}
                 onCreateBroker={setPendingNewBroker}
-                onChangePartner={patchPartnerDraft}
+                onChangeLegPay={patchLegPay}
+                onViewLeg={(eventId) => {
+                  useCalendarStore.getState().openEditModal(eventId);
+                  router.push('/');
+                }}
                 onClickLocked={flashLockedHint}
                 onPriorityToggle={() => void flipPriority()}
                 onStatusChange={(next) => void setEventStatus(next)}
@@ -906,17 +893,76 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
   );
 }
 
+// ─── Per-leg driver-pay input ───────────────────────────────────────────
+//
+// One editable pay input for one relay leg. Split into its own
+// component so the finalized-payroll hook runs once per leg without
+// breaking the rules of hooks when the leg count varies.
+function LegPayField({
+  leg, label, loadPrice, iStyle, onFocus, onCommit,
+}: {
+  leg: Load;
+  label: string;
+  loadPrice: number | undefined;
+  iStyle: React.CSSProperties;
+  onFocus: (e: React.FocusEvent<HTMLInputElement>) => void;
+  /** null = clear the leg's pay. */
+  onCommit: (value: number | null) => void;
+}) {
+  const { finalized } = useLoadPayFinalized(leg.driverName, leg.start);
+  const payNum = typeof leg.driverPay === 'number' ? leg.driverPay : 0;
+  const lp = typeof loadPrice === 'number' ? loadPrice : 0;
+  const pct = lp > 0 && payNum > 0 ? Math.round((payNum / lp) * 1000) / 10 : null;
+  const pctChip = pct === null ? null : (
+    <span className="px-1.5 py-0.5 rounded-lg normal-case tracking-normal font-semibold"
+      style={{ fontSize: 10, background: '#f1f3f4', color: 'var(--gc-text-3)', border: '1px solid var(--gc-border-light)' }}>
+      {pct % 1 === 0 ? pct.toFixed(0) : pct.toFixed(1)}%
+    </span>
+  );
+  const finalizedHint = 'Locked — driver pay has been finalized for this week. Reopen the payroll record on the Payroll page to edit.';
+  return (
+    <Field label={label} labelSuffix={pctChip}>
+      <input type="number" value={payNum === 0 ? '' : payNum}
+        placeholder="0.00"
+        onChange={e => {
+          const raw = e.target.value.trim();
+          const parsed = raw === '' ? null : Number(raw);
+          if (raw !== '' && (parsed == null || isNaN(parsed))) return;
+          onCommit(parsed);
+        }}
+        disabled={finalized}
+        title={finalized ? finalizedHint : undefined}
+        style={{
+          ...iStyle,
+          fontVariantNumeric: 'tabular-nums',
+          ...(finalized ? { background: '#f1f5f9', color: 'var(--gc-text-3)', cursor: 'not-allowed' } : null),
+        }}
+        onFocus={onFocus} onBlur={blurColor} />
+      <div className="mt-2">
+        <FinalizedPayBanner
+          driverName={leg.driverName}
+          pickupIso={leg.start}
+          driverPay={leg.driverPay}
+        />
+      </div>
+    </Field>
+  );
+}
+
 // ─── Left card — modal-styled form ──────────────────────────────────────
 
 function LoadFormPane({
-  primary, partner, customerById, assets, drivers, customers,
+  primary, legs, customerById, assets, drivers, customers,
   sectionOrder, fieldSettings,
-  driverPayPct, onOpenCustomerProfile, onCreateBroker, onChangePartner,
+  driverPayPct, onOpenCustomerProfile, onCreateBroker, onChangeLegPay, onViewLeg,
   onClickLocked, onPriorityToggle, onStatusChange,
   currentUserName, calendarTimezone, onChange,
 }: {
   primary: Load;
-  partner: Load | undefined;
+  /** ALL legs of the load in leg order (leg 1 = pickup first);
+   *  legs[0] carries the same draft overlay as `primary`. Single-leg
+   *  loads pass a one-element array. */
+  legs: Load[];
   customerById: Map<string, { id: string; name: string }>;
   assets: { id: number; name?: string | null; unit?: string | null }[];
   drivers: { id?: number; name?: string; firstName?: string; lastName?: string; phone?: string }[];
@@ -931,9 +977,12 @@ function LoadFormPane({
   /** Fires when the CustomerCombobox user clicks "Add &lt;name&gt;".
    *  Parent opens NewBrokerReviewModal with the prefilled name. */
   onCreateBroker: (name: string) => void;
-  /** Patch into the PARTNER leg's draft — currently used for the relay
-   *  delivery driver pay. Only meaningful when `partner` is set. */
-  onChangePartner: (patch: Partial<Pick<Load, 'driverPay'>>) => void;
+  /** Patch a leg's pending driver-pay draft (keyed by the leg's EVENT
+   *  id). driverPay is the only per-leg field this page edits. */
+  onChangeLegPay: (eventId: string, value: number | null) => void;
+  /** Open a leg in the calendar modal (per-leg "View leg" action in
+   *  the Relay Legs card). */
+  onViewLeg: (eventId: string) => void;
   /** Click on a locked (calendar-only) field. Parent flashes a top-of-
    *  page banner pointing the dispatcher at the View in Calendar pill. */
   onClickLocked: () => void;
@@ -958,11 +1007,14 @@ function LoadFormPane({
   // we lock the per-leg driverPay input so an edit can't drift from
   // what was actually paid out. The banner under the input shows the
   // locked amount. Per-leg on relays because each leg has its own
-  // driver and may be independently finalized.
+  // driver and may be independently finalized — the relay inputs live
+  // in LegPayField below, which runs the hook per leg.
   const primaryFinalized = useLoadPayFinalized(primary.driverName, primary.start);
-  const partnerFinalized = useLoadPayFinalized(partner?.driverName, partner?.start);
   const isPrimaryFinalized = primaryFinalized.finalized;
-  const isPartnerFinalized = partnerFinalized.finalized;
+
+  // Relay = more than one leg. legs[0] mirrors `primary` (same draft
+  // overlay applied by the page).
+  const isRelayLoad = legs.length > 1;
 
   // ── Derived values ──────────────────────────────────────────────────
   // Linked customer — first try the FK (canonical source). If the load
@@ -1143,14 +1195,13 @@ function LoadFormPane({
     // Driver Pay — for solo loads, a generic number input with the
     // percentage chip + reset button via labelSuffix.
     // For relay loads, swap the slot for a read-only "Total Driver Pay"
-    // tile (Pickup + Delivery summed). The editable Pickup/Delivery
-    // inputs appear below the section's fields (see renderSection
-    // 'financial' tail) — same pattern EventModal uses.
+    // tile (every leg summed). The editable per-leg inputs appear below
+    // the section's fields (see renderSection 'financial' tail) — same
+    // pattern EventModal uses.
     if (field.id === 'driverPay') {
-      if (partner) {
-        const pickupNum = typeof primary.driverPay === 'number' ? primary.driverPay : 0;
-        const deliveryNum = typeof partner.driverPay === 'number' ? partner.driverPay : 0;
-        const total = pickupNum + deliveryNum;
+      if (isRelayLoad) {
+        const total = legs.reduce(
+          (s, l) => s + (typeof l.driverPay === 'number' ? l.driverPay : 0), 0);
         const lp = typeof primary.loadPrice === 'number' ? primary.loadPrice : 0;
         const totalPct = lp > 0 && total > 0
           ? Math.round((total / lp) * 1000) / 10
@@ -1365,35 +1416,34 @@ function LoadFormPane({
   // controls render the same, they just don't fire.
   function renderSection(section: FieldSection, first: boolean) {
     if (section === 'locations') {
-      // Load-level miles: for relay loads, sum BOTH legs' miles so the
+      // Load-level miles: for relay loads, sum EVERY leg's miles so the
       // displayed RPM is `loadPrice / totalLoadedMiles` instead of
       // `loadPrice / thisLegMiles`. Previous behavior made a short
-      // delivery leg show an inflated RPM and a long pickup leg show a
+      // final leg show an inflated RPM and a long first leg show a
       // deflated one, because each leg divided the whole-load price by
       // only its own miles.
-      const primMi = primary.loadedMiles ?? 0;
-      const partMi = partner?.loadedMiles ?? 0;
-      const loadedMiles = (primMi + partMi) > 0 ? (primMi + partMi) : null;
+      const milesSum = legs.reduce((s, l) => s + (l.loadedMiles ?? 0), 0);
+      const loadedMiles = milesSum > 0 ? milesSum : null;
       const rpm = loadedMiles && loadedMiles > 0 && primary.loadPrice != null
         ? primary.loadPrice / loadedMiles
         : null;
       return (
         <div key={section}
           style={first ? {} : { borderTop: '1px solid var(--gc-border-light)', paddingTop: 20 }}>
-          {/* Relay block sits directly above the locations section so
-              the dispatcher reads "pickup leg → relay handoff →
-              delivery leg" in physical order. Purple-on-lavender to
-              match the calendar's relay color. Fields are read-only
-              because the relay pair is driven by both legs' events;
-              editing here would split the source of truth — the inline
-              note points dispatch back to the calendar instead. */}
-          {partner && (
+          {/* Relay Legs card sits directly above the locations section
+              so the dispatcher reads the legs in physical order before
+              the merged stop list. Purple-on-lavender to match the
+              calendar's relay color. Rows are read-only because leg
+              assignments are driven by each leg's event; editing here
+              would split the source of truth — the per-leg "View leg"
+              action opens the calendar modal instead. */}
+          {isRelayLoad && (
             <div className="mb-5 p-4 rounded-xl"
               style={{ background: '#f5f3ff', border: '1px solid #ddd6fe' }}>
               <div className="flex items-center justify-between mb-3">
                 <div className="text-[11px] font-bold uppercase tracking-wider"
                   style={{ color: '#6d28d9' }}>
-                  Relay — Delivery Leg
+                  Relay — {legs.length} Legs
                 </div>
                 <div className="flex items-center gap-1.5 text-[11px]"
                   style={{ color: '#6d28d9' }}>
@@ -1401,19 +1451,47 @@ function LoadFormPane({
                   Edit relay legs in the calendar
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <Field label="Delivery Driver">
-                  <input type="text" value={partner.driverName ?? ''} readOnly
-                    placeholder="Unassigned"
-                    onMouseDown={onClickLocked}
-                    style={{ ...lockedStyle, borderColor: '#ddd6fe' }} />
-                </Field>
-                <Field label="Delivery Truck">
-                  <input type="text" value={truckLabel(assetById.get(partner.assetId))} readOnly
-                    placeholder="—"
-                    onMouseDown={onClickLocked}
-                    style={{ ...lockedStyle, borderColor: '#ddd6fe' }} />
-                </Field>
+              <div className="space-y-2">
+                {legs.map((leg, i) => (
+                  <div key={leg.id} className="rounded-lg px-3 py-2.5 flex flex-wrap items-center gap-x-4 gap-y-1"
+                    style={{ background: '#fff', border: '1px solid #ddd6fe' }}>
+                    <div className="text-[11px] font-bold uppercase tracking-wider shrink-0"
+                      style={{ color: '#6d28d9', minWidth: 108 }}>
+                      {legLabel(i, legs.length)}
+                    </div>
+                    <div className="text-[12px] min-w-0 flex-1" style={{ color: 'var(--gc-text-1)' }}>
+                      <span className="font-semibold">
+                        {leg.driverName ?? <span style={{ color: 'var(--gc-text-3)' }}>Unassigned</span>}
+                      </span>
+                      <span style={{ color: 'var(--gc-text-3)' }}>
+                        {' · '}{truckLabel(assetById.get(leg.assetId)) || '—'}
+                      </span>
+                    </div>
+                    <div className="text-[11px] tabular-nums shrink-0" style={{ color: 'var(--gc-text-2)' }}>
+                      {fmtShortDate(leg.start)} → {fmtShortDate(leg.end)}
+                    </div>
+                    <div className="text-[11px] tabular-nums shrink-0" style={{ color: 'var(--gc-text-2)' }}>
+                      {leg.loadedMiles != null && leg.loadedMiles > 0
+                        ? `${Math.round(leg.loadedMiles).toLocaleString()} mi`
+                        : '— mi'}
+                    </div>
+                    <div className="text-[11px] tabular-nums shrink-0" style={{ color: 'var(--gc-text-2)' }}>
+                      {typeof leg.driverPay === 'number' && leg.driverPay > 0
+                        ? moneyFmt.format(leg.driverPay)
+                        : '—'}
+                    </div>
+                    <div className="text-[10px] font-bold uppercase tracking-wider shrink-0 px-1.5 py-0.5 rounded"
+                      style={{ background: 'var(--gc-hover)', color: 'var(--gc-text-2)' }}>
+                      {(leg.status ?? 'scheduled').replace('_', ' ')}
+                    </div>
+                    <button type="button"
+                      onClick={() => onViewLeg(leg.id)}
+                      className="text-[11px] font-semibold shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded-lg transition-colors"
+                      style={{ background: '#f5f3ff', border: '1px solid #ddd6fe', color: '#6d28d9', cursor: 'pointer' }}>
+                      <CalendarIcon size={11} /> View leg
+                    </button>
+                  </div>
+                ))}
               </div>
             </div>
           )}
@@ -1449,83 +1527,30 @@ function LoadFormPane({
       <ModalSection key={section} title={SECTION_LABELS[section]} first={first}>
         {renderSectionFields(fields)}
 
-        {/* Relay-only: Pickup + Delivery Driver Pay inputs. Sit right
-            below the (now read-only) Total Driver Pay tile so the
-            two halves and the sum stay visually grouped. Pickup goes
-            to primary.driverPay (the same column solo loads write).
-            Delivery routes through onChangePartner since it lives on
-            the partner load row. */}
-        {section === 'financial' && partner && (() => {
-          const lp = typeof primary.loadPrice === 'number' ? primary.loadPrice : 0;
-          const pctOf = (n: number) => (lp > 0 && n > 0 ? Math.round((n / lp) * 1000) / 10 : null);
-          const pickupNum = typeof primary.driverPay === 'number' ? primary.driverPay : 0;
-          const deliveryNum = typeof partner.driverPay === 'number' ? partner.driverPay : 0;
-          const fmtPct = (p: number) => `${p % 1 === 0 ? p.toFixed(0) : p.toFixed(1)}%`;
-          const pctChip = (p: number | null) => p === null ? null : (
-            <span className="px-1.5 py-0.5 rounded-lg normal-case tracking-normal font-semibold"
-              style={{ fontSize: 10, background: '#f1f3f4', color: 'var(--gc-text-3)', border: '1px solid var(--gc-border-light)' }}>
-              {fmtPct(p)}
-            </span>
-          );
-          const finalizedHint = 'Locked — driver pay has been finalized for this week. Reopen the payroll record on the Payroll page to edit.';
-          return (
-            <div className="mt-4 grid grid-cols-2 gap-4">
-              <Field label="Pickup Driver Pay" labelSuffix={pctChip(pctOf(pickupNum))}>
-                <input type="number" value={pickupNum === 0 ? '' : pickupNum}
-                  placeholder="0.00"
-                  onChange={e => {
-                    const raw = e.target.value.trim();
-                    const parsed = raw === '' ? null : Number(raw);
-                    if (raw !== '' && (parsed == null || isNaN(parsed))) return;
-                    onChange({ driverPay: parsed } as Partial<Load>);
-                  }}
-                  disabled={isPrimaryFinalized}
-                  title={isPrimaryFinalized ? finalizedHint : undefined}
-                  style={{
-                    ...iStyle,
-                    fontVariantNumeric: 'tabular-nums',
-                    ...(isPrimaryFinalized ? { background: '#f1f5f9', color: 'var(--gc-text-3)', cursor: 'not-allowed' } : null),
-                  }}
-                  onFocus={focusH} onBlur={blurColor} />
-                <div className="mt-2">
-                  <FinalizedPayBanner
-                    driverName={primary.driverName}
-                    pickupIso={primary.start}
-                    driverPay={primary.driverPay}
-                  />
-                </div>
-              </Field>
-              <Field label="Delivery Driver Pay" labelSuffix={pctChip(pctOf(deliveryNum))}>
-                <input type="number" value={deliveryNum === 0 ? '' : deliveryNum}
-                  placeholder="0.00"
-                  onChange={e => {
-                    const raw = e.target.value.trim();
-                    const parsed = raw === '' ? null : Number(raw);
-                    if (raw !== '' && (parsed == null || isNaN(parsed))) return;
-                    // null is the "clear" sentinel; cast through unknown
-                    // to satisfy Load.driverPay's number|undefined sig.
-                    // The converter (loads.ts) coerces null → DB NULL.
-                    onChangePartner({ driverPay: parsed as unknown as number });
-                  }}
-                  disabled={isPartnerFinalized}
-                  title={isPartnerFinalized ? finalizedHint : undefined}
-                  style={{
-                    ...iStyle,
-                    fontVariantNumeric: 'tabular-nums',
-                    ...(isPartnerFinalized ? { background: '#f1f5f9', color: 'var(--gc-text-3)', cursor: 'not-allowed' } : null),
-                  }}
-                  onFocus={focusH} onBlur={blurColor} />
-                <div className="mt-2">
-                  <FinalizedPayBanner
-                    driverName={partner.driverName}
-                    pickupIso={partner.start}
-                    driverPay={partner.driverPay}
-                  />
-                </div>
-              </Field>
-            </div>
-          );
-        })()}
+        {/* Relay-only: one Driver Pay input per leg. Sit right below
+            the (now read-only) Total Driver Pay tile so the parts and
+            the sum stay visually grouped. Leg 1 goes to
+            primary.driverPay (the same draft field solo loads write);
+            every other leg routes through onChangeLegPay keyed by its
+            event id. */}
+        {section === 'financial' && isRelayLoad && (
+          <div className="mt-4 grid grid-cols-2 gap-4">
+            {legs.map((leg, i) => (
+              <LegPayField
+                key={leg.id}
+                leg={leg}
+                label={`${legLabel(i, legs.length)} Pay`}
+                loadPrice={primary.loadPrice}
+                iStyle={iStyle}
+                onFocus={focusH}
+                onCommit={(value) => {
+                  if (i === 0) onChange({ driverPay: value as unknown as number } as Partial<Load>);
+                  else onChangeLegPay(leg.id, value);
+                }}
+              />
+            ))}
+          </div>
+        )}
 
         {/* Accessorials editor — same data model as the modal:
             category select, description, amount, billable toggle,
@@ -1538,14 +1563,15 @@ function LoadFormPane({
               onChange={(next) => onChange({ accessorials: next })}
               iStyle={iStyle}
               payOpts={(() => {
-                // Drivers eligible for an accessorial payroll line.
-                // Primary leg's driver first; relay partner's second
-                // (deduped). Empty list when neither leg has a driver —
-                // the toggle still works, the dropdown just hides.
+                // Drivers eligible for an accessorial payroll line —
+                // every leg's driver in leg order, deduped. Empty list
+                // when no leg has a driver — the toggle still works,
+                // the dropdown just hides.
                 const opts: string[] = [];
-                if (primary.driverName) opts.push(primary.driverName);
-                if (partner?.driverName && !opts.includes(partner.driverName)) {
-                  opts.push(partner.driverName);
+                for (const leg of legs) {
+                  if (leg.driverName && !opts.includes(leg.driverName)) {
+                    opts.push(leg.driverName);
+                  }
                 }
                 return opts;
               })()}
@@ -1622,13 +1648,13 @@ function LoadFormPane({
 
       {/* ── Assignment (always rendered first, above the user-ordered
           sections — matches EventModal's pinning of driver/asset above
-          the load info). On relay loads the labels switch to "Pickup
-          Driver / Pickup Truck" so the relay block below can carry the
-          delivery pair without ambiguity. */}
+          the load info). On relay loads the labels switch to "Leg 1 ·
+          Pickup Driver / Truck" so the Relay Legs card below can carry
+          the remaining legs without ambiguity. */}
       <ModalSection title="Assignment" first>
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <Field label={partner ? 'Pickup Driver' : 'Driver'}>
+            <Field label={isRelayLoad ? `${legLabel(0, legs.length)} Driver` : 'Driver'}>
               {/* Locked — driver assignment is event-level. Mouse-down
                   flashes the calendar hint; the select itself is
                   pointer-events: none via the wrapper so the click
@@ -1644,7 +1670,7 @@ function LoadFormPane({
               <DriverPhoneCopy phone={primaryDriver.phone} />
             )}
           </div>
-          <Field label={partner ? 'Pickup Truck' : 'Truck'}>
+          <Field label={isRelayLoad ? `${legLabel(0, legs.length)} Truck` : 'Truck'}>
             <input type="text"
               value={truckLabel(assetById.get(primary.assetId))}
               placeholder="— Unassigned —"

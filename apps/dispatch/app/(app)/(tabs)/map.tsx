@@ -743,7 +743,7 @@ export default function MapScreen() {
                           {l.title}
                         </Text>
                         {isNonRev ? <NonRevChip size="small" /> : null}
-                        {l.relayRole ? <RelayChip role={l.relayRole} size="small" /> : null}
+                        {l.relayRole ? <RelayChip load={l} size="small" /> : null}
                       </View>
                       {l.driverName ? (
                         <Text style={[txt(600), { fontSize: 12, color: "#3c4043", marginTop: 2 }]} numberOfLines={1}>
