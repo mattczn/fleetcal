@@ -122,11 +122,19 @@ export function LoadCard({ load }: Props) {
   // Pending dispatcher nudges (load_notifications WHERE acknowledged_at IS NULL).
   const pendingCount = (load.pendingNotificationKinds ?? []).length;
 
-  // Delivered-without-POD warning (skips TONU, non-rev, and every
-  // non-final relay leg — only the final leg is responsible for the POD).
+  // Delivered-without-POD warning (skips TONU and non-rev).
+  //
+  // A leg that ends by dropping the trailer at a BARE relay point has no
+  // paperwork to collect — nobody signs for a yard drop — so it's exempt.
+  // But a handoff can now sit on a real stop: "leg 1 delivers in
+  // Hurricane and hands off there" is a genuine delivery that needs a
+  // POD, so only the bare-relay-point case is skipped. Exempting every
+  // leg ending at a handoff would silently stop nagging for real
+  // deliveries.
   const podCount = load.documentCounts?.pod ?? 0;
+  const endsAtBareRelayPoint = delivery ? isRelayPoint(delivery) : false;
   const missingPaperwork =
-    load.status === "delivered" && !load.isTonu && !isNonRev && !endsAtHandoff && podCount === 0;
+    load.status === "delivered" && !load.isTonu && !isNonRev && !endsAtBareRelayPoint && podCount === 0;
 
   const { data: orgSettings } = useQuery({
     queryKey: ["org-settings", driver?.orgId],
