@@ -7,7 +7,7 @@
  * leg (driver, truck, per-leg driver pay with % chip + FinalizedPayBanner,
  * computed leg miles + revenue share) with a handoff divider between
  * consecutive legs showing the relay point, drop/pickup times, handoff
- * photos, and a per-handoff "Remove split" (undo) affordance.
+ * photos, and a per-handoff "Remove leg" (undo) affordance.
  *
  * The component is presentational: EventModal owns all state and passes
  * view models down. The leg card for the leg currently open in the modal
@@ -388,7 +388,7 @@ export default function RelayLegsEditor({
                       style={confirming ? { background: '#d93025', color: 'white', border: 'none', cursor: 'pointer' } : { color: '#d93025', background: 'transparent', border: 'none', cursor: 'pointer' }}>
                       {confirming
                         ? (handoff.isDraft ? 'Confirm cancel?' : 'Confirm remove?')
-                        : (handoff.isDraft ? 'Cancel split' : 'Remove split')}
+                        : (handoff.isDraft ? 'Cancel leg' : 'Remove leg')}
                     </button>
                   )}
                 </div>

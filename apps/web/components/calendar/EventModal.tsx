@@ -44,6 +44,22 @@ import CheckCallsSection from '@/components/calendar/CheckCallsSection';
 
 const RELAY_COLOR = '#7c3aed';
 
+/**
+ * One entry of the leg plan — the ordered list of legs the dispatcher
+ * is building. `eventId` is the persisted event this leg IS; absent
+ * means a genuinely new leg. `key` is a stable local id so React keys
+ * and the per-leg edit buffers survive re-renders and reordering.
+ */
+interface PlannedLeg {
+  key:      string;
+  eventId?: string;
+}
+
+/** Build the initial plan from the load's persisted legs, in leg order. */
+function planFromLegs(legs: Array<{ id: string }>): PlannedLeg[] {
+  return legs.map(l => ({ key: l.id, eventId: l.id }));
+}
+
 function driverDisplayName(d: Driver): string {
   const full = `${d.firstName ?? ''} ${d.lastName ?? ''}`.trim();
   return full || d.name;
@@ -2256,6 +2272,23 @@ export default function EventModal() {
    *  flips immediately, so the second click bails. */
   const pendingSplitLockRef = useRef(false);
 
+  // ── Leg plan (identity follows the leg, never the index) ───────────
+  //
+  // The ordered list of legs the dispatcher is building, with each
+  // entry's link to the persisted event it IS. Handoff operations
+  // MUTATE this plan; it is rebuilt only when the modal opens or after
+  // a successful reconcile — never re-derived per render.
+  //
+  // Deriving leg→event from array position (the old `relayLegs[i]`) is
+  // what corrupted Matt's load: remove a handoff and every later leg
+  // shifts down a slot, so an event silently reattaches to a different
+  // route segment while leg count and handoff count stay consistent.
+  const [legPlan, setLegPlan] = useState<PlannedLeg[]>([]);
+  /** eventIds freed by a merge. They are soft-deleted on save and must
+   *  NEVER be handed to a leg created later — remove-then-add is
+   *  exactly the sequence that reattached the wrong driver. */
+  const [releasedEventIds, setReleasedEventIds] = useState<string[]>([]);
+
   const isExistingRelayLeg = isEdit && !!relayRole;
 
   // ── Leg builder ────────────────────────────────────────────────────
@@ -2266,6 +2299,18 @@ export default function EventModal() {
   // Create mode keeps the draftLegs + POST /v1/loads path.
   const currentEv = isEdit && modalEventId ? events.find(e => e.id === modalEventId) : undefined;
   const isLegBuilder = isEdit && eventKind === 'revenue' && !!currentEv?.loadId && !isBatch;
+  // Create mode gets the SAME builder affordances (rail, LEG tags,
+  // per-stop handoff toggle, between-stops insert rows) so the surface
+  // looks and behaves identically before and after the first save.
+  // It can't hit the identity-drift bug class: there are no persisted
+  // events, so nothing can be soft-deleted or mis-mapped — the worst
+  // case is a driver on the wrong draft leg, visible before saving.
+  // Its ordered leg list is `draftLegs` (leg 0 is the form itself),
+  // which is already a keyed array — the plan minus eventId — so the
+  // edit path's legPlan machinery is deliberately left untouched.
+  const isCreateLegBuilder = !isEdit && eventKind === 'revenue' && !isBatch;
+  /** Whether the builder affordances render at all (either mode). */
+  const showLegBuilderUi = isLegBuilder || isCreateLegBuilder;
   const boundaryIdxs = useMemo(() => handoffIndexes(stops), [stops]);
   /** Leg count implied by the CURRENT stop list (what Apply would write). */
   const derivedLegCount = boundaryIdxs.length + 1;
@@ -2498,13 +2543,14 @@ export default function EventModal() {
   };
 
   useEffect(() => {
-    if (!modalOpen) { setConfirmDel(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setRateConOriginal(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setOtherLegMiles({}); setShowDriverSummary(false); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setLoadInvoices([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); setInternalNotes([]); setOriginalInternalNotes([]); setNoteComposer(''); setNoteComposerOpen(false); setPendingNewBroker(null); setLegPays({}); setLegEdits({}); setDraftLegs([]); setPendingSplitStopId(null); setPendingSplitTargetId(null); pendingSplitLockRef.current = false; setSuggestAssetSwap(null); setSuggestDriverSwap(null); return; }
+    if (!modalOpen) { setConfirmDel(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setRateConOriginal(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setOtherLegMiles({}); setShowDriverSummary(false); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setLoadInvoices([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); setInternalNotes([]); setOriginalInternalNotes([]); setNoteComposer(''); setNoteComposerOpen(false); setPendingNewBroker(null); setLegPays({}); setLegEdits({}); setDraftLegs([]); setPendingSplitStopId(null); setPendingSplitTargetId(null); pendingSplitLockRef.current = false; setLegPlan([]); setReleasedEventIds([]); setSuggestAssetSwap(null); setSuggestDriverSwap(null); return; }
     setParseState('idle'); setParseError('');
     setRateConPdf(undefined); setRateConOriginal(undefined); setShowPdfViewer(false); setShowMapPanel(modalShowMap);
     setIsDirty(false); setShowSavePrompt(false);
     setRelayGroupId(undefined); setRelayRole(undefined);
     setLegPays({}); setLegEdits({}); setDraftLegs([]); setPendingSplitStopId(null); setPendingSplitTargetId(null);
     pendingSplitLockRef.current = false;
+    setLegPlan([]); setReleasedEventIds([]);
     setAccessorials([]);
     // Internal notes are scoped to a single load — never carry across
     // duplicate / +1 Week / drag-create transitions. The edit branch
@@ -2704,6 +2750,34 @@ export default function EventModal() {
     setPendingWorkOrderLinks(prefillWorkOrderLinkIds ?? []);
   }, [modalOpen, modalEventId, batchIndex]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Seed the leg plan from the load's persisted legs. Runs when the
+  // modal opens (plan empty) and when a late leg backfill lands while
+  // the dispatcher hasn't started editing structure yet — never once
+  // the plan diverges from the persisted set, because from that point
+  // the plan IS the source of truth for leg identity.
+  useEffect(() => {
+    if (!modalOpen || !isLegBuilder) return;
+    if (relayLegs.length === 0) return;
+    setLegPlan(prev => {
+      if (prev.length === 0) return planFromLegs(relayLegs);
+      // Structure untouched so far (same events, same order) → refresh
+      // in place so a backfilled sibling leg joins the plan.
+      const prevIds = prev.map(p => p.eventId ?? '').join(',');
+      const liveIds = relayLegs.map(l => l.id).join(',');
+      if (prevIds === liveIds) return prev;
+      // Only adopt the live set when the dispatcher hasn't touched
+      // structure yet AND the arrival is a strict superset (a sibling
+      // leg finished loading). Any edit in progress wins — the plan is
+      // the source of truth for identity from the first mutation on.
+      const planIsPristine = prev.every(p => p.eventId) && releasedEventIds.length === 0;
+      const isBackfill = planIsPristine
+        && relayLegs.length > prev.length
+        && prev.every(p => relayLegs.some(l => l.id === p.eventId));
+      return isBackfill ? planFromLegs(relayLegs) : prev;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modalOpen, isLegBuilder, relayLegs.map(l => l.id).join(','), releasedEventIds.length]);
+
   // Seed per-leg pay from each leg's stored driver_pay as legs land in
   // the store (including the async whole-load backfill above). Only
   // ADDS missing keys — a value the dispatcher already typed (even a
@@ -2725,7 +2799,7 @@ export default function EventModal() {
   // stop trash icon, the split can no longer be saved — treat it as a
   // cancel: drop the draft leg and release the lock so the "+ Add
   // handoff" affordances come back. Without this, pendingSplitStopId
-  // dangles and Save would keep erroring until Cancel split was found.
+  // dangles and Save would keep erroring until Cancel leg was found.
   useEffect(() => {
     if (!pendingSplitStopId) return;
     if (stops.some(s => s.id === pendingSplitStopId)) return;
@@ -3204,7 +3278,17 @@ export default function EventModal() {
       return v === '' || v == null ? undefined : v;
     };
 
-    if (isLegBuilder && derivedLegCount !== relayLegs.length) {
+    // Structure changed = the PLAN diverges from the persisted legs.
+    // Counting legs is not enough: remove-a-handoff-then-add-one leaves
+    // the count identical while one event is released and one leg is
+    // brand new — the exact sequence that silently corrupted a load.
+    const legStructureChanged = isLegBuilder && (
+      legPlan.length !== relayLegs.length ||
+      releasedEventIds.length > 0 ||
+      legPlan.some(p => !p.eventId) ||
+      derivedLegCount !== relayLegs.length
+    );
+    if (legStructureChanged) {
       // ── Leg structure changed → atomic reconcile ───────────────────
       // The Save button and the legs editor's "Apply N legs" run the
       // same path, so a dispatcher who edits handoffs and hits Save
@@ -3239,7 +3323,7 @@ export default function EventModal() {
         // leg) or stay as-is (other legs).
         const start = i === 0
           ? (isViewed ? `${startDate}T${startTime}` : leg.start)
-          : (relayMarkers[i - 1]?.apptEnd ?? relayMarkers[i - 1]?.apptStart
+          : (handoffTimesOf(relayMarkers[i - 1]).pickup ?? handoffTimesOf(relayMarkers[i - 1]).drop
               ?? (isViewed ? `${startDate}T${startTime}` : leg.start));
         const end = i === relayLegs.length - 1
           ? (isViewed ? `${endDate}T${endTime}` : leg.end)
@@ -3345,22 +3429,32 @@ export default function EventModal() {
 
     } else if (draftLegs.length > 0) {
       // ── Create-mode splits (or single→relay conversion in edit) ────
-      // Marker invariant: one relay point per handoff being added.
-      // THIS guard was the silent no-op behind "Save does nothing" —
-      // orphan markers (stop-type dropdown / double-inserted) made the
-      // counts diverge and doSave bailed without a word.
+      // ── Create-mode identity invariant ──────────────────────────────
+      // Boundary m opens leg m+1, i.e. draftLegs[m]. Every insert
+      // splices the draft leg at the boundary's own ordinal and every
+      // removal drops exactly that index, so the two arrays stay
+      // aligned by construction — this asserts it before the POST goes
+      // out, since a drift would put a driver on the wrong route. (It
+      // was also the silent no-op behind an earlier "Save does
+      // nothing" report, when orphan markers made the counts diverge.)
       if (relayMarkers.length !== draftLegs.length) {
         showSaveBlocked(
           relayMarkers.length > draftLegs.length
-            ? `This load has ${relayMarkers.length} relay points but only ${draftLegs.length} new leg${draftLegs.length === 1 ? '' : 's'}. ` +
-              'Remove the extra relay points with the trash icon (or cancel the split and start over), then save again.'
-            : `A relay point is missing for one of the new legs (${relayMarkers.length} relay point${relayMarkers.length === 1 ? '' : 's'} for ${draftLegs.length} new legs). ` +
-              'Cancel the affected split in the relay section and add the handoff again.',
+            ? `This load has ${relayMarkers.length} handoff${relayMarkers.length === 1 ? '' : 's'} but only ${draftLegs.length} added leg${draftLegs.length === 1 ? '' : 's'}. ` +
+              'Remove the extra handoff (trash icon on a relay point, or the handoff toggle on a stop), then save again.'
+            : `A handoff is missing for one of the added legs (${relayMarkers.length} handoff${relayMarkers.length === 1 ? '' : 's'} for ${draftLegs.length} added legs). ` +
+              'Remove the affected leg in the relay section and add the handoff again.',
         );
         return;
       }
-      if (relayMarkers.some(m => !m.apptStart)) {
-        showSaveBlocked('Set the drop time on every relay point (Locations section) before saving.');
+      // Boundaries must sit strictly inside the route — a first or last
+      // handoff would leave a leg with no stops.
+      if (boundaryIdxs.includes(0) || boundaryIdxs.includes(stops.length - 1)) {
+        showSaveBlocked('The first and last stop cannot be handoffs — a handoff needs a leg on each side.');
+        return;
+      }
+      if (relayMarkers.some(m => { const t = handoffTimesOf(m); return !t.drop && !t.pickup; })) {
+        showSaveBlocked('Set the drop time on every handoff (Locations section) before saving.');
         return;
       }
       const rgId = crypto.randomUUID();
@@ -3413,9 +3507,12 @@ export default function EventModal() {
       const legStartOf = (i: number): string =>
         i === 0
           ? `${startDate}T${startTime}`
-          : (relayMarkers[i - 1].apptEnd ?? relayMarkers[i - 1].apptStart!);
+          : (handoffTimesOf(relayMarkers[i - 1]).pickup ?? handoffTimesOf(relayMarkers[i - 1]).drop!);
       const legEndOf = (i: number): string => {
-        if (i < n - 1) return relayMarkers[i].apptStart!;
+        if (i < n - 1) {
+          const t = handoffTimesOf(relayMarkers[i]);
+          return (t.drop ?? t.pickup)!;
+        }
         const lastStartDate = legStartOf(i).split('T')[0];
         const delivEndDate = lastStartDate > endDate ? lastStartDate : endDate;
         return `${delivEndDate}T${endTime}`;
@@ -3775,11 +3872,24 @@ export default function EventModal() {
     const h = relayHandoffViews[handoffIdx];
     if (!h) return;
     if (isLegBuilder) {
-      // Builder: removing a boundary MERGES the two adjacent legs. A
-      // real stop just loses its isHandoff flag (the stop stays on the
-      // route); a bare relay point is deleted outright. Either way the
-      // derived leg list drops one entry and the earlier leg keeps its
-      // eventId + driver by position. Committed by "Apply N legs".
+      // Builder: removing boundary h MERGES plan[h] and plan[h+1] into
+      // one leg that keeps plan[h]'s identity. plan[h+1]'s eventId (if
+      // it had one) is RELEASED — soft-deleted on save and never
+      // reusable by a leg added later.
+      setLegPlan(prev => {
+        if (handoffIdx < 0 || handoffIdx + 1 >= prev.length) return prev;
+        const dropped = prev[handoffIdx + 1];
+        if (dropped.eventId) {
+          setReleasedEventIds(ids => ids.includes(dropped.eventId!) ? ids : [...ids, dropped.eventId!]);
+        }
+        // Drop the merged-away leg's edit buffers so a later add can't
+        // inherit its driver/pay through a recycled key.
+        setLegEdits(e => { const n = { ...e }; delete n[dropped.key]; return n; });
+        setLegPays(p => { const n = { ...p }; delete n[dropped.key]; return n; });
+        return [...prev.slice(0, handoffIdx + 1), ...prev.slice(handoffIdx + 2)];
+      });
+      // A real stop just loses its isHandoff flag (the stop stays on
+      // the route); a bare relay point is deleted outright.
       setStops(prev => {
         const next = isHandoffStop(h.stop) && h.stop.type !== 'relay'
           ? prev.map(s => s.id === h.stop.id
@@ -3792,7 +3902,16 @@ export default function EventModal() {
       return;
     }
     if (h.isDraft) {
-      setStops(prev => prev.filter(s => s.id !== h.stop.id).map((s, i) => ({ ...s, sequence: i + 1 })));
+      // A handoff sitting ON a real stop only loses its flag — the stop
+      // stays on the route. A bare relay point is removed outright.
+      setStops(prev => {
+        const next = isHandoffStop(h.stop) && h.stop.type !== 'relay'
+          ? prev.map(s => s.id === h.stop.id
+              ? { ...s, isHandoff: false, handoffDropAt: undefined, handoffPickupAt: undefined }
+              : s)
+          : prev.filter(s => s.id !== h.stop.id);
+        return next.map((s, i) => ({ ...s, sequence: i + 1 }));
+      });
       if (isExistingRelayLeg || pendingSplitStopId) {
         // Edit mode: the single pending handoff + its draft leg.
         setDraftLegs([]);
@@ -3800,7 +3919,13 @@ export default function EventModal() {
         setPendingSplitTargetId(null);
         pendingSplitLockRef.current = false;
       } else {
-        // Create mode: marker m maps 1:1 to draftLegs[m].
+        // Create mode: boundary m opens leg m+1, i.e. draftLegs[m], so
+        // removing boundary m drops exactly that draft leg — the legs
+        // stay aligned with the markers by construction.
+        const dropped = draftLegs[handoffIdx];
+        if (dropped) {
+          setLegPays(p => { const n = { ...p }; delete n[dropped.key]; return n; });
+        }
         setDraftLegs(prev => prev.filter((_, i) => i !== handoffIdx));
       }
       markDirty();
@@ -3812,25 +3937,27 @@ export default function EventModal() {
     closeModal();
   };
 
-  /** "Add handoff" — generalizes the old single→relay split. Splits the
-   *  named leg in edit mode (per-leg "+" on each card; defaults to the
-   *  viewed leg; one pending handoff per save), or the LAST leg in
-   *  create mode (repeatable: each call appends a leg). */
+  /** "Add handoff" — splits ONE leg by dropping a new relay point at
+   *  the end of its stop window. Identical in create and edit mode:
+   *  the per-leg "+" names the leg; the header "+" targets the viewed
+   *  leg when editing and the LAST leg when creating (so the familiar
+   *  "append another leg" behavior is preserved). Repeatable in both. */
   const addHandoff = (targetLegId?: string) => {
-    // Builder mode (saved load): a handoff is purely a stop-list edit —
-    // insert a relay point at the end of the chosen leg's window and
-    // let the derived leg list pick it up. No pending-split state, no
-    // one-per-save limit: "Apply N legs" reconciles them all at once.
-    if (isLegBuilder) {
+    // Builder affordances (saved OR unsaved load): a handoff is purely
+    // a stop-list edit plus a positional splice into the leg list. No
+    // pending-split state and no one-per-save limit.
+    if (showLegBuilderUi) {
       const targetIdx = targetLegId
         ? Math.max(0, relayLegViews.findIndex(v => v.key === targetLegId || v.eventId === targetLegId))
-        : Math.max(0, relayLegViews.findIndex(v => v.isViewed));
+        : (isEdit
+            ? Math.max(0, relayLegViews.findIndex(v => v.isViewed))
+            : boundaryIdxs.length);   // create: append after the last leg
       const windowEndIdx = targetIdx < boundaryIdxs.length ? boundaryIdxs[targetIdx] : stops.length - 1;
       // Insert before the window's closing stop so the new boundary
       // splits the leg rather than landing outside it. Guard against a
       // 1-stop window (nothing to split).
       const insertAfter = Math.max(0, windowEndIdx - 1);
-      if (windowEndIdx <= (targetIdx === 0 ? 0 : boundaryIdxs[targetIdx - 1])) {
+      if (stops.length < 2 || windowEndIdx <= (targetIdx === 0 ? 0 : boundaryIdxs[targetIdx - 1])) {
         showSaveBlocked('This leg has no room for another handoff — add a stop to it first.');
         return;
       }
@@ -3993,12 +4120,52 @@ export default function EventModal() {
     }
   };
 
+  /** Split planned leg `legIdx` in two. The FIRST half keeps the
+   *  eventId (mirrors the server's split semantics: the target leg
+   *  keeps its identity, its end clamps to the new boundary); the
+   *  SECOND half is genuinely new — it must never inherit an eventId,
+   *  released or otherwise. */
+  const splitPlanAt = (legIdx: number) => {
+    setLegPlan(prev => {
+      const base = prev.length > 0 ? prev : planFromLegs(relayLegs);
+      const i = Math.max(0, Math.min(legIdx, base.length - 1));
+      if (base.length === 0) return base;
+      return [
+        ...base.slice(0, i + 1),
+        { key: `newleg:${crypto.randomUUID()}` },   // no eventId — a new leg
+        ...base.slice(i + 1),
+      ];
+    });
+  };
+
+  /** Which planned leg the stop at `stopIdx` sits in, using the CURRENT
+   *  boundary positions (boundaries strictly before it). */
+  const legIdxForStop = (stopIdx: number) => boundaryIdxs.filter(b => b < stopIdx).length;
+
+  /** Create mode's analogue of splitPlanAt. Boundary ordinal `m` opens
+   *  leg m+1, which is `draftLegs[m]` (leg 0 is the form itself), so a
+   *  new boundary at ordinal m SPLICES a draft leg in at index m —
+   *  never appends. That 1:1 marker↔draftLeg alignment is create
+   *  mode's identity invariant; doSave asserts it before POSTing. */
+  const spliceDraftLegAt = (m: number) => {
+    setDraftLegs(prev => {
+      const at = Math.max(0, Math.min(m, prev.length));
+      // Default to a truck other than the leg being split, plus that
+      // truck's preferred driver — same rule as the edit-path builder.
+      const splitLegAsset = at === 0 ? assetId : (prev[at - 1]?.assetId ?? assetId);
+      const newAsset = assets.find(a => a.id !== splitLegAsset)?.id ?? splitLegAsset;
+      const draft = { key: crypto.randomUUID(), assetId: newAsset, driverName: preferredDriverName(newAsset) };
+      return [...prev.slice(0, at), draft, ...prev.slice(at)];
+    });
+  };
+
   /** Toggle `isHandoff` on an intermediate stop — the leg-builder's
    *  "handoff on a real stop" affordance. Turning it ON seeds the two
    *  handoff times from the stop's own appointment window so the leg
    *  boundaries are valid immediately; turning it OFF merges the two
-   *  adjacent legs (the derived leg list simply loses an entry, and the
-   *  earlier leg's eventId + driver survive by position). */
+   *  adjacent legs (the earlier leg keeps its eventId; the later one's
+   *  is released). Both directions mutate the leg PLAN, so identity
+   *  travels with the leg rather than with its position. */
   const handleToggleStopHandoff = (idx: number) => {
     const stop = stops[idx];
     if (!stop) return;
@@ -4006,6 +4173,16 @@ export default function EventModal() {
       showSaveBlocked('The first and last stop cannot be handoffs — a handoff needs a leg on each side.');
       return;
     }
+    if (stop.isHandoff) {
+      // Turning a boundary off is a merge — route it through the same
+      // path as the divider's "Remove leg" so identity is released
+      // consistently and the confirm/assertions stay in one place.
+      handleRemoveHandoff(boundaryIdxs.indexOf(idx));
+      return;
+    }
+    const newBoundaryOrdinal = legIdxForStop(idx);
+    if (isLegBuilder) splitPlanAt(newBoundaryOrdinal);
+    else if (isCreateLegBuilder) spliceDraftLegAt(newBoundaryOrdinal);
     setStops(prev => prev.map((s, i) => {
       if (i !== idx) return s;
       if (s.isHandoff) {
@@ -4030,6 +4207,11 @@ export default function EventModal() {
     const before = stops[idx];
     const after  = stops[idx + 1];
     if (!before || !after) return;
+    // The new marker lands at idx+1, so it splits the leg containing
+    // that position. Boundaries at or before idx are already behind it.
+    const newBoundaryOrdinal = boundaryIdxs.filter(b => b <= idx).length;
+    if (isLegBuilder) splitPlanAt(newBoundaryOrdinal);
+    else if (isCreateLegBuilder) spliceDraftLegAt(newBoundaryOrdinal);
     const anchor = handoffTimesOf(before).drop ?? before.apptEnd ?? before.apptStart
       ?? `${startDate}T${startTime}`;
     const relayStop: Stop = {
@@ -4049,8 +4231,10 @@ export default function EventModal() {
   // ── Apply N legs (atomic reconcile) ────────────────────────────────
   // Reached from Save when the leg structure changed — the modal's own
   // saving indicator covers the in-flight state.
-  /** Client-side validation mirroring the server's invariants. Returns
-   *  a user-facing message, or null when the payload is sound. */
+  /** Client-side validation mirroring the server's invariants PLUS
+   *  internal consistency assertions on the leg plan. Returns a
+   *  user-facing message, or null when the payload is sound. An
+   *  inconsistent plan must never reach the server. */
   const legsValidationError = (): string | null => {
     if (!currentEv?.loadId) return 'This load has not been saved yet — save it before configuring legs.';
     if (stops.length < 2) return 'Add at least two stops before splitting this load into legs.';
@@ -4059,6 +4243,22 @@ export default function EventModal() {
     }
     if (relayLegViews.length !== boundaryIdxs.length + 1) {
       return `Leg/handoff mismatch: ${boundaryIdxs.length} handoff${boundaryIdxs.length === 1 ? '' : 's'} should give ${boundaryIdxs.length + 1} legs but ${relayLegViews.length} are configured. Remove or add a handoff and try again.`;
+    }
+    // ── Plan-identity assertions (never silently ship a bad mapping) ──
+    if (legPlan.length !== relayLegViews.length) {
+      return 'Internal leg mismatch — close the load without saving and reopen it, then redo the handoff changes.';
+    }
+    const sentIds = relayLegViews.map(l => l.eventId).filter((id): id is string => !!id);
+    if (new Set(sentIds).size !== sentIds.length) {
+      return 'Internal leg mismatch: the same leg is assigned twice. Close the load without saving and reopen it.';
+    }
+    const reusedRelease = sentIds.find(id => releasedEventIds.includes(id));
+    if (reusedRelease) {
+      return 'Internal leg mismatch: a removed leg was reattached. Close the load without saving and reopen it.';
+    }
+    const foreign = sentIds.find(id => !relayLegs.some(l => l.id === id));
+    if (foreign) {
+      return 'Internal leg mismatch: a leg references an event that is not on this load. Close the load without saving and reopen it.';
     }
     const noTruck = relayLegViews.findIndex(l => !l.assetId || !assets.some(a => a.id === l.assetId));
     if (noTruck >= 0) {
@@ -4072,15 +4272,69 @@ export default function EventModal() {
     }
     return null;
   };
-  /** Commit the derived legs in ONE PUT /v1/loads/:id/legs. Existing
-   *  legs keep their eventId by position, new legs omit it, and legs
-   *  that no longer exist are simply absent (server soft-deletes them).
-   *  Returns true when the reconcile landed. */
+
+  /** Legs the pending save would DELETE — persisted legs of this load
+   *  that no longer appear in the plan (released by a merge, or gone
+   *  for any other reason). */
+  const legsBeingRemoved = (): CalendarEvent[] => {
+    const kept = new Set(relayLegViews.map(l => l.eventId).filter(Boolean));
+    return relayLegs.filter(l => !kept.has(l.id));
+  };
+  /** A removal is "drastic" when the leg carries work: a driver, pay, a
+   *  status past `assigned`, or documents keyed to it. Removing an
+   *  untouched leg is routine and needs no dialog. */
+  const isProgressedLeg = (leg: CalendarEvent): boolean => {
+    const beyondAssigned = !!leg.status && !['scheduled', 'assigned'].includes(leg.status);
+    const hasDocs = loadDocuments.some(d => (d as { eventId?: string }).eventId === leg.id);
+    return !!leg.driverName || !!leg.driverId || (leg.driverPay ?? 0) > 0 || beyondAssigned || hasDocs;
+  };
+
+  const [legRemovalConfirm, setLegRemovalConfirm] = useState<{ message: string } | null>(null);
+  const legRemovalResolver = useRef<((ok: boolean) => void) | null>(null);
+  /** Describe exactly what a destructive save is about to drop, then
+   *  wait for the dispatcher. Resolves false on cancel. */
+  const confirmLegRemoval = (removed: CalendarEvent[]): Promise<boolean> => {
+    const describe = (leg: CalendarEvent) => {
+      const idx = relayLegs.findIndex(l => l.id === leg.id);
+      const label = legLabel(idx >= 0 ? idx : 0, relayLegs.length) || `Leg ${(idx >= 0 ? idx : 0) + 1}`;
+      const truck = assets.find(a => a.id === leg.assetId);
+      const bits = [
+        leg.driverName || 'no driver',
+        truck ? (truck.unit ? `${truck.name} - ${truck.unit}` : truck.name) : 'no truck',
+        (leg.driverPay ?? 0) > 0 ? `$${(leg.driverPay as number).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null,
+      ].filter(Boolean);
+      return `${label} (${bits.join(', ')})`;
+    };
+    const list = removed.map(describe).join(' and ');
+    return new Promise<boolean>(resolve => {
+      legRemovalResolver.current = resolve;
+      setLegRemovalConfirm({
+        message: `Saving removes ${list}. Its pay and paperwork will be detached from the load. Continue?`,
+      });
+    });
+  };
+
+  /** Commit the planned legs in ONE PUT /v1/loads/:id/legs. Identity
+   *  comes from the leg PLAN: entries with an eventId update that leg
+   *  in place, entries without create one, and persisted legs absent
+   *  from the array are soft-deleted server-side. Returns true when
+   *  the reconcile landed. */
   const applyLegsNow = async (): Promise<boolean> => {
     const blocked = legsValidationError();
     if (blocked) { showSaveBlocked(blocked); return false; }
     const loadId = currentEv?.loadId;
     if (!loadId) return false;
+    // Drastic-change gate: name what is going away before doing it.
+    // The server independently refuses (409 leg_removal_blocked) unless
+    // `force` is set, so an unconfirmed destructive save can't slip by.
+    const removed = legsBeingRemoved();
+    const progressed = removed.filter(isProgressedLeg);
+    let force = false;
+    if (progressed.length > 0) {
+      const ok = await confirmLegRemoval(progressed);
+      if (!ok) return false;
+      force = true;
+    }
     try {
       await configureLegs(loadId, {
         stops,
@@ -4099,10 +4353,17 @@ export default function EventModal() {
             trailerId: l.isViewed ? (linkedTrailerId ?? null) : undefined,
           };
         }),
+        ...(force ? { force: true } : {}),
       });
+      // Reconcile landed — the plan is rebuilt from the server's
+      // canonical legs on the next open; clear the release ledger so a
+      // stale id can never influence a later edit.
+      setReleasedEventIds([]);
+      setLegPlan([]);
       return true;
     } catch {
-      // configureLegs already toasted the failure.
+      // configureLegs already toasted the failure (including the
+      // server's leg_removal_blocked message).
       return false;
     }
   };
@@ -4617,20 +4878,25 @@ export default function EventModal() {
   const relayLegViews: RelayLegView[] = (() => {
     if (!isRelayContext) return [];
     if (isLegBuilder) {
-      // Builder: one view per DERIVED leg. Position i reuses persisted
-      // leg i (so its eventId, driver/truck and pay carry over); legs
-      // beyond the persisted count are new and get a positional key.
-      return Array.from({ length: derivedLegCount }, (_, i) => {
-        const existing = relayLegs[i];
-        const key = existing?.id ?? `newleg:${i}`;
+      // Builder: one view per PLANNED leg. Identity (which persisted
+      // event a leg is) comes ONLY from the plan — never from array
+      // position against relayLegs, which is what silently reattached
+      // drivers to the wrong route segment.
+      return legPlan.map((planned, i) => {
+        const existing = planned.eventId
+          ? relayLegs.find(l => l.id === planned.eventId)
+          : undefined;
+        const key = planned.key;
         const isViewed = !!existing && existing.id === modalEventId;
         const edits = legEdits[key] ?? {};
         // A brand-new leg defaults to a truck other than the previous
         // leg's, with that truck's preferred driver.
+        const prevKey = i > 0 ? legPlan[i - 1].key : undefined;
+        const prevExisting = i > 0 && legPlan[i - 1].eventId
+          ? relayLegs.find(l => l.id === legPlan[i - 1].eventId)
+          : undefined;
         const prevAssetId = i > 0
-          ? (legEdits[relayLegs[i - 1]?.id ?? `newleg:${i - 1}`]?.assetId
-              ?? relayLegs[i - 1]?.assetId
-              ?? assetId)
+          ? ((prevKey ? legEdits[prevKey]?.assetId : undefined) ?? prevExisting?.assetId ?? assetId)
           : assetId;
         const fallbackAsset = existing?.assetId
           ?? assets.find(a => a.id !== prevAssetId)?.id
@@ -4666,7 +4932,9 @@ export default function EventModal() {
       ...draftLegs.map((d, i) => ({
         key: d.key, legIndex: i + 1, assetId: d.assetId, driverName: d.driverName,
         pay: legPays[d.key] ?? '',
-        startIso: relayMarkersInStops[i]?.apptEnd ?? relayMarkersInStops[i]?.apptStart,
+        startIso: relayMarkersInStops[i]
+          ? (handoffTimesOf(relayMarkersInStops[i]).pickup ?? handoffTimesOf(relayMarkersInStops[i]).drop)
+          : undefined,
         miles: draftLegMilesEstimate(i + 1), isViewed: false, isDraft: true as const,
       })),
     ];
@@ -4684,10 +4952,10 @@ export default function EventModal() {
   const relayHandoffViews: RelayHandoffView[] = isRelayContext
     ? relayMarkersInStops.map((stop, m) => ({
         stop,
-        // In builder mode a boundary is "draft" until Apply writes it —
-        // i.e. whenever it implies a leg the load doesn't have yet.
+        // In builder mode a boundary is "draft" until the save writes
+        // it — i.e. when the leg it opens has no event yet.
         isDraft: isLegBuilder
-          ? derivedLegCount > relayLegs.length
+          ? !relayLegViews[m + 1]?.eventId
           : (isExistingRelayLeg ? stop.id === pendingSplitStopId : true),
         keepEventId: relayLegViews[m]?.eventId,
         mergeEventId: relayLegViews[m + 1]?.eventId,
@@ -6412,14 +6680,17 @@ export default function EventModal() {
                         // existing relay each leg card gets its own "+"
                         // instead (split THAT leg), gated to one pending
                         // handoff per save.
+                        // Header "+" — kept for create mode (appends
+                        // after the last leg) and the legacy split flow.
                         onAddHandoff={!isBatch && !isLegBuilder && !isExistingRelayLeg && !(isEdit && pendingSplitStopId) ? () => addHandoff() : undefined}
-                        onAddHandoffForLeg={!isBatch && !isReadOnly && (isLegBuilder || (isExistingRelayLeg && !pendingSplitStopId))
+                        // Per-leg "+" — splits THAT leg, in either mode.
+                        onAddHandoffForLeg={!isBatch && !isReadOnly && (showLegBuilderUi || (isExistingRelayLeg && !pendingSplitStopId))
                           ? (legKey) => addHandoff(legKey)
                           : undefined}
                         onRemoveHandoff={handleRemoveHandoff}
                         // Builder mode: any leg can be split again before
                         // saving; Save reconciles the whole structure.
-                        builderMode={isLegBuilder && !isReadOnly}
+                        builderMode={showLegBuilderUi && !isReadOnly}
                       />
                     </div>
                   )}
@@ -6454,7 +6725,7 @@ export default function EventModal() {
                       legDriverNames={isRelayContext ? relayLegViews.map(v => v.driverName || undefined) : undefined}
                       // Leg-builder affordances: per-stop handoff toggle,
                       // leg rail + tags, and insert-between rows.
-                      legBuilder={isLegBuilder && !isReadOnly}
+                      legBuilder={showLegBuilderUi && !isReadOnly}
                       onToggleHandoff={handleToggleStopHandoff}
                       onInsertHandoffAfter={handleInsertHandoffAfter}
                       eventStart={startDate && startTime ? `${startDate}T${startTime}` : undefined}
@@ -7139,6 +7410,24 @@ export default function EventModal() {
         the board. The "keep load record" path was removed (we now
         only support Mark Cancelled + Move to Recently Deleted), so
         this collapsed to a single confirm. */}
+    {/* Drastic-change gate for the leg reconcile. Appears ONLY when a
+        save would delete a leg that carries work (driver, pay, status
+        past assigned, or documents) — routine removal of an untouched
+        leg saves without interruption. Confirming is what sets
+        `force: true` on the PUT. */}
+    {legRemovalConfirm && (
+      <ConfirmDialog
+        title="Remove a leg from this load?"
+        message={legRemovalConfirm.message}
+        confirmLabel="Remove leg and save"
+        cancelLabel="Keep the leg"
+        destructive
+        zIndex={240}
+        onCancel={() => { setLegRemovalConfirm(null); legRemovalResolver.current?.(false); legRemovalResolver.current = null; }}
+        onConfirm={() => { setLegRemovalConfirm(null); legRemovalResolver.current?.(true); legRemovalResolver.current = null; }}
+      />
+    )}
+
     {removeDialogOpen && (
       <ConfirmDialog
         title="Move to Recently Deleted?"

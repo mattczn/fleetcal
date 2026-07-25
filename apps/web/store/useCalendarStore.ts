@@ -2423,7 +2423,20 @@ export const useCalendarStore = create<CalendarStore>()(
       set({ loadEditTick: get().loadEditTick + 1 });
     } catch (err) {
       console.error('configureLegs:', err);
-      errorToast(err, 'Legs did not save');
+      // The API's refusal detail rides in RailwayError.detail, not in
+      // .message (which is just "PUT … → 409"). Unwrap it so the
+      // server's own wording reaches the dispatcher verbatim — notably
+      // `leg_removal_blocked`, which names the leg that would be lost.
+      const e = err as { status?: number; detail?: unknown; message?: string };
+      const d = (typeof e.detail === 'object' && e.detail !== null)
+        ? e.detail as { error?: string; detail?: string; message?: string }
+        : undefined;
+      const serverMsg = d?.detail ?? d?.message;
+      if (serverMsg) {
+        errorToast({ status: e.status ?? 400, message: serverMsg }, 'Legs did not save');
+      } else {
+        errorToast(err, 'Legs did not save');
+      }
       throw err;
     }
   },
