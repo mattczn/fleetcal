@@ -4512,6 +4512,17 @@ export default function EventModal() {
     markDirty();
   };
 
+  /** Edit the handoff STOP itself (facility, address, and whatever the
+   *  shared address input geocodes onto it — lat/lng/timezone/status).
+   *  Writes straight to that stop, exactly as the Locations row does,
+   *  so leg miles and the driver app see identical data. */
+  const handleChangeHandoffStop = (handoffIdx: number, patch: Partial<Stop>) => {
+    const stopIdx = boundaryIdxs[handoffIdx];
+    if (stopIdx == null) return;
+    setStops(prev => prev.map((s, i) => (i === stopIdx ? { ...s, ...patch } : s)));
+    markDirty();
+  };
+
   /** Re-pull the load's documents after a handoff-photo upload. */
   const refreshHandoffDocs = async () => {
     const lid = currentEv?.loadId;
@@ -6858,6 +6869,7 @@ export default function EventModal() {
                         // Handoff times live here now — the Locations
                         // rows mirror them read-only.
                         onChangeHandoffTimes={!isReadOnly ? handleChangeHandoffTimes : undefined}
+                        onChangeHandoffStop={!isReadOnly ? handleChangeHandoffStop : undefined}
                         // Builder mode: any leg can be split again before
                         // saving; Save reconciles the whole structure.
                         builderMode={showLegBuilderUi && !isReadOnly}

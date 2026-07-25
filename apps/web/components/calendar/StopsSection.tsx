@@ -1,12 +1,11 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { GripVertical, Plus, Trash2, MapPin, CheckCircle2, AlertCircle, Clock, LocateFixed, ArrowLeftRight, Bookmark } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { GripVertical, Plus, Trash2, MapPin, AlertCircle, ArrowLeftRight } from 'lucide-react';
 import { isHandoffStop, handoffIndexes } from '@fleetcal/types';
-import Tooltip from '@/components/ui/Tooltip';
+import { StopAddressFields } from './StopAddressFields';
 import type { Stop, StopType } from '@/lib/types';
 import { useCalendarStore } from '@/store/useCalendarStore';
-import { railway } from '@/lib/railway';
 import DatePicker from './DatePicker';
 import TimePicker from './TimePicker';
 import { naiveHomeToView, naiveViewToHome } from '@/lib/time-utils';
@@ -252,92 +251,6 @@ const TYPE_LABELS: Record<StopType, string> = {
   pickup: 'Pickup', delivery: 'Delivery', drop: 'Drop Trailer', drop_hook: 'Drop & Hook', stop: 'Stop', relay: 'Relay Point',
 };
 
-function GeocodeIndicator({ status }: { status: Stop['geocodeStatus'] }) {
-  // The green check is the ONLY signal that an address was actually
-  // accepted by Google Places — anything else means the stop won't
-  // route, won't surface on the map, and won't auto-fill the timezone.
-  // Make that consequence explicit on hover so dispatchers don't
-  // ship loads with raw text addresses by accident.
-  const tip = status === 'success' ? (
-    <>
-      <strong>Address verified.</strong> Stop is geocoded — it&rsquo;ll route on the map, save lat/lng, and pick up the correct timezone.
-    </>
-  ) : status === 'failed' ? (
-    <>
-      <strong>Geocoding failed.</strong> Google couldn&rsquo;t resolve this address — the stop is <strong>not saved</strong> as a real location.
-      <div style={{ marginTop: 6 }}>
-        Fix: clear the field and start typing the address again, then pick one of the <strong>Google suggestions</strong> from the dropdown. The check turns green once Google accepts it.
-      </div>
-    </>
-  ) : (
-    <>
-      <strong>Not yet geocoded.</strong> This address isn&rsquo;t saved as a real location yet — no lat/lng, no map route, no auto timezone.
-      <div style={{ marginTop: 6 }}>
-        Fix: type the address into the field and pick one of the <strong>Google suggestions</strong> that appears in the dropdown below. The check turns green once Google accepts it.
-      </div>
-    </>
-  );
-  const icon = status === 'success'
-    ? <CheckCircle2 size={13} style={{ color: '#16a34a', flexShrink: 0 }} />
-    : status === 'failed'
-      ? <AlertCircle  size={13} style={{ color: '#dc2626', flexShrink: 0 }} />
-      : <Clock        size={13} style={{ color: '#9ca3af', flexShrink: 0 }} />;
-  return (
-    <Tooltip content={tip}>
-      <span style={{ cursor: 'help' }}>{icon}</span>
-    </Tooltip>
-  );
-}
-
-interface StopSuggestion {
-  key: string;
-  facilityName?: string;
-  address?: string;
-  lat?: number;
-  lng?: number;
-  timezone?: string;
-  count: number;
-  isSaved?: boolean;
-  savedName?: string;
-  /** Came from the org-wide history lookup rather than the loaded
-   *  calendar window. Ranked below local matches but still offered. */
-  isRemote?: boolean;
-}
-
-/** How many facility/address suggestions to show at once. The calendar
- *  store only holds a ~2-week window, so local matches alone are a thin
- *  slice of where the fleet actually goes — the org-history lookup fills
- *  the rest and this cap has to leave room for it. */
-const SUGGESTION_LIMIT = 10;
-
-function suggestionKey(facilityName?: string, address?: string): string {
-  return `${(facilityName ?? '').toLowerCase().trim()}||${(address ?? '').toLowerCase().trim()}`;
-}
-
-/**
- * Rank matches for a query: prefix hits on the facility name first (what
- * you get when you type "ALB" for ALBERTSONS), then other name hits, then
- * address-only hits. Saved locations outrank history, and local history
- * outranks the org-wide lookup only as a tiebreak — freshness of the
- * calendar window is not a signal of relevance.
- */
-function rankSuggestions(list: StopSuggestion[], q: string): StopSuggestion[] {
-  const score = (s: StopSuggestion): number => {
-    const name = (s.facilityName ?? '').toLowerCase();
-    const addr = (s.address ?? '').toLowerCase();
-    if (name.startsWith(q)) return 0;
-    if (name.includes(q))   return 1;
-    if (addr.startsWith(q)) return 2;
-    return 3;
-  };
-  return [...list].sort((a, b) => {
-    if (a.isSaved !== b.isSaved) return a.isSaved ? -1 : 1;
-    const sa = score(a), sb = score(b);
-    if (sa !== sb) return sa - sb;
-    if (a.isRemote !== b.isRemote) return a.isRemote ? 1 : -1;
-    return b.count - a.count;
-  });
-}
 
 // Distance in miles between two lat/lng points (haversine).
 function distanceMiles(lat1: number, lng1: number, lat2: number, lng2: number): number {
@@ -393,9 +306,6 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
   const [dragActive, setDragActive] = useState(false);
   const [confirmDeleteIdx, setConfirmDeleteIdx] = useState<number | null>(null);
   const [expandedInstructions, setExpandedInstructions] = useState<Set<string>>(new Set());
-  const [manualCoordIdx, setManualCoordIdx] = useState<number | null>(null);
-  const [manualLat, setManualLat] = useState('');
-  const [manualLng, setManualLng] = useState('');
   const [relayTimeError, setRelayTimeError] = useState<string | null>(null);
   const relayErrTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -428,192 +338,6 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Build a deduplicated, frequency-ranked list combining saved locations + historical stops
-  const historicalStops = useMemo<StopSuggestion[]>(() => {
-    const map = new Map<string, StopSuggestion>();
-
-    // Seed with saved locations first (always included, marked as saved)
-    for (const loc of savedLocations) {
-      const key = `${loc.name.toLowerCase().trim()}||${(loc.address ?? '').toLowerCase().trim()}`;
-      map.set(key, {
-        key,
-        facilityName: loc.name,
-        address: loc.address,
-        lat: loc.lat,
-        lng: loc.lng,
-        timezone: loc.timezone,
-        count: 0,
-        isSaved: true,
-      });
-    }
-
-    // Merge in historical event stops, incrementing count
-    for (const ev of allEvents) {
-      for (const s of ev.stops ?? []) {
-        if (!s.address && !s.facilityName) continue;
-        const key = `${(s.facilityName ?? '').toLowerCase().trim()}||${(s.address ?? '').toLowerCase().trim()}`;
-        const existing = map.get(key);
-        if (existing) {
-          existing.count++;
-        } else {
-          map.set(key, {
-            key,
-            facilityName: s.facilityName,
-            address: s.address,
-            lat: s.lat,
-            lng: s.lng,
-            timezone: s.timezone,
-            count: 1,
-            isSaved: false,
-          });
-        }
-      }
-    }
-
-    // Saved locations first, then by frequency
-    return Array.from(map.values()).sort((a, b) => {
-      if (a.isSaved !== b.isSaved) return a.isSaved ? -1 : 1;
-      return b.count - a.count;
-    });
-  }, [allEvents, savedLocations]);
-
-  // Autocomplete
-  const [suggestions,           setSuggestions]           = useState<{ place_id: string; description: string }[]>([]);
-  const [savedSuggestions,      setSavedSuggestions]      = useState<StopSuggestion[]>([]);
-  const [facilityAcIdx,         setFacilityAcIdx]         = useState<number | null>(null); // facility name dropdown
-  const [facilitySuggestions,   setFacilitySuggestions]   = useState<StopSuggestion[]>([]);
-  const [acIdx, setAcIdx] = useState<number | null>(null); // which stop is showing suggestions
-  const acTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const justSelected = useRef(false);
-  // One Places session token per address-editing session — threaded through
-  // every autocomplete request and the final place-details call so Google
-  // bills it as a single Autocomplete Session SKU. Reset after each select.
-  const placesToken = useRef<string | null>(null);
-  const getPlacesToken = () => (placesToken.current ??= crypto.randomUUID());
-
-  // ── Org-wide stop history ─────────────────────────────────────────────
-  // `historicalStops` above can only see events the calendar store has
-  // loaded — roughly a two-week window around the viewed date. That's a
-  // tiny slice of where the fleet actually goes, which is why typing a
-  // facility name used to surface almost nothing. GET /v1/stops/recent
-  // searches every stop the org has ever saved (the dispatch app has
-  // always used it); we merge its hits in behind the local ones.
-  const [remoteStops, setRemoteStops] = useState<StopSuggestion[]>([]);
-  const remoteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const remoteSeq   = useRef(0);
-  const facilityQ   = useRef('');
-  const addrQ       = useRef('');
-
-  const localMatches = useCallback((q: string) => historicalStops.filter(s =>
-    (s.facilityName ?? '').toLowerCase().includes(q) ||
-    (s.address ?? '').toLowerCase().includes(q)
-  ), [historicalStops]);
-
-  /** Local + org-history matches, deduped and ranked. */
-  const mergedMatches = useCallback((q: string): StopSuggestion[] => {
-    const seen = new Set<string>();
-    const out: StopSuggestion[] = [];
-    for (const s of [...localMatches(q), ...remoteStops]) {
-      if (seen.has(s.key)) continue;
-      seen.add(s.key);
-      out.push(s);
-    }
-    return rankSuggestions(out, q).slice(0, SUGGESTION_LIMIT);
-  }, [localMatches, remoteStops]);
-
-  /** Debounced org-history lookup. Stale responses are dropped by seq so a
-   *  slow request for "ALB" can't overwrite results for "ALBERTSONS". */
-  const searchOrgHistory = useCallback((q: string) => {
-    if (remoteTimer.current) clearTimeout(remoteTimer.current);
-    if (q.length < 2) { setRemoteStops([]); return; }
-    const seq = ++remoteSeq.current;
-    remoteTimer.current = setTimeout(async () => {
-      try {
-        const { recentStops } = await railway.listRecentStops({ q, limit: 25 });
-        if (seq !== remoteSeq.current) return;
-        setRemoteStops((recentStops ?? []).map(r => ({
-          key:          suggestionKey(r.facilityName, r.address),
-          facilityName: r.facilityName,
-          address:      r.address,
-          lat:          r.lat,
-          lng:          r.lng,
-          timezone:     r.timezone,
-          count:        0,
-          isRemote:     true,
-        })));
-      } catch {
-        // Autocomplete is additive — a failed history lookup just leaves
-        // the local matches in place rather than surfacing an error.
-        if (seq === remoteSeq.current) setRemoteStops([]);
-      }
-    }, 250);
-  }, []);
-
-  // History arrives after the keystroke that asked for it, so refresh
-  // whichever dropdown is open rather than making the user type again.
-  useEffect(() => {
-    if (facilityAcIdx !== null && facilityQ.current) {
-      setFacilitySuggestions(mergedMatches(facilityQ.current));
-    }
-    if (acIdx !== null && addrQ.current) {
-      setSavedSuggestions(mergedMatches(addrQ.current));
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [remoteStops]);
-
-  const fetchSuggestions = useCallback((idx: number, input: string) => {
-    if (acTimer.current) clearTimeout(acTimer.current);
-    const q = input.trim().toLowerCase();
-    // Local matches (saved locations + loaded calendar window) render
-    // instantly; the org-history lookup fills in behind them.
-    addrQ.current = q;
-    searchOrgHistory(q);
-    const matched = q.length >= 1 ? mergedMatches(q) : [];
-    setSavedSuggestions(matched);
-    if (!q || q.length < 4) { setSuggestions([]); if (!matched.length) setAcIdx(null); else setAcIdx(idx); return; }
-    setAcIdx(idx);
-    acTimer.current = setTimeout(async () => {
-      try {
-        const res = await fetch(`/api/places?input=${encodeURIComponent(input)}&sessiontoken=${getPlacesToken()}`);
-        const data = await res.json() as { suggestions: { place_id: string; description: string }[] };
-        setSuggestions(data.suggestions ?? []);
-        setAcIdx(idx);
-      } catch { setSuggestions([]); }
-    }, 300);
-  }, [mergedMatches, searchOrgHistory]);
-
-  function selectStopSuggestion(idx: number, s: StopSuggestion) {
-    justSelected.current = true;
-    setSuggestions([]); setSavedSuggestions([]); setAcIdx(null);
-    onChange(stopsRef.current.map((stop, i) => i === idx ? {
-      ...stop,
-      facilityName: s.facilityName ?? stop.facilityName,
-      address: s.address ?? stop.address,
-      lat: s.lat,
-      lng: s.lng,
-      timezone: s.timezone,
-      geocodeStatus: s.lat ? 'success' : 'pending',
-    } : stop));
-  }
-
-  async function selectSuggestion(idx: number, s: { place_id: string; description: string }) {
-    justSelected.current = true;
-    setSuggestions([]); setAcIdx(null);
-    try {
-      const res  = await fetch(`/api/places?place_id=${encodeURIComponent(s.place_id)}&sessiontoken=${getPlacesToken()}`);
-      const data = await res.json() as { result: { lat: number; lng: number; timezone?: string; address?: string } | null };
-      if (data.result) {
-        onChange(stopsRef.current.map((stop, i) => i === idx ? { ...stop, address: data.result!.address ?? s.description, lat: data.result!.lat, lng: data.result!.lng, timezone: data.result!.timezone, geocodeStatus: 'success' } : stop));
-      } else {
-        onChange(stopsRef.current.map((stop, i) => i === idx ? { ...stop, address: s.description, geocodeStatus: 'failed' } : stop));
-      }
-    } catch {
-      onChange(stopsRef.current.map((stop, i) => i === idx ? { ...stop, address: s.description, geocodeStatus: 'failed' } : stop));
-    } finally {
-      // Session complete — next address edit starts a fresh token.
-      placesToken.current = null;
-    }
-  }
 
   const geocodedCount = stops.filter(s => s.geocodeStatus === 'success').length;
 
@@ -658,25 +382,6 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
     dragIdx.current = null; dragOverIdx.current = null;
   }
 
-  async function geocodeStop(idx: number, address: string) {
-    if (!address?.trim()) return;
-    onChange(stopsRef.current.map((s, i) => i === idx ? { ...s, geocodeStatus: 'pending' } : s));
-    try {
-      const res = await fetch('/api/geocode', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ address }),
-      });
-      const { result } = await res.json() as { result: { lat: number; lng: number; timezone?: string } | null };
-      if (result) {
-        onChange(stopsRef.current.map((s, i) => i === idx ? { ...s, lat: result.lat, lng: result.lng, timezone: result.timezone, geocodeStatus: 'success' } : s));
-      } else {
-        onChange(stopsRef.current.map((s, i) => i === idx ? { ...s, lat: undefined, lng: undefined, timezone: undefined, geocodeStatus: 'failed' } : s));
-      }
-    } catch {
-      onChange(stopsRef.current.map((s, i) => i === idx ? { ...s, geocodeStatus: 'failed' } : s));
-    }
-  }
 
   const inp: React.CSSProperties = {
     border: '1px solid var(--gc-border)', borderRadius: 6,
@@ -914,224 +619,22 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
 
               {/* Address + facility */}
               <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 5 }}>
-                {stop.type !== 'relay' && (
-                  <div style={{ position: 'relative' }}>
-                    <input
-                      type="text"
-                      value={stop.facilityName ?? ''}
-                      onChange={e => {
-                        update(idx, { facilityName: e.target.value });
-                        const q = e.target.value.trim().toLowerCase();
-                        facilityQ.current = q;
-                        searchOrgHistory(q);
-                        if (q.length >= 1) {
-                          const matched = mergedMatches(q);
-                          setFacilitySuggestions(matched);
-                          // Keep the dropdown anchored to this stop even
-                          // when local matches are empty — org history
-                          // usually lands a beat later and fills it.
-                          setFacilityAcIdx(idx);
-                        } else {
-                          setFacilitySuggestions([]); setFacilityAcIdx(null);
-                        }
-                      }}
-                      placeholder="Facility name"
-                      style={{ ...inp }}
-                      onFocus={e => {
-                        e.currentTarget.style.borderColor = headerColor;
-                        const q = (stop.facilityName ?? '').trim().toLowerCase();
-                        facilityQ.current = q;
-                        if (q.length >= 1) {
-                          searchOrgHistory(q);
-                          const matched = mergedMatches(q);
-                          setFacilitySuggestions(matched);
-                          setFacilityAcIdx(idx);
-                        }
-                      }}
-                      onBlur={e => {
-                        e.currentTarget.style.borderColor = 'var(--gc-border)';
-                        setTimeout(() => { setFacilitySuggestions([]); setFacilityAcIdx(null); }, 200);
-                      }}
-                    />
-                    {facilityAcIdx === idx && facilitySuggestions.length > 0 && (
-                      <div style={{
-                        position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50,
-                        background: 'var(--gc-surface)', border: '1px solid var(--gc-border)',
-                        borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.12)', marginTop: 2, overflow: 'hidden',
-                      }}>
-                        {facilitySuggestions.map(s => (
-                          <button
-                            key={s.key}
-                            type="button"
-                            onMouseDown={() => {
-                              justSelected.current = true;
-                              setFacilitySuggestions([]); setFacilityAcIdx(null);
-                              onChange(stopsRef.current.map((stop, i) => i === idx ? {
-                                ...stop,
-                                facilityName: s.facilityName ?? stop.facilityName,
-                                address: s.address ?? stop.address,
-                                lat: s.lat, lng: s.lng, timezone: s.timezone,
-                                geocodeStatus: s.lat ? 'success' : 'pending',
-                              } : stop));
-                            }}
-                            style={{
-                              display: 'flex', alignItems: 'center', gap: 6,
-                              width: '100%', textAlign: 'left',
-                              padding: '7px 10px', fontSize: 12, color: 'var(--gc-text-1)',
-                              background: 'transparent', border: 'none', cursor: 'pointer',
-                              borderBottom: '1px solid var(--gc-border-light)',
-                            }}
-                            onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-blue-light)')}
-                            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                          >
-                            <Bookmark size={10} style={{ color: s.isSaved ? 'var(--gc-blue)' : 'var(--gc-text-3)', flexShrink: 0 }} />
-                            <span style={{ flex: 1, minWidth: 0 }}>
-                              {s.facilityName && <span style={{ fontWeight: 700 }}>{s.facilityName}</span>}
-                              {s.address && <span style={{ color: 'var(--gc-text-3)', marginLeft: s.facilityName ? 5 : 0 }}>{s.address}</span>}
-                            </span>
-                            {s.count > 1 && <span style={{ fontSize: 10, color: 'var(--gc-text-3)', flexShrink: 0 }}>×{s.count}</span>}
-                          </button>
-                        ))}
-                      </div>
-                    )}
+                {/* Facility + address — the SHARED implementation, also
+                    mounted by the leg builder's handoff box. Relay
+                    points are read-only in builder mode (edited in the
+                    Relay section) but stay editable everywhere else. */}
+                <StopAddressFields
+                  stop={stop}
+                  onChange={patch => update(idx, patch)}
+                  headerColor={headerColor}
+                  showFacility={stop.type !== 'relay'}
+                  readOnly={!!legBuilder && isBoundary}
+                />
+                {legBuilder && isBoundary && (
+                  <div style={{ fontSize: 10.5, fontWeight: 600, color: RELAY_ACCENT, display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <ArrowLeftRight size={10} style={{ flexShrink: 0 }} />
+                    Handoff — edit in the Relay section above
                   </div>
-                )}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 5, position: 'relative' }}>
-                  <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
-                    <input
-                      type="text"
-                      value={stop.address ?? ''}
-                      onChange={e => {
-                        update(idx, { address: e.target.value, geocodeStatus: 'pending' });
-                        fetchSuggestions(idx, e.target.value);
-                      }}
-                      placeholder="Full address"
-                      style={{ ...inp, width: '100%' }}
-                      onFocus={e => {
-                        e.currentTarget.style.borderColor = headerColor;
-                        fetchSuggestions(idx, e.currentTarget.value);
-                      }}
-                      onBlur={e => {
-                        e.currentTarget.style.borderColor = 'var(--gc-border)';
-                        setTimeout(() => { setSuggestions([]); setSavedSuggestions([]); setAcIdx(null); }, 200);
-                        if (justSelected.current) { justSelected.current = false; return; }
-                        const addr = e.currentTarget.value.trim();
-                        if (addr && (stop.geocodeStatus === 'pending' || !stop.timezone)) void geocodeStop(idx, addr);
-                      }}
-                    />
-                    {acIdx === idx && (savedSuggestions.length > 0 || suggestions.length > 0) && (
-                      <div style={{
-                        position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50,
-                        background: 'var(--gc-surface)', border: '1px solid var(--gc-border)',
-                        borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.12)', marginTop: 2, overflow: 'hidden',
-                      }}>
-                        {/* Historical stops first */}
-                        {savedSuggestions.length > 0 && (
-                          <>
-                            <div style={{ padding: '5px 10px 3px', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--gc-text-3)', borderBottom: '1px solid var(--gc-border-light)' }}>
-                              Your Locations
-                            </div>
-                            {savedSuggestions.map(s => (
-                              <button
-                                key={s.key}
-                                type="button"
-                                onMouseDown={() => selectStopSuggestion(idx, s)}
-                                style={{
-                                  display: 'flex', alignItems: 'center', gap: 6,
-                                  width: '100%', textAlign: 'left',
-                                  padding: '7px 10px', fontSize: 12, color: 'var(--gc-text-1)',
-                                  background: 'transparent', border: 'none', cursor: 'pointer',
-                                  borderBottom: '1px solid var(--gc-border-light)',
-                                }}
-                                onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-blue-light)')}
-                                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                              >
-                                <Bookmark size={10} style={{ color: s.isSaved ? 'var(--gc-blue)' : 'var(--gc-text-3)', flexShrink: 0 }} />
-                                <span style={{ flex: 1, minWidth: 0 }}>
-                                  {s.facilityName && <span style={{ fontWeight: 700 }}>{s.facilityName}</span>}
-                                  {s.address && <span style={{ color: 'var(--gc-text-3)', marginLeft: s.facilityName ? 5 : 0 }}>{s.address}</span>}
-                                </span>
-                                {s.count > 1 && <span style={{ fontSize: 10, color: 'var(--gc-text-3)', flexShrink: 0 }}>×{s.count}</span>}
-                              </button>
-                            ))}
-                          </>
-                        )}
-                        {/* Google Places below */}
-                        {suggestions.length > 0 && (
-                          <>
-                            {savedSuggestions.length > 0 && (
-                              <div style={{ padding: '5px 10px 3px', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--gc-text-3)', borderBottom: '1px solid var(--gc-border-light)' }}>
-                                Search Results
-                              </div>
-                            )}
-                            {suggestions.map(s => (
-                              <button
-                                key={s.place_id}
-                                type="button"
-                                onMouseDown={() => selectSuggestion(idx, s)}
-                                style={{
-                                  display: 'flex', alignItems: 'center', gap: 6,
-                                  width: '100%', textAlign: 'left',
-                                  padding: '7px 10px', fontSize: 12, color: 'var(--gc-text-1)',
-                                  background: 'transparent', border: 'none', cursor: 'pointer',
-                                  borderBottom: '1px solid var(--gc-border-light)',
-                                }}
-                                onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
-                                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                              >
-                                <MapPin size={10} style={{ color: 'var(--gc-text-3)', flexShrink: 0 }} />
-                                {s.description}
-                              </button>
-                            ))}
-                          </>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                  <GeocodeIndicator status={stop.geocodeStatus} />
-                </div>
-                {stop.geocodeStatus === 'failed' && (
-                  manualCoordIdx === idx ? (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
-                      <input
-                        type="text" value={manualLat} onChange={e => setManualLat(e.target.value)}
-                        placeholder="Lat (e.g. 36.0395)"
-                        style={{ ...inp, width: 130, fontSize: 11, padding: '3px 6px' }}
-                      />
-                      <input
-                        type="text" value={manualLng} onChange={e => setManualLng(e.target.value)}
-                        placeholder="Lng (e.g. -114.9817)"
-                        style={{ ...inp, width: 140, fontSize: 11, padding: '3px 6px' }}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const lat = parseFloat(manualLat);
-                          const lng = parseFloat(manualLng);
-                          if (!isNaN(lat) && !isNaN(lng)) {
-                            fetch('/api/geocode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lat, lng }) })
-                              .then(r => r.json())
-                              .then((d: { result: { timezone?: string } | null }) => {
-                                update(idx, { lat, lng, timezone: d.result?.timezone, geocodeStatus: 'success' });
-                              })
-                              .catch(() => update(idx, { lat, lng, geocodeStatus: 'success' }));
-                            setManualCoordIdx(null); setManualLat(''); setManualLng('');
-                          }
-                        }}
-                        style={{ fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 5, border: 'none', background: '#2563eb', color: '#fff', cursor: 'pointer', whiteSpace: 'nowrap' }}
-                      >Apply</button>
-                      <button type="button" onClick={() => { setManualCoordIdx(null); setManualLat(''); setManualLng(''); }}
-                        style={{ fontSize: 11, color: 'var(--gc-text-3)', background: 'none', border: 'none', cursor: 'pointer' }}>✕</button>
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => { setManualCoordIdx(idx); setManualLat(''); setManualLng(''); }}
-                      style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 2, fontSize: 11, color: '#b45309', background: '#fef3c7', border: '1px solid #fcd34d', borderRadius: 5, padding: '2px 7px', cursor: 'pointer' }}
-                    >
-                      <LocateFixed size={10} /> Enter coordinates manually
-                    </button>
-                  )
                 )}
                 {/* Instructions — allowed on every stop type, including relays */}
                 {expandedInstructions.has(stop.id) ? (

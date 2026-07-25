@@ -21,6 +21,7 @@ import { ArrowLeftRight, Plus } from 'lucide-react';
 import { legLabel, handoffTimesOf } from '@fleetcal/types';
 import { StyledSelect } from '@/components/ui/StyledSelect';
 import { ApptInput } from './StopsSection';
+import { StopAddressFields } from './StopAddressFields';
 import { naiveHomeToView, naiveViewToHome } from '@/lib/time-utils';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { AssetSelect } from './AssetSelect';
@@ -108,6 +109,9 @@ interface Props {
    *  handoffDropAt/handoffPickupAt for a handoff on a real stop, or
    *  apptStart/apptEnd for a bare relay point. Absent = read-only. */
   onChangeHandoffTimes?: (handoffIdx: number, patch: { drop?: string; pickup?: string }) => void;
+  /** Edit the handoff stop itself (facility, address, geocode result).
+   *  Absent = the location renders read-only. */
+  onChangeHandoffStop?: (handoffIdx: number, patch: Partial<Stop>) => void;
   /** Leg-builder mode: the legs come from the CURRENT stop list's
    *  handoff boundaries (not from persisted events), so ANY leg can be
    *  split again before saving — that's how one leg becomes three in a
@@ -257,7 +261,10 @@ function LegCard({
           </span>
         )}
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      {/* Driver | Truck | Driver pay on ONE row. Falls back to two
+          columns at narrow modal widths so the pay input never squashes
+          (auto-fit with a 150px floor does that without a media query). */}
+      <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
         <Field label="Driver">
           <StyledSelect
             value={leg.driverName}
@@ -284,9 +291,7 @@ function LegCard({
             focusColor={RELAY_COLOR}
           />
         </Field>
-      </div>
-      {canViewDriverPay && (
-        <div className="grid grid-cols-2 gap-4">
+        {canViewDriverPay && (
           <Field label="Driver Pay" labelSuffix={pctChip(pct)}>
             <PayInput
               value={leg.pay}
@@ -302,9 +307,8 @@ function LegCard({
               />
             </div>
           </Field>
-          <div />
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }
@@ -313,7 +317,7 @@ export default function RelayLegsEditor({
   legs, handoffs, loadPrice, assets, drivers, startDate,
   canViewDriverPay, disabled, loadId, handoffPhotos, onSelectPhoto, onPhotosUploaded,
   canonicalDriverName, onChangeLeg, onOpenLeg, onAddHandoff, onAddHandoffForLeg, onRemoveHandoff,
-  builderMode, onChangeHandoffTimes,
+  builderMode, onChangeHandoffTimes, onChangeHandoffStop,
 }: Props) {
   const [confirmIdx, setConfirmIdx] = useState<number | null>(null);
   // Handoff times are stored in HOME_TZ but entered/displayed in the
@@ -365,46 +369,71 @@ export default function RelayLegsEditor({
         return (
           <Fragment key={leg.key}>
             {handoff && (
-              <div className="space-y-1.5">
-                <div className="flex items-center gap-2 px-1">
-                  <div className="flex-1 h-px" style={{ background: '#ddd6fe' }} />
-                  <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-lg"
-                    style={{ background: '#ede9fe', color: RELAY_COLOR, border: '1px solid #ddd6fe' }}>
-                    {handoffLabel}
-                  </span>
-                  <div className="flex-1 h-px" style={{ background: '#ddd6fe' }} />
+              // ── HANDOFF BOX ──────────────────────────────────────
+              // Deliberately unlike a leg card: darker purple surface,
+              // solid relay border, its own label. This is the
+              // exchange between two legs, not a leg.
+              <div className="rounded-xl p-4 space-y-3"
+                style={{ background: '#ede9fe', border: `1.5px solid ${RELAY_COLOR}` }}>
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex items-center gap-2">
+                    <ArrowLeftRight size={14} style={{ color: RELAY_COLOR, flexShrink: 0 }} />
+                    <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: RELAY_COLOR }}>
+                      {handoffLabel}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {loadId && !handoff.isDraft && onSelectPhoto && onPhotosUploaded && (
+                      <HandoffPhotosButton
+                        loadId={loadId}
+                        photos={markerPhotos}
+                        onSelectInPanel={onSelectPhoto}
+                        onUploaded={onPhotosUploaded}
+                      />
+                    )}
+                    {!disabled && (
+                      <button type="button"
+                        onClick={() => {
+                          if (!confirming) { setConfirmIdx(handoffIdx); return; }
+                          setConfirmIdx(null);
+                          onRemoveHandoff(handoffIdx);
+                        }}
+                        onMouseLeave={() => { if (confirming) setConfirmIdx(null); }}
+                        className="text-xs px-2.5 py-1 rounded-lg font-medium transition-colors shrink-0"
+                        style={confirming ? { background: '#d93025', color: 'white', border: 'none', cursor: 'pointer' } : { color: '#d93025', background: 'transparent', border: 'none', cursor: 'pointer' }}>
+                        {confirming
+                          ? (handoff.isDraft ? 'Confirm cancel?' : 'Confirm remove?')
+                          : (handoff.isDraft ? 'Cancel leg' : 'Remove leg')}
+                      </button>
+                    )}
+                  </div>
                 </div>
-                <div style={{ background: '#ede9fe', borderRadius: 8, padding: '8px 12px', fontSize: 12.5, color: '#5b21b6', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                  <ArrowLeftRight size={13} style={{ flexShrink: 0 }} />
-                  <span style={{ flex: 1, minWidth: 160 }}>
-                    {handoff.stop.address || handoff.stop.facilityName
-                      ? <>Relay point: <strong>{handoff.stop.facilityName || handoff.stop.address}</strong></>
-                      : <>Set the relay point address in the <strong>Locations</strong> section below.</>}
-                  </span>
-                  {loadId && !handoff.isDraft && onSelectPhoto && onPhotosUploaded && (
-                    <HandoffPhotosButton
-                      loadId={loadId}
-                      photos={markerPhotos}
-                      onSelectInPanel={onSelectPhoto}
-                      onUploaded={onPhotosUploaded}
+
+                {/* Where the exchange happens. Same shared inputs as the
+                    Locations list — Places autocomplete, saved-location
+                    and org-history matches, geocoding, status pill —
+                    so lat/lng/timezone land on the stop exactly as they
+                    would there (leg miles + the driver app need them). */}
+                {onChangeHandoffStop && !disabled ? (
+                  <div className="space-y-1.5">
+                    <div style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#6d28d9' }}>
+                      Handoff location
+                    </div>
+                    <StopAddressFields
+                      stop={handoff.stop}
+                      onChange={patch => onChangeHandoffStop(handoffIdx, patch)}
+                      headerColor={RELAY_COLOR}
+                      showFacility
+                      facilityPlaceholder="Facility / yard name"
+                      addressPlaceholder="Handoff address"
                     />
-                  )}
-                  {!disabled && (
-                    <button type="button"
-                      onClick={() => {
-                        if (!confirming) { setConfirmIdx(handoffIdx); return; }
-                        setConfirmIdx(null);
-                        onRemoveHandoff(handoffIdx);
-                      }}
-                      onMouseLeave={() => { if (confirming) setConfirmIdx(null); }}
-                      className="text-xs px-2.5 py-1 rounded-lg font-medium transition-colors shrink-0"
-                      style={confirming ? { background: '#d93025', color: 'white', border: 'none', cursor: 'pointer' } : { color: '#d93025', background: 'transparent', border: 'none', cursor: 'pointer' }}>
-                      {confirming
-                        ? (handoff.isDraft ? 'Confirm cancel?' : 'Confirm remove?')
-                        : (handoff.isDraft ? 'Cancel leg' : 'Remove leg')}
-                    </button>
-                  )}
-                </div>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 12.5, color: '#5b21b6' }}>
+                    {handoff.stop.facilityName || handoff.stop.address || 'No handoff location set'}
+                  </div>
+                )}
+
                 {/* Handoff times — the ONE place these are set. Writes
                     handoffDropAt/handoffPickupAt on a real stop or
                     apptStart/apptEnd on a bare relay point; the parent
@@ -417,7 +446,7 @@ export default function RelayLegsEditor({
                     letterSpacing: '0.05em', color: '#6d28d9', marginBottom: 3,
                   };
                   return (
-                    <div className="grid grid-cols-2 gap-3" style={{ padding: '0 2px' }}>
+                    <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
                       <div>
                         <div style={labelStyle}>{fromName ? `${fromName} drops` : 'Driver 1 drop'}</div>
                         <ApptInput
@@ -437,7 +466,7 @@ export default function RelayLegsEditor({
                         />
                       </div>
                       {t.drop && t.pickup && t.pickup < t.drop && (
-                        <div className="col-span-2" style={{ fontSize: 11, color: '#b91c1c', background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 6, padding: '5px 8px' }}>
+                        <div style={{ gridColumn: '1 / -1', fontSize: 11, color: '#b91c1c', background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 6, padding: '5px 8px' }}>
                           Pickup is before the drop — check these times.
                         </div>
                       )}
