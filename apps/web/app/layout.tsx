@@ -6,6 +6,7 @@ import { Toaster } from 'sonner';
 import { Analytics } from '@vercel/analytics/next';
 import { SpeedInsights } from '@vercel/speed-insights/next';
 import ThemeProvider from '@/components/ThemeProvider';
+import MetaPixel from '@/components/MetaPixel';
 import { RailwayClientProvider } from '@/components/RailwayClientProvider';
 import { clerkAppearance } from '@/lib/clerkAppearance';
 import './globals.css';
@@ -140,6 +141,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           />
           <Analytics />
           <SpeedInsights />
+          <MetaPixel />
         </body>
       </html>
     </ClerkProvider>
