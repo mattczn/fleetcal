@@ -91,9 +91,15 @@ interface Props {
   canonicalDriverName: (d: Driver) => string;
   onChangeLeg: (key: string, patch: { assetId?: number; driverName?: string; pay?: number | '' }) => void;
   onOpenLeg?: (eventId: string) => void;
-  /** Absent = the Add-handoff affordance is hidden (batch mode, or a
-   *  pending unsaved handoff already exists in edit mode). */
+  /** Header "+ Add handoff" (create mode: appends after the last leg).
+   *  Absent = hidden (batch mode, or edit mode where the per-leg
+   *  affordance below takes over). */
   onAddHandoff?: () => void;
+  /** Per-leg split: an insert row under EACH persisted leg card starts
+   *  a pending handoff targeting THAT leg (the new marker lands inside
+   *  its stop window). Absent = hidden (create mode, read-only, or a
+   *  pending unsaved handoff already exists — one split per save). */
+  onAddHandoffForLeg?: (legKey: string) => void;
   onRemoveHandoff: (handoffIdx: number) => void;
 }
 
@@ -293,7 +299,7 @@ function LegCard({
 export default function RelayLegsEditor({
   legs, handoffs, loadPrice, assets, drivers, startDate,
   canViewDriverPay, disabled, loadId, handoffPhotos, onSelectPhoto, onPhotosUploaded,
-  canonicalDriverName, onChangeLeg, onOpenLeg, onAddHandoff, onRemoveHandoff,
+  canonicalDriverName, onChangeLeg, onOpenLeg, onAddHandoff, onAddHandoffForLeg, onRemoveHandoff,
 }: Props) {
   const [confirmIdx, setConfirmIdx] = useState<number | null>(null);
 
@@ -316,7 +322,7 @@ export default function RelayLegsEditor({
           </span>
         </div>
         {onAddHandoff && !disabled && (
-          <button type="button" onClick={onAddHandoff}
+          <button type="button" onClick={() => onAddHandoff()}
             className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg font-semibold transition-colors"
             style={{ color: RELAY_COLOR, border: '1px solid #ddd6fe', background: 'transparent', cursor: 'pointer' }}
             onMouseEnter={e => (e.currentTarget.style.background = '#ede9fe')}
@@ -395,6 +401,24 @@ export default function RelayLegsEditor({
               onChangeLeg={onChangeLeg}
               onOpenLeg={onOpenLeg}
             />
+            {/* Per-leg split affordance — inserts a handoff INSIDE this
+                leg (new marker within its stop window, new leg right
+                after it). Rendered for persisted legs only; hidden
+                while a split is already pending. */}
+            {onAddHandoffForLeg && !disabled && leg.eventId && !leg.isDraft && (
+              <div className="flex items-center gap-2 px-1" style={{ marginTop: -6 }}>
+                <div className="flex-1 h-px" style={{ background: '#e9e5f8' }} />
+                <button type="button" onClick={() => onAddHandoffForLeg(leg.key)}
+                  className="flex items-center gap-1 text-[11px] px-2.5 py-0.5 rounded-lg font-semibold transition-colors"
+                  style={{ color: RELAY_COLOR, border: '1px dashed #ddd6fe', background: 'transparent', cursor: 'pointer' }}
+                  onMouseEnter={e => (e.currentTarget.style.background = '#ede9fe')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                  title="Split this leg with a new handoff">
+                  <Plus size={10} /> Add handoff
+                </button>
+                <div className="flex-1 h-px" style={{ background: '#e9e5f8' }} />
+              </div>
+            )}
           </Fragment>
         );
       })}

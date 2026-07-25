@@ -2235,6 +2235,10 @@ export default function EventModal() {
   const [legEdits,           setLegEdits]           = useState<Record<string, { assetId?: number; driverName?: string }>>({});
   const [draftLegs,          setDraftLegs]          = useState<Array<{ key: string; assetId: number; driverName: string }>>([]);
   const [pendingSplitStopId, setPendingSplitStopId] = useState<string | null>(null);
+  /** Event id of the leg the pending handoff splits — any leg, not just
+   *  the viewed one (per-leg "+ Add handoff" on each card). null while
+   *  no split is pending; falls back to the viewed leg for safety. */
+  const [pendingSplitTargetId, setPendingSplitTargetId] = useState<string | null>(null);
 
   const isExistingRelayLeg = isEdit && !!relayRole;
   const isRelayContext = draftLegs.length > 0 || isExistingRelayLeg;
@@ -2463,12 +2467,12 @@ export default function EventModal() {
   };
 
   useEffect(() => {
-    if (!modalOpen) { setConfirmDel(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setRateConOriginal(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setOtherLegMiles({}); setShowDriverSummary(false); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setLoadInvoices([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); setInternalNotes([]); setOriginalInternalNotes([]); setNoteComposer(''); setNoteComposerOpen(false); setPendingNewBroker(null); setLegPays({}); setLegEdits({}); setDraftLegs([]); setPendingSplitStopId(null); setSuggestAssetSwap(null); setSuggestDriverSwap(null); return; }
+    if (!modalOpen) { setConfirmDel(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setRateConOriginal(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setOtherLegMiles({}); setShowDriverSummary(false); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setLoadInvoices([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); setInternalNotes([]); setOriginalInternalNotes([]); setNoteComposer(''); setNoteComposerOpen(false); setPendingNewBroker(null); setLegPays({}); setLegEdits({}); setDraftLegs([]); setPendingSplitStopId(null); setPendingSplitTargetId(null); setSuggestAssetSwap(null); setSuggestDriverSwap(null); return; }
     setParseState('idle'); setParseError('');
     setRateConPdf(undefined); setRateConOriginal(undefined); setShowPdfViewer(false); setShowMapPanel(modalShowMap);
     setIsDirty(false); setShowSavePrompt(false);
     setRelayGroupId(undefined); setRelayRole(undefined);
-    setLegPays({}); setLegEdits({}); setDraftLegs([]); setPendingSplitStopId(null);
+    setLegPays({}); setLegEdits({}); setDraftLegs([]); setPendingSplitStopId(null); setPendingSplitTargetId(null);
     setAccessorials([]);
     // Internal notes are scoped to a single load — never carry across
     // duplicate / +1 Week / drag-create transitions. The edit branch
@@ -3189,30 +3193,52 @@ export default function EventModal() {
       saveRelayLegs(legsPayload);
 
     } else if (isEdit && isExistingRelayLeg && modalEventId && pendingSplitStopId) {
-      // ── Existing relay + pending handoff: split the viewed leg ─────
+      // ── Existing relay + pending handoff: split the TARGET leg ─────
+      // (any leg, per the per-leg "+" — defaults to the viewed one).
       const draft = draftLegs[0]; // edit mode allows one pending handoff per save
       const marker = stops.find(s => s.id === pendingSplitStopId);
       if (!draft || !marker?.apptStart) return;
-      // Persist the OTHER legs' event-level edits (driver/truck/pay)
-      // first — splitToRelay only touches the split leg + load-level.
-      const otherPayload = otherLegs.map(leg => {
-        const edits = legEdits[leg.id] ?? {};
-        const legDriverName = (edits.driverName ?? resolveDriverNameForEvent(leg)) || undefined;
-        const updates: Partial<Omit<CalendarEvent, 'id'>> = {
-          assetId: edits.assetId ?? leg.assetId,
-          driverName: legDriverName,
-          driverId: findDriverByName(legDriverName)?.id ?? undefined,
-          driverPay: legPayOf(leg.id),
-        };
-        return { id: leg.id, updates };
-      });
-      if (otherPayload.length > 0) saveRelayLegs(otherPayload);
+      const targetId = pendingSplitTargetId ?? modalEventId;
+      const targetLeg = relayLegs.find(l => l.id === targetId) ?? currentEv;
+      if (!targetLeg) return;
+      const isViewedTarget = targetLeg.id === modalEventId;
+      // Persist every NON-target leg's event-level edits first —
+      // splitToRelay only touches the split leg + load-level. Stops are
+      // deliberately excluded here: splitRelay's mergedStops writes the
+      // full list (incl. the new marker) onto every leg.
+      const patchPayload = relayLegs
+        .filter(leg => leg.id !== targetLeg.id)
+        .map(leg => {
+          const isViewed = leg.id === modalEventId;
+          const edits = legEdits[leg.id] ?? {};
+          const legDriverName = isViewed
+            ? (driverName || undefined)
+            : ((edits.driverName ?? resolveDriverNameForEvent(leg)) || undefined);
+          const updates: Partial<Omit<CalendarEvent, 'id'>> = {
+            assetId: isViewed ? assetId : (edits.assetId ?? leg.assetId),
+            driverName: legDriverName,
+            driverId: findDriverByName(legDriverName)?.id ?? undefined,
+            driverPay: legPayOf(leg.id),
+            // The viewed leg (when it isn't the split target) also
+            // carries its form-level event fields.
+            ...(isViewed ? { title: title.trim(), status, priority, trailerId: linkedTrailerId } : {}),
+          };
+          return { id: leg.id, updates };
+        });
+      if (patchPayload.length > 0) saveRelayLegs(patchPayload);
+      const targetEdits = legEdits[targetLeg.id] ?? {};
+      const targetDriverName = isViewedTarget
+        ? (driverName || undefined)
+        : ((targetEdits.driverName ?? resolveDriverNameForEvent(targetLeg)) || undefined);
       const targetUpdates: Partial<Omit<CalendarEvent, 'id'>> = {
-        ...shared, assetId, driverName: driverName || undefined, driverId,
-        start: `${startDate}T${startTime}`,
+        ...shared,
+        assetId: isViewedTarget ? assetId : (targetEdits.assetId ?? targetLeg.assetId),
+        driverName: targetDriverName,
+        driverId: findDriverByName(targetDriverName)?.id ?? undefined,
+        start: isViewedTarget ? `${startDate}T${startTime}` : targetLeg.start,
         end: marker.apptStart,
-        driverPay: legPayOf(modalEventId),
-        status,
+        driverPay: legPayOf(targetLeg.id),
+        status: isViewedTarget ? status : (targetLeg.status ?? 'scheduled'),
       };
       const newLegData: Omit<CalendarEvent, 'id'> = {
         ...shared,
@@ -3220,12 +3246,13 @@ export default function EventModal() {
         driverName: draft.driverName || undefined,
         driverId: findDriverByName(draft.driverName)?.id ?? undefined,
         start: marker.apptEnd ?? marker.apptStart,
-        end: `${endDate}T${endTime}`,
+        // The new leg inherits the split leg's original end.
+        end: isViewedTarget ? `${endDate}T${endTime}` : targetLeg.end,
         driverPay: legPayOf(draft.key),
         status: 'scheduled',
         createdByName: currentUserName,
       };
-      splitToRelay(modalEventId, targetUpdates, newLegData, delivId, { relayStopId: pendingSplitStopId });
+      splitToRelay(targetLeg.id, targetUpdates, newLegData, delivId, { relayStopId: pendingSplitStopId });
 
     } else if (draftLegs.length > 0) {
       // ── Create-mode splits (or single→relay conversion in edit) ────
@@ -3648,6 +3675,7 @@ export default function EventModal() {
         // Edit mode: the single pending handoff + its draft leg.
         setDraftLegs([]);
         setPendingSplitStopId(null);
+        setPendingSplitTargetId(null);
       } else {
         // Create mode: marker m maps 1:1 to draftLegs[m].
         setDraftLegs(prev => prev.filter((_, i) => i !== handoffIdx));
@@ -3662,24 +3690,34 @@ export default function EventModal() {
   };
 
   /** "Add handoff" — generalizes the old single→relay split. Splits the
-   *  VIEWED leg in edit mode (one pending handoff per save), or the
-   *  LAST leg in create mode (repeatable: each call appends a leg). */
-  const addHandoff = () => {
+   *  named leg in edit mode (per-leg "+" on each card; defaults to the
+   *  viewed leg; one pending handoff per save), or the LAST leg in
+   *  create mode (repeatable: each call appends a leg). */
+  const addHandoff = (targetLegId?: string) => {
     if (isEdit && pendingSplitStopId) return; // one unsaved handoff at a time
+    // Resolve the leg being split (edit mode on an existing relay only).
+    const targetLeg = isEdit && isExistingRelayLeg
+      ? (relayLegs.find(l => l.id === (targetLegId ?? modalEventId)) ?? relayLegs.find(l => l.id === modalEventId))
+      : undefined;
+    const isViewedTarget = !targetLeg || targetLeg.id === modalEventId;
     const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}T${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
     const markerIdxsAll = stops.reduce<number[]>((acc, s, i) => { if (s.type === 'relay') acc.push(i); return acc; }, []);
     const markers = markerIdxsAll.map(i => stops[i]);
 
-    // Window being split. Edit mode: the viewed leg's own start/end (the
-    // form fields hold them). Create mode: from the last marker's pickup
-    // time (or the load start) to the load end.
+    // Window being split. Edit mode: the target leg's own start/end (the
+    // form fields hold them when the target is the viewed leg; the store
+    // row otherwise). Create mode: from the last marker's pickup time
+    // (or the load start) to the load end.
     let windowStartIso: string;
     let windowEndIso: string;
     let markerOrdinal: number; // ordinal the NEW marker will take
-    if (isEdit && isExistingRelayLeg) {
-      windowStartIso = `${startDate}T${startTime}`;
-      windowEndIso   = `${endDate || startDate}T${endTime || startTime}`;
-      markerOrdinal  = Math.min(viewedLegIdx ?? 0, markerIdxsAll.length);
+    if (isEdit && isExistingRelayLeg && targetLeg) {
+      windowStartIso = isViewedTarget ? `${startDate}T${startTime}` : targetLeg.start;
+      windowEndIso   = isViewedTarget ? `${endDate || startDate}T${endTime || startTime}` : targetLeg.end;
+      const tIdx = targetLeg.legIndex
+        ?? (isViewedTarget ? viewedLegIdx : undefined)
+        ?? Math.max(0, relayLegs.findIndex(l => l.id === targetLeg.id));
+      markerOrdinal  = Math.min(tIdx, markerIdxsAll.length);
     } else {
       const lastMarker = markers[markers.length - 1];
       windowStartIso = lastMarker ? (lastMarker.apptEnd ?? lastMarker.apptStart ?? `${startDate}T${startTime}`) : `${startDate}T${startTime}`;
@@ -3719,12 +3757,15 @@ export default function EventModal() {
 
     // New leg defaults: a different truck than the leg being split, and
     // that truck's preferred driver.
-    const splitLegAsset = (!isEdit && draftLegs.length > 0) ? draftLegs[draftLegs.length - 1].assetId : assetId;
+    const splitLegAsset = targetLeg && !isViewedTarget
+      ? (legEdits[targetLeg.id]?.assetId ?? targetLeg.assetId)
+      : (!isEdit && draftLegs.length > 0) ? draftLegs[draftLegs.length - 1].assetId : assetId;
     const newAsset = assets.find(a => a.id !== splitLegAsset)?.id ?? splitLegAsset;
     const draft = { key: crypto.randomUUID(), assetId: newAsset, driverName: preferredDriverName(newAsset) };
     if (isEdit) {
       setDraftLegs([draft]);
       setPendingSplitStopId(relayStop.id);
+      setPendingSplitTargetId(targetLeg?.id ?? modalEventId ?? null);
     } else {
       setDraftLegs(prev => [...prev, draft]);
     }
@@ -4280,7 +4321,10 @@ export default function EventModal() {
       });
       if (pendingSplitStopId && draftLegs[0]) {
         const marker = stops.find(s => s.id === pendingSplitStopId);
-        const insertAt = (viewedArrIdx >= 0 ? viewedArrIdx : views.length - 1) + 1;
+        // The draft leg lands right after the leg being split (any leg
+        // — per-leg "+"; falls back to the viewed one).
+        const targetArrIdx = views.findIndex(v => v.eventId === (pendingSplitTargetId ?? modalEventId));
+        const insertAt = (targetArrIdx >= 0 ? targetArrIdx : (viewedArrIdx >= 0 ? viewedArrIdx : views.length - 1)) + 1;
         views.splice(insertAt, 0, {
           key: draftLegs[0].key,
           legIndex: insertAt,
@@ -6044,7 +6088,14 @@ export default function EventModal() {
                           if (isDirty) { setSavePromptAfterNav(eventId); setShowSavePrompt(true); }
                           else { openEditModal(eventId); }
                         }}
-                        onAddHandoff={!isBatch && !(isEdit && pendingSplitStopId) ? addHandoff : undefined}
+                        // Header "+" stacks handoffs in create mode; on an
+                        // existing relay each leg card gets its own "+"
+                        // instead (split THAT leg), gated to one pending
+                        // handoff per save.
+                        onAddHandoff={!isBatch && !isExistingRelayLeg && !(isEdit && pendingSplitStopId) ? () => addHandoff() : undefined}
+                        onAddHandoffForLeg={!isBatch && isExistingRelayLeg && !pendingSplitStopId
+                          ? (legKey) => addHandoff(legKey)
+                          : undefined}
                         onRemoveHandoff={handleRemoveHandoff}
                       />
                     </div>
@@ -6072,7 +6123,7 @@ export default function EventModal() {
                       onChange={next => { setStops(next); markDirty(); }}
                       headerColor={headerColor}
                       onMapRoute={() => { setShowMapPanel(true); setShowPdfViewer(false); }}
-                      onActivateRelay={!isBatch ? addHandoff : undefined}
+                      onActivateRelay={!isBatch ? () => addHandoff() : undefined}
                       relayActive={isEdit ? pendingSplitStopId != null : false}
                       relayRole={relayRole}
                       legIndex={viewedLegIdx}
