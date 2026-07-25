@@ -2365,11 +2365,22 @@ export default function EventModal() {
     if (!isLegBuilder) return [];
     const base = legPlan.length > 0 ? legPlan : planFromLegs(relayLegs);
     const claimed = new Set<string>();
+    // "Not in relayLegs" only means "not on this load" once we've
+    // actually FETCHED this load's legs. While the backfill is in
+    // flight, a leg we haven't received yet is missing from relayLegs —
+    // and treating that as foreign dropped its identity. The plan then
+    // read as "this leg is being removed" (a delete confirmation right
+    // after the dispatcher ADDED one) and the save either recreated the
+    // leg as new or was rejected. Worse, once the dispatcher touched the
+    // plan it stopped being pristine, so the re-seed that would have
+    // healed it never ran and the wrong state stuck.
+    const legSetKnown = !currentEv?.loadId
+      || !legsFetchingLoadIds.includes(currentEv.loadId);
     const cleaned: PlannedLeg[] = base.map(p => {
       if (!p.eventId) return p;
       const unusable = releasedEventIds.includes(p.eventId)
         || claimed.has(p.eventId)
-        || !relayLegs.some(l => l.id === p.eventId);
+        || (legSetKnown && !relayLegs.some(l => l.id === p.eventId));
       if (unusable) return { key: p.key };        // keep the slot, drop the identity
       claimed.add(p.eventId);
       return p;
@@ -4526,6 +4537,12 @@ export default function EventModal() {
    *  that no longer appear in the plan (released by a merge, or gone
    *  for any other reason). */
   const legsBeingRemoved = (): CalendarEvent[] => {
+    // Never compute removals from a half-loaded picture: a leg still in
+    // flight isn't in relayLegs, and one whose identity we haven't
+    // resolved yet would look "dropped". That produced a delete
+    // confirmation immediately after the dispatcher ADDED a leg. Save is
+    // blocked while loading anyway, so reporting nothing here is safe.
+    if (legsLoading) return [];
     const kept = new Set(relayLegViews.map(l => l.eventId).filter(Boolean));
     return relayLegs.filter(l => !kept.has(l.id));
   };
