@@ -34,6 +34,7 @@ import StopsSection from './StopsSection';
 import RelayLegsEditor, { RelayLegView, RelayHandoffView, RelayHandoffPhoto } from './RelayLegsEditor';
 import { legRoleFor, legLabel, byLegIndex } from '@fleetcal/types';
 import { legStraightMiles } from '@/lib/legMiles';
+import { errorToast } from '@/lib/errorToast';
 import RouteMapPanel from './RouteMapPanel';
 import DriverSummaryPanel from './DriverSummaryPanel';
 import NotifyDriverPopover from './NotifyDriverPopover';
@@ -1992,6 +1993,14 @@ export default function EventModal() {
   const [geocodeBlock,   setGeocodeBlock]   = useState<'single' | 'batch' | null>(null); // save target when ungeocoded stops detected
   const markDirty = () => setIsDirty(true);
 
+  /** User-correctable save blocker → visible toast. errorToast renders
+   *  the `message` of a 4xx-shaped error verbatim, which is exactly the
+   *  contract we want for validation messages. Every abort path in
+   *  doSave MUST go through this — silent returns caused "Save does
+   *  nothing" bug reports. */
+  const showSaveBlocked = (message: string) =>
+    errorToast({ status: 400, message }, message);
+
   // Shift stop appointment times when the start date changes (duplicate/+1 Week flow).
   // Only manipulates the date portion — time portion is preserved as-is to avoid
   // UTC↔local conversion errors (new Date(localIso).toISOString() shifts by TZ offset).
@@ -2239,6 +2248,13 @@ export default function EventModal() {
    *  the viewed one (per-leg "+ Add handoff" on each card). null while
    *  no split is pending; falls back to the viewed leg for safety. */
   const [pendingSplitTargetId, setPendingSplitTargetId] = useState<string | null>(null);
+  /** Synchronous re-entry lock for addHandoff in edit mode. State-based
+   *  guards (pendingSplitStopId) read stale closures under rapid double
+   *  clicks — two clicks in one commit both saw null and inserted two
+   *  relay markers while draftLegs (a replace, not append) kept one
+   *  draft leg. That marker/leg mismatch is what made Save no-op. A ref
+   *  flips immediately, so the second click bails. */
+  const pendingSplitLockRef = useRef(false);
 
   const isExistingRelayLeg = isEdit && !!relayRole;
   const isRelayContext = draftLegs.length > 0 || isExistingRelayLeg;
@@ -2467,12 +2483,13 @@ export default function EventModal() {
   };
 
   useEffect(() => {
-    if (!modalOpen) { setConfirmDel(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setRateConOriginal(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setOtherLegMiles({}); setShowDriverSummary(false); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setLoadInvoices([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); setInternalNotes([]); setOriginalInternalNotes([]); setNoteComposer(''); setNoteComposerOpen(false); setPendingNewBroker(null); setLegPays({}); setLegEdits({}); setDraftLegs([]); setPendingSplitStopId(null); setPendingSplitTargetId(null); setSuggestAssetSwap(null); setSuggestDriverSwap(null); return; }
+    if (!modalOpen) { setConfirmDel(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setRateConOriginal(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setOtherLegMiles({}); setShowDriverSummary(false); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setLoadInvoices([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); setInternalNotes([]); setOriginalInternalNotes([]); setNoteComposer(''); setNoteComposerOpen(false); setPendingNewBroker(null); setLegPays({}); setLegEdits({}); setDraftLegs([]); setPendingSplitStopId(null); setPendingSplitTargetId(null); pendingSplitLockRef.current = false; setSuggestAssetSwap(null); setSuggestDriverSwap(null); return; }
     setParseState('idle'); setParseError('');
     setRateConPdf(undefined); setRateConOriginal(undefined); setShowPdfViewer(false); setShowMapPanel(modalShowMap);
     setIsDirty(false); setShowSavePrompt(false);
     setRelayGroupId(undefined); setRelayRole(undefined);
     setLegPays({}); setLegEdits({}); setDraftLegs([]); setPendingSplitStopId(null); setPendingSplitTargetId(null);
+    pendingSplitLockRef.current = false;
     setAccessorials([]);
     // Internal notes are scoped to a single load — never carry across
     // duplicate / +1 Week / drag-create transitions. The edit branch
@@ -2688,6 +2705,21 @@ export default function EventModal() {
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modalOpen, isExistingRelayLeg, relayLegs.map(l => l.id).join(',')]);
+
+  // If the dispatcher deletes the PENDING handoff's relay point via the
+  // stop trash icon, the split can no longer be saved — treat it as a
+  // cancel: drop the draft leg and release the lock so the "+ Add
+  // handoff" affordances come back. Without this, pendingSplitStopId
+  // dangles and Save would keep erroring until Cancel split was found.
+  useEffect(() => {
+    if (!pendingSplitStopId) return;
+    if (stops.some(s => s.id === pendingSplitStopId)) return;
+    setPendingSplitStopId(null);
+    setPendingSplitTargetId(null);
+    setDraftLegs([]);
+    pendingSplitLockRef.current = false;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stops, pendingSplitStopId]);
 
   // Auto-recover loads that landed in the cache with empty stops. The
   // user reported opening a load and seeing "+ Add Stop" instead of
@@ -3158,6 +3190,16 @@ export default function EventModal() {
 
     if (isEdit && isExistingRelayLeg && modalEventId && !pendingSplitStopId) {
       // ── Existing relay: patch EVERY leg in one action ──────────────
+      // Marker invariant: an N-leg relay carries exactly N-1 relay
+      // points (orphans sneak in via the stop-type dropdown or stale
+      // sessions and would corrupt every leg's window server-side).
+      if (relayMarkers.length !== relayLegs.length - 1) {
+        showSaveBlocked(
+          `This load has ${relayMarkers.length} relay point${relayMarkers.length === 1 ? '' : 's'} for ${relayLegs.length} legs (expected ${relayLegs.length - 1}). ` +
+          `Remove the extra relay point${relayMarkers.length - (relayLegs.length - 1) === 1 ? '' : 's'} with the trash icon — or use "+ Add handoff" on a leg card to add a leg for it — then save again.`,
+        );
+        return;
+      }
       // Load-level fields ride on each leg's updates; saveRelayLegs
       // merges them with leg 0 winning (they're identical here anyway).
       const legsPayload = relayLegs.map((leg, i) => {
@@ -3197,10 +3239,31 @@ export default function EventModal() {
       // (any leg, per the per-leg "+" — defaults to the viewed one).
       const draft = draftLegs[0]; // edit mode allows one pending handoff per save
       const marker = stops.find(s => s.id === pendingSplitStopId);
-      if (!draft || !marker?.apptStart) return;
+      if (!draft || !marker) {
+        // Shouldn't be reachable (a deleted pending marker auto-cancels
+        // the split via the effect above) — but never fail silently.
+        showSaveBlocked('The pending handoff is missing its relay point. Cancel the split and add the handoff again.');
+        return;
+      }
+      if (!marker.apptStart) {
+        showSaveBlocked('Set the drop time on the new relay point (Locations section) before saving the handoff.');
+        return;
+      }
+      // Marker invariant: existing legs carry legs-1 markers, plus the
+      // one pending marker → exactly relayLegs.length in total.
+      if (relayMarkers.length !== relayLegs.length) {
+        showSaveBlocked(
+          `This load has ${relayMarkers.length} relay point${relayMarkers.length === 1 ? '' : 's'} but ${relayLegs.length} ${relayLegs.length === 1 ? 'is' : 'are'} expected ` +
+          `(${relayLegs.length - 1} existing plus the one being added). Remove the extra relay points with the trash icon, then save again.`,
+        );
+        return;
+      }
       const targetId = pendingSplitTargetId ?? modalEventId;
       const targetLeg = relayLegs.find(l => l.id === targetId) ?? currentEv;
-      if (!targetLeg) return;
+      if (!targetLeg) {
+        showSaveBlocked('Could not resolve the leg being split. Cancel the split and try again.');
+        return;
+      }
       const isViewedTarget = targetLeg.id === modalEventId;
       // Persist every NON-target leg's event-level edits first —
       // splitToRelay only touches the split leg + load-level. Stops are
@@ -3256,8 +3319,24 @@ export default function EventModal() {
 
     } else if (draftLegs.length > 0) {
       // ── Create-mode splits (or single→relay conversion in edit) ────
-      if (relayMarkers.length !== draftLegs.length) return;
-      if (relayMarkers.some(m => !m.apptStart)) return;
+      // Marker invariant: one relay point per handoff being added.
+      // THIS guard was the silent no-op behind "Save does nothing" —
+      // orphan markers (stop-type dropdown / double-inserted) made the
+      // counts diverge and doSave bailed without a word.
+      if (relayMarkers.length !== draftLegs.length) {
+        showSaveBlocked(
+          relayMarkers.length > draftLegs.length
+            ? `This load has ${relayMarkers.length} relay points but only ${draftLegs.length} new leg${draftLegs.length === 1 ? '' : 's'}. ` +
+              'Remove the extra relay points with the trash icon (or cancel the split and start over), then save again.'
+            : `A relay point is missing for one of the new legs (${relayMarkers.length} relay point${relayMarkers.length === 1 ? '' : 's'} for ${draftLegs.length} new legs). ` +
+              'Cancel the affected split in the relay section and add the handoff again.',
+        );
+        return;
+      }
+      if (relayMarkers.some(m => !m.apptStart)) {
+        showSaveBlocked('Set the drop time on every relay point (Locations section) before saving.');
+        return;
+      }
       const rgId = crypto.randomUUID();
       const existingEv = isEdit && modalEventId ? events.find(e => e.id === modalEventId) : undefined;
       // Pre-resolve display names so the audit entry survives later
@@ -3676,6 +3755,7 @@ export default function EventModal() {
         setDraftLegs([]);
         setPendingSplitStopId(null);
         setPendingSplitTargetId(null);
+        pendingSplitLockRef.current = false;
       } else {
         // Create mode: marker m maps 1:1 to draftLegs[m].
         setDraftLegs(prev => prev.filter((_, i) => i !== handoffIdx));
@@ -3694,7 +3774,22 @@ export default function EventModal() {
    *  viewed leg; one pending handoff per save), or the LAST leg in
    *  create mode (repeatable: each call appends a leg). */
   const addHandoff = (targetLegId?: string) => {
-    if (isEdit && pendingSplitStopId) return; // one unsaved handoff at a time
+    // One unsaved handoff at a time in edit mode. The ref is the
+    // race-proof gate (flips synchronously); the state check is belt +
+    // suspenders for anything that re-enables the buttons early.
+    if (isEdit && (pendingSplitStopId || pendingSplitLockRef.current)) return;
+    // Structural guard: refuse to insert a marker when the stop list
+    // already has more relay points than the load has handoffs (orphans
+    // from the type dropdown or an old session). Piling on another
+    // marker would deepen the mismatch that blocks Save.
+    const allowedExisting = isEdit && isExistingRelayLeg
+      ? Math.max(0, relayLegs.length - 1)
+      : draftLegs.length;
+    if (stops.filter(s => s.type === 'relay').length > allowedExisting) {
+      showSaveBlocked('This load has extra relay points. Remove them (trash icon on the stop) before adding a new handoff.');
+      return;
+    }
+    if (isEdit) pendingSplitLockRef.current = true;
     // Resolve the leg being split (edit mode on an existing relay only).
     const targetLeg = isEdit && isExistingRelayLeg
       ? (relayLegs.find(l => l.id === (targetLegId ?? modalEventId)) ?? relayLegs.find(l => l.id === modalEventId))

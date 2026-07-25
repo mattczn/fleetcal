@@ -2177,7 +2177,7 @@ export const useCalendarStore = create<CalendarStore>()(
           ],
         }));
       })
-      .catch((err) => console.error('createRelayLegs:', err));
+      .catch((err) => { console.error('createRelayLegs:', err); errorToast(err, 'Relay did not save'); });
   },
 
   splitToRelay: (targetEventId, targetUpdates, newLegData, presetNewLegId, opts) => {
@@ -2185,10 +2185,12 @@ export const useCalendarStore = create<CalendarStore>()(
     const ev = state.events.find(e => e.id === targetEventId);
     if (!ev) {
       console.error('splitToRelay: event not found', targetEventId);
+      errorToast({ status: 400, message: 'Could not split the load — the leg being split was not found. Refresh and try again.' }, 'Relay split failed');
       return;
     }
     if (!ev.loadId) {
       console.error('splitToRelay: event has no loadId; cannot split', targetEventId);
+      errorToast({ status: 400, message: 'Could not split the load — it has no load record. Refresh and try again.' }, 'Relay split failed');
       return;
     }
     if (state.isDemo) return;
@@ -2204,6 +2206,7 @@ export const useCalendarStore = create<CalendarStore>()(
       : stops.findIndex(s => s.type === 'relay');
     if (relayIdx < 0) {
       console.error('splitToRelay: relay marker not found in stops list');
+      errorToast({ status: 400, message: 'Could not split the load — the new relay point is missing from the stop list. Cancel the split and add the handoff again.' }, 'Relay split failed');
       return;
     }
 
@@ -2316,7 +2319,7 @@ export const useCalendarStore = create<CalendarStore>()(
       }),
     );
 
-    Promise.all(promises).catch(err => console.error('splitToRelay:', err));
+    Promise.all(promises).catch(err => { console.error('splitToRelay:', err); errorToast(err, 'Relay split did not save'); });
   },
 
   saveRelayLegs: (legs) => {
@@ -2384,7 +2387,7 @@ export const useCalendarStore = create<CalendarStore>()(
         promises.push(railway.replaceStops(l.id, { stops: l.stops }));
       }
     }
-    Promise.all(promises).catch((err) => console.error('saveRelayLegs:', err));
+    Promise.all(promises).catch((err) => { console.error('saveRelayLegs:', err); errorToast(err, 'Relay changes did not save'); });
   },
 
   removeRelay: (keepEventId, opts) => {
@@ -2473,7 +2476,7 @@ export const useCalendarStore = create<CalendarStore>()(
         for (const l of res.loads) markSelfWrite(l.id);
         for (const l of res.loads) get().updateEventFromRemote(l);
       })
-      .catch((err) => console.error('removeRelay:', err));
+      .catch((err) => { console.error('removeRelay:', err); errorToast(err, 'Relay merge did not save'); });
   },
 
   // ── Calendar nav ──────────────────────────────────────────────────────────

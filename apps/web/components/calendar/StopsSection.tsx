@@ -284,6 +284,19 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
     relayErrTimer.current = setTimeout(() => setRelayTimeError(null), 3500);
   }
 
+  // Transient banner under the section header — used when a stop-type
+  // change to "Relay Point" is blocked (it would create an orphan
+  // marker with no matching leg, which corrupts every leg's window and
+  // blocks Save). Longer timeout than the time warning: it carries an
+  // instruction, not just a nudge.
+  const [typeChangeError, setTypeChangeError] = useState<string | null>(null);
+  const typeErrTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function showTypeChangeError(msg: string) {
+    setTypeChangeError(msg);
+    if (typeErrTimer.current) clearTimeout(typeErrTimer.current);
+    typeErrTimer.current = setTimeout(() => setTypeChangeError(null), 6000);
+  }
+
   // Always-current ref to stops so async callbacks don't use stale closures
   const stopsRef = useRef(stops);
   useEffect(() => { stopsRef.current = stops; }, [stops]);
@@ -535,6 +548,13 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
         </div>
       </div>
 
+      {typeChangeError && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#b45309', background: '#fef3c7', border: '1px solid #fcd34d', borderRadius: 8, padding: '7px 10px', marginBottom: 8 }}>
+          <AlertCircle size={13} style={{ flexShrink: 0 }} />
+          <span>{typeChangeError}</span>
+        </div>
+      )}
+
       {/* Stop rows */}
       <div className="space-y-2">
         {(() => {
@@ -614,7 +634,29 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
               <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 4 }}>
                 <select
                   value={stop.type}
-                  onChange={e => update(idx, { type: e.target.value as StopType })}
+                  onChange={e => {
+                    const nextType = e.target.value as StopType;
+                    if (nextType === 'relay' && stop.type !== 'relay') {
+                      // A relay point only makes sense with a leg on each
+                      // side: an N-leg load carries exactly N-1 markers
+                      // (legCount already includes any pending draft leg).
+                      // Converting a stop beyond that creates an orphan
+                      // marker that blocks Save — steer to the real flow.
+                      // Re-converting after an accidental delete (count
+                      // below the allowance) is still permitted.
+                      const allowed = Math.max(0, (legCount ?? (relayRole ? 2 : 1)) - 1);
+                      const current = stops.filter(s => s.type === 'relay').length;
+                      if (current + 1 > allowed) {
+                        showTypeChangeError(
+                          allowed === 0
+                            ? 'To split this load into a relay, use the "Split / Relay" button above — it creates the relay point and the second leg together.'
+                            : 'This load already has a relay point for every handoff. To add another handoff, use "+ Add handoff" — it creates the relay point and the new leg together.',
+                        );
+                        return;
+                      }
+                    }
+                    update(idx, { type: nextType });
+                  }}
                   style={{
                     height: 28, border: 'none', borderRadius: 6,
                     padding: '0 6px', fontSize: 11, fontWeight: 700,
