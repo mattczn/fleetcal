@@ -2023,6 +2023,10 @@ export default function EventModal() {
   useEffect(() => {
     const prev = prevStartDateRef.current;
     if (!prev || !startDate || prev === startDate) { prevStartDateRef.current = startDate; return; }
+    // Never bulk-shift stops while viewing one leg of a relay: the stop
+    // list is the WHOLE load's, so a day change on this leg would move
+    // every other leg's appointments and the handoff times with it.
+    if (isExistingRelayLeg) { prevStartDateRef.current = startDate; return; }
     // Both are YYYY-MM-DD date-only strings → parse as UTC midnight for an exact day delta
     const deltaDays = Math.round(
       (new Date(startDate).getTime() - new Date(prev).getTime()) / (1000 * 60 * 60 * 24)
@@ -2354,8 +2358,35 @@ export default function EventModal() {
     for (let i = out.length; i < derivedLegCount; i++) out.push({ key: `seg:${i}` });
     return out;
   }, [isLegBuilder, legPlan, relayLegs, releasedEventIds, derivedLegCount]);
+  /** True when the form's start/end describe ONE LEG of a multi-leg
+   *  load rather than the whole load's pickup and delivery. Gates the
+   *  start↔end and start↔stops linkages, which are correct only when
+   *  the two fields really are the load's own window. */
+  const isMultiLegView = isExistingRelayLeg || derivedLegCount > 1 || draftLegs.length > 0;
   const isRelayContext = draftLegs.length > 0 || isExistingRelayLeg
     || (isLegBuilder && derivedLegCount > 1);
+  /**
+   * The LOAD's overall window: first leg start → last leg end, taken
+   * from the PERSISTED legs (server truth), never from the form.
+   *
+   * The form's startDate/endDate describe the VIEWED LEG, but a
+   * dispatcher reads them as the load's pickup and delivery. Sourcing
+   * the load window from them made every handoff drag the delivery
+   * earlier (splitting clamps the viewed leg's end to the new handoff
+   * time) and let an edit on one leg move another leg's boundary.
+   * Adding or removing a handoff only subdivides the interior — this
+   * window is invariant under it.
+   */
+  const loadWindow = useMemo<{ start: string; end: string } | null>(() => {
+    if (relayLegs.length === 0) return null;
+    let start = relayLegs[0].start;
+    let end   = relayLegs[0].end;
+    for (const l of relayLegs) {
+      if (l.start && l.start < start) start = l.start;
+      if (l.end   && l.end   > end)   end   = l.end;
+    }
+    return { start, end };
+  }, [relayLegs]);
   const viewedArrIdx = relayLegs.findIndex(l => l.id === modalEventId);
   const otherLegs = useMemo(
     () => relayLegs.filter(l => l.id !== modalEventId),
@@ -4982,8 +5013,18 @@ export default function EventModal() {
     const after  = i < relayMarkersInStops.length ? relayMarkersInStops[i] : undefined;
     const bt = before ? handoffTimesOf(before) : undefined;
     const at = after  ? handoffTimesOf(after)  : undefined;
-    const start = bt ? (bt.pickup ?? bt.drop ?? formStart) : formStart;
-    let end = at ? (at.drop ?? at.pickup ?? formEnd) : formEnd;
+    // Interior boundaries come from the handoff itself. The OUTER
+    // boundaries are the load's pickup and delivery: they may only come
+    // from the form when the form is actually describing that leg —
+    // otherwise they're pinned to the load window, so adding a handoff
+    // can never drag the delivery earlier, and editing one leg can
+    // never move another leg's outer boundary.
+    const viewedIdx = viewedLegIdx ?? 0;
+    const lastIdx = relayMarkersInStops.length;
+    const loadStart = viewedIdx === 0      ? formStart : (loadWindow?.start ?? formStart);
+    const loadEnd   = viewedIdx === lastIdx ? formEnd   : (loadWindow?.end   ?? formEnd);
+    const start = bt ? (bt.pickup ?? bt.drop ?? loadStart) : loadStart;
+    let end = at ? (at.drop ?? at.pickup ?? loadEnd) : loadEnd;
     // Never emit an inverted window — the server rejects start > end.
     if (end < start) end = start;
     return { start, end };
@@ -6404,7 +6445,14 @@ export default function EventModal() {
                   <DatePicker value={startDate}
                     onChange={v => {
                       markDirty();
-                      if (startDate && endDate) {
+                      // Duration preservation (moving the start drags the
+                      // end along) is right for a single-leg load, where
+                      // these two fields ARE the load's pickup and
+                      // delivery. On a relay leg they're one leg's
+                      // boundaries, and dragging the other one rewrites a
+                      // handoff — or the load's delivery — behind the
+                      // dispatcher's back. Each boundary moves alone here.
+                      if (startDate && endDate && !isMultiLegView) {
                         const diffMs = new Date(`${endDate}T${endTime}`).getTime() - new Date(`${startDate}T${startTime}`).getTime();
                         const newEndMs = new Date(`${v}T${startTime}`).getTime() + diffMs;
                         const d = new Date(newEndMs);
