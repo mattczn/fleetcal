@@ -102,19 +102,11 @@ interface Props {
   onAddHandoffForLeg?: (legKey: string) => void;
   onRemoveHandoff: (handoffIdx: number) => void;
   /** Leg-builder mode: the legs come from the CURRENT stop list's
-   *  handoff boundaries (not from persisted events), and the single
-   *  "Apply N legs" action reconciles them all at once via
-   *  PUT /v1/loads/:id/legs. Absent = the incremental split flow. */
-  applyLegs?: {
-    /** Human summary of what will change, e.g. "1 leg → 3 legs". */
-    summary: string;
-    /** True while the reconcile request is in flight. */
-    busy?: boolean;
-    /** Non-null = a client-side validation failure; the button stays
-     *  clickable and reports this message (never silently disabled). */
-    blockedReason?: string | null;
-    onApply: () => void;
-  };
+   *  handoff boundaries (not from persisted events), so ANY leg can be
+   *  split again before saving — that's how one leg becomes three in a
+   *  single pass. Saving reconciles them all at once via
+   *  PUT /v1/loads/:id/legs. False = the incremental split flow. */
+  builderMode?: boolean;
 }
 
 function fmtRelayTime(iso: string): string {
@@ -314,7 +306,7 @@ export default function RelayLegsEditor({
   legs, handoffs, loadPrice, assets, drivers, startDate,
   canViewDriverPay, disabled, loadId, handoffPhotos, onSelectPhoto, onPhotosUploaded,
   canonicalDriverName, onChangeLeg, onOpenLeg, onAddHandoff, onAddHandoffForLeg, onRemoveHandoff,
-  applyLegs,
+  builderMode,
 }: Props) {
   const [confirmIdx, setConfirmIdx] = useState<number | null>(null);
 
@@ -420,11 +412,11 @@ export default function RelayLegsEditor({
                 leg (new marker within its stop window, new leg right
                 after it). Rendered for persisted legs only; hidden
                 while a split is already pending. */}
-            {/* In builder mode (applyLegs set) every leg can be split
-                again before the single Apply — that's how 1 leg becomes
-                3 in one pass. The incremental flow only splits legs
-                that already exist server-side. */}
-            {onAddHandoffForLeg && !disabled && (applyLegs ? true : (leg.eventId && !leg.isDraft)) && (
+            {/* In builder mode every leg can be split again before the
+                save — that's how 1 leg becomes 3 in one pass. The
+                incremental flow only splits legs that already exist
+                server-side. */}
+            {onAddHandoffForLeg && !disabled && (builderMode ? true : (leg.eventId && !leg.isDraft)) && (
               <div className="flex items-center gap-2 px-1" style={{ marginTop: -6 }}>
                 <div className="flex-1 h-px" style={{ background: '#e9e5f8' }} />
                 <button type="button" onClick={() => onAddHandoffForLeg(leg.key)}
@@ -455,57 +447,6 @@ export default function RelayLegsEditor({
         </div>
       )}
 
-      {/* ── Leg summary + single confirm (leg-builder mode) ──────────
-          One chip per leg, then ONE action that reconciles the whole
-          load: 1 leg → N legs in a single save. */}
-      {applyLegs && (
-        <div className="space-y-2 rounded-lg p-3" style={{ background: 'var(--gc-surface)', border: '1px solid #ddd6fe' }}>
-          <div className="text-[10px] font-bold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
-            Confirm legs
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {legs.map((l, i) => {
-              const truck = assets.find(a => a.id === l.assetId);
-              const truckName = truck ? (truck.unit ? `${truck.name} - ${truck.unit}` : truck.name) : '— no truck —';
-              const share = totalMiles != null && l.miles != null ? Math.round((l.miles / totalMiles) * 100) : null;
-              return (
-                <span key={l.key}
-                  className="flex items-center gap-1.5 px-2 py-1 rounded-lg"
-                  style={{
-                    fontSize: 11, color: '#5b21b6', background: '#f5f3ff',
-                    border: `1px solid ${truck ? '#ddd6fe' : '#fca5a5'}`,
-                  }}>
-                  <strong>{legLabel(i, legs.length) || `Leg ${i + 1}`}</strong>
-                  <span style={{ color: 'var(--gc-text-3)' }}>·</span>
-                  <span>{l.driverName || 'no driver'}</span>
-                  <span style={{ color: 'var(--gc-text-3)' }}>·</span>
-                  <span style={{ color: truck ? undefined : '#b91c1c' }}>{truckName}</span>
-                  {l.miles != null && (
-                    <>
-                      <span style={{ color: 'var(--gc-text-3)' }}>·</span>
-                      <span>{Math.round(l.miles).toLocaleString()} mi{share != null ? ` (${share}%)` : ''}</span>
-                    </>
-                  )}
-                </span>
-              );
-            })}
-          </div>
-          <div className="flex items-center justify-between gap-3 flex-wrap">
-            <span style={{ fontSize: 11, color: 'var(--gc-text-3)' }}>{applyLegs.summary}</span>
-            <button type="button" onClick={applyLegs.onApply} disabled={applyLegs.busy}
-              className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors"
-              style={{
-                background: applyLegs.blockedReason ? '#ede9fe' : RELAY_COLOR,
-                color: applyLegs.blockedReason ? RELAY_COLOR : '#fff',
-                border: `1px solid ${RELAY_COLOR}`,
-                cursor: applyLegs.busy ? 'wait' : 'pointer',
-                opacity: applyLegs.busy ? 0.6 : 1,
-              }}>
-              {applyLegs.busy ? 'Applying…' : `Apply ${legs.length} leg${legs.length === 1 ? '' : 's'}`}
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

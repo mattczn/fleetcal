@@ -4047,7 +4047,8 @@ export default function EventModal() {
   };
 
   // ── Apply N legs (atomic reconcile) ────────────────────────────────
-  const [applyingLegs, setApplyingLegs] = useState(false);
+  // Reached from Save when the leg structure changed — the modal's own
+  // saving indicator covers the in-flight state.
   /** Client-side validation mirroring the server's invariants. Returns
    *  a user-facing message, or null when the payload is sound. */
   const legsValidationError = (): string | null => {
@@ -4080,7 +4081,6 @@ export default function EventModal() {
     if (blocked) { showSaveBlocked(blocked); return false; }
     const loadId = currentEv?.loadId;
     if (!loadId) return false;
-    setApplyingLegs(true);
     try {
       await configureLegs(loadId, {
         stops,
@@ -4104,12 +4104,7 @@ export default function EventModal() {
     } catch {
       // configureLegs already toasted the failure.
       return false;
-    } finally {
-      setApplyingLegs(false);
     }
-  };
-  const handleApplyLegs = () => {
-    void applyLegsNow().then(ok => { if (ok) closeModal(); });
   };
 
   /** Re-pull the load's documents after a handoff-photo upload. */
@@ -6422,15 +6417,9 @@ export default function EventModal() {
                           ? (legKey) => addHandoff(legKey)
                           : undefined}
                         onRemoveHandoff={handleRemoveHandoff}
-                        // Builder: one confirm for the whole structure.
-                        applyLegs={isLegBuilder && !isReadOnly ? {
-                          summary: derivedLegCount === relayLegs.length
-                            ? `${relayLegs.length} leg${relayLegs.length === 1 ? '' : 's'} — saves drivers, trucks and pay`
-                            : `${relayLegs.length} leg${relayLegs.length === 1 ? '' : 's'} → ${derivedLegCount} legs`,
-                          busy: applyingLegs,
-                          blockedReason: legsValidationError(),
-                          onApply: handleApplyLegs,
-                        } : undefined}
+                        // Builder mode: any leg can be split again before
+                        // saving; Save reconciles the whole structure.
+                        builderMode={isLegBuilder && !isReadOnly}
                       />
                     </div>
                   )}
