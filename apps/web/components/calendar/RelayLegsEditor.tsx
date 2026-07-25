@@ -17,7 +17,7 @@
  */
 
 import { Fragment, useState } from 'react';
-import { ArrowLeftRight, Plus } from 'lucide-react';
+import { ArrowLeftRight, Plus, Loader2 } from 'lucide-react';
 import { legLabel, handoffTimesOf } from '@fleetcal/types';
 import { StyledSelect } from '@/components/ui/StyledSelect';
 import { ApptInput } from './StopsSection';
@@ -247,6 +247,10 @@ function LegCard({
             style={{ background: '#ede9fe', color: RELAY_COLOR, border: '1px solid #ddd6fe', letterSpacing: '0.02em' }}>
             {label}
           </span>
+          {/* Same spinner the rest of the modal uses (rate-con parse,
+              document upload, geocode) so "busy" reads identically
+              wherever it appears. */}
+          <Loader2 size={12} className="animate-spin" style={{ color: RELAY_COLOR }} />
           <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
             Loading leg…
           </span>
@@ -380,6 +384,15 @@ export default function RelayLegsEditor({
           <span className="text-sm font-semibold" style={{ color: RELAY_COLOR }}>
             Relay — {legCount} leg{legCount === 1 ? '' : 's'}
           </span>
+          {/* Section-level busy signal, so the state is visible without
+              scrolling down to find which leg is still coming in. */}
+          {legs.some(l => l.isLoading) && (
+            <span className="flex items-center gap-1.5 text-[11px] font-semibold"
+              style={{ color: RELAY_COLOR }}>
+              <Loader2 size={12} className="animate-spin" />
+              Loading legs…
+            </span>
+          )}
         </div>
         {onAddHandoff && !disabled && (
           <button type="button" onClick={() => onAddHandoff()}
