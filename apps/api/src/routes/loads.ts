@@ -2209,12 +2209,26 @@ loads.put("/:id/legs", requireCapability("loads.edit"), async (c) => {
   }
   const existingIds = new Set(existing.map((e) => e.id));
 
-  // Every referenced eventId must belong to this load — otherwise a
-  // caller could graft another load's leg onto this one.
+  // A referenced eventId must belong to this load — otherwise a caller
+  // could graft another load's leg onto this one. But a STALE id for a
+  // leg of this same load (one that was soft-deleted, and lingered in a
+  // client cache) is not an attack, it's out-of-date information — and
+  // rejecting it dead-ended the dispatcher, who had no way to see or
+  // clear the stale reference. Converge instead: forget the id and let
+  // the leg be created. Only a genuinely foreign id is refused.
+  const { data: everRaw } = await supabase
+    .from("events")
+    .select("id")
+    .eq("load_id", loadId)
+    .eq("org_id", orgId);
+  const everOnThisLoad = new Set(((everRaw ?? []) as Array<{ id: string }>).map(r => r.id));
   for (const [i, leg] of body.legs.entries()) {
-    if (leg.eventId && !existingIds.has(leg.eventId)) {
-      return badRequest(c, [`legs[${i}]: eventId does not belong to this load`]);
+    if (!leg.eventId || existingIds.has(leg.eventId)) continue;
+    if (everOnThisLoad.has(leg.eventId)) {
+      delete leg.eventId;   // stale reference to a removed leg → new leg
+      continue;
     }
+    return badRequest(c, [`legs[${i}]: eventId does not belong to this load`]);
   }
   // `expectedEventIds` used to hard-reject a payload whose leg set had
   // drifted. That guarded against the double-submit multiplication —

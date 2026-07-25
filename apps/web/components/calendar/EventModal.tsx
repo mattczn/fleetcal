@@ -2342,7 +2342,14 @@ export default function EventModal() {
   const relayLegs = useMemo<CalendarEvent[]>(() => {
     if (!isEdit || !currentEv?.loadId) return [];
     if (!currentEv.relayRole) return [currentEv];
-    return events.filter(e => e.loadId === currentEv.loadId).sort(byLegIndex);
+    // Exclude soft-deleted legs. A removed leg can come back into the
+    // store from a realtime echo or a range refetch, and nothing here
+    // filtered it — so the plan adopted a dead leg's id and the save was
+    // rejected with "eventId does not belong to this load". The server
+    // only ever considers non-deleted legs, so this list has to match.
+    return events
+      .filter(e => e.loadId === currentEv.loadId && !e.deletedAt)
+      .sort(byLegIndex);
   }, [events, isEdit, currentEv]);
 
   /**
