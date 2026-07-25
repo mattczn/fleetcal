@@ -2822,9 +2822,32 @@ export default function EventModal() {
   useEffect(() => {
     if (!modalOpen || !isLegBuilder) return;
     if (relayLegs.length === 0) return;
-    const serverStops = relayLegs.find(l => (l.stops?.length ?? 0) > 0)?.stops ?? [];
+    // Prefer the stops of the leg the modal actually opened — that's
+    // what seeded the on-screen `stops` state, so the anchor keys are
+    // guaranteed to be the ids on screen. Legs cached from different
+    // fetches can carry stop lists with different ids; keying anchors
+    // off one leg's list while rendering another's is itself enough to
+    // make every lookup miss.
+    const serverStops = ((currentEv?.stops?.length ?? 0) > 0
+      ? currentEv?.stops
+      : relayLegs.find(l => (l.stops?.length ?? 0) > 0)?.stops) ?? [];
     if (serverStops.length === 0) return;
     setLegAnchors(prev => {
+      // Does the CURRENT map still identify anything on the current
+      // route? After a save it won't: the reconcile re-inserts every
+      // stop, so the ids the old anchors point at no longer exist.
+      const resolvesSomething = Array.from({ length: derivedLegCount }, (_, i) =>
+        prev[anchorIdIn(stops, i)]).some(Boolean);
+      if (!resolvesSomething) {
+        // Stale or empty → REPLACE wholesale from the server's stops.
+        // Merging would preserve the dead entries and never map the new
+        // ids, which is precisely how saved legs came back as "unsaved".
+        const next: Record<string, string> = {};
+        relayLegs.forEach((leg, i) => { next[anchorIdIn(serverStops, i)] = leg.id; });
+        return next;
+      }
+      // The map is live, so a local structural edit is in progress —
+      // only fill anchors with no entry, so late data can't overwrite it.
       const next = { ...prev };
       let changed = false;
       relayLegs.forEach((leg, i) => {
@@ -2834,7 +2857,8 @@ export default function EventModal() {
       return changed ? next : prev;
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [modalOpen, isLegBuilder, relayLegs.map(l => l.id).join(',')]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modalOpen, isLegBuilder, relayLegs.map(l => l.id).join(','), stops]);
 
   // Seed per-leg pay from each leg's stored driver_pay as legs land in
   // the store (including the async whole-load backfill above). Only
@@ -4457,10 +4481,25 @@ export default function EventModal() {
           };
         }),
       });
-      // Reconcile landed — the plan is rebuilt from the server's
-      // canonical legs on the next open; clear the release ledger so a
-      // stale id can never influence a later edit.
-      setLegAnchors({});
+      // ── Re-anchor to the server's state ─────────────────────────
+      // The reconcile DELETES and re-INSERTS every stop row, so the
+      // returned stops carry brand-new ids and every anchor keyed to a
+      // pre-save id would match nothing — making saved legs render as
+      // new/unassigned. Post-save the server's state IS the truth (the
+      // save just applied our structural edit), so adopt its stops and
+      // REPLACE the map wholesale rather than merging into it.
+      const fresh = useCalendarStore.getState().events
+        .filter(e => e.loadId === loadId && !e.deletedAt)
+        .sort(byLegIndex);
+      const serverStops = fresh.find(l => (l.stops?.length ?? 0) > 0)?.stops ?? [];
+      if (serverStops.length > 0 && fresh.length > 0) {
+        setStops(serverStops);
+        const nextAnchors: Record<string, string> = {};
+        fresh.forEach((leg, i) => { nextAnchors[anchorIdIn(serverStops, i)] = leg.id; });
+        setLegAnchors(nextAnchors);
+      } else {
+        setLegAnchors({});
+      }
       return true;
     } catch {
       // configureLegs already toasted the failure (including the
@@ -5040,11 +5079,28 @@ export default function EventModal() {
       // Builder: one view per SEGMENT of the stop list. Identity comes
       // from the anchor map — the id of the stop that starts the
       // segment — so it can never be knocked out of step by position.
+      // Safety net: if the map identifies NOTHING on the current route
+      // (stale ids after a save, or not seeded yet) but the legs are
+      // loaded, pair legs to segments in order — the same pairing the
+      // seed does. A persisted leg must never render as "unsaved" with
+      // blank fields just because a lookup missed. When the map DOES
+      // resolve something a structural edit is in progress, so an
+      // unmapped segment there is genuinely new and stays that way.
+      const anchorsResolve = Array.from({ length: derivedLegCount }, (_, i) =>
+        legAnchors[anchorIdFor(i)]).some(Boolean);
+      const useOrderFallback = !anchorsResolve && relayLegs.length > 0 && !legsLoading;
       return Array.from({ length: derivedLegCount }, (_, i) => {
         const key = anchorIdFor(i);
         const mappedId = legAnchors[key];
-        const existing = mappedId ? relayLegs.find(l => l.id === mappedId) : undefined;
-        const isViewed = !!existing && existing.id === modalEventId;
+        let existing = mappedId ? relayLegs.find(l => l.id === mappedId) : undefined;
+        if (!existing && useOrderFallback) existing = relayLegs[i];
+        // The segment showing the OPEN leg always binds to the form,
+        // even if its anchor missed — otherwise the viewed leg's truck
+        // falls back to "some other truck" while its driver reads from
+        // the form, which is the split state Matt screenshotted.
+        const isViewedSegment = viewedLegIdx === i;
+        if (!existing && isViewedSegment && currentEv) existing = currentEv;
+        const isViewed = existing ? existing.id === modalEventId : isViewedSegment;
         const edits = legEdits[key] ?? {};
         const prevKey = i > 0 ? anchorIdFor(i - 1) : undefined;
         const prevMappedId = prevKey ? legAnchors[prevKey] : undefined;
