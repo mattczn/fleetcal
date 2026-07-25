@@ -359,7 +359,7 @@ function PlanSelectStep({
                     color:      period === 'annual' ? 'var(--gc-blue)' : 'var(--gc-text-3)',
                   }}
                 >
-                  SAVE 17%
+                  SAVE 15%
                 </span>
               )}
             </button>
