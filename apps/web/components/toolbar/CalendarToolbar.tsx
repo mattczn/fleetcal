@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { ChevronLeft, ChevronRight, CheckCircle2, Loader2, Menu, Search, X, Trash2, RotateCcw, SlidersHorizontal, Eye, Container, Truck } from 'lucide-react';
 import { OrganizationSwitcher, UserButton, useUser } from '@clerk/nextjs';
-import { useCalendarStore } from '@/store/useCalendarStore';
+import { useCalendarStore, type DeletedEvent } from '@/store/useCalendarStore';
 import { localDateStr, nowInTz, dayAtNoon } from '@/lib/time-utils';
 import { searchEvents } from '@/lib/db';
 import LearningCenter from '@/components/onboarding/LearningCenter';
@@ -66,7 +66,7 @@ export default function CalendarToolbar() {
     rowHeight, setRowHeight,
     sidebarOpen, toggleSidebar,
     events, assets, trailers, openEditModal, openCreateModal, mergeEvents,
-    deletedEvents, restoreEvent, purgeEvent, clearTrash,
+    deletedEvents: deletedEventRows, restoreEvent, purgeEvent, clearTrash,
     viewMode, setViewMode,
     batchParseProgress, batchParseTotal, batchMinimized, batchItems, modalOpen, clearBatch, requestBatchCancel,
     calendarTimezone,
@@ -75,6 +75,22 @@ export default function CalendarToolbar() {
     showPodOverlay,       setShowPodOverlay,
     showBillingOverlay,   setShowBillingOverlay,
   } = useCalendarStore();
+
+  // Trash lists one row per LOAD, not per leg. Cancelling a relay
+  // soft-deletes every leg, so the raw list would show a 3-leg load as
+  // three identical-looking rows; restoring any one of them restores
+  // the whole load anyway (see restoreEvent), so the extra rows were
+  // only noise. Keeps the earliest leg as the load's representative.
+  const deletedEvents = useMemo(() => {
+    const seen = new Set<string>();
+    return deletedEventRows.filter((e: DeletedEvent) => {
+      if (!e.loadId) return true;              // non-revenue / unparented
+      if (seen.has(e.loadId)) return false;
+      seen.add(e.loadId);
+      return true;
+    });
+  }, [deletedEventRows]);
+
 
   const { user } = useUser();
   const router = useRouter();

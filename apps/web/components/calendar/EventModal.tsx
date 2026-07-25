@@ -1745,7 +1745,7 @@ export default function EventModal() {
     modalOpen, modalMode, modalEventId, modalDefaults, modalShowMap, modalConflict, clearModalConflict,
     prefillWorkOrderLinkIds,
     refetchEvent, refetchingEventIds,
-    addEvent, updateEvent, removeEvent, cancelEventKeepLoad, closeModal,
+    addEvent, updateEvent, removeEvent, cancelEventKeepLoad, cancelLoadKeepRecord, closeModal,
     openEditModal, openCreateModal,
     createRelayLegs, splitToRelay, saveRelayLegs, removeRelay, configureLegs,
     fieldSettings, sectionOrder, promptInstructions, promptVariables,
@@ -3790,11 +3790,9 @@ export default function EventModal() {
   const handleDelete = () => {
     if (!confirmDel) { setConfirmDel(true); return; }
     if (modalEventId) {
-      // Unlink EVERY sibling leg locally before the load-level delete
-      // cascades server-side.
-      for (const leg of otherLegs) {
-        updateEvent(leg.id, { ...leg, relayGroupId: undefined, relayRole: undefined });
-      }
+      // The load-level delete really does cascade (DELETE /v1/loads/:id
+      // removes the load and all its events) and the store now moves
+      // every cached leg to Trash with it, so no unlinking is needed.
       const deleteEntry: LoadAuditEntry = { changedAt: new Date().toISOString(), changedByName: currentUserName, loadDeleted: true };
       removeEvent(modalEventId, deleteEntry);
     }
@@ -3860,47 +3858,24 @@ export default function EventModal() {
   };
   const handleCancelRemoveEvent = () => {
     if (!modalEventId) return;
-    if (otherLegs.length > 0) {
-      // Drop the relay link on every sibling leg first so none ends up
-      // half-orphaned, and zero their financials — the whole load is
-      // being removed.
-      for (const leg of otherLegs) {
-        updateEvent(leg.id, {
-          ...leg,
-          relayGroupId: undefined,
-          relayRole: undefined,
-          loadPrice: 0,
-          loadedMiles: 0,
-          driverPay: 0,
-        });
-      }
-    } else {
-      // Single-leg load: zero rate on the load record before the
-      // event row is deleted so the preserved load reads as cancelled.
-      const evNow = events.find(e => e.id === modalEventId);
-      if (evNow?.loadId) {
-        const loadId = evNow.loadId;
-        // Suppress the realtime echo of this load write so the
-        // dispatcher running cancel doesn't get "updated by another
-        // dispatcher" pop on themselves while the modal is still
-        // closing.
-        useCalendarStore.getState().markLoadSelfWrite(loadId);
-        import('@/lib/railway').then(({ railway }) =>
-          railway.updateLoad(loadId, { loadPrice: 0 }),
-        ).catch((err) =>
-          console.error('handleCancelRemoveEvent: zero loadPrice failed', err),
-        );
-      }
-    }
-    cancelEventKeepLoad(modalEventId, buildCancelAuditEntry('remove-event'));
+    // Cancels the WHOLE load off the calendar: zeroes the load-level
+    // financials once on the LOAD record, then soft-deletes every leg.
+    // Previously this unlinked the siblings and removed only the open
+    // leg, so a relay's other legs survived as standalone events —
+    // the load looked cancelled while its delivery leg carried on.
+    // Unlinking first is also what made those orphans permanent, so
+    // there is deliberately no relayRole/relayGroupId clearing here.
+    cancelLoadKeepRecord(modalEventId, buildCancelAuditEntry('remove-event'));
     setCancelDialogOpen(false);
     closeModal();
   };
+
   const handleCancelPermanent = () => {
     if (!modalEventId) return;
-    for (const leg of otherLegs) {
-      updateEvent(leg.id, { ...leg, relayGroupId: undefined, relayRole: undefined });
-    }
+    // DELETE /v1/loads/:id soft-deletes the load and every event on it,
+    // and the store moves all the legs to Trash together — so there is
+    // nothing to unlink. Clearing relayRole on a leg that's about to be
+    // deleted only strands it if a later step fails.
     removeEvent(modalEventId, buildCancelAuditEntry('permanent'));
     setCancelDialogOpen(false);
     closeModal();
@@ -3949,7 +3924,16 @@ export default function EventModal() {
     if (isRemovedEventCancelled) {
       try {
         const { railway } = await import('@/lib/railway');
-        await railway.restoreEvent(modalEventId);
+        // Exact inverse of the cancel: that soft-deleted EVERY leg, so
+        // restore every leg. POST /v1/loads/:id/restore undeletes the
+        // load and all of its events in one call, which also makes the
+        // server the thing guaranteeing all-or-nothing. (It's a no-op
+        // on the load row itself here — 'remove-event' mode never
+        // deleted the load.) Only fall back to the single-event
+        // restore when there's no parent load.
+        const loadIdForRestore = currentEv?.loadId;
+        if (loadIdForRestore) await railway.restoreLoad(loadIdForRestore);
+        else await railway.restoreEvent(modalEventId);
       } catch (err) {
         console.error('[handleReinstate] event restore failed:', err);
         alert(`Reinstate failed: ${(err as Error).message ?? 'unknown'}`);

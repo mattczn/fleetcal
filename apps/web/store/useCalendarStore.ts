@@ -282,6 +282,12 @@ interface CalendarStore extends ModalState {
    *  The audit entry attaches to the load via updateLoad. */
   cancelEventKeepLoad: (id: string, auditEntry?: import('@/lib/types').LoadAuditEntry) => void;
   removeEvent: (id: string, auditEntry?: import('@/lib/types').LoadAuditEntry) => void;
+  /** Cancel the WHOLE load off the calendar while keeping the load
+   *  record: zeroes the load-level financials once, then soft-deletes
+   *  EVERY leg. There is no load-level endpoint for this (unlike
+   *  delete/restore), so the legs are looped — but the load write
+   *  happens once, on the load, not per event. */
+  cancelLoadKeepRecord: (id: string, auditEntry?: import('@/lib/types').LoadAuditEntry) => void;
   // Remote-only (realtime): apply without writing back to DB
   addEventFromRemote: (event: CalendarEvent) => void;
   updateEventFromRemote: (event: CalendarEvent) => void;
@@ -1912,6 +1918,56 @@ export const useCalendarStore = create<CalendarStore>()(
     }
   },
 
+  cancelLoadKeepRecord: (id, auditEntry) => {
+    if (get().isDemo) return;
+    if (!get().canEditLoads) return;
+    const ev = get().events.find((e) => e.id === id);
+    if (!ev) return;
+    const { orgId } = get();
+    if (!orgId) return;
+    // Non-revenue or unparented → nothing load-level to preserve.
+    if (ev.eventKind === 'non_revenue' || !ev.loadId) {
+      get().cancelEventKeepLoad(id, auditEntry);
+      return;
+    }
+    const loadId = ev.loadId;
+    const legs = get().events.filter((e) => e.loadId === loadId);
+    for (const leg of legs) markSelfWrite(leg.id);
+    // Zero the load-level financials ONCE, on the load record — these
+    // live on the load, never per leg, so writing them per event was
+    // both wrong and left the load itself untouched.
+    get().markLoadSelfWrite(loadId);
+    const nextLog = auditEntry ? [...(ev.auditLog ?? []), auditEntry] : undefined;
+    railway.updateLoad(loadId, {
+      loadPrice: 0,
+      ...(nextLog ? { auditLog: nextLog } : {}),
+    }).catch((err) => console.error('cancelLoadKeepRecord: zero load failed', err));
+    // Then take every leg off the calendar. The load row survives for
+    // search / accounting / TONU, exactly as the single-leg flow did.
+    const legIds = new Set(legs.map((l) => l.id));
+    set((state) => ({ events: state.events.filter((e) => !legIds.has(e.id)) }));
+    Promise.all(legs.map((leg) => railway.cancelEventKeepLoad(leg.id)))
+      .catch((err) => {
+        console.error('cancelLoadKeepRecord:', err);
+        errorToast(err, 'Load did not cancel');
+        set((state) => ({
+          events: [...state.events, ...legs.filter((l) => !state.events.some((e) => e.id === l.id))],
+        }));
+      });
+    // Tell the driver of each leg, same rule as the single-leg path.
+    for (const leg of legs) {
+      if (!leg.driverId) continue;
+      notifyDriver(
+        leg.driverId,
+        'Load Cancelled',
+        `${leg.title} — pickup ${fmtPushTime(leg.start)} — has been cancelled.`,
+        { type: 'load_cancelled', loadId, eventId: leg.id, url: '/' },
+        'load_cancelled',
+        leg.start,
+      );
+    }
+  },
+
   removeEvent: (id, auditEntry) => {
     if (get().isDemo) return;
     if (!get().canEditLoads) return; // read-only roles can't delete loads
@@ -1921,9 +1977,22 @@ export const useCalendarStore = create<CalendarStore>()(
     const deletedAt = new Date().toISOString();
     const newAuditLog = auditEntry ? [...(ev.auditLog ?? []), auditEntry] : ev.auditLog;
     const updated = { ...ev, auditLog: newAuditLog };
+    // DELETE /v1/loads/:id soft-deletes the load AND every one of its
+    // events, so the local state has to move ALL of them too. Removing
+    // only the viewed leg left the siblings on the calendar as
+    // standalone events — a relay that looked half-cancelled.
+    const siblings = ev.eventKind !== 'non_revenue' && ev.loadId
+      ? get().events.filter((e) => e.loadId === ev.loadId && e.id !== id)
+      : [];
+    for (const sib of siblings) markSelfWrite(sib.id);
+    const removedIds = new Set([id, ...siblings.map((e) => e.id)]);
     set((state) => ({
-      events: state.events.filter((e) => e.id !== id),
-      deletedEvents: [{ ...updated, deletedAt }, ...state.deletedEvents],
+      events: state.events.filter((e) => !removedIds.has(e.id)),
+      deletedEvents: [
+        { ...updated, deletedAt },
+        ...siblings.map((e) => ({ ...e, deletedAt })),
+        ...state.deletedEvents,
+      ],
     }));
     const { orgId } = get();
     if (!orgId) return;
@@ -1935,9 +2004,13 @@ export const useCalendarStore = create<CalendarStore>()(
     // so this only fires in edge cases — no user-facing alert.
     const rollback = (err: unknown) => {
       console.error('removeEvent:', err);
+      const restoreAll = [ev, ...siblings];
       set((state) => ({
-        events: state.events.some((e) => e.id === id) ? state.events : [...state.events, ev],
-        deletedEvents: state.deletedEvents.filter((d) => d.id !== id),
+        events: [
+          ...state.events,
+          ...restoreAll.filter((r) => !state.events.some((e) => e.id === r.id)),
+        ],
+        deletedEvents: state.deletedEvents.filter((d) => !removedIds.has(d.id)),
       }));
     };
 
@@ -2064,9 +2137,20 @@ export const useCalendarStore = create<CalendarStore>()(
     const { deletedAt: _, ...rest } = ev;
     const newAuditLog = auditEntry ? [...(rest.auditLog ?? []), auditEntry] : rest.auditLog;
     const restored = { ...rest, auditLog: newAuditLog };
+    // POST /v1/loads/:id/restore undeletes the load AND every event on
+    // it, so bring back all the legs — the exact inverse of the delete.
+    // A half-restored relay is worse than a half-cancelled one.
+    const siblings = ev.eventKind !== 'non_revenue' && ev.loadId
+      ? get().deletedEvents.filter((e) => e.loadId === ev.loadId && e.id !== id)
+      : [];
+    const restoredIds = new Set([id, ...siblings.map((e) => e.id)]);
     set((state) => ({
-      events: [...state.events, restored],
-      deletedEvents: state.deletedEvents.filter((e) => e.id !== id),
+      events: [
+        ...state.events,
+        restored,
+        ...siblings.map(({ deletedAt: _d, ...r }) => r as CalendarEvent),
+      ],
+      deletedEvents: state.deletedEvents.filter((e) => !restoredIds.has(e.id)),
     }));
     const { orgId } = get();
     if (!orgId) return;
