@@ -2,8 +2,8 @@
  * schema.org structured data (JSON-LD) for the marketing site, rendered
  * via <JsonLd data={...} />.
  *
- * Prices mirror PricingCards (Owner Op $99 / Growth $149 / Fleet $199
- * monthly) as an AggregateOffer (low 99 / high 199). Update both together
+ * Prices mirror PricingCards (Owner Op $249 / Growth $299 / Fleet $349
+ * monthly) as an AggregateOffer (low 249 / high 349). Update both together
  * if the plans change.
  */
 
@@ -14,8 +14,8 @@ const ORG_ID = `${SITE_URL}/#organization`;
 const OFFERS = {
   '@type': 'AggregateOffer',
   priceCurrency: 'USD',
-  lowPrice: '99',
-  highPrice: '199',
+  lowPrice: '249',
+  highPrice: '349',
   offerCount: 3,
 };
 
@@ -53,7 +53,7 @@ export const fleetcalAppLd = {
   operatingSystem: 'Web, iOS, Android',
   url: SITE_URL,
   description:
-    'See every truck and load on one calendar. FleetCal takes you from load to invoice in one system, built by a 14-truck carrier.',
+    'See every truck and load on one calendar. FleetCal takes you from load to invoice in one system: dispatch, driver app, paperwork, billing, and payroll.',
   publisher: { '@id': ORG_ID },
   offers: OFFERS,
 };
