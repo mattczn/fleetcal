@@ -49,6 +49,9 @@ export const fleetcalAppLd = {
   '@context': 'https://schema.org',
   '@type': 'SoftwareApplication',
   name: 'FleetCal',
+  alternateName: ['Fleet Calendar', 'Dispatch Calendar', 'Truck Scheduler'],
+  keywords:
+    'dispatch calendar, fleet calendar, trucking calendar, truck scheduler, fleet scheduler, truck dispatch software',
   applicationCategory: 'BusinessApplication',
   operatingSystem: 'Web, iOS, Android',
   url: SITE_URL,
@@ -144,6 +147,15 @@ export function productJsonLd(slug: ProductSlug) {
       description: p.description,
       publisher: { '@id': ORG_ID },
       offers: OFFERS,
+      // Calendar is our lead SEO page — reinforce the synonym cluster
+      // (fleet calendar / trucking calendar / truck scheduler) so it ranks
+      // for the whole set, not just "dispatch calendar".
+      ...(slug === 'calendar'
+        ? {
+            alternateName: ['Fleet Calendar', 'Trucking Dispatch Calendar', 'Truck Scheduler'],
+            keywords: 'dispatch calendar, fleet calendar, trucking calendar, truck scheduler, fleet scheduler',
+          }
+        : {}),
     },
     breadcrumbLd([
       { name: 'Home', url: SITE_URL },

@@ -21,11 +21,11 @@ import CapabilitySelector from '@/components/marketing/calendar/CapabilitySelect
  * hero. Authed app lives at `/calendar`. Light mode only.
  */
 export const metadata: Metadata = {
-  title: 'Dispatch Calendar Software for Trucking Fleets | FleetCal',
-  description: 'Drop a rate con, drag it to a truck, dispatch in seconds. One column per truck on a live dispatch calendar.',
+  title: 'Dispatch Calendar & Truck Scheduler for Fleets | FleetCal',
+  description: 'The dispatch calendar and truck scheduler for trucking fleets: drag a rate con onto a truck and dispatch in seconds, one column per truck on a live fleet calendar.',
   openGraph: {
-    title: 'Dispatch Calendar Software for Trucking Fleets | FleetCal',
-    description: 'Drop a rate con, drag it to a truck, dispatch in seconds. One column per truck on a live dispatch calendar.',
+    title: 'Dispatch Calendar & Truck Scheduler for Fleets | FleetCal',
+    description: 'The dispatch calendar and truck scheduler for trucking fleets: drag a rate con onto a truck and dispatch in seconds, one column per truck on a live fleet calendar.',
     url: 'https://fleetcal.app/product/calendar',
     siteName: 'FleetCal',
     images: [{ url: 'https://fleetcal.app/og-image.png', width: 1200, height: 630, alt: 'FleetCal: Every Load. One Calendar. Dispatch to invoice in one platform.' }],
@@ -33,8 +33,8 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'Dispatch Calendar Software for Trucking Fleets | FleetCal',
-    description: 'Drop a rate con, drag it to a truck, dispatch in seconds. One column per truck on a live dispatch calendar.',
+    title: 'Dispatch Calendar & Truck Scheduler for Fleets | FleetCal',
+    description: 'The dispatch calendar and truck scheduler for trucking fleets: drag a rate con onto a truck and dispatch in seconds, one column per truck on a live fleet calendar.',
     images: ['https://fleetcal.app/og-image.png'],
   },
   alternates: {
@@ -101,7 +101,7 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
           </Reveal>
           <Reveal delay={120}>
             <p style={{ fontSize: 18.5, lineHeight: 1.6, color: '#5f6368', maxWidth: 482, margin: '20px 0 0' }}>
-              Visualize your capacity in real time with one column per truck on a live calendar. A solid bar means it&rsquo;s rolling; white space means it&rsquo;s sitting and ready for the next load. Drop a rate con, drag it onto a truck, and dispatch the driver without leaving the calendar.
+              Visualize your capacity in real time with one column per truck on a live fleet calendar. A solid bar means it&rsquo;s rolling; white space means it&rsquo;s sitting and ready for the next load. Drop a rate con, drag it onto a truck, and dispatch the driver without leaving the calendar.
             </p>
           </Reveal>
           <Reveal delay={180}>
