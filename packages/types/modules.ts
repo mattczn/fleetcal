@@ -232,3 +232,52 @@ export const MVP_LAUNCH_DEFAULTS: Readonly<Record<OrgModule, boolean>> = {
   // aggregating.
   expenses:           false,
 };
+
+// ── Resolution ────────────────────────────────────────────────────
+
+/** An org's effective module map. Every OrgModule key is present with
+ *  an explicit boolean — no absent keys, so `isModuleEnabled`'s
+ *  absent-means-enabled fallback can't fire on a resolved map. */
+export type ResolvedOrgModules = Record<OrgModule, boolean>;
+
+/**
+ * Turn an org's STORED flags into its EFFECTIVE flags.
+ *
+ * This is the single definition of that rule. It used to be written
+ * out at six call sites — GET and PATCH /v1/org-settings, the
+ * requireModule guard, two driver-app endpoints, and the admin
+ * portal — and on 2026-07-26 two of those copies disagreed: the guard
+ * read the stored map raw while the settings endpoint layered the
+ * defaults. A brand-new org has NO org_settings row (it's written on
+ * the first save), so the guard saw `{}`, absent-means-enabled fired,
+ * and every module-gated route answered for an org whose nav
+ * correctly hid those same features. Module gating was UI-only for
+ * exactly the orgs the MVP module set was written for, and nothing
+ * errored — the two paths just quietly disagreed about entitlement.
+ *
+ * Any new reader of org_settings.modules calls this instead of
+ * spreading by hand.
+ *
+ * Layering, not flag-flipping: MVP_LAUNCH_DEFAULTS is a TOTAL map
+ * over OrgModule (compiler-enforced above), so the result always
+ * carries every key and a module is on only if the launch set says so
+ * or the org explicitly enabled it.
+ *
+ * FUTURE — per-plan module bundles: when tiers stop sharing one
+ * module set, the base layer becomes a function of the org's plan
+ * (`PLAN_BUNDLE[tier] ← stored`) and this is the only body that
+ * changes. Add the tier as a second, optional parameter so existing
+ * callers keep compiling, and have callers that know the tier pass
+ * it. Storing only DEVIATIONS is what makes that work — see the note
+ * on the PATCH handler in routes/org-settings.ts, which currently
+ * stamps the full resolved map and therefore pins an org to the
+ * defaults in force the day it first saved.
+ */
+export function resolveOrgModules(
+  stored: OrgModuleFlags | null | undefined,
+): ResolvedOrgModules {
+  // Spreading a null/empty stored map is a no-op, so this covers the
+  // "no row at all" and "row with empty map" cases without the
+  // has-any-keys branch the old call sites carried.
+  return { ...MVP_LAUNCH_DEFAULTS, ...(stored ?? {}) };
+}

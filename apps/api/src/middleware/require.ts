@@ -24,7 +24,7 @@ import type { MiddlewareHandler } from "hono";
 import {
   effectiveCan,
   isModuleEnabled,
-  MVP_LAUNCH_DEFAULTS,
+  resolveOrgModules,
   type Capability,
   type OrgRole,
   type RoleOverrides,
@@ -101,30 +101,15 @@ async function loadOrgModules(orgId: string): Promise<OrgModuleFlags> {
     moduleCache.set(orgId, { flags: {}, fetchedAt: now });
     return {};
   }
-  // Layer the launch defaults under the org's stored map — the SAME
-  // rule GET /v1/org-settings uses to build what the web nav renders.
-  // These two used to disagree, and the disagreement was invisible:
-  //
-  // A new org has NO org_settings row at all (the row is only written
-  // the first time someone saves a setting). This function returned
-  // the raw stored value, so a row-less org resolved to `{}` — and
-  // isModuleEnabled treats an absent key as ENABLED. Net effect: the
-  // nav correctly hid Fuel/Maintenance/Expenses for a new carrier
-  // while every one of those routes still answered. Module gating was
-  // UI-only for exactly the orgs it was written for.
-  //
-  // Layering fixes it structurally rather than by flipping the
-  // absent-key rule: MVP_LAUNCH_DEFAULTS is a TOTAL map over
-  // OrgModule (the compiler enforces it — see packages/types/
-  // modules.ts), so after the spread there are no absent keys left
-  // and the fail-open branch can't be reached from here. A module is
-  // on only if the MVP set says so or the org explicitly enabled it
-  // via Settings → Modules / the admin portal.
-  //
-  // Applies to every row-less org at once, so it also covers orgs
-  // created before this shipped.
+  // Shared resolver — the same rule GET /v1/org-settings uses to build
+  // what the web nav renders. These two used to be separate spreads
+  // and they disagreed: this one read the stored map raw, so a
+  // row-less org (no org_settings row exists until the first save)
+  // resolved to `{}`, absent-means-enabled fired, and every
+  // module-gated route answered for a carrier whose nav correctly hid
+  // those same features. See resolveOrgModules in packages/types.
   const stored = (data as { modules?: OrgModuleFlags } | null)?.modules ?? null;
-  const flags: OrgModuleFlags = { ...MVP_LAUNCH_DEFAULTS, ...(stored ?? {}) };
+  const flags: OrgModuleFlags = resolveOrgModules(stored);
   moduleCache.set(orgId, { flags, fetchedAt: now });
   return flags;
 }

@@ -30,7 +30,7 @@ import { auth, clerkClient } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 import {
   DEFAULT_OFF_MODULES,
-  MVP_LAUNCH_DEFAULTS,
+  resolveOrgModules,
   ORG_MODULES,
   type OrgModule,
 } from '@fleetcal/types';
@@ -42,22 +42,10 @@ const notFound = () => NextResponse.json({ error: 'Not found' }, { status: 404 }
 
 const MODULE_SET: ReadonlySet<string> = new Set(ORG_MODULES);
 
-/**
- * Layer the stored map over the launch defaults — identical semantics
- * to GET /v1/org-settings in apps/api. An org whose stored map predates
- * a newly-added module inherits that module's current default rather
- * than falling into the absent-key-means-enabled hole.
- *
- * Keep these two in sync: if the layering rule changes there, it has to
- * change here, or the admin portal will display flags that differ from
- * what the API actually enforces.
- */
-function resolveFlags(stored: OrgModuleFlags | null): Record<string, boolean> {
-  const hasStored = stored !== null && Object.keys(stored).length > 0;
-  return hasStored
-    ? { ...MVP_LAUNCH_DEFAULTS, ...stored }
-    : { ...MVP_LAUNCH_DEFAULTS };
-}
+// Resolution comes from @fleetcal/types so the admin portal can't drift
+// from what the API enforces — this file used to carry its own copy of
+// the spread, which is precisely how the nav and the route guard ended
+// up disagreeing. See resolveOrgModules.
 
 async function loadOrgName(orgId: string): Promise<string | null> {
   try {
@@ -104,7 +92,7 @@ export async function GET(
     orgId,
     orgName,
     /** Effective flags after layering — what the API will enforce. */
-    modules: resolveFlags(stored),
+    modules: resolveOrgModules(stored),
     /** Only the keys this org has explicitly opined on. Everything
      *  else in `modules` is inherited, and will keep tracking the
      *  launch default if we change it in code. */
@@ -180,7 +168,7 @@ export async function PATCH(
   }
 
   const stored = (existing?.modules ?? null) as OrgModuleFlags | null;
-  const merged = { ...resolveFlags(stored), ...incoming };
+  const merged = { ...resolveOrgModules(stored), ...incoming };
 
   // Update-or-insert rather than upsert: this route writes ONE column
   // of a wide row, and an explicit update can't be misread as

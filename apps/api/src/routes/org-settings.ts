@@ -25,7 +25,7 @@ import {
   type DocumentTypeConfig,
   DOCUMENT_KINDS,
   DRIVER_HIDDEN_DOC_KINDS,
-  MVP_LAUNCH_DEFAULTS,
+  resolveOrgModules,
   resolveAutoIncludeKinds,
   isPacketDocKind,
 } from "@fleetcal/types";
@@ -75,11 +75,7 @@ orgSettings.get("/", async (c) => {
   // map, any later default-flag flips were silently ignored for that
   // org. With layering, default flips propagate to all orgs that
   // haven't explicitly opined on the flag.
-  const storedModules    = row?.modules ?? null;
-  const hasStoredModules = storedModules !== null && Object.keys(storedModules).length > 0;
-  const orgModulesOut    = hasStoredModules
-    ? { ...MVP_LAUNCH_DEFAULTS, ...storedModules }
-    : MVP_LAUNCH_DEFAULTS;
+  const orgModulesOut = resolveOrgModules(row?.modules ?? null);
 
   const res: GetOrgSettingsResponse = {
     settings: {
@@ -219,11 +215,17 @@ orgSettings.patch("/", requireCapability("org.settings.edit"), async (c) => {
   // permanently invisible to that org — admins had to hand-toggle
   // every new MVP default in the Modules panel. With layering, the
   // newest defaults always show through for unset keys.
-  const existingStored   = existingRow?.modules ?? null;
-  const hasExistingFlags = existingStored !== null && Object.keys(existingStored).length > 0;
-  const moduleMergeBase: OrgModuleFlags = hasExistingFlags
-    ? { ...MVP_LAUNCH_DEFAULTS, ...existingStored }
-    : MVP_LAUNCH_DEFAULTS;
+  //
+  // KNOWN LIMITATION: what gets WRITTEN below is the full resolved map
+  // (every OrgModule key), not just the org's deviations. So the
+  // layering above only helps for keys added to the code AFTER this
+  // org last saved — once saved, an org is pinned to the defaults in
+  // force that day. Harmless while every tier shares one module set;
+  // it becomes a real problem when per-plan bundles land, because
+  // "we added X to Growth" would silently skip every Growth org that
+  // ever touched its settings. Fix then by persisting only the keys
+  // that differ from resolveOrgModules(null).
+  const moduleMergeBase: OrgModuleFlags = resolveOrgModules(existingRow?.modules ?? null);
   const mergedModules: OrgModuleFlags = body.orgModules === undefined
     ? moduleMergeBase
     : { ...moduleMergeBase, ...body.orgModules };

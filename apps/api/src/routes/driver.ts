@@ -17,7 +17,7 @@ import {
   driverVisibleDocumentKinds,
   type OrgModule,
   type OrgModuleFlags,
-  MVP_LAUNCH_DEFAULTS,
+  resolveOrgModules,
   isModuleEnabled,
   type DriverScorecardResponse,
 } from "@fleetcal/types";
@@ -739,8 +739,7 @@ async function getOrgModules(orgId: string): Promise<OrgModuleFlags> {
     .eq("org_id", orgId)
     .maybeSingle();
   const stored = (data as { modules: OrgModuleFlags | null } | null)?.modules ?? null;
-  const has = stored !== null && Object.keys(stored).length > 0;
-  return has ? { ...MVP_LAUNCH_DEFAULTS, ...stored } : { ...MVP_LAUNCH_DEFAULTS };
+  return resolveOrgModules(stored);
 }
 
 /** Server-enforce a driver-app module gate: true if ANY of the given
@@ -822,9 +821,7 @@ driver.get("/org-settings", async (c) => {
   driverUploadKinds = ensureMandatoryDriverKinds(driverUploadKinds, orgId, "org-settings");
   // Module flags (same MVP-defaults merge as the web) so the driver app
   // can gate the Report tab / inspections / compliance per org.
-  const storedModules = row?.modules ?? null;
-  const hasModules = storedModules !== null && Object.keys(storedModules).length > 0;
-  const modules: OrgModuleFlags = hasModules ? { ...MVP_LAUNCH_DEFAULTS, ...storedModules } : { ...MVP_LAUNCH_DEFAULTS };
+  const modules: OrgModuleFlags = resolveOrgModules(row?.modules ?? null);
   // Curzon-only Truck History module — gates the "View truck history" +
   // "Post-Trip Inspection" surfaces in the driver app.
   const truckHistoryEnabled = isTruckHistoryOrg(orgId);
