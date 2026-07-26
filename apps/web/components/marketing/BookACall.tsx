@@ -16,7 +16,7 @@ export const BOOKING_URL = 'https://calendar.app.google/VxAWq62VAGBmDrk27';
 export default function BookACall({
   url     = BOOKING_URL,
   heading = 'Rather just talk it through?',
-  blurb   = 'Grab a 15-minute slot on my calendar — weekdays, 11am–4pm ET.',
+  blurb   = 'Grab a 15-minute slot on my calendar.',
   cta     = 'Book a call',
 }: {
   url?:     string;
