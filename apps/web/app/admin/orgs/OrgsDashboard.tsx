@@ -8,13 +8,18 @@
  * Each row gets a risk flag (never_activated / idle / churning)
  * that bubbles to the top via a "Show flagged only" filter.
  *
- * No drill-down yet — that's a future PR (per-org detail page).
+ * Clicking a row expands OrgModulesPanel beneath it — per-org module
+ * flags, edited in place. Kept inline rather than on a drill-down
+ * route because the flags only mean something next to the org's
+ * activity, and the job here is "scan the list, fix the one org
+ * that's wrong."
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import AppShell from '@/components/nav/AppShell';
-import { AlertCircle, Building2, DollarSign, Loader2, RefreshCw, Users } from 'lucide-react';
+import { AlertCircle, Building2, ChevronDown, ChevronRight, DollarSign, Loader2, RefreshCw, Users } from 'lucide-react';
 import Breadcrumbs from '../Breadcrumbs';
+import OrgModulesPanel from './OrgModulesPanel';
 
 interface OrgRow {
   orgId:                string;
@@ -53,6 +58,25 @@ export default function OrgsDashboard() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showFlaggedOnly, setShowFlaggedOnly] = useState(false);
+  // One org expanded at a time — the modules panel is tall, and two
+  // open at once makes the table impossible to scan.
+  const [expandedOrgId, setExpandedOrgId] = useState<string | null>(null);
+  // Set by the expanded panel while it holds unsaved toggles. Collapsing
+  // unmounts the panel and discards its draft, so confirm first — the
+  // whole row is a click target and it's easy to hit by accident.
+  const panelDirtyRef = useRef(false);
+
+  const toggleExpanded = useCallback((orgId: string) => {
+    setExpandedOrgId(prev => {
+      const collapsing = prev === orgId;
+      const movingAway = prev !== null && prev !== orgId;
+      if ((collapsing || movingAway) && panelDirtyRef.current) {
+        if (!window.confirm('Discard unsaved module changes?')) return prev;
+        panelDirtyRef.current = false;
+      }
+      return collapsing ? null : orgId;
+    });
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -158,6 +182,7 @@ export default function OrgsDashboard() {
               <table className="w-full text-[13px]" style={{ borderCollapse: 'collapse' }}>
                 <thead>
                   <tr style={{ background: 'var(--gc-bg)' }}>
+                    <Th><span className="sr-only">Expand</span></Th>
                     <Th>Org</Th>
                     <Th>Tier</Th>
                     <Th>Flag</Th>
@@ -170,8 +195,23 @@ export default function OrgsDashboard() {
                   </tr>
                 </thead>
                 <tbody>
-                  {visibleOrgs.map(o => (
-                    <tr key={o.orgId} className="border-t" style={{ borderColor: 'var(--gc-border-light)' }}>
+                  {visibleOrgs.map(o => {
+                    const isExpanded = expandedOrgId === o.orgId;
+                    return (
+                    <Fragment key={o.orgId}>
+                    <tr className="border-t cursor-pointer"
+                      style={{ borderColor: 'var(--gc-border-light)',
+                               background: isExpanded ? 'var(--gc-bg)' : undefined }}
+                      onClick={() => toggleExpanded(o.orgId)}>
+                      <Td>
+                        <button
+                          aria-expanded={isExpanded}
+                          aria-label={`${isExpanded ? 'Collapse' : 'Expand'} modules for ${o.orgName}`}
+                          onClick={e => { e.stopPropagation(); toggleExpanded(o.orgId); }}
+                          style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--gc-text-3)', display: 'flex' }}>
+                          {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                        </button>
+                      </Td>
                       <Td>
                         <div className="font-semibold truncate" style={{ color: 'var(--gc-text-1)' }} title={o.orgId}>
                           {o.orgName}
@@ -201,7 +241,20 @@ export default function OrgsDashboard() {
                           : <span style={{ color: 'var(--gc-text-3)' }}>never</span>}
                       </Td>
                     </tr>
-                  ))}
+                    {isExpanded && (
+                      <tr style={{ background: 'var(--gc-bg)' }}>
+                        {/* Mounted only while expanded, so the panel
+                            fetches on open and discards its draft on
+                            close — no stale edits waiting in a hidden
+                            row. */}
+                        <td colSpan={10} style={{ padding: '0 12px 4px 34px' }}>
+                          <OrgModulesPanel orgId={o.orgId} orgName={o.orgName} dirtyRef={panelDirtyRef} />
+                        </td>
+                      </tr>
+                    )}
+                    </Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
