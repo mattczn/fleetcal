@@ -19,6 +19,7 @@
 import { useState, useRef, useMemo } from 'react';
 import Link from 'next/link';
 import MarketingNav from '@/components/marketing/MarketingNav';
+import BookACall from '@/components/marketing/BookACall';
 import { ArrowLeft, ArrowRight, Check, Loader2 } from 'lucide-react';
 
 interface ChoiceQuestion {
@@ -419,6 +420,13 @@ export default function ContactSalesPage() {
               />
             ) : null}
           </div>
+
+          {/* Skip-the-questions shortcut — straight to the calendar. */}
+          {!sent && (
+            <div className="mt-6">
+              <BookACall />
+            </div>
+          )}
 
           {/* Bail-out line */}
           {!sent && (

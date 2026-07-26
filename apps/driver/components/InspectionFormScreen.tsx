@@ -487,11 +487,10 @@ export default function InspectionFormScreen({ initialAssetId, initialTrailerId,
     const res = await ImagePicker.launchCameraAsync({
       mediaTypes:       ImagePicker.MediaTypeOptions.Videos,
       videoMaxDuration: MAX_VIDEO_SECONDS,
-      // Medium (1) = ~480p on iOS — good enough to see a rattle or a
-      // brake pedal, keeps a 3-min clip in the ~30-60MB range for
-      // cellular upload. Bump to High (0) later if quality complaints
-      // come in. On Android this maps to the middle quality bucket.
-      videoQuality:     ImagePicker.UIImagePickerControllerQualityType.Medium,
+      // High (0) = ~720p+ on iOS — readable text on a mudflap or
+      // license plate, visible defect detail. 3-min clip lands
+      // around 100-200MB. Server cap raised to match (see API).
+      videoQuality:     ImagePicker.UIImagePickerControllerQualityType.High,
     });
     if (res.canceled) return;
     const a = res.assets[0];
@@ -893,7 +892,7 @@ export default function InspectionFormScreen({ initialAssetId, initialTrailerId,
             Walkaround video (optional)
           </Text>
           <Text style={[txt(500), { fontSize: 12, color: C.t3, marginBottom: 10 }]}>
-            Up to 3 minutes. Filmed with the phone camera.
+            Up to 3 minutes. Filmed with the phone camera. Videos are kept for 90 days.
           </Text>
           {videos.length === 0 ? (
             <TouchableOpacity

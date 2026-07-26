@@ -6495,6 +6495,9 @@ function InspectionDetail({
       {inspectionVideos.length > 0 && (
         <div className="px-6 pb-4">
           <SectionHeader>Video ({inspectionVideos.length})</SectionHeader>
+          <div className="text-[11px] mb-2" style={{ color: 'var(--gc-text-3)' }}>
+            Walkaround videos are kept for 90 days after submission.
+          </div>
           <div className="flex flex-col gap-3">
             {inspectionVideos.map(v => (
               <div key={v.id}

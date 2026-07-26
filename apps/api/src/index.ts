@@ -70,6 +70,7 @@ import supportRoute from "./routes/support.js";
 import { syncIncrementalAllOrgs, snapshotOdometersAllOrgs } from "./lib/motiveIngest.js";
 import { syncPerformanceEventsAllOrgs } from "./lib/motivePerformanceIngest.js";
 import { sweepAutoDeliver } from "./lib/autoDeliverSweep.js";
+import { sweepOldInspectionVideos } from "./lib/inspectionVideoSweep.js";
 import { runConfirmReminders } from "./jobs/confirmReminders.js";
 import { runAiUsageSweep } from "./jobs/aiUsageSweep.js";
 import { trackCronRun } from "./lib/cronRun.js";
@@ -368,6 +369,40 @@ async function fireAutoDeliverSweep(label: string): Promise<void> {
 }
 setTimeout(() => void fireAutoDeliverSweep("startup pass"), SWEEP_STARTUP_DELAY_MS).unref();
 setInterval(() => void fireAutoDeliverSweep("hourly pass"), SWEEP_INTERVAL_MS).unref();
+
+// ── Inspection-video retention sweep (90 days) ─────────────────────────
+//
+// Daily sweep of walkaround videos older than 90 days. See
+// lib/inspectionVideoSweep.ts for the rationale — videos are big
+// (~150MB at 720p, 3 min) and stop earning their Supabase Storage
+// cost after a few months. Photos are permanent evidence and NOT
+// swept. First pass runs 2 minutes after startup so it can drain any
+// large backlog without competing with the auto-deliver sweep on
+// startup; subsequent passes run once every 24h. Same single-replica
+// caveat as the other in-process sweeps.
+const VIDEO_SWEEP_INTERVAL_MS      = 24 * 60 * 60 * 1000;
+const VIDEO_SWEEP_STARTUP_DELAY_MS = 2 * 60 * 1000;
+console.log(`[inspection-video-sweep] scheduled: startup in ${VIDEO_SWEEP_STARTUP_DELAY_MS / 1000}s, then every ${VIDEO_SWEEP_INTERVAL_MS / 3_600_000}h`);
+async function fireInspectionVideoSweep(label: string): Promise<void> {
+  try {
+    await trackCronRun("inspection-video-sweep", async () => {
+      const r = await sweepOldInspectionVideos();
+      if (r.candidates > 0 || r.errors.length > 0) {
+        console.log(
+          `[inspection-video-sweep] ${label}: candidates=${r.candidates} ` +
+          `storage_deleted=${r.storageDeleted} storage_failed=${r.storageFailed} ` +
+          `rows_deleted=${r.rowsDeleted}` +
+          (r.errors.length > 0 ? ` errors=${r.errors.join(" | ")}` : ""),
+        );
+      }
+      return { meta: { candidates: r.candidates, rowsDeleted: r.rowsDeleted } };
+    });
+  } catch (err) {
+    console.error(`[inspection-video-sweep] ${label} failed:`, err);
+  }
+}
+setTimeout(() => void fireInspectionVideoSweep("startup pass"), VIDEO_SWEEP_STARTUP_DELAY_MS).unref();
+setInterval(() => void fireInspectionVideoSweep("daily pass"), VIDEO_SWEEP_INTERVAL_MS).unref();
 
 // ── In-process driver-notification cron ─────────────────────────────────
 //

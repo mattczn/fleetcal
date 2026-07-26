@@ -3341,7 +3341,7 @@ driver.post("/inspections/:id/photos", async (c) => {
   const mediaKind: "photo" | "video" =
     body.mediaKind === "video" || (body.mediaKind == null && isVideoMime) ? "video" : "photo";
   const MAX_PHOTO_BYTES =  25 * 1024 * 1024;
-  const MAX_VIDEO_BYTES = 250 * 1024 * 1024;
+  const MAX_VIDEO_BYTES = 400 * 1024 * 1024;
   if (file.size != null) {
     const cap = mediaKind === "video" ? MAX_VIDEO_BYTES : MAX_PHOTO_BYTES;
     if (file.size > cap) {

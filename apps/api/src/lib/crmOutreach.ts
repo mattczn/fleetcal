@@ -130,6 +130,12 @@ export async function sendOutreachEmail(args: OutreachSendArgs): Promise<Outreac
     .join(" · ");
   let body = args.body.trimEnd();
   body += `\nFleetCal · ${websiteHost}`;
+  // Personal booking link (Google Calendar appt page, etc.) rides on the
+  // signature so every outreach email offers a direct "grab a time" path.
+  // Sits with the sign-off, above the compliance footer. The HTML wrapper
+  // auto-links any https URL, so it's clickable in both text and HTML.
+  const bookingUrl = args.settings.bookingUrl?.trim();
+  if (bookingUrl) body += `\nBook a call: ${bookingUrl}`;
   const footerLines = ["—", addressOneLine];
   if (!body.includes(unsub)) footerLines.push(`Unsubscribe: ${unsub}`);
   body += `\n\n${footerLines.join("\n")}`;

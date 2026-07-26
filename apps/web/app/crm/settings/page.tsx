@@ -77,6 +77,7 @@ function CrmSettingsPageInner() {
   const [addressFooter, setAddressFooter] = useState('');
   const [introSubject, setIntroSubject] = useState('');
   const [introBody,    setIntroBody]    = useState('');
+  const [bookingUrl,   setBookingUrl]   = useState('');
   const [outreachSaving, setOutreachSaving] = useState(false);
   const [outreachMsg,    setOutreachMsg]    = useState<string | null>(null);
 
@@ -108,6 +109,7 @@ function CrmSettingsPageInner() {
         setAddressFooter(s.physicalAddressFooter);
         setIntroSubject(s.introSubject);
         setIntroBody(s.introBody);
+        setBookingUrl(s.bookingUrl);
       } catch (e) {
         if (!cancelled) {
           setError(e instanceof RailwayError ? `Failed to load settings (${e.status})` : 'Failed to load settings.');
@@ -204,6 +206,7 @@ function CrmSettingsPageInner() {
         physicalAddressFooter: addressFooter.trim(),
         introSubject: introSubject.trim(),
         introBody,
+        bookingUrl: bookingUrl.trim(),
       });
       setSettings(next);
       setOutreachMsg('Saved.');
@@ -606,6 +609,24 @@ function CrmSettingsPageInner() {
                   placeholder="you@example.com"
                   className="w-64 rounded-lg px-2.5 py-1.5 text-[13px] outline-none disabled:opacity-60"
                   style={inputStyle} />
+              </div>
+
+              {/* Booking link — appended to the signature of every send. */}
+              <div className="flex items-start gap-3">
+                <label className="text-[12.5px] font-semibold w-36 shrink-0 pt-1.5" style={{ color: 'var(--gc-text-2)' }}>
+                  Booking link
+                </label>
+                <div className="flex-1 min-w-0">
+                  <input type="url" value={bookingUrl} disabled={!canManage}
+                    onChange={e => setBookingUrl(e.target.value)}
+                    placeholder="https://calendar.app.google/…"
+                    className="w-full rounded-lg px-2.5 py-1.5 text-[13px] outline-none disabled:opacity-60"
+                    style={inputStyle} />
+                  <div className="text-[11px] mt-1" style={{ color: 'var(--gc-text-3)' }}>
+                    Optional. When set, a &ldquo;Book a call&rdquo; line is added to the signature of every
+                    outreach email. Leave blank to omit.
+                  </div>
+                </div>
               </div>
 
               {/* Physical address footer */}

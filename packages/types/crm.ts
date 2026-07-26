@@ -229,6 +229,10 @@ export interface CrmSettings {
    *  {{power_units}} {{unsubscribe_url}}. */
   introSubject: string;
   introBody: string;
+  /** Personal scheduling link (Google Calendar appointment page, Cal.com,
+   *  etc.). When set, a "Book a call: <url>" line is auto-appended to the
+   *  signature of every outreach email. Empty string = no booking line. */
+  bookingUrl: string;
   /** First-run FMCSA cursor seed: ingest starts above this DOT number.
    *  Unset = seeded to the dataset max at first sync (only genuinely
    *  new carriers from then on). */
@@ -276,10 +280,10 @@ export const CRM_SETTINGS_DEFAULTS: CrmSettings = {
     "- Payroll and insights: driver pay auto-fills from delivered loads; see revenue by truck and lane",
     "",
     "Take a look: https://fleetcal.app",
-    "Book a quick demo: https://fleetcal.app/contact-sales",
     "",
-    "Happy to show you around whenever works for you.",
+    "Happy to show you around, just reply or grab a time on my calendar below.",
   ].join("\n"),
+  bookingUrl: "https://calendar.app.google/VxAWq62VAGBmDrk27",
 };
 
 /** Deep-merge stored (partial, never trusted) settings over defaults. */
