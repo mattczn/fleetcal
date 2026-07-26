@@ -8,12 +8,34 @@
  * features / how / story / FAQ sections (the SmoothScrollLinks fall
  * through to a normal anchor on a different page).
  */
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import Image from 'next/image';
 import { auth } from '@clerk/nextjs/server';
 import PricingCards from '@/components/marketing/PricingCards';
 import MarketingNav from '@/components/marketing/MarketingNav';
 import Reveal from '@/components/marketing/Reveal';
+
+export const metadata: Metadata = {
+  title: 'Pricing: Dispatch Calendar Plans for Truck Fleets | FleetCal',
+  description:
+    'Simple per-fleet pricing for FleetCal: three plans by fleet size, a 14-day free trial, and no per-driver fees. From owner-operators to 14-truck fleets.',
+  alternates: { canonical: 'https://fleetcal.app/pricing' },
+  openGraph: {
+    title: 'Pricing: Dispatch Calendar Plans for Truck Fleets | FleetCal',
+    description: 'Simple per-fleet pricing: three plans by fleet size, a 14-day free trial, no per-driver fees.',
+    url: 'https://fleetcal.app/pricing',
+    siteName: 'FleetCal',
+    images: [{ url: 'https://fleetcal.app/og-image.png', width: 1200, height: 630, alt: 'FleetCal dispatch calendar pricing plans' }],
+    type: 'website',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'Pricing: Dispatch Calendar Plans for Truck Fleets | FleetCal',
+    description: 'Simple per-fleet pricing: three plans by fleet size, a 14-day free trial, no per-driver fees.',
+    images: ['https://fleetcal.app/og-image.png'],
+  },
+};
 
 export default async function PricingPage() {
   const { userId, orgId } = await auth();
