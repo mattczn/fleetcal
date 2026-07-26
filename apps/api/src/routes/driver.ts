@@ -2765,7 +2765,11 @@ driver.get("/equipment/:kind/:id/history", async (c) => {
       .order("created_at", { ascending: false }),
     sb.from("maintenance_reports")
       .select("id, description, status, reported_at, source, inspection_item_id")
-      .eq("org_id", orgId).eq(col, id).is("action_item_id", null).in("status", ["open", "reviewed"])
+      // Only 'open' is pending. 'reviewed' used to be counted here, but
+      // it's the same settled state as 'dismissed' — the dispatch app
+      // wrote it for the action the web calls "Ignore". See
+      // MaintenanceReportStatus in @fleetcal/types.
+      .eq("org_id", orgId).eq(col, id).is("action_item_id", null).eq("status", "open")
       .order("reported_at", { ascending: false }),
   ]);
   const actionItems = (aiRes.data ?? []) as Array<Record<string, unknown>>;

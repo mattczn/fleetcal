@@ -38,8 +38,10 @@ import type {
   MaintenanceReport, FuelReport, FuelTransaction, MaintenanceReportPhoto,
   MaintenanceActionItem, MaintenanceActionItemPhoto,
   MaintenanceCategory, MaintenancePriority, MaintenanceActionStatus,
+  MaintenanceReportStatus,
   PayrollAdjustment, DriverScore, ListDriverScoresResponse,
 } from '@fleetcal/types';
+import { isMaintenanceReportPending } from '@fleetcal/types';
 import { loadGoogleMaps, MAP_ID } from '@/lib/googleMaps';
 import {
   OpsTable, OpsDate, OpsPill, OpsMuted,
@@ -249,8 +251,37 @@ function EquipmentPageInner() {
   const retryFixtures = useCallback(() => setFixturesReloadKey(k => k + 1), []);
 
   const [panel, setPanel] = useState<PanelData | null>(null);
-  // Bumped after a panel delete/ignore so the affected tab remounts + refetches.
-  const [mutationTick, setMutationTick] = useState(0);
+
+  // Row-level patches applied to whatever the tabs already fetched.
+  //
+  // These used to be one `mutationTick` counter that got fed into the
+  // tab components as a React `key`, so every dismiss/delete unmounted
+  // the whole tab: scroll position, filter chips, sub-tab selection and
+  // pagination all reset, and both lists refetched 200 rows to change
+  // one cell. Now the parent hands the child a small overlay it merges
+  // into its own rows — the component stays mounted and only the
+  // affected row re-renders.
+  //
+  // Both are keyed by row id, so they survive a later background
+  // refetch harmlessly (re-applying "this one is dismissed" to a row
+  // the server already reports as dismissed is a no-op).
+  const [reportStatusOverrides, setReportStatusOverrides] = useState<Record<string, MaintenanceReportStatus>>({});
+  const [hiddenInspectionIds,   setHiddenInspectionIds]   = useState<ReadonlySet<string>>(() => new Set());
+
+  /** Optimistically stamp a report's status. Pass the previous value
+   *  back in to revert when the API call fails. */
+  const setReportStatus = useCallback((id: string, status: MaintenanceReportStatus) => {
+    setReportStatusOverrides(prev => ({ ...prev, [id]: status }));
+  }, []);
+  /** Hide (or, on a failed delete, restore) an inspection row. */
+  const setInspectionHidden = useCallback((id: string, hidden: boolean) => {
+    setHiddenInspectionIds(prev => {
+      if (prev.has(id) === hidden) return prev;
+      const next = new Set(prev);
+      if (hidden) next.add(id); else next.delete(id);
+      return next;
+    });
+  }, []);
 
   // Resolver maps for the row tables + detail panels. Everywhere we
   // would otherwise render "Driver #30" / "Asset #37" we now look up
@@ -404,23 +435,23 @@ function EquipmentPageInner() {
         <div className="mx-auto w-full px-6 py-5" style={{ maxWidth: 1400 }}>
         {tab === 'maintenance' && tabAllowed('maintenance') && (
           <MaintenanceTabContent
-            key={`maint-${mutationTick}`}
             drivers={drivers}
             assets={assets}
             trailers={trailers}
             driverNameById={driverNameById}
             assetLabelById={assetLabelById}
             trailerLabelById={trailerLabelById}
+            statusOverrides={reportStatusOverrides}
             panel={panel}
             setPanel={setPanel}
           />
         )}
         {tab === 'inspections' && tabAllowed('inspections') && (
           <InspectionsTabContent
-            key={`insp-${mutationTick}`}
             drivers={drivers}
             assets={assets}
             trailers={trailers}
+            hiddenIds={hiddenInspectionIds}
             onOpen={(r) => setPanel({ kind: 'inspection', id: r.id, row: r })}
             onOpenDirty={(r) => setPanel({ kind: 'dirty', id: r.id, row: r })}
             openId={panel?.kind === 'inspection' || panel?.kind === 'dirty' ? panel.id : null}
@@ -459,7 +490,8 @@ function EquipmentPageInner() {
           trailerLabelById={trailerLabelById}
           sideMedia={sideMedia}
           onFuelMutation={bumpFuelData}
-          onMutated={() => setMutationTick(t => t + 1)}
+          onReportStatusChange={setReportStatus}
+          onInspectionHiddenChange={setInspectionHidden}
           onClose={() => { setPanel(null); setSideMedia(null); }}
           onOpenMedia={(list) => setSideMedia(list)}
           onCloseSideMedia={() => setSideMedia(null)}
@@ -547,7 +579,7 @@ type MaintenanceSubTab = 'work_orders' | 'driver_reports';
 
 function MaintenanceTabContent({
   drivers, assets, trailers, driverNameById, assetLabelById, trailerLabelById,
-  panel, setPanel,
+  statusOverrides, panel, setPanel,
 }: {
   drivers: Driver[];
   assets: Asset[];
@@ -555,6 +587,10 @@ function MaintenanceTabContent({
   driverNameById: Map<number, string>;
   assetLabelById: Map<number, string>;
   trailerLabelById: Map<number, string>;
+  /** Report-id → status patches the detail panel has applied since the
+   *  last fetch. Merged over the fetched rows so a dismiss updates one
+   *  row instead of remounting this whole tab. */
+  statusOverrides: Record<string, MaintenanceReportStatus>;
   panel: PanelData | null;
   setPanel: (p: PanelData | null) => void;
 }) {
@@ -613,20 +649,25 @@ function MaintenanceTabContent({
   // Lightweight separate fetch so dispatchers see "you have N reports
   // to triage" without having to click into the sub-tab first.
   // Recomputes whenever a convert action fires (via woReloadKey).
-  const [pendingReportCount, setPendingReportCount] = useState<number | null>(null);
+  //
+  // Only the (id, status) pairs are kept — the badge is derived from
+  // them plus `statusOverrides` so dismissing a report decrements the
+  // count immediately, with no refetch and no remount.
+  const [reportStatuses, setReportStatuses] = useState<Array<{ id: string; status: string }> | null>(null);
   useEffect(() => {
     railway.listMaintenanceReports({ limit: 200 })
-      .then(r => {
-        // "Pending" = needs dispatcher attention. Open reports are the
-        // raw inbox; reviewed reports are partially-triaged but not
-        // yet acted on. Converted + dismissed are settled.
-        const pending = r.reports.filter(rep =>
-          rep.status === 'open' || rep.status === 'reviewed',
-        ).length;
-        setPendingReportCount(pending);
-      })
-      .catch(() => setPendingReportCount(null));
+      .then(r => setReportStatuses(r.reports.map(rep => ({ id: rep.id, status: rep.status }))))
+      .catch(() => setReportStatuses(null));
   }, [woReloadKey]);
+  // "Pending" = needs dispatcher attention, i.e. still 'open'.
+  // Converted, dismissed, and legacy 'reviewed' (same thing as
+  // dismissed — see MaintenanceReportStatus) are all settled.
+  const pendingReportCount = useMemo<number | null>(() => {
+    if (!reportStatuses) return null;
+    return reportStatuses.filter(rep =>
+      isMaintenanceReportPending(statusOverrides[rep.id] ?? rep.status),
+    ).length;
+  }, [reportStatuses, statusOverrides]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -692,6 +733,7 @@ function MaintenanceTabContent({
           driverNameById={driverNameById}
           assetLabelById={assetLabelById}
           trailerLabelById={trailerLabelById}
+          statusOverrides={statusOverrides}
           onOpen={(r) => setPanel({ kind: 'maintenance', id: r.id, report: r })}
           onConvertClick={(r) => setWoModal({ open: true, mode: 'convert', report: r })}
           openId={panel?.kind === 'maintenance' ? panel.id : null}
@@ -3535,8 +3577,23 @@ function localTodayYmd(): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+/** Collapse the legacy 'reviewed' wire value onto 'dismissed'.
+ *
+ *  The dispatch app used to write 'reviewed' for the exact action the
+ *  web calls "Ignore" (→ 'dismissed'), and the two surfaces disagreed
+ *  about whether the result was still pending. Both now write
+ *  'dismissed'; rows written by an older dispatch build still arrive as
+ *  'reviewed', so every renderer runs the value through here first and
+ *  the two become visually indistinguishable. */
+function displayReportStatus(status: string): 'open' | 'dismissed' | 'converted' {
+  if (status === 'converted') return 'converted';
+  if (status === 'open')      return 'open';
+  return 'dismissed'; // 'dismissed' + legacy 'reviewed' + anything unknown
+}
+
 function MaintenanceList({
-  drivers, assets, trailers, driverNameById, assetLabelById, trailerLabelById, onOpen, onConvertClick, openId,
+  drivers, assets, trailers, driverNameById, assetLabelById, trailerLabelById,
+  statusOverrides, onOpen, onConvertClick, openId,
 }: {
   drivers: Driver[];
   assets: Asset[];
@@ -3544,6 +3601,10 @@ function MaintenanceList({
   driverNameById: Map<number, string>;
   assetLabelById: Map<number, string>;
   trailerLabelById: Map<number, string>;
+  /** Status patches from the detail panel, merged over `rows` below.
+   *  Lets a dismiss repaint one row without this component (and its
+   *  scroll position, filters, sort and page) being torn down. */
+  statusOverrides: Record<string, MaintenanceReportStatus>;
   onOpen: (r: MaintenanceReport) => void;
   /** Optional: when present, renders a "Convert to work order" action
    *  on each row. Lifted from the Maintenance tab content wrapper. */
@@ -3571,8 +3632,11 @@ function MaintenanceList({
     const equipmentLabel = (embedded.assetName as string | undefined)
       ?? (embedded.trailerName ? `Trailer ${embedded.trailerName}` : undefined)
       ?? resolveEquipmentLabel(r.assetId, r.trailerId, assetLabelById, trailerLabelById);
-    return { ...r, _driverLabel: driverLabel, _equipmentLabel: equipmentLabel };
-  }), [rows, driverNameById, assetLabelById, trailerLabelById]);
+    // Parent-supplied patch wins over the fetched value — that's what
+    // makes an in-place dismiss visible without a refetch.
+    const status = statusOverrides[r.id] ?? r.status;
+    return { ...r, status, _driverLabel: driverLabel, _equipmentLabel: equipmentLabel };
+  }), [rows, statusOverrides, driverNameById, assetLabelById, trailerLabelById]);
 
   type R = typeof resolvedRows[number];
 
@@ -3590,15 +3654,18 @@ function MaintenanceList({
           <span>{r.description.length > 90 ? r.description.slice(0, 90) + '…' : r.description}</span>
         </span>
       ) },
+    // Legacy 'reviewed' rows are normalised to 'dismissed' for display
+    // (and for sorting, so the two don't split into separate groups) —
+    // they mean the same thing. See MaintenanceReportStatus.
     { key: 'status', header: 'Status', width: 110, sortable: true,
-      sortValue: r => r.status,
+      sortValue: r => displayReportStatus(r.status),
       render: r => {
-        const color: 'amber' | 'blue' | 'gray' | 'green' =
-          r.status === 'open'      ? 'amber' :
-          r.status === 'reviewed'  ? 'blue'  :
-          r.status === 'converted' ? 'green' :
-                                     'gray';   // dismissed
-        return <OpsPill color={color}>{r.status}</OpsPill>;
+        const status = displayReportStatus(r.status);
+        const color: 'amber' | 'gray' | 'green' =
+          status === 'open'      ? 'amber' :
+          status === 'converted' ? 'green' :
+                                   'gray';   // dismissed
+        return <OpsPill color={color}>{status}</OpsPill>;
       } },
     // Convert action column — only renders the button on
     // not-yet-converted rows. Once converted, the row's status pill
@@ -3639,14 +3706,16 @@ function MaintenanceList({
     { kind: 'select', key: 'equipment', label: 'Equipment',
       options: buildEquipmentOptions(assets, trailers),
       predicate: (r, v) => matchesEquipment(v, r.assetId, r.trailerId) },
+    // No separate 'Reviewed' option — it was never a distinct state,
+    // just the dispatch app's name for "dismissed". Picking Dismissed
+    // matches both wire values so legacy rows don't go unfindable.
     { kind: 'select', key: 'status',    label: 'Status',
       options: [
         { value: 'open',      label: 'Open' },
-        { value: 'reviewed',  label: 'Reviewed' },
         { value: 'converted', label: 'Added' },
         { value: 'dismissed', label: 'Dismissed' },
       ],
-      predicate: (r, v) => r.status === v },
+      predicate: (r, v) => displayReportStatus(r.status) === v },
   ];
 
   return (
@@ -3678,11 +3747,15 @@ function MaintenanceList({
  * today?" which is naturally a coverage grid.
  */
 function InspectionsTabContent({
-  drivers, assets, trailers, onOpen, onOpenDirty, openId,
+  drivers, assets, trailers, hiddenIds, onOpen, onOpenDirty, openId,
 }: {
   drivers: Driver[];
   assets: Asset[];
   trailers: Array<{ id: number; name: string; trailerNumber?: string; category: string }>;
+  /** Ids deleted from the detail panel since the last fetch. Filtered
+   *  out of both views so a delete drops one row instead of remounting
+   *  the tab (which reset the week / view toggle / filters). */
+  hiddenIds: ReadonlySet<string>;
   onOpen: (r: InspectionRow) => void;
   onOpenDirty: (r: InspectionRow) => void;
   openId: string | null;
@@ -3721,6 +3794,7 @@ function InspectionsTabContent({
         {view === 'calendar' && (
           <InspectionsCalendar
             assets={assets}
+            hiddenIds={hiddenIds}
             onOpen={onOpen}
             onOpenDirty={onOpenDirty}
             openId={openId}
@@ -3731,6 +3805,7 @@ function InspectionsTabContent({
             drivers={drivers}
             assets={assets}
             trailers={trailers}
+            hiddenIds={hiddenIds}
             onOpen={onOpen}
             onOpenDirty={onOpenDirty}
             openId={openId}
@@ -3815,9 +3890,11 @@ const DAY_LABELS = ['Sat', 'Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri'] as const;
  * fetches when the visible week changes.
  */
 function InspectionsCalendar({
-  assets, onOpen, onOpenDirty, openId,
+  assets, hiddenIds, onOpen, onOpenDirty, openId,
 }: {
   assets: Asset[];
+  /** Deleted-since-fetch ids to skip. See InspectionsTabContent. */
+  hiddenIds: ReadonlySet<string>;
   onOpen: (r: InspectionRow) => void;
   onOpenDirty: (r: InspectionRow) => void;
   openId: string | null;
@@ -3888,6 +3965,7 @@ function InspectionsCalendar({
     const m = new Map<string, InspectionRow[]>();
     for (const r of rows) {
       if (r.assetId == null) continue;
+      if (hiddenIds.has(r.id)) continue;   // deleted from the detail panel
       const dayKey = ymdInTz(r.submittedAt, calendarTimezone);
       const k = `${r.assetId}|${dayKey}`;
       const arr = m.get(k);
@@ -3897,7 +3975,7 @@ function InspectionsCalendar({
     // recent submission at the top.
     for (const arr of m.values()) arr.sort((a, b) => b.submittedAt.localeCompare(a.submittedAt));
     return m;
-  }, [rows, calendarTimezone]);
+  }, [rows, hiddenIds, calendarTimezone]);
 
   // Active (non-retired, non-hidden) trucks in dispatcher's preferred
   // order. The "Unassigned" placeholder bucket (used elsewhere in the
@@ -4332,11 +4410,13 @@ function InspectionPickerPopover({
 }
 
 function InspectionsList({
-  drivers, assets, trailers, onOpen, onOpenDirty, openId,
+  drivers, assets, trailers, hiddenIds, onOpen, onOpenDirty, openId,
 }: {
   drivers: Driver[];
   assets: Asset[];
   trailers: Array<{ id: number; name: string; trailerNumber?: string; category: string }>;
+  /** Deleted-since-fetch ids to skip. See InspectionsTabContent. */
+  hiddenIds: ReadonlySet<string>;
   onOpen: (r: InspectionRow) => void;
   onOpenDirty: (r: InspectionRow) => void;
   openId: string | null;
@@ -4351,6 +4431,11 @@ function InspectionsList({
       .catch(err => { console.error('[equipment] inspections:', err); setRows([]); })
       .finally(() => setLoading(false));
   }, []);
+
+  const visibleRows = useMemo(
+    () => (hiddenIds.size === 0 ? rows : rows.filter(r => !hiddenIds.has(r.id))),
+    [rows, hiddenIds],
+  );
 
   const columns: OpsColumn<InspectionRow>[] = [
     { key: 'submittedAt', header: 'Date', width: 120, sortable: true,
@@ -4430,7 +4515,7 @@ function InspectionsList({
   return (
     <OpsTable
       columns={columns}
-      data={rows}
+      data={visibleRows}
       filters={filters}
       loading={loading}
       rowKey={r => r.id}
@@ -5671,13 +5756,14 @@ function StatusPill({ status }: { status: string }) {
   // dispatchers want to know whether a report has been *added* to
   // their work-order list. Map the wire value to a friendlier label
   // here; the DB stays as-is so we don't churn the schema.
+  // Legacy 'reviewed' collapses onto 'dismissed' via
+  // displayReportStatus, so it never renders as its own state.
   const map: Record<string, { bg: string; fg: string; label: string }> = {
     open:      { bg: '#fef3c7', fg: '#92400e', label: 'open'     },
-    reviewed:  { bg: '#dbeafe', fg: '#1e40af', label: 'reviewed' },
     dismissed: { bg: '#f3f4f6', fg: '#374151', label: 'dismissed'},
     converted: { bg: '#d1fae5', fg: '#065f46', label: 'added'    },
   };
-  const p = map[status] ?? { bg: '#f3f4f6', fg: '#374151', label: status };
+  const p = map[displayReportStatus(status)];
   return (
     <span className="inline-block text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded"
       style={{ background: p.bg, color: p.fg }}>
@@ -5697,7 +5783,8 @@ function StatusPill({ status }: { status: string }) {
 
 function DetailPanel({
   panel, drivers, assets, trailers, driverNameById, assetLabelById, trailerLabelById,
-  sideMedia, onFuelMutation, onMutated, onClose, onOpenMedia, onCloseSideMedia,
+  sideMedia, onFuelMutation, onReportStatusChange, onInspectionHiddenChange,
+  onClose, onOpenMedia, onCloseSideMedia,
 }: {
   panel: PanelData;
   drivers: Driver[];
@@ -5711,38 +5798,51 @@ function DetailPanel({
    *  the FuelTabContent to refetch so the table behind the modal
    *  reflects the new state without a page reload. */
   onFuelMutation: () => void;
-  /** Called after a delete/ignore so the inspections / maintenance list
-   *  behind the modal refreshes. */
-  onMutated: () => void;
+  /** Patch one maintenance report's status in the list behind the
+   *  modal. Called optimistically before the PATCH and again with the
+   *  previous value if it fails — the list never remounts either way. */
+  onReportStatusChange: (id: string, status: MaintenanceReportStatus) => void;
+  /** Hide (true) or restore (false) one inspection row in the lists
+   *  behind the modal. Same optimistic-then-revert contract. */
+  onInspectionHiddenChange: (id: string, hidden: boolean) => void;
   onClose: () => void;
   onOpenMedia: (list: MediaList) => void;
   onCloseSideMedia: () => void;
 }) {
   const overlayRef = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = useState(false);
+  // Both mutations below patch the row behind the modal optimistically,
+  // then revert that exact patch if the request fails. Nothing here
+  // remounts a tab — the lists merge the patch into rows they already
+  // hold, so scroll position, filters, sort and pagination survive.
   async function handleDeleteInspection() {
     if (panel.kind !== 'inspection' || busy) return;
     if (!window.confirm('Delete this inspection report? This permanently removes it and its photos.')) return;
+    const id = panel.id;
     setBusy(true);
+    onInspectionHiddenChange(id, true);
     try {
-      await railway.deleteInspectionReport(panel.id);
-      onMutated();
+      await railway.deleteInspectionReport(id);
       onClose();
     } catch (e) {
       console.error('[equipment] delete inspection failed:', e);
+      onInspectionHiddenChange(id, false);   // row comes back
       alert('Could not delete the inspection. Please try again.');
       setBusy(false);
     }
   }
   async function handleIgnoreReport() {
     if (panel.kind !== 'maintenance' || busy) return;
+    const id = panel.id;
+    const previousStatus = panel.report.status;
     setBusy(true);
+    onReportStatusChange(id, 'dismissed');
     try {
-      await railway.updateMaintenanceReport(panel.id, { status: 'dismissed' });
-      onMutated();
+      await railway.updateMaintenanceReport(id, { status: 'dismissed' });
       onClose();
     } catch (e) {
       console.error('[equipment] ignore report failed:', e);
+      onReportStatusChange(id, previousStatus);   // row reverts to its old pill
       alert('Could not ignore the report. Please try again.');
       setBusy(false);
     }
@@ -5817,7 +5917,7 @@ function DetailPanel({
               <Trash2 size={13} /> Delete
             </button>
           )}
-          {panel.kind === 'maintenance' && (panel.report.status === 'open' || panel.report.status === 'reviewed') && (
+          {panel.kind === 'maintenance' && displayReportStatus(panel.report.status) === 'open' && (
             <button onClick={handleIgnoreReport} disabled={busy} title="Ignore this report"
               className="px-2 py-1 rounded-lg transition-colors shrink-0 flex items-center gap-1.5 text-[12px] font-semibold"
               style={{ color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}
@@ -5850,7 +5950,12 @@ function DetailPanel({
             assetLabelById={assetLabelById}
             trailerLabelById={trailerLabelById}
             onOpenMedia={onOpenMedia}
-            onConverted={onClose}
+            onConverted={() => {
+              // Same in-place patch as dismiss — the row behind the
+              // modal flips to "added" without the tab remounting.
+              onReportStatusChange(panel.id, 'converted');
+              onClose();
+            }}
           />}
           {panel.kind === 'inspection'  && <InspectionDetail  id={panel.id} onOpenMedia={onOpenMedia} />}
           {panel.kind === 'dirty'       && <DirtyDetail       row={panel.row} onOpenMedia={onOpenMedia} />}
@@ -5955,8 +6060,9 @@ function MaintenanceDetail({
     for (const p of sec.photos) flatItems.push({ id: p.id, signedUrl: p.signedUrl, caption: p.caption, section: sec.label });
   }
 
-  const isConverted = report.status === 'converted';
-  const isDismissed = report.status === 'dismissed';
+  const isConverted = displayReportStatus(report.status) === 'converted';
+  // Legacy 'reviewed' counts as dismissed — same settled state.
+  const isDismissed = displayReportStatus(report.status) === 'dismissed';
 
   return (
     <div className="flex-1 overflow-y-auto" style={{ background: 'var(--gc-bg)' }}>
@@ -6126,13 +6232,14 @@ function MaintenanceDetail({
  *  Same visual language as InspectionStatusBadge — solid color,
  *  white icon dot, extra-bold label — so the two panels match. */
 function MaintenanceStatusBadge({ status }: { status: string }) {
+  // Legacy 'reviewed' is folded into 'dismissed' before lookup — same
+  // chip, same wording, so a dispatcher can't tell the two apart.
   const palette: Record<string, { bg: string; fg: string; dotBg: string; icon: React.ReactNode; label: string }> = {
     open:      { bg: '#fef7e0', fg: '#b06000', dotBg: '#f9ab00', icon: <AlertCircle size={14} color="#fff" strokeWidth={2.5} />, label: 'Open' },
-    reviewed:  { bg: '#e8f0fe', fg: '#1967d2', dotBg: '#1a73e8', icon: <Check       size={14} color="#fff" strokeWidth={3}   />, label: 'Reviewed' },
     converted: { bg: '#e6f4ea', fg: '#137333', dotBg: '#0f9d58', icon: <Wrench      size={12} color="#fff" strokeWidth={2.5} />, label: 'Added' },
     dismissed: { bg: '#f1f3f4', fg: '#3c4043', dotBg: '#5f6368', icon: <X           size={14} color="#fff" strokeWidth={3}   />, label: 'Dismissed' },
   };
-  const p = palette[status] ?? palette.open;
+  const p = palette[displayReportStatus(status)];
   return (
     <div className="inline-flex items-center gap-2 rounded-full"
       style={{ background: p.bg, padding: '6px 14px 6px 8px' }}>

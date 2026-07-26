@@ -33,6 +33,7 @@ import type {
   MaintenanceActionItem, MaintenanceReport,
   Asset, Trailer, Driver,
 } from "@fleetcal/types";
+import { isMaintenanceReportPending } from "@fleetcal/types";
 import { txt } from "@/lib/font";
 import { railway } from "@/lib/railway";
 import { fetchAssets, fetchTrailers, fetchDrivers } from "@/lib/api";
@@ -95,7 +96,9 @@ function backlogCount(items: MaintenanceActionItem[]): number {
 }
 
 function reportsRank(a: MaintenanceReport, b: MaintenanceReport): number {
-  const rank: Record<string, number> = { open: 0, reviewed: 1, converted: 2, dismissed: 3 };
+  // Legacy 'reviewed' ranks with 'dismissed' — same state, so the two
+  // don't split into separate bands in the list.
+  const rank: Record<string, number> = { open: 0, converted: 1, dismissed: 2, reviewed: 2 };
   const r = rank[a.status] - rank[b.status];
   if (r !== 0) return r;
   return b.reportedAt.localeCompare(a.reportedAt);
@@ -356,7 +359,7 @@ export default function MaintenanceScreen() {
   const backlogN      = useMemo(() => backlogCount(allItems), [allItems]);
   const reports       = useMemo(() => [...(reportsQ.data ?? [])].sort(reportsRank), [reportsQ.data]);
   const pendingCount  = useMemo(
-    () => (reportsQ.data ?? []).filter((r) => r.status === "open" || r.status === "reviewed").length,
+    () => (reportsQ.data ?? []).filter((r) => isMaintenanceReportPending(r.status)).length,
     [reportsQ.data],
   );
 

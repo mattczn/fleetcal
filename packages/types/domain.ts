@@ -1642,10 +1642,30 @@ export type ExpenseBucketKey = string;
 //   - MaintenanceActionItem  — ops's tracked work. Created from a report
 //                              (reportId set) or ad-hoc.
 
+/** Triage state of a driver-submitted report.
+ *
+ *  'reviewed' is LEGACY and means exactly what 'dismissed' means. The
+ *  web app wrote 'dismissed' ("Ignore") while the dispatch app wrote
+ *  'reviewed' ("Mark reviewed") for the same human action, and the two
+ *  disagreed on whether the result was still pending. As of
+ *  20260726_maintenance_report_status_unify.sql the two are collapsed:
+ *  'dismissed' is the only value new clients write, and both mean
+ *  "settled, no longer pending".
+ *
+ *  The value stays in the union — and therefore in the API's PATCH
+ *  allow-list — because dispatch builds already on drivers' phones can
+ *  still send it. Every UI must render it identically to 'dismissed'. */
 export type MaintenanceReportStatus = 'open' | 'reviewed' | 'dismissed' | 'converted';
 export const MAINTENANCE_REPORT_STATUSES: readonly MaintenanceReportStatus[] = [
   'open', 'reviewed', 'dismissed', 'converted',
 ];
+
+/** True when a report still needs dispatcher attention. The single
+ *  source of truth for "pending" across every surface — 'reviewed' and
+ *  'dismissed' are both settled, 'converted' became a work order. */
+export function isMaintenanceReportPending(status: string): boolean {
+  return status === 'open';
+}
 
 export interface MaintenanceReportPhoto {
   id:           string;

@@ -22,11 +22,16 @@ export const STATUS_COLORS: Record<MaintenanceActionStatus, { bg: string; fg: st
   done:        { bg: "#e6f4ea", fg: "#1e8e3e", label: "Done" },
 };
 
+/** Legacy 'reviewed' is the same state as 'dismissed' — this app used
+ *  to write it for the action the web calls "Ignore". It shares the
+ *  dismissed swatch and label verbatim so a dispatcher can't tell an
+ *  old row from a new one. See MaintenanceReportStatus in
+ *  @fleetcal/types. */
 export const REPORT_STATUS_COLORS: Record<MaintenanceReportStatus, { bg: string; fg: string; label: string }> = {
   open:      { bg: "#fce8e6", fg: "#c5221f", label: "Open" },
-  reviewed:  { bg: "#fef7e0", fg: "#b06000", label: "Reviewed" },
   converted: { bg: "#e6f4ea", fg: "#1e8e3e", label: "Added" },
   dismissed: { bg: "#eef1f3", fg: "#5f6368", label: "Dismissed" },
+  reviewed:  { bg: "#eef1f3", fg: "#5f6368", label: "Dismissed" },
 };
 
 /** Left-stripe and chip color per priority. Bright at urgent, neutral at low. */
@@ -54,7 +59,7 @@ export function StatusPill({ status }: { status: MaintenanceActionStatus }) {
 }
 
 export function ReportStatusPill({ status }: { status: MaintenanceReportStatus }) {
-  const c = REPORT_STATUS_COLORS[status];
+  const c = REPORT_STATUS_COLORS[status] ?? REPORT_STATUS_COLORS.dismissed;
   return (
     <View style={{
       paddingHorizontal: 9, paddingVertical: 3, borderRadius: 999,

@@ -48,9 +48,11 @@ interface Props {
 function statusTint(C: ReturnType<typeof useTheme>["C"]): Record<string, { bg: string; fg: string; label: string }> {
   return {
     open:      { bg: C.amberBg, fg: C.amberInk, label: "Open" },
-    reviewed:  { bg: C.blueBg,  fg: C.blueInk,  label: "Reviewed" },
     converted: { bg: C.greenBg, fg: C.greenInk, label: "Scheduled" },
     dismissed: { bg: C.borderSoft, fg: C.t2,    label: "Dismissed" },
+    // Legacy alias — 'reviewed' is the same settled state as
+    // 'dismissed' (see MaintenanceReportStatus in @fleetcal/types).
+    reviewed:  { bg: C.borderSoft, fg: C.t2,    label: "Dismissed" },
   };
 }
 

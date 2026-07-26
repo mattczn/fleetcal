@@ -606,9 +606,11 @@ function HistoryRow({ report, onPress }: { report: MaintenanceReport; onPress?: 
   const { C } = useTheme();
   const date = new Date(report.reportedAt);
   const dateLabel = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  // Legacy 'reviewed' falls through to the dismissed branch on purpose
+  // — it's the same settled state, not a distinct one. See
+  // MaintenanceReportStatus in @fleetcal/types.
   const statusColor =
     report.status === 'open'        ? { bg: C.amberBg, fg: C.amberInk, label: 'Open' } :
-    report.status === 'reviewed'    ? { bg: C.blueBg,  fg: C.blueInk,  label: 'Reviewed' } :
     report.status === 'converted'   ? { bg: C.greenBg, fg: C.greenInk, label: 'Scheduled' } :
                                       { bg: C.borderSoft, fg: C.t2,     label: 'Dismissed' };
   const photoCount = report.photos?.length ?? 0;

@@ -14,6 +14,7 @@ import {
 } from "react-native";
 import { X, Inbox } from "lucide-react-native";
 import type { MaintenanceReport, Asset, Trailer, Driver } from "@fleetcal/types";
+import { isMaintenanceReportPending } from "@fleetcal/types";
 import { txt } from "@/lib/font";
 
 interface Props {
@@ -32,9 +33,7 @@ export function MaintenanceReportsListSheet({
   visible, reports, drivers, assets, trailers, refreshing,
   onClose, onRefresh, onOpenReport,
 }: Props) {
-  const pendingCount = reports.filter(
-    (r) => r.status === "open" || r.status === "reviewed",
-  ).length;
+  const pendingCount = reports.filter((r) => isMaintenanceReportPending(r.status)).length;
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
@@ -126,7 +125,7 @@ function ReportRow({
     : trailer
       ? (trailer.trailerNumber ? `Trailer ${trailer.trailerNumber}` : trailer.name)
       : "—";
-  const isPending = report.status === "open" || report.status === "reviewed";
+  const isPending = isMaintenanceReportPending(report.status);
 
   return (
     <TouchableOpacity

@@ -5,14 +5,14 @@
  * photos, decide whether it becomes a work order or gets dismissed.
  * The big primary button at the bottom kicks off conversion (the parent
  * pops the work-order sheet in convert mode pre-filled from this
- * report); secondary buttons handle dismiss + delete.
+ * report); the secondary button dismisses it.
  */
 import React, { useState } from "react";
 import {
   Modal, View, Text, TouchableOpacity, Pressable, ScrollView,
   Alert, Image, ActivityIndicator,
 } from "react-native";
-import { X, Wrench, Trash2 } from "lucide-react-native";
+import { X, Wrench, EyeOff } from "lucide-react-native";
 import type { MaintenanceReport, Asset, Trailer } from "@fleetcal/types";
 import { txt } from "@/lib/font";
 import { railway } from "@/lib/railway";
@@ -57,21 +57,12 @@ export function MaintenanceReportSheet({
     }
   }
 
-  async function markReviewed() {
-    if (!report) return;
-    setBusy(true);
-    try {
-      await railway.updateMaintenanceReport(report.id, { status: "reviewed" });
-      onMutated();
-    } catch (err) {
-      console.error("review report:", err);
-    } finally {
-      setBusy(false);
-    }
-  }
-
   const photos = report.photos ?? [];
   const isConverted = report.status === "converted";
+  // Legacy 'reviewed' means exactly what 'dismissed' means (see
+  // MaintenanceReportStatus) — a report in either state is settled, so
+  // the Dismiss action is already spent.
+  const isDismissed = report.status === "dismissed" || report.status === "reviewed";
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
@@ -196,17 +187,23 @@ export function MaintenanceReportSheet({
               </TouchableOpacity>
             ) : null}
 
+            {/* Single triage-out action. There used to be a second
+                "Mark reviewed" button next to this one that wrote
+                status='reviewed' — a different name for the same thing
+                the web calls "Ignore", which then disagreed with this
+                app about whether the report was still pending. One
+                button, one wire value ('dismissed'), and the eye-off
+                glyph matches the web's Ignore control. */}
             <View style={{ flexDirection: "row", justifyContent: "center", gap: 18, marginTop: 12 }}>
-              {!isConverted && report.status === "open" ? (
-                <TouchableOpacity onPress={markReviewed} disabled={busy} hitSlop={8}>
+              {!isConverted && !isDismissed ? (
+                <TouchableOpacity
+                  onPress={dismiss}
+                  disabled={busy}
+                  hitSlop={8}
+                  style={{ flexDirection: "row", alignItems: "center", gap: 6 }}
+                >
+                  <EyeOff size={14} color="#5f6368" strokeWidth={2.2} />
                   <Text style={[txt(700), { fontSize: 13, color: "#5f6368" }]}>
-                    Mark reviewed
-                  </Text>
-                </TouchableOpacity>
-              ) : null}
-              {!isConverted ? (
-                <TouchableOpacity onPress={dismiss} disabled={busy} hitSlop={8}>
-                  <Text style={[txt(700), { fontSize: 13, color: "#c5221f" }]}>
                     Dismiss
                   </Text>
                 </TouchableOpacity>
