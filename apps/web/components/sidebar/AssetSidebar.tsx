@@ -8,7 +8,7 @@ import { usePathname, useSearchParams } from 'next/navigation';
 import { useOrganization, useUser } from '@clerk/nextjs';
 import { useCalendarStore, BatchItem } from '@/store/useCalendarStore';
 import { usePermissions } from '@/lib/usePermissions';
-import { useModules } from '@/lib/useModules';
+import { useNavGate } from '@/lib/useNavGate';
 import { isCrmUser, isInternalOrg } from '@/lib/internalOrg';
 import { PRIMARY_NAV, type NavItem } from '@/components/nav/AppSidebar';
 import DirectoryModal, { type DirectoryTab } from './DirectoryModal';
@@ -32,9 +32,12 @@ export default function AssetSidebar() {
   const [manageOpen,   setManageOpen]   = useState(false);
   const [directoryTab, setDirectoryTab] = useState<DirectoryTab | null>(null);
   const [batchHovered, setBatchHovered] = useState(false);
-  const { enabled: moduleEnabled } = useModules();
   const { can } = usePermissions();
-  const trailersOn = moduleEnabled('trailers');
+  // Through the gate, not useModules directly — an unhydrated flags
+  // map reads as "everything on", which flashed the Trailers button
+  // for orgs without the module.
+  const { visible: navVisible } = useNavGate();
+  const trailersOn = navVisible({ module: 'trailers' });
 
   const openDirectory = (tab: DirectoryTab) => {
     setDirectoryTab(tab);
@@ -319,19 +322,18 @@ function SubNavButton({ icon: Icon, label, onClick }: {
 function PageNavSection() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const { can, isLoading } = usePermissions();
-  const { enabled: moduleEnabled } = useModules();
+  const { visible } = useNavGate();
   const { organization } = useOrganization();
   const { user } = useUser();
   // CRM (internalOnly) shows only for internal-org CRM users — same gate as
   // AppSidebar. isInternalOrg(undefined) is false during hydration → no flash.
   const internal = isInternalOrg(organization?.id) && isCrmUser(user?.id);
 
+  // Hide-until-known on every axis (see lib/useNavGate.ts). This was
+  // optimistic-while-hydrating to match AppSidebar; AppSidebar no
+  // longer is, because it flashed modules the org doesn't own.
   const allowed = (it: NavItem): boolean =>
-    (!it.internalOnly || internal) &&
-    // Optimistic while perms hydrate (matches AppSidebar) — but internalOnly
-    // still applies so CRM never flashes for non-internal users.
-    (isLoading || (can(it.cap) && (!it.module || moduleEnabled(it.module))));
+    (!it.internalOnly || internal) && visible(it);
 
   // Drop Calendar (you're already on it — the brand header is the "here" cue).
   const items = PRIMARY_NAV.filter(it => it.href !== '/calendar' && allowed(it));

@@ -4,8 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Calendar, BarChart2, Users, LayoutDashboard, FileCheck2, Receipt, Package, Gauge } from 'lucide-react';
 import type { Capability, OrgModule } from '@fleetcal/types';
-import { usePermissions } from '@/lib/usePermissions';
-import { useModules } from '@/lib/useModules';
+import { useNavGate } from '@/lib/useNavGate';
 
 // Each nav link carries:
 //   - cap     — the capability the user's role must have
@@ -49,17 +48,18 @@ interface ManagementHeaderProps {
 
 export default function ManagementHeader({ title, icon: Icon, onBack, rightSlot }: ManagementHeaderProps) {
   const pathname = usePathname();
-  const { can, isLoading: permsLoading } = usePermissions();
-  const { enabled: moduleEnabled } = useModules();
-
   // Filter the nav by BOTH axes: per-user capability AND per-org
-  // module flag. While Clerk is still hydrating the membership, render
-  // the full nav optimistically — flickering links would be worse than
-  // briefly showing a link the API will 403 if clicked. As soon as
-  // perms resolve, the restricted ones disappear.
-  const visibleLinks = permsLoading
-    ? NAV_LINKS
-    : NAV_LINKS.filter(l => can(l.cap) && (!l.module || moduleEnabled(l.module)));
+  // module flag — via the shared gate so this can't drift from
+  // AppSidebar again.
+  //
+  // This used to render the full nav optimistically while Clerk
+  // hydrated, on the theory that a flicker beat briefly showing a
+  // link the API would 403. That reasoning doesn't hold for the
+  // MODULE axis: a module the org doesn't own isn't a 403 they'll
+  // never hit, it's a feature they haven't bought being advertised to
+  // them on every page load. Hide until known — see lib/useNavGate.ts.
+  const { visible } = useNavGate();
+  const visibleLinks = NAV_LINKS.filter(visible);
 
   return (
     <header

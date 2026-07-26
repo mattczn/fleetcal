@@ -40,8 +40,7 @@ import {
 } from 'lucide-react';
 import { useOrganization, useUser } from '@clerk/nextjs';
 import type { Capability, OrgModule } from '@fleetcal/types';
-import { usePermissions } from '@/lib/usePermissions';
-import { useModules } from '@/lib/useModules';
+import { useNavGate } from '@/lib/useNavGate';
 import { isCrmUser, isInternalOrg } from '@/lib/internalOrg';
 
 export interface NavLeaf {
@@ -113,15 +112,17 @@ const SIDEBAR_W_COLLAPSED = 60;
 export default function AppSidebar() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const { can, isLoading: permsLoading } = usePermissions();
-  const { enabled: moduleEnabled } = useModules();
-  // Internal-org gate for internalOnly entries (CRM). Unlike the
-  // cap/module gates there's no optimistic-while-loading rendering:
-  // isInternalOrg(undefined) is false during Clerk hydration, so the
-  // entry appears only once the org resolves to an allowlisted id —
-  // customer orgs never see even a flicker of it. The per-user CRM
-  // allowlist (NEXT_PUBLIC_CRM_USER_IDS) tightens it further so other
-  // admins of the internal org don't see the entry either.
+  // Gates nothing until permissions AND module flags both resolve —
+  // see lib/useNavGate.ts. Rendering optimistically used to flash the
+  // full link set on every cold load.
+  const { ready: gatesReady, visible } = useNavGate();
+  // Internal-org gate for internalOnly entries (CRM). Same
+  // hide-until-known treatment: isInternalOrg(undefined) is false
+  // during Clerk hydration, so the entry appears only once the org
+  // resolves to an allowlisted id — customer orgs never see even a
+  // flicker of it. The per-user CRM allowlist
+  // (NEXT_PUBLIC_CRM_USER_IDS) tightens it further so other admins of
+  // the internal org don't see the entry either.
   const { organization } = useOrganization();
   const { user } = useUser();
   const internal = isInternalOrg(organization?.id) && isCrmUser(user?.id);
@@ -154,11 +155,15 @@ export default function AppSidebar() {
     if (onEquipment) setGroupOpen(prev => ({ ...prev, Equipment: true }));
   }, [onEquipment]);
 
+  // Groups also filter their children, so an Equipment group whose
+  // sub-tabs are all gated off doesn't render as an empty expander.
   const filterVisible = (items: NavItem[]): NavItem[] =>
-    (permsLoading
-      ? items
-      : items.filter(it => can(it.cap) && (!it.module || moduleEnabled(it.module)))
-    ).filter(it => !it.internalOnly || internal);
+    items
+      .filter(it => visible(it) && (!it.internalOnly || internal))
+      .map(it => it.kind === 'group'
+        ? { ...it, children: it.children.filter(c => visible(c) && (!c.internalOnly || internal)) }
+        : it)
+      .filter(it => it.kind !== 'group' || it.children.length > 0);
 
   const primary   = filterVisible(PRIMARY_NAV);
   const secondary = filterVisible(SECONDARY_NAV);
@@ -222,6 +227,11 @@ export default function AppSidebar() {
 
       {/* Primary nav */}
       <nav className="flex-1 overflow-y-auto overflow-x-hidden py-2 flex flex-col gap-0.5 px-2">
+        {/* Placeholders hold the rail's shape while the gates resolve.
+            The real count varies per org, so some settle is
+            unavoidable — this just avoids an empty rail, which reads
+            as broken. */}
+        {!gatesReady && <NavSkeleton collapsed={collapsed} />}
         {primary.map(item =>
           item.kind === 'leaf'
             ? <LeafLink key={item.href} item={item} active={isActive(item)} collapsed={collapsed} />
@@ -279,6 +289,35 @@ export default function AppSidebar() {
         </button>
       </div>
     </aside>
+  );
+}
+
+// ── Loading skeleton ──────────────────────────────────────────────────
+
+/** Shown in place of the nav while permissions + module flags resolve.
+ *  Six rows is roughly the MVP link count — enough to reserve the
+ *  space without pretending to know the org's real nav. */
+function NavSkeleton({ collapsed }: { collapsed: boolean }) {
+  return (
+    <div aria-hidden className="flex flex-col gap-0.5">
+      {Array.from({ length: 6 }, (_, i) => (
+        <div key={i} className="flex items-center gap-2.5 rounded-lg"
+          style={{ height: 36, padding: '0 10px' }}>
+          <span style={{
+            width: 18, height: 18, borderRadius: 5, flexShrink: 0,
+            background: 'var(--gc-border-light)', opacity: 0.7,
+          }} />
+          {!collapsed && (
+            <span style={{
+              height: 9, borderRadius: 4, flex: 1,
+              // Vary the width so it reads as text, not a progress bar.
+              maxWidth: [88, 104, 72, 96, 80, 110][i],
+              background: 'var(--gc-border-light)', opacity: 0.7,
+            }} />
+          )}
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -431,8 +470,11 @@ function Group({
       </div>
       {open && (
         <div className="flex flex-col gap-0.5 mt-0.5">
+          {/* Children arrive pre-filtered from filterVisible, which
+              now gates them individually — it previously only filtered
+              top-level items, so a sub-tab the role couldn't use still
+              rendered here. */}
           {item.children
-            .filter(c => true) // cap filtering already happened at filterVisible
             .map(c => (
               <SubLeafLink
                 key={c.href}

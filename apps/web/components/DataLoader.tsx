@@ -80,7 +80,19 @@ export default function DataLoader() {
             hydrateDocumentTypes(settings.documentTypes ?? null);
             hydrateInvoiceAutoIncludeKinds(settings.invoiceAutoIncludeKinds ?? null);
           })
-          .catch((err) => console.error('[DataLoader] org settings fetch failed:', err));
+          .catch((err) => {
+            console.error('[DataLoader] org settings fetch failed:', err);
+            // Fail OPEN, and crucially still mark modules hydrated.
+            // The nav hides every module-gated link until this
+            // resolves (lib/useNavGate.ts) — without this line a
+            // failed fetch would leave the sidebar stuck on its
+            // loading skeleton with no navigation at all. An empty
+            // flags map means "everything enabled", which is the same
+            // degraded-but-usable state this failure produced before
+            // the nav started waiting on it, and matches how the API
+            // fails open in loadOrgModules.
+            hydrateOrgModules(undefined);
+          });
         autoExpireTrash();
         // Stage 2: extend the events window in the background. Merges by id,
         // updates loadedStart/loadedEnd in the store.
