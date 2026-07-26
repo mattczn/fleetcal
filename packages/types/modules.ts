@@ -168,13 +168,14 @@ export function isModuleEnabled(
  * To upgrade a customer's tier later, PATCH the specific flags from
  * `false` to `true` via Settings → Modules (or a Stripe webhook).
  */
-export const MVP_LAUNCH_DEFAULTS: Required<Pick<OrgModuleFlags,
-  | "closeout" | "accounting" | "fuel" | "payroll" | "maintenance"
-  | "motive_integration" | "trailers" | "performance" | "driver_app"
-  | "dispatch_board" | "custom_documents" | "team_roles"
-  | "trailer_categories" | "relay_advanced" | "invoicing_advanced"
-  | "crm"
->> = {
+// Typed as a TOTAL map over OrgModule (not a Pick of hand-listed keys)
+// so the compiler refuses to build when a new module is added to the
+// union without a launch default. The previous Pick<> shape let
+// `expenses` ship in ORG_MODULES with no entry here, and since
+// isModuleEnabled treats an absent key as ENABLED, every new org
+// silently got the Expenses dashboard. Adding a module is now a
+// two-line change by construction: the union, and this map.
+export const MVP_LAUNCH_DEFAULTS: Readonly<Record<OrgModule, boolean>> = {
   // Pre-launch core modules
   // - closeout / accounting / payroll: core to the rate-con-to-paid
   //   hero workflow → ON.
@@ -222,4 +223,12 @@ export const MVP_LAUNCH_DEFAULTS: Required<Pick<OrgModuleFlags,
   // internal org opts in with {crm: true}. Also default-off via
   // DEFAULT_OFF_MODULES even when the key is absent.
   crm:                false,
+  // Expenses: OFF for MVP. The dashboard federates fuel_transactions,
+  // payroll_records, and ramp_transactions — and the Ramp card-spend
+  // board behind it is Curzon-only plumbing (rampSyncSweep hardcodes
+  // their org id). Two of the three sources are themselves off for new
+  // orgs (fuel), so the page would render mostly-empty buckets anyway.
+  // Flip on per-org once a carrier has a card integration worth
+  // aggregating.
+  expenses:           false,
 };
