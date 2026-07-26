@@ -37,10 +37,11 @@
  * render optimistically; there is no safe optimistic guess.
  */
 
-import { useCallback } from 'react';
+import { useCallback, useEffect } from 'react';
 import type { Capability, OrgModule } from '@fleetcal/types';
 import { usePermissions } from '@/lib/usePermissions';
 import { useModules } from '@/lib/useModules';
+import { useCalendarStore } from '@/store/useCalendarStore';
 
 /** The gate-bearing shape shared by NavLeaf, NavGroup and the
  *  ManagementHeader link list. Structural so each surface can keep
@@ -62,6 +63,16 @@ export interface NavGateApi {
 export function useNavGate(): NavGateApi {
   const { can, isLoading: permsLoading } = usePermissions();
   const { enabled, hydrated } = useModules();
+  const ensureOrgModules = useCalendarStore((s) => s.ensureOrgModules);
+
+  // The nav can't wait on DataLoader for its flags: DataLoader is
+  // mounted per-page and several pages that DO render the nav don't
+  // mount it (/expenses, /admin/*). Gating on modulesHydrated without
+  // this left the sidebar stuck on its skeleton forever on exactly
+  // those routes. ensureOrgModules is idempotent and no-ops once
+  // hydrated, so this is a cheap safety net on pages DataLoader
+  // covers and the only hydration path on pages it doesn't.
+  useEffect(() => { ensureOrgModules(); }, [ensureOrgModules]);
 
   const ready = !permsLoading && hydrated;
 

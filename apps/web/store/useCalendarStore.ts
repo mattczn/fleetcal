@@ -393,6 +393,16 @@ interface CalendarStore extends ModalState {
    *  navigating directly to /timeline). */
   modulesHydrated: boolean;
   hydrateOrgModules: (flags: import('@fleetcal/types').OrgModuleFlags | undefined) => void;
+  /** Idempotent self-hydrate for the module flags. DataLoader is
+   *  mounted PER PAGE and several pages don't mount it at all
+   *  (/expenses, /admin/*), so anything that gates on modulesHydrated
+   *  can't rely on DataLoader having run — it hangs forever on those
+   *  routes. The nav calls this so it always resolves regardless of
+   *  which page it's rendering inside. No-ops once hydrated or while
+   *  a fetch is already in flight, so the three nav surfaces sharing
+   *  a page issue one request between them. Always ends hydrated,
+   *  even on failure. */
+  ensureOrgModules: () => void;
 
   /** Per-org document-type configuration (kind → enabled + driver
    *  visibility). Drives upload kind pickers across the app and the
@@ -581,6 +591,11 @@ interface CalendarStore extends ModalState {
    *  snapshots would only re-sync on the next page-level Refresh. */
   bumpLoadEditTick: () => void;
 }
+
+/** In-flight guard for ensureOrgModules. Module scope rather than
+ *  store state so a concurrent call is deduped without a re-render —
+ *  the three nav surfaces on a page all call it in the same tick. */
+let modulesFetchInFlight = false;
 
 export const useCalendarStore = create<CalendarStore>()(
   persist(
@@ -774,6 +789,32 @@ export const useCalendarStore = create<CalendarStore>()(
   modulesHydrated: false,
   hydrateOrgModules: (flags) =>
     set({ orgModules: flags ?? {}, modulesHydrated: true }),
+  ensureOrgModules: () => {
+    if (get().modulesHydrated || modulesFetchInFlight) return;
+    modulesFetchInFlight = true;
+    void import('@/lib/railway')
+      .then(({ railway }) => railway.getOrgSettings())
+      .then(({ settings }) => {
+        // Take roleOverrides from the same response — usePermissions
+        // reads them, and on a DataLoader-less page they'd otherwise
+        // stay empty and fall back to hardcoded role defaults, which
+        // silently ignores an org's per-role customisations.
+        set({
+          orgModules:      settings.orgModules ?? {},
+          roleOverrides:   settings.roleOverrides ?? {},
+          modulesHydrated: true,
+        });
+      })
+      .catch((err) => {
+        console.error('[useCalendarStore] ensureOrgModules failed:', err);
+        // Fail OPEN and still mark hydrated. An empty map means every
+        // module is enabled — degraded, but the nav renders. Leaving
+        // it unhydrated would strand every gated surface on its
+        // loading state with no way out.
+        set({ orgModules: {}, modulesHydrated: true });
+      })
+      .finally(() => { modulesFetchInFlight = false; });
+  },
 
   documentTypes: null,
   hydrateDocumentTypes: (types) =>
