@@ -42,7 +42,7 @@ import { FLOW } from '@/components/marketing/ProductFlowFooter';
  */
 export const metadata: Metadata = {
   title: 'FleetCal - Dispatch Calendar for Fleets, Load to Invoice in One System',
-  description: 'See every truck and load on one calendar. FleetCal takes you from load to invoice in one system, built by a 14-truck carrier.',
+  description: 'See every truck and load on one calendar. FleetCal takes you from load to invoice in one system: dispatch, driver app, paperwork, billing, and payroll.',
   alternates: {
     canonical: 'https://fleetcal.app',
   },
@@ -1324,7 +1324,7 @@ function Story() {
                   FleetCal put <span style={{ color: 'var(--gc-blue)' }}>every load on a calendar</span>, so I can see at a glance which trucks are sitting and which are moving.
                 </p>
                 <p style={{ fontSize: 16, lineHeight: 1.6, color: '#5f6368', margin: 0 }}>
-                  We grew to 14 trucks on spreadsheets and group chats, but things kept slipping: trucks sitting empty, loads we scrambled to cover, hours lost chasing down PODs and unpaid invoices. <span style={{ color: '#1e7a3d', fontWeight: 600 }}>Now I know we&rsquo;re not leaving money on the table, and every load&rsquo;s getting paid.</span>
+                  We grew our fleet on spreadsheets and group chats, but things kept slipping: trucks sitting empty, loads we scrambled to cover, hours lost chasing down PODs and unpaid invoices. <span style={{ color: '#1e7a3d', fontWeight: 600 }}>Now I know we&rsquo;re not leaving money on the table, and every load&rsquo;s getting paid.</span>
                 </p>
               </div>
               <div className="border-t pt-8 lg:border-t-0 lg:pt-0 lg:border-l lg:pl-11" style={{ borderColor: '#eef1f4' }}>
