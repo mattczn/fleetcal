@@ -14,15 +14,24 @@
  *   2. Renders Clerk's <PricingTable for="organization" />, which now
  *      works (signed-in admin with an org) and surfaces real subscribe
  *      buttons that launch the Stripe checkout
- *   3. Offers a "Skip — try free without a card →" escape hatch that
- *      lands them in /calendar at unrestricted tier (same as the prior
- *      default behaviour — explicit opt-in instead of silent)
  *
  * After Clerk completes the checkout the user returns here with their
  * plan active; the bottom CTA then routes them to /calendar.
  *
- * Route protection: signed-in users WITH an org. Middleware handles
- * the redirect chain (sign-up → create-org → here → calendar).
+ * There is deliberately NO "skip / try without a card" path any more.
+ * Every org picks a plan to start — the plan IS the truck cap, and the
+ * 14-day trial runs per-plan (Clerk keeps exposing the plan's feature
+ * during the trial, so useOrgTier resolves the right cap throughout).
+ * An org with no plan resolves to tier 'none' → maxTrucks 0, which
+ * makes POST /v1/assets reject the customer's very first truck. Only
+ * "Sign out" leaves this page.
+ *
+ * Route protection: this route is PUBLIC in middleware, and middleware
+ * does not enforce the chain — it has no org or tier check (both were
+ * removed after they caused a crash; see middleware.ts). So a
+ * determined user can navigate straight to /calendar without a plan.
+ * EmptyFleetState catches that case and routes them back here rather
+ * than letting them hit an unexplained 402.
  */
 import Link from 'next/link';
 import { PricingTable, SignOutButton } from '@clerk/nextjs';

@@ -117,9 +117,19 @@ export function useOrgTier(): OrgTierApi {
       tier = "unrestricted";
       maxTrucks = Infinity;
     }
-    // Non-internal orgs with tier === "none" are BLOCKED by middleware
-    // (redirected to /onboarding/pick-plan). The UI consumers still
-    // need to know about this state to render upgrade banners cleanly.
+    // Non-internal orgs with tier === "none" are NOT blocked by
+    // middleware — it has no org or tier check (both were removed
+    // after causing a crash; see middleware.ts). This state means
+    // something went wrong: every org picks a plan to start, and Clerk
+    // keeps exposing the plan's feature through the 14-day trial, so a
+    // paying or trialling org always resolves to a real tier. Reaching
+    // 'none' means the customer abandoned /onboarding/pick-plan, or
+    // Clerk billing didn't propagate.
+    //
+    // It matters because maxTrucks stays 0, so POST /v1/assets rejects
+    // their FIRST truck with a 402. EmptyFleetState checks for this and
+    // sends them to plan selection instead of offering an add button
+    // that can only fail.
 
     // Cap rule: count trucks where `activeTo` is null — i.e. not
     // retired. Deliberately ignoring `activeFrom`. Also excludes

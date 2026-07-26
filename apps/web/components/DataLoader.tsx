@@ -10,7 +10,6 @@ import { usePermissions } from '@/lib/usePermissions';
 export default function DataLoader() {
   const { orgId } = useAuth();
   const hydrate              = useCalendarStore((s) => s.hydrate);
-  const hydrateDemoMode      = useCalendarStore((s) => s.hydrateDemoMode);
   const extendLoadedRange    = useCalendarStore((s) => s.extendLoadedRange);
   const loadSavedLocations   = useCalendarStore((s) => s.fetchSavedLocations);
   const loadDispatchers      = useCalendarStore((s) => s.fetchDispatchers);
@@ -23,7 +22,7 @@ export default function DataLoader() {
   const hydrateInvoiceAutoIncludeKinds = useCalendarStore((s) => s.hydrateInvoiceAutoIncludeKinds);
   const autoExpireTrash      = useCalendarStore((s) => s.autoExpireTrash);
   const hydrateCanEditLoads  = useCalendarStore((s) => s.hydrateCanEditLoads);
-  const { phase, completeOnboarding, setPhase } = useOnboardingStore();
+  const { phase, completeOnboarding } = useOnboardingStore();
   const loadedId = useRef<string | null>(null);
 
   // Mirror the current user's loads.edit capability into the calendar
@@ -56,14 +55,21 @@ export default function DataLoader() {
 
     fetchOrgData(orgId, stage1Start, stage1End)
       .then((data) => {
-        if (data.assets.length === 0 && phase !== 'complete') {
-          hydrate({ orgId, ...data, loadedStart: stage1Start, loadedEnd: stage1End });
-          hydrateDemoMode();
-          setPhase('demo');
-        } else {
-          hydrate({ orgId, ...data, loadedStart: stage1Start, loadedEnd: stage1End });
-          if (phase !== 'complete') completeOnboarding();
-        }
+        hydrate({ orgId, ...data, loadedStart: stage1Start, loadedEnd: stage1End });
+        // An asset-less org used to get seeded with demo trucks +
+        // an 8-step tour (hydrateDemoMode → phase 'demo'). Onboarding
+        // is a scheduled call now, so the demo fleet was work in both
+        // directions: the customer studied a fleet that wasn't theirs,
+        // then had to clear it before adding a real truck. They land on
+        // an empty calendar with a single action instead — see
+        // components/calendar/EmptyFleetState.tsx. The onboarding
+        // components stay on disk, just unmounted.
+        //
+        // Everyone is marked complete: LearningCenter (the post-setup
+        // checklist in CalendarToolbar) renders only at phase
+        // 'complete', and the store's default is 'demo', so skipping
+        // this would silently hide it from every new browser.
+        if (phase !== 'complete') completeOnboarding();
         // Reference data — not blocking the calendar paint
         void loadSavedLocations();
         void loadDispatchers();
@@ -99,7 +105,7 @@ export default function DataLoader() {
         void extendLoadedRange(stage2Start, stage2End);
       })
       .catch((err) => console.error('[DataLoader] fetch failed:', err));
-  }, [orgId, hydrate, hydrateDemoMode, extendLoadedRange, loadSavedLocations, loadDispatchers, loadCustomers, loadTrailers, hydrateRateConSettings, hydrateRoleOverrides, hydrateOrgModules, hydrateDocumentTypes, hydrateInvoiceAutoIncludeKinds, autoExpireTrash, phase, completeOnboarding, setPhase]);
+  }, [orgId, hydrate, extendLoadedRange, loadSavedLocations, loadDispatchers, loadCustomers, loadTrailers, hydrateRateConSettings, hydrateRoleOverrides, hydrateOrgModules, hydrateDocumentTypes, hydrateInvoiceAutoIncludeKinds, autoExpireTrash, phase, completeOnboarding]);
 
   return null;
 }

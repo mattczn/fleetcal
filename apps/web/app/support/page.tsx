@@ -26,6 +26,10 @@ const CTA = { href: '/sign-up', label: 'Try for free' };
 const SUPPORT_EMAIL = 'hello@fleetcal.app';
 
 const TOPICS = [
+  // First because it's where new signups land: EmptyFleetState's
+  // "Book a setup call" points here for anyone who signed up without
+  // going through onboarding with us.
+  'Getting started / setup call',
   'Driver app (mobile)',
   'Dispatcher web app',
   'Billing & account',

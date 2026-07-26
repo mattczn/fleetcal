@@ -194,8 +194,13 @@ assets.post("/", requireCapability("assets.create"), async (c) => {
       // existing truck — the third one is the cheapest path for a
       // customer who's just rotating equipment, so we surface it
       // first in the "real tier" message.
+      // tier 'none' means no resolvable plan, NOT a full fleet — the
+      // cap is 0, so this fires on the org's very first truck. The old
+      // copy told them to "retire an existing truck to free a slot"
+      // while they had none, which reads as a broken product during
+      // onboarding. Say what's actually wrong.
       const detail = tier.tier === "none"
-        ? `You've hit your truck limit. Retire or delete an existing truck to free a slot, or contact support to increase capacity.`
+        ? `No active plan found for this organization, so trucks can't be added yet. Choose a plan to start your trial — every plan includes a truck allowance. If you've already picked one, contact support and we'll sort it out.`
         : `You've hit the truck limit for your plan (${current} of ${tier.maxTrucks}). Retire or delete an existing truck to free a slot, or upgrade your plan / contact sales to raise the cap.`;
       return c.json({
         error:  "tier_cap_exceeded",
