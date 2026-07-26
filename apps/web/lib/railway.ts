@@ -1770,6 +1770,12 @@ class RailwayClient {
           caption: string | null;
           signedUrl: string | null;
           uploadedAt: string;
+          /** New 2026-07-13: video support. Old rows default to
+           *  'photo'. `durationSeconds` is only populated for videos. */
+          mediaKind:       'photo' | 'video';
+          durationSeconds: number | null;
+          sizeBytes:       number | null;
+          mimeType:        string | null;
         }>;
       };
     }>('GET', `/v1/inspection-reports/${id}`);

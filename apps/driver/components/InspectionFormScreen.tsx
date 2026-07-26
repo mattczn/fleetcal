@@ -26,7 +26,7 @@ import {
 } from "react-native";
 import {
   Truck, Container, ChevronDown, Check, X, ArrowLeft, AlertTriangle,
-  Camera, Plus, Trash2, Search, Wrench, Sparkles,
+  Camera, Plus, Trash2, Search, Wrench, Sparkles, Video, Play,
 } from "lucide-react-native";
 import * as ImagePicker from "expo-image-picker";
 import * as Location from "expo-location";
@@ -186,6 +186,16 @@ interface PendingPhoto {
   target:   PhotoTarget;
 }
 
+interface PendingVideo {
+  key:              string;
+  uri:              string;
+  fileName:         string;
+  mimeType:         string;
+  /** Duration Expo returned in seconds. Enforced ≤ 180 client-side even
+   *  though iOS honors videoMaxDuration natively — Android is looser. */
+  durationSeconds:  number;
+}
+
 interface Props {
   /** Initial asset to select. Defaults to the driver's currently
    *  assigned truck if known; null triggers a server lookup via
@@ -239,6 +249,12 @@ export default function InspectionFormScreen({ initialAssetId, initialTrailerId,
   }));
   const [notes,       setNotes]       = useState("");
   const [photos,      setPhotos]      = useState<PendingPhoto[]>([]);
+  // Optional short walkaround video, filmed with the phone camera at
+  // the end of the inspection. One per inspection is the intent (a
+  // ~3-min narration of anything the checklist can't capture — engine
+  // sound, brake feel, rattles). Kept as an array so a driver can drop
+  // one and re-record without confusing state, but capped at 1.
+  const [videos,      setVideos]      = useState<PendingVideo[]>([]);
   const [submitting,  setSubmitting]  = useState(false);
 
   // ── Cleanliness (standout top card) ───────────────────────────────
@@ -453,6 +469,57 @@ export default function InspectionFormScreen({ initialAssetId, initialTrailerId,
     setPhotos(p => p.filter(x => x.key !== key));
   }, []);
 
+  // ── Optional walkaround video ────────────────────────────────────
+  // Record with the native camera in video mode, 3-min cap. iOS
+  // enforces videoMaxDuration natively; Android doesn't reliably, so
+  // we also reject the clip client-side if it comes back long.
+  const MAX_VIDEO_SECONDS = 180;
+  const recordVideo = useCallback(async () => {
+    if (videos.length >= 1) {
+      Alert.alert("Video recorded", "Remove the current video before recording a new one.");
+      return;
+    }
+    const perm = await ImagePicker.requestCameraPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert("Camera", "Enable camera access in Settings.");
+      return;
+    }
+    const res = await ImagePicker.launchCameraAsync({
+      mediaTypes:       ImagePicker.MediaTypeOptions.Videos,
+      videoMaxDuration: MAX_VIDEO_SECONDS,
+      // Medium (1) = ~480p on iOS — good enough to see a rattle or a
+      // brake pedal, keeps a 3-min clip in the ~30-60MB range for
+      // cellular upload. Bump to High (0) later if quality complaints
+      // come in. On Android this maps to the middle quality bucket.
+      videoQuality:     ImagePicker.UIImagePickerControllerQualityType.Medium,
+    });
+    if (res.canceled) return;
+    const a = res.assets[0];
+    if (!a) return;
+    // Expo returns duration in ms on video assets. Guard against
+    // Android-side missing duration by falling back to a sane default.
+    const durMs = typeof a.duration === "number" ? a.duration : 0;
+    const durSec = Math.round(durMs / 1000);
+    if (durSec > MAX_VIDEO_SECONDS) {
+      Alert.alert(
+        "Video too long",
+        `Videos are limited to ${MAX_VIDEO_SECONDS / 60} minutes. This clip is ${Math.round(durSec / 60)} min.`,
+      );
+      return;
+    }
+    setVideos([{
+      key:             `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      uri:             a.uri,
+      fileName:        a.fileName ?? `inspection-${Date.now()}.mp4`,
+      mimeType:        a.mimeType ?? "video/mp4",
+      durationSeconds: durSec > 0 ? durSec : 1,
+    }]);
+  }, [videos.length]);
+
+  const removeVideo = useCallback((key: string) => {
+    setVideos(v => v.filter(x => x.key !== key));
+  }, []);
+
   // ── Submit ────────────────────────────────────────────────────────
   // Two-step: tapping the bottom button opens a confirm alert ("Submit
   // this inspection?") with Confirm / Keep editing. Submission is
@@ -542,9 +609,30 @@ export default function InspectionFormScreen({ initialAssetId, initialTrailerId,
         }
       }
 
-      if (photoFailures.length > 0) {
-        Alert.alert("Submitted",
-          `Inspection saved, but ${photoFailures.length} photo${photoFailures.length === 1 ? "" : "s"} failed to upload.`);
+      // Video upload — same endpoint, extra multipart fields tell the
+      // server this is a video. Failing here doesn't roll back the
+      // inspection; the driver keeps the local file (they can retry
+      // from the toast).
+      const videoFailures: string[] = [];
+      for (const vd of videos) {
+        try {
+          const form = new FormData();
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          form.append("file", { uri: vd.uri, name: vd.fileName, type: vd.mimeType } as any);
+          form.append("mediaKind",       "video");
+          form.append("durationSeconds", String(vd.durationSeconds));
+          await railway.uploadInspectionPhoto(inspection.id, form);
+        } catch (err) {
+          console.warn("[inspection] video upload failed:", err);
+          videoFailures.push(vd.fileName);
+        }
+      }
+
+      if (photoFailures.length + videoFailures.length > 0) {
+        const bits: string[] = [];
+        if (photoFailures.length > 0) bits.push(`${photoFailures.length} photo${photoFailures.length === 1 ? "" : "s"}`);
+        if (videoFailures.length > 0) bits.push(`${videoFailures.length} video`);
+        Alert.alert("Submitted", `Inspection saved, but ${bits.join(" + ")} failed to upload.`);
       }
 
       // Step 3 — if the driver flagged any defects, offer to spin up a
@@ -563,7 +651,7 @@ export default function InspectionFormScreen({ initialAssetId, initialTrailerId,
     } finally {
       setSubmitting(false);
     }
-  }, [assetId, trailerId, includeTrailer, kind, items, notes, driverName, photos, onSubmitted]);
+  }, [assetId, trailerId, includeTrailer, kind, items, notes, driverName, photos, videos, onSubmitted]);
 
   const failCount = useMemo(
     () => Object.values(items).filter(s => s.status === "fail").length,
@@ -796,6 +884,63 @@ export default function InspectionFormScreen({ initialAssetId, initialTrailerId,
               textAlignVertical: "top",
             }]}
           />
+        </View>
+
+        {/* Walkaround video (optional) — short clip for anything
+            photos can't show (engine sound, brake feel, rattle). */}
+        <View style={{ backgroundColor: C.surface, borderRadius: 12, padding: 14, marginBottom: 14 }}>
+          <Text style={[txt(700), { fontSize: 12, color: C.t3, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }]}>
+            Walkaround video (optional)
+          </Text>
+          <Text style={[txt(500), { fontSize: 12, color: C.t3, marginBottom: 10 }]}>
+            Up to 3 minutes. Filmed with the phone camera.
+          </Text>
+          {videos.length === 0 ? (
+            <TouchableOpacity
+              onPress={recordVideo}
+              style={{
+                flexDirection: "row", alignItems: "center", justifyContent: "center",
+                borderWidth: 1, borderColor: C.border, borderStyle: "dashed",
+                borderRadius: 10, paddingVertical: 14, gap: 8,
+              }}
+            >
+              <Video size={18} color={C.t2} />
+              <Text style={[txt(600), { fontSize: 14, color: C.t2 }]}>Record video</Text>
+            </TouchableOpacity>
+          ) : (
+            videos.map(v => (
+              <View
+                key={v.key}
+                style={{
+                  flexDirection: "row", alignItems: "center",
+                  borderWidth: 1, borderColor: C.border, borderRadius: 10,
+                  padding: 12, gap: 12,
+                }}
+              >
+                <View style={{
+                  width: 44, height: 44, borderRadius: 8,
+                  backgroundColor: C.t1 + "12",
+                  alignItems: "center", justifyContent: "center",
+                }}>
+                  <Play size={20} color={C.t1} fill={C.t1} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[txt(700), { fontSize: 14, color: C.t1 }]}>
+                    Video recorded
+                  </Text>
+                  <Text style={[txt(500), { fontSize: 12, color: C.t3, marginTop: 2 }]}>
+                    {Math.floor(v.durationSeconds / 60)}:{String(v.durationSeconds % 60).padStart(2, "0")}
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  onPress={() => removeVideo(v.key)}
+                  hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+                >
+                  <Trash2 size={18} color={C.red} />
+                </TouchableOpacity>
+              </View>
+            ))
+          )}
         </View>
 
         {/* Signature line */}

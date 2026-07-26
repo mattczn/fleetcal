@@ -6283,7 +6283,12 @@ function InspectionDetail({
   const trailerDefects = data.trailerItems.filter(i => i.status === 'fail' && i.id !== 'cleanliness');
   const cleanlinessFailed = data.cleanlinessFlagged
     || [...data.items, ...data.trailerItems].some(i => i.id === 'cleanliness' && i.status === 'fail');
-  const cleanlinessPhotos = data.photos.filter(p => p.itemId === 'cleanliness');
+  // Split off videos so the per-defect/section grouping below only
+  // operates on images. Videos are always general (no per-item) and
+  // rendered in their own block under the photo grid.
+  const inspectionVideos = data.photos.filter(p => p.mediaKind === 'video');
+  const inspectionImages = data.photos.filter(p => p.mediaKind !== 'video');
+  const cleanlinessPhotos = inspectionImages.filter(p => p.itemId === 'cleanliness');
   const totalDefects   = truckDefects.length + trailerDefects.length;
   const totalItems     = data.items.length + data.trailerItems.length;
   const passCount      = totalItems - totalDefects;
@@ -6297,7 +6302,7 @@ function InspectionDetail({
   // which item a given evidence shot belongs to.
   const mediaSections: Array<{ label?: string; photos: { id: string; signedUrl: string | null; caption: string | null }[] }> = [];
   for (const def of truckDefects) {
-    const itemPhotos = data.photos.filter(p => p.itemId === def.id);
+    const itemPhotos = inspectionImages.filter(p => p.itemId === def.id);
     if (itemPhotos.length > 0) {
       mediaSections.push({
         label: `${truckLabel} · ${def.label}`,
@@ -6306,7 +6311,7 @@ function InspectionDetail({
     }
   }
   for (const def of trailerDefects) {
-    const itemPhotos = data.photos.filter(p => p.itemId === def.id);
+    const itemPhotos = inspectionImages.filter(p => p.itemId === def.id);
     if (itemPhotos.length > 0) {
       mediaSections.push({
         label: `${trailerLabel} · ${def.label}`,
@@ -6322,9 +6327,9 @@ function InspectionDetail({
       photos: cleanlinessPhotos.map(p => ({ id: p.id, signedUrl: p.signedUrl, caption: p.caption ?? 'Cab & interior' })),
     });
   }
-  const truckGeneral   = data.photos.filter(p => p.itemId == null && p.target === 'truck');
-  const trailerGeneral = data.photos.filter(p => p.itemId == null && p.target === 'trailer');
-  const orphanGeneral  = data.photos.filter(p => p.itemId == null && p.target == null);
+  const truckGeneral   = inspectionImages.filter(p => p.itemId == null && p.target === 'truck');
+  const trailerGeneral = inspectionImages.filter(p => p.itemId == null && p.target === 'trailer');
+  const orphanGeneral  = inspectionImages.filter(p => p.itemId == null && p.target == null);
   if (truckGeneral.length > 0)   mediaSections.push({ label: `${truckLabel} · General`,   photos: truckGeneral  .map(p => ({ id: p.id, signedUrl: p.signedUrl, caption: p.caption })) });
   if (trailerGeneral.length > 0) mediaSections.push({ label: `${trailerLabel} · General`, photos: trailerGeneral.map(p => ({ id: p.id, signedUrl: p.signedUrl, caption: p.caption })) });
   if (orphanGeneral.length > 0)  mediaSections.push({ label: 'General',                    photos: orphanGeneral.map(p => ({ id: p.id, signedUrl: p.signedUrl, caption: p.caption })) });
@@ -6481,6 +6486,52 @@ function InspectionDetail({
               </div>
             );
           })()}
+        </div>
+      )}
+
+      {/* Walkaround video(s) — optional driver-submitted clips. Native
+          <video controls> for playback + a small caption strip below
+          each showing duration + submitted-at. */}
+      {inspectionVideos.length > 0 && (
+        <div className="px-6 pb-4">
+          <SectionHeader>Video ({inspectionVideos.length})</SectionHeader>
+          <div className="flex flex-col gap-3">
+            {inspectionVideos.map(v => (
+              <div key={v.id}
+                className="rounded-xl overflow-hidden"
+                style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border-light)' }}>
+                {v.signedUrl ? (
+                  <video
+                    controls
+                    preload="metadata"
+                    src={v.signedUrl}
+                    style={{ width: '100%', maxHeight: 480, display: 'block', background: '#000' }}
+                  />
+                ) : (
+                  <div className="flex items-center justify-center py-10 text-[12px]"
+                    style={{ color: 'var(--gc-text-3)', background: 'var(--gc-bg)' }}>
+                    Video temporarily unavailable
+                  </div>
+                )}
+                <div className="px-3 py-2 text-[12px] flex items-center gap-2 tabular-nums"
+                  style={{ color: 'var(--gc-text-3)' }}>
+                  {v.durationSeconds != null && (
+                    <span>
+                      {Math.floor(v.durationSeconds / 60)}:{String(v.durationSeconds % 60).padStart(2, '0')}
+                    </span>
+                  )}
+                  {v.sizeBytes != null && (
+                    <>
+                      <span>·</span>
+                      <span>{(v.sizeBytes / 1024 / 1024).toFixed(1)} MB</span>
+                    </>
+                  )}
+                  <span>·</span>
+                  <span>Submitted {new Date(v.uploadedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

@@ -2667,7 +2667,20 @@ driver.get("/maintenance-reports/history", async (c) => {
 // org already writes to.
 // ─────────────────────────────────────────────────────────────────────────
 
-type PhotoOut = { id: string; fileName?: string; caption?: string | null; itemId?: string | null; uploadedAt: string; signedUrl?: string };
+type PhotoOut = {
+  id: string;
+  fileName?: string;
+  caption?: string | null;
+  itemId?: string | null;
+  uploadedAt: string;
+  signedUrl?: string;
+  /** Video support. `photo` for existing rows (default), `video` for
+   *  optional driver-submitted clips on inspections. */
+  mediaKind?:       "photo" | "video";
+  durationSeconds?: number | null;
+  sizeBytes?:       number | null;
+  mimeType?:        string | null;
+};
 
 async function signPathsMap(bucket: string): Promise<(paths: string[]) => Promise<Map<string, string>>> {
   return async (paths: string[]) => {
@@ -2703,14 +2716,29 @@ async function fetchInspectionPhotosMap(ids: string[]): Promise<Map<string, Phot
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data } = await (supabase as any)
     .from("inspection_photos")
-    .select("id, report_id, item_id, caption, storage_path, uploaded_at")
+    .select("id, report_id, item_id, caption, storage_path, uploaded_at, media_kind, duration_seconds, size_bytes, mime_type")
     .in("report_id", ids)
     .order("uploaded_at", { ascending: true });
-  const rows = (data ?? []) as Array<{ id: string; report_id: string; item_id: string | null; caption: string | null; storage_path: string; uploaded_at: string }>;
+  const rows = (data ?? []) as Array<{
+    id: string; report_id: string; item_id: string | null; caption: string | null;
+    storage_path: string; uploaded_at: string;
+    media_kind: "photo" | "video" | null; duration_seconds: number | null;
+    size_bytes: number | null; mime_type: string | null;
+  }>;
   const urlByPath = await (await signPathsMap("inspection-photos"))(rows.map(r => r.storage_path));
   for (const r of rows) {
     const arr = out.get(r.report_id) ?? [];
-    arr.push({ id: r.id, itemId: r.item_id ?? null, caption: r.caption ?? null, uploadedAt: r.uploaded_at, signedUrl: urlByPath.get(r.storage_path) });
+    arr.push({
+      id:              r.id,
+      itemId:          r.item_id ?? null,
+      caption:         r.caption ?? null,
+      uploadedAt:      r.uploaded_at,
+      signedUrl:       urlByPath.get(r.storage_path),
+      mediaKind:       r.media_kind ?? "photo",
+      durationSeconds: r.duration_seconds,
+      sizeBytes:       r.size_bytes,
+      mimeType:        r.mime_type,
+    });
     out.set(r.report_id, arr);
   }
   return out;
@@ -3278,8 +3306,15 @@ driver.post("/inspections/:id/photos", async (c) => {
     return c.json({ error: "not_authorized" }, 403);
   }
 
-  let body: { file?: File; itemId?: string; caption?: string; target?: string };
-  try { body = await c.req.parseBody() as { file?: File; itemId?: string; caption?: string; target?: string }; }
+  let body: {
+    file?:             File;
+    itemId?:           string;
+    caption?:          string;
+    target?:           string;
+    mediaKind?:        string;
+    durationSeconds?:  string;
+  };
+  try { body = await c.req.parseBody() as typeof body; }
   catch { return c.json({ error: "validation_failed", errors: ["multipart parse failed"] }, 400); }
   const file = body.file;
   if (!file || typeof file === 'string') {
@@ -3297,10 +3332,42 @@ driver.post("/inspections/:id/photos", async (c) => {
     return c.json({ error: "validation_failed", errors: ["target must be 'truck' or 'trailer'"] }, 400);
   }
 
+  // mediaKind: derive from mime unless the client explicitly said. Video
+  // path skips HEIC conversion (irrelevant), enforces a bigger size cap,
+  // and records duration_seconds for the UI. A ~3-minute clip at ~480p
+  // typically lands under 60MB but we allow up to 250MB so a longer 720p
+  // clip on a good day still uploads without a cryptic failure.
+  const isVideoMime = (file.type ?? "").toLowerCase().startsWith("video/");
+  const mediaKind: "photo" | "video" =
+    body.mediaKind === "video" || (body.mediaKind == null && isVideoMime) ? "video" : "photo";
+  const MAX_PHOTO_BYTES =  25 * 1024 * 1024;
+  const MAX_VIDEO_BYTES = 250 * 1024 * 1024;
+  if (file.size != null) {
+    const cap = mediaKind === "video" ? MAX_VIDEO_BYTES : MAX_PHOTO_BYTES;
+    if (file.size > cap) {
+      return c.json({
+        error:  "validation_failed",
+        errors: [`${mediaKind} exceeds ${Math.round(cap / 1024 / 1024)}MB cap`],
+      }, 413);
+    }
+  }
+
+  let durationSeconds: number | null = null;
+  if (mediaKind === "video" && body.durationSeconds != null && body.durationSeconds !== "") {
+    const n = Number(body.durationSeconds);
+    if (!Number.isFinite(n) || n <= 0 || n > 600) {
+      return c.json({ error: "validation_failed", errors: ["durationSeconds out of range"] }, 400);
+    }
+    durationSeconds = Math.round(n);
+  }
+
   let bytes      = new Uint8Array(await file.arrayBuffer());
   let uploadName = file.name;
   let uploadMime = file.type;
-  {
+  // HEIC conversion is image-only. Videos skip it — the helper's
+  // isHeic() check would already short-circuit, but being explicit
+  // keeps the intent clear.
+  if (mediaKind === "photo") {
     const conv = await convertIfHeic(file, bytes);
     if ("failed" in conv) return c.json(HEIC_DECODE_FAILED, 415);
     bytes = conv.bytes; uploadName = conv.name; uploadMime = conv.mime;
@@ -3324,13 +3391,17 @@ driver.post("/inspections/:id/photos", async (c) => {
   const { data, error } = await (supabase as any)
     .from("inspection_photos")
     .insert({
-      report_id:    id,
-      item_id:      body.itemId ?? null,
+      report_id:        id,
+      item_id:          body.itemId ?? null,
       target,
-      storage_path: storagePath,
-      caption:      body.caption ?? null,
+      storage_path:     storagePath,
+      caption:          body.caption ?? null,
+      media_kind:       mediaKind,
+      duration_seconds: durationSeconds,
+      size_bytes:       bytes.length,
+      mime_type:        uploadMime || null,
     })
-    .select("id, item_id, target, storage_path, caption, uploaded_at")
+    .select("id, item_id, target, storage_path, caption, uploaded_at, media_kind, duration_seconds, size_bytes, mime_type")
     .single();
   if (error || !data) {
     void supabase.storage.from(INSPECTION_PHOTO_BUCKET).remove([storagePath]);

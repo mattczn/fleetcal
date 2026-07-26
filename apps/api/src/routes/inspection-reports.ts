@@ -49,22 +49,30 @@ interface DbInspectionRow {
 }
 
 interface InspectionPhotoRow {
-  id:           string;
-  report_id:    string;
-  item_id:      string | null;
-  target:       "truck" | "trailer" | null;
-  storage_path: string;
-  caption:      string | null;
-  uploaded_at:  string;
+  id:               string;
+  report_id:        string;
+  item_id:          string | null;
+  target:           "truck" | "trailer" | null;
+  storage_path:     string;
+  caption:          string | null;
+  uploaded_at:      string;
+  media_kind:       "photo" | "video";
+  duration_seconds: number | null;
+  size_bytes:       number | null;
+  mime_type:        string | null;
 }
 
 interface InspectionPhoto {
-  id:        string;
-  itemId:    string | null;
-  target:    "truck" | "trailer" | null;
-  caption:   string | null;
-  signedUrl: string | null;  // 1-hour TTL, minted by /:id
-  uploadedAt: string;
+  id:              string;
+  itemId:          string | null;
+  target:          "truck" | "trailer" | null;
+  caption:         string | null;
+  signedUrl:       string | null;  // 1-hour TTL, minted by /:id
+  uploadedAt:      string;
+  mediaKind:       "photo" | "video";
+  durationSeconds: number | null;
+  sizeBytes:       number | null;
+  mimeType:        string | null;
 }
 
 interface ListInspectionRow {
@@ -235,7 +243,7 @@ inspectionReports.get("/:id", async (c) => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: photoRows } = await (supabase as any)
     .from("inspection_photos")
-    .select("id, report_id, item_id, target, storage_path, caption, uploaded_at")
+    .select("id, report_id, item_id, target, storage_path, caption, uploaded_at, media_kind, duration_seconds, size_bytes, mime_type")
     .eq("report_id", id)
     .order("uploaded_at", { ascending: true });
   const rawPhotos = (photoRows ?? []) as InspectionPhotoRow[];
@@ -252,12 +260,16 @@ inspectionReports.get("/:id", async (c) => {
     }
   }
   const photos: InspectionPhoto[] = rawPhotos.map(p => ({
-    id:         p.id,
-    itemId:     p.item_id,
-    target:     p.target,
-    caption:    p.caption,
-    signedUrl:  urlByPath.get(p.storage_path) ?? null,
-    uploadedAt: p.uploaded_at,
+    id:              p.id,
+    itemId:          p.item_id,
+    target:          p.target,
+    caption:         p.caption,
+    signedUrl:       urlByPath.get(p.storage_path) ?? null,
+    uploadedAt:      p.uploaded_at,
+    mediaKind:       p.media_kind ?? "photo",
+    durationSeconds: p.duration_seconds,
+    sizeBytes:       p.size_bytes,
+    mimeType:        p.mime_type,
   }));
 
   return c.json({
