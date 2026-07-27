@@ -90,13 +90,13 @@ capacity.get("/", async (c) => {
     // ── Forward 7-day events ─────────────────────────────────────────────
     const { data: futureRows } = await sb
       .from("events")
-      .select("asset_id, start, \"end\"")
+      .select("asset_id, start, \"end\", status")
       .eq("org_id", orgId)
       .is("deleted_at", null)
       .lt("start", winEndNaive)
       .gt("end", winStartNaive);
     const futureEvents = ((futureRows ?? []) as Array<{
-      asset_id: number; start: string; end: string;
+      asset_id: number; start: string; end: string; status: string | null;
     }>);
 
     const resultDays = days.map((dayStr) => {
@@ -105,6 +105,9 @@ capacity.get("/", async (c) => {
 
       const activeAssets = new Set<number>();
       for (const ev of futureEvents) {
+        // Cancelled loads and TONUs (truck-order-not-used — the truck never
+        // moved) leave the truck free, so they don't count against capacity.
+        if (ev.status === "cancelled" || ev.status === "tonu") continue;
         const s = (ev.start ?? "").slice(0, 16);
         const e = (ev.end   ?? "").slice(0, 16);
         if (s && e && s < dayEnd && e > dayStart) {
