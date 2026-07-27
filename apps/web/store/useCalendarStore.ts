@@ -2627,13 +2627,13 @@ export const useCalendarStore = create<CalendarStore>()(
         : { legIndex: firstIdx, legCount: remaining, relayRole: legRoleFor(firstIdx, remaining) }),
       ...(opts?.auditLog !== undefined ? { auditLog: opts.auditLog } : {}),
     };
-    const deletedAt = new Date().toISOString();
-    const trashed: DeletedEvent = {
-      ...merge,
-      deletedAt,
-      relayGroupId: undefined,
-      relayRole:    undefined,
-    };
+    // Collapsing a handoff does NOT put the absorbed leg in Trash. It's a
+    // restructure, not a deletion: the load is still live, and a Trash
+    // entry for it means searching that load number later turns up a
+    // "deleted" row for a load sitting on the calendar. What matters is
+    // that the load exists — from there it can be split or unsplit again
+    // freely. The event row is still soft-deleted server-side; it just
+    // isn't surfaced as something the dispatcher deleted.
     set((s) => ({
       events: s.events
         .filter((e) => e.id !== merge.id)
@@ -2648,7 +2648,6 @@ export const useCalendarStore = create<CalendarStore>()(
           }
           return e;
         }),
-      deletedEvents: [trashed, ...s.deletedEvents],
     }));
     if (get().isDemo) return;
     const { orgId } = get();

@@ -81,15 +81,28 @@ export default function CalendarToolbar() {
   // three identical-looking rows; restoring any one of them restores
   // the whole load anyway (see restoreEvent), so the extra rows were
   // only noise. Keeps the earliest leg as the load's representative.
+  //
+  // Also hides legs that were removed by RESTRUCTURING a live load.
+  // Collapsing a handoff soft-deletes the absorbed leg, and a range
+  // refetch pulls every soft-deleted row back in — so unsplitting a load
+  // left its load number sitting in Recently Deleted while the load
+  // itself was still on the calendar. Trash is for loads that are gone;
+  // if any leg of the load is still live, the deleted rows are
+  // restructure artifacts, not something the dispatcher deleted.
+  const liveLoadIds = useCalendarStore(s => s.events);
   const deletedEvents = useMemo(() => {
+    const live = new Set(
+      liveLoadIds.filter(e => e.loadId && !e.deletedAt).map(e => e.loadId as string),
+    );
     const seen = new Set<string>();
     return deletedEventRows.filter((e: DeletedEvent) => {
       if (!e.loadId) return true;              // non-revenue / unparented
+      if (live.has(e.loadId)) return false;    // load still exists
       if (seen.has(e.loadId)) return false;
       seen.add(e.loadId);
       return true;
     });
-  }, [deletedEventRows]);
+  }, [deletedEventRows, liveLoadIds]);
 
 
   const { user } = useUser();
