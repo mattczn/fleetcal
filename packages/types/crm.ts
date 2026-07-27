@@ -386,6 +386,11 @@ export interface CrmEmail {
   leadPhone?: string;
   leadCellPhone?: string;
   leadStatus?: CrmLeadStatus;
+  /** Last logged call for this email's lead — so the outbox shows whether
+   *  you've already reached the carrier (mirrors the leads-list Contact
+   *  column). Undefined = never called. */
+  lastContactedAt?: string;
+  lastCallOutcome?: CrmCallOutcome;
 }
 
 // ── API request/response shapes ──────────────────────────────────────

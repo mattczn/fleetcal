@@ -24,9 +24,11 @@ import RequireCap from '@/components/auth/RequireCap';
 import RequireInternalOrg from '@/components/crm/RequireInternalOrg';
 import { Th, Td, fmtShortDate } from '@/components/queue/QueueTablePrimitives';
 import LogCallControl from '@/components/crm/LogCallControl';
+import LeadDetailDrawer from '@/components/crm/LeadDetailDrawer';
+import { OutcomeBadge, fmtRelativeTime } from '@/components/crm/crmMeta';
 import { usePermissions } from '@/lib/usePermissions';
 import { railway, RailwayError } from '@/lib/railway';
-import type { CrmEmail, CrmEmailStatus, CrmSettings } from '@fleetcal/types';
+import type { CrmEmail, CrmEmailStatus, CrmSettings, CrmLead, CrmCallOutcome } from '@fleetcal/types';
 
 const PAGE_LIMIT = 200;
 
@@ -73,6 +75,7 @@ function CrmOutboxPageInner() {
   const [refreshing, setRefreshing] = useState(false);
   const [capRemaining, setCapRemaining] = useState<number | null>(null);
   const [windowOpen,   setWindowOpen]   = useState<boolean | null>(null);
+  const [openLeadId,   setOpenLeadId]   = useState<string | null>(null);
 
   const fetchEmails = useCallback(async (status: CrmEmailStatus) => {
     setLoading(true);
@@ -86,6 +89,24 @@ function CrmOutboxPageInner() {
     } finally {
       setLoading(false);
     }
+  }, []);
+
+  /** Live-update outbox rows when a call is logged (row or drawer) so the
+   *  "already contacted" indicator appears without a refetch. */
+  const applyCall = useCallback((leadId: string, outcome: CrmCallOutcome, at: string) => {
+    setEmails(prev => prev.map(e => (e.leadId === leadId
+      ? { ...e, lastContactedAt: at, lastCallOutcome: outcome } : e)));
+  }, []);
+
+  const handleLeadUpdated = useCallback((lead: CrmLead) => {
+    setEmails(prev => prev.map(e => (e.leadId === lead.id
+      ? {
+          ...e,
+          leadStatus:      lead.status,
+          lastContactedAt: lead.lastContactedAt ?? e.lastContactedAt,
+          lastCallOutcome: lead.lastCallOutcome ?? e.lastCallOutcome,
+        }
+      : e)));
   }, []);
 
   useEffect(() => {
@@ -359,16 +380,34 @@ function CrmOutboxPageInner() {
                                 ? <ChevronDown size={13} style={{ color: 'var(--gc-text-3)', flex: 'none', marginTop: 2 }} />
                                 : <ChevronRight size={13} style={{ color: 'var(--gc-text-3)', flex: 'none', marginTop: 2 }} />}
                               <div className="min-w-0">
-                                <span className="font-semibold truncate max-w-[220px] block" style={{ color: 'var(--gc-text-1)' }}>
+                                <button
+                                  type="button"
+                                  onClick={e => { e.stopPropagation(); setOpenLeadId(em.leadId); }}
+                                  title="Open carrier details"
+                                  className="font-semibold truncate max-w-[220px] block text-left hover:underline"
+                                  style={{ color: 'var(--gc-text-1)' }}>
                                   {em.leadName ?? '—'}
-                                </span>
+                                </button>
                                 {(em.leadPhone || em.leadCellPhone) && (
                                   <div className="flex items-center gap-2 mt-0.5" onClick={e => e.stopPropagation()}>
                                     <a href={`tel:${em.leadPhone || em.leadCellPhone}`}
                                       className="text-[11.5px] tabular-nums hover:underline whitespace-nowrap" style={{ color: '#1a73e8' }}>
                                       {em.leadPhone || em.leadCellPhone}
                                     </a>
-                                    <LogCallControl leadId={em.leadId} phone={em.leadPhone} cellPhone={em.leadCellPhone} email={em.toEmail} compact />
+                                    <LogCallControl leadId={em.leadId} phone={em.leadPhone} cellPhone={em.leadCellPhone} email={em.toEmail} compact
+                                      onLogged={(_lead, outcome) => applyCall(em.leadId, outcome, new Date().toISOString())} />
+                                  </div>
+                                )}
+                                {em.lastContactedAt ? (
+                                  <div className="flex items-center gap-1.5 mt-1" onClick={e => e.stopPropagation()}>
+                                    {em.lastCallOutcome && <OutcomeBadge outcome={em.lastCallOutcome} />}
+                                    <span className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
+                                      {fmtRelativeTime(em.lastContactedAt)}
+                                    </span>
+                                  </div>
+                                ) : (
+                                  <div className="text-[11px] mt-1" style={{ color: 'var(--gc-text-3)' }}>
+                                    Not called yet
                                   </div>
                                 )}
                               </div>
@@ -473,6 +512,14 @@ function CrmOutboxPageInner() {
           </div>
         )}
       </div>
+
+      {openLeadId && (
+        <LeadDetailDrawer
+          leadId={openLeadId}
+          onClose={() => setOpenLeadId(null)}
+          onLeadUpdated={handleLeadUpdated}
+        />
+      )}
     </AppShell>
   );
 }

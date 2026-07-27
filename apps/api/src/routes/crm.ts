@@ -139,21 +139,31 @@ async function logActivity(
  *  'call') and total email opens (from crm_emails) to a page of leads.
  *  Both aggregate from existing tables for just these lead ids — no new
  *  columns — so the list can show "already contacted" + engagement. */
-async function enrichLeadsContact(orgId: string, leads: CrmLead[]): Promise<void> {
-  const ids = leads.map((l) => l.id);
-  if (ids.length === 0) return;
+/** Latest logged call per lead (kind='call'), newest first. Shared by the
+ *  leads list + the outbox so both show "already contacted" consistently. */
+async function lastCallByLead(
+  orgId: string, leadIds: string[],
+): Promise<Map<string, { at: string; outcome?: CrmCallOutcome }>> {
+  const m = new Map<string, { at: string; outcome?: CrmCallOutcome }>();
+  if (leadIds.length === 0) return m;
   const { data: calls } = await supabase
     .from("crm_activities")
     .select("lead_id,meta,created_at")
     .eq("org_id", orgId)
     .eq("kind", "call")
-    .in("lead_id", ids)
+    .in("lead_id", leadIds)
     .order("created_at", { ascending: false });
-  const lastCall = new Map<string, { at: string; outcome?: CrmCallOutcome }>();
   for (const row of (calls ?? []) as Array<{ lead_id: string; meta: Record<string, unknown> | null; created_at: string }>) {
-    if (lastCall.has(row.lead_id)) continue; // desc order → first seen is latest
-    lastCall.set(row.lead_id, { at: row.created_at, outcome: row.meta?.outcome as CrmCallOutcome | undefined });
+    if (m.has(row.lead_id)) continue; // desc order → first seen is latest
+    m.set(row.lead_id, { at: row.created_at, outcome: row.meta?.outcome as CrmCallOutcome | undefined });
   }
+  return m;
+}
+
+async function enrichLeadsContact(orgId: string, leads: CrmLead[]): Promise<void> {
+  const ids = leads.map((l) => l.id);
+  if (ids.length === 0) return;
+  const lastCall = await lastCallByLead(orgId, ids);
   const { data: emailRows } = await supabase
     .from("crm_emails")
     .select("lead_id,open_count")
@@ -1408,7 +1418,7 @@ const EMAIL_COLS =
 
 function rowToEmail(
   r: Record<string, unknown>,
-  lead?: { name?: string; phone?: string; cellPhone?: string; status?: CrmLeadStatus },
+  lead?: { name?: string; phone?: string; cellPhone?: string; status?: CrmLeadStatus; lastContactedAt?: string; lastCallOutcome?: CrmCallOutcome },
 ): CrmEmail {
   return {
     id:              r.id as string,
@@ -1431,10 +1441,12 @@ function rowToEmail(
     clickCount:      (r.click_count as number | null) ?? undefined,
     firstClickedAt:  (r.first_clicked_at as string | null) ?? undefined,
     lastClickedAt:   (r.last_clicked_at as string | null) ?? undefined,
-    leadName:      lead?.name,
-    leadPhone:     lead?.phone,
-    leadCellPhone: lead?.cellPhone,
-    leadStatus:    lead?.status,
+    leadName:        lead?.name,
+    leadPhone:       lead?.phone,
+    leadCellPhone:   lead?.cellPhone,
+    leadStatus:      lead?.status,
+    lastContactedAt: lead?.lastContactedAt,
+    lastCallOutcome: lead?.lastCallOutcome,
   };
 }
 
@@ -1460,7 +1472,7 @@ crm.get("/emails", async (c) => {
   const rows = (data ?? []) as unknown as Record<string, unknown>[];
   // Join lead names for display (one IN query).
   const leadIds = [...new Set(rows.map((r) => r.lead_id as string))];
-  const leadById = new Map<string, { name: string; phone?: string; cellPhone?: string; status: CrmLeadStatus }>();
+  const leadById = new Map<string, { name: string; phone?: string; cellPhone?: string; status: CrmLeadStatus; lastContactedAt?: string; lastCallOutcome?: CrmCallOutcome }>();
   if (leadIds.length > 0) {
     const { data: leadRows } = await supabase
       .from("crm_leads")
@@ -1474,6 +1486,13 @@ crm.get("/emails", async (c) => {
         cellPhone: l.cell_phone ?? undefined,
         status: l.status,
       });
+    }
+    // Last-call enrichment so the outbox shows whether each carrier has
+    // already been reached (same source as the leads-list Contact column).
+    const lastCall = await lastCallByLead(orgId, leadIds);
+    for (const [id, lc] of lastCall) {
+      const entry = leadById.get(id);
+      if (entry) { entry.lastContactedAt = lc.at; entry.lastCallOutcome = lc.outcome; }
     }
   }
   return c.json({
