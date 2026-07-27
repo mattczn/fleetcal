@@ -3419,7 +3419,11 @@ export default function EventModal() {
       // The Save button and the legs editor's "Apply N legs" run the
       // same path, so a dispatcher who edits handoffs and hits Save
       // isn't told to go press a different button.
-      const ok = await applyLegsNow();
+      // Pass the shared payload so load-level fields (accessorials,
+      // internal notes, priority, broker, price, ref nums, rate con,
+      // audit log …) persist on a relay exactly as they do on a
+      // single-leg load. Before this they were silently dropped.
+      const ok = await applyLegsNow(shared);
       if (!ok) return;          // applyLegsNow already toasted the reason
       closeModal();
       return;
@@ -4430,7 +4434,17 @@ export default function EventModal() {
    *  in place, entries without create one, and persisted legs absent
    *  from the array are soft-deleted server-side. Returns true when
    *  the reconcile landed. */
-  const applyLegsNow = async (): Promise<boolean> => {
+  /** `sharedFields` is the SAME `shared` object every other save branch
+   *  sends — load-level fields (accessorials, internal notes, broker,
+   *  price, ref nums, …) plus the event-level fields that apply to every
+   *  leg (title, priority, trailer). configureLegs carries only stops
+   *  and per-leg structure, so without this the reconcile silently
+   *  discarded every load-level edit. Derived from one object rather
+   *  than a second hand-maintained list, so a new field can't be
+   *  forgotten here. */
+  const applyLegsNow = async (
+    sharedFields?: Partial<Omit<CalendarEvent, 'id'>>,
+  ): Promise<boolean> => {
     const blocked = legsValidationError();
     if (blocked) { showSaveBlocked(blocked); return false; }
     const loadId = currentEv?.loadId;
@@ -4490,10 +4504,25 @@ export default function EventModal() {
       } else {
         setLegAnchors({});
       }
+      // ── Load-level + shared event-level fields ──────────────────
+      // configureLegs writes stops and per-leg structure only. Push
+      // everything else through the same splitForUpdate path the
+      // non-reconcile branches use, against the legs that now exist
+      // (so legs the reconcile just CREATED get them too).
+      // `stops` is stripped: configureLegs already wrote the stop list,
+      // and re-sending it would re-insert the rows and change the ids
+      // the anchors were just re-seeded to.
+      if (sharedFields) {
+        const { stops: _reconciledStops, ...loadAndLegFields } = sharedFields;
+        void _reconciledStops;
+        const legsForFields = (fresh.length > 0 ? fresh : relayLegs);
+        if (legsForFields.length > 0) {
+          await saveRelayLegs(legsForFields.map(l => ({ id: l.id, updates: loadAndLegFields })));
+        }
+      }
       return true;
     } catch {
-      // configureLegs already toasted the failure (including the
-      // server's leg_removal_blocked message).
+      // configureLegs / saveRelayLegs already toasted the failure.
       return false;
     }
   };

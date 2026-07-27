@@ -322,7 +322,7 @@ interface CalendarStore extends ModalState {
   /** Patch every leg of a relay load in one action. `legs` must be in
    *  leg order — load-level fields are merged across legs with leg 0
    *  winning conflicts (generalizes the old "pickup wins" rule). */
-  saveRelayLegs: (legs: Array<{ id: string; updates: Partial<Omit<CalendarEvent, 'id'>> }>) => void;
+  saveRelayLegs: (legs: Array<{ id: string; updates: Partial<Omit<CalendarEvent, 'id'>> }>) => Promise<void>;
   /** Atomic leg reconcile — the leg builder's single "Apply N legs".
    *  Sends the full stop list + one entry per leg (eventId present =
    *  keep that leg, absent = create, omitted entirely = soft-delete)
@@ -2456,7 +2456,7 @@ export const useCalendarStore = create<CalendarStore>()(
     Promise.all(promises).catch(err => { console.error('splitToRelay:', err); errorToast(err, 'Relay split did not save'); });
   },
 
-  saveRelayLegs: (legs) => {
+  saveRelayLegs: async (legs) => {
     if (legs.length === 0) return;
     set((state) => ({
       events: state.events.map((e) => {
@@ -2521,7 +2521,13 @@ export const useCalendarStore = create<CalendarStore>()(
         promises.push(railway.replaceStops(l.id, { stops: l.stops }));
       }
     }
-    Promise.all(promises).catch((err) => { console.error('saveRelayLegs:', err); errorToast(err, 'Relay changes did not save'); });
+    try {
+      await Promise.all(promises);
+    } catch (err) {
+      console.error('saveRelayLegs:', err);
+      errorToast(err, 'Relay changes did not save');
+      throw err;
+    }
   },
 
   configureLegs: async (loadId, body) => {
