@@ -44,6 +44,27 @@ import CheckCallsSection from '@/components/calendar/CheckCallsSection';
 
 const RELAY_COLOR = '#7c3aed';
 
+/**
+ * Audit-entry keys that describe ONE leg rather than the whole load.
+ * Only these get a leg chip in a relay's history.
+ *
+ * Everything else the differ can emit — load price, broker, customer,
+ * dispatcher, accessorials, stop counts, billing status, and priority —
+ * is a property of the load. Priority in particular reads as per-leg
+ * because it's stored on `events`, but the save writes it to EVERY leg,
+ * so attributing it to whichever leg happened to be open was just wrong.
+ */
+const LEG_SCOPED_AUDIT_KEYS = new Set<string>([
+  'prevDriverName', 'newDriverName',
+  'prevAssetId',    'newAssetId',
+  'prevDriverPay',  'newDriverPay',
+  'prevStart',      'newStart',
+  'prevEnd',        'newEnd',
+  'prevStatus',     'newStatus',
+  'prevTrailerId',  'newTrailerId',
+  'prevTrailerNum', 'newTrailerNum',
+]);
+
 function driverDisplayName(d: Driver): string {
   const full = `${d.firstName ?? ''} ${d.lastName ?? ''}`.trim();
   return full || d.name;
@@ -4664,13 +4685,39 @@ export default function EventModal() {
 
     // 1. Load-level + viewed-leg diff, through the SAME differ the
     //    single-leg path uses.
+    //
+    //    The differ returns one entry mixing both scopes, but they can't
+    //    share a leg chip: driver/truck/times belong to the leg that's
+    //    open, while price, broker, accessorials — and priority, which
+    //    the save writes to EVERY leg — belong to the load. Tagging the
+    //    whole entry produced "Leg 2 · Delivery — Priority flagged on"
+    //    for something that isn't a property of leg 2 at all (and would
+    //    have said the same about a load-price change). Split by scope
+    //    and chip only the leg-scoped half.
     if (currentEv) {
       const base = buildAuditEntry(currentEv, sharedNext, prevNames, currentUserName);
       if (base) {
         const vi = viewedLegIdx ?? 0;
-        out.push(legCountNow > 1
-          ? { ...base, leg: { index: vi, count: legCountNow, label: labelFor(vi), driverName: driverName || undefined } }
-          : base);
+        if (legCountNow <= 1) {
+          out.push(base);
+        } else {
+          const { changedAt, changedByName } = base;
+          const legScoped: Record<string, unknown> = {};
+          const loadScoped: Record<string, unknown> = {};
+          for (const [k, v] of Object.entries(base)) {
+            if (k === 'changedAt' || k === 'changedByName') continue;
+            (LEG_SCOPED_AUDIT_KEYS.has(k) ? legScoped : loadScoped)[k] = v;
+          }
+          if (Object.keys(loadScoped).length > 0) {
+            out.push({ changedAt, changedByName, ...loadScoped } as LoadAuditEntry);
+          }
+          if (Object.keys(legScoped).length > 0) {
+            out.push({
+              changedAt, changedByName, ...legScoped,
+              leg: { index: vi, count: legCountNow, label: labelFor(vi), driverName: driverName || undefined },
+            } as LoadAuditEntry);
+          }
+        }
       }
     }
 
