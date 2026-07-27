@@ -3423,7 +3423,41 @@ export default function EventModal() {
       // internal notes, priority, broker, price, ref nums, rate con,
       // audit log …) persist on a relay exactly as they do on a
       // single-leg load. Before this they were silently dropped.
-      const ok = await applyLegsNow(shared);
+      // Relay saves now record history too — same differ as single-leg,
+      // plus leg-scoped and structural entries. Appended to the LOAD's
+      // log and sent ONCE: saveRelayLegs merges load-level updates
+      // across legs (leg 0 wins) into a single updateLoad, so passing
+      // the same array on every leg still yields one write.
+      const relayEntries = buildRelayAuditEntries(
+        {
+          assetId,
+          driverName:      driverName || undefined,
+          newLoadPrice:    parseFloat(String(fieldValues['loadPrice'] ?? '')) || undefined,
+          newDriverPay:    parseFloat(String(fieldValues['driverPay'] ?? '')) || undefined,
+          newStopCount:    stops.length,
+          newAccessorials: accessorials,
+          newBroker:       typeof fieldValues['broker'] === 'string' ? (fieldValues['broker'] as string) : undefined,
+          newCustomerId:   typeof fieldValues['customerId'] === 'string' ? (fieldValues['customerId'] as string) : undefined,
+          newCustomerName: typeof fieldValues['customerId'] === 'string'
+            ? customers.find(c => c.id === fieldValues['customerId'])?.name
+            : undefined,
+          newDispatcher:   typeof fieldValues['dispatcher'] === 'string' ? (fieldValues['dispatcher'] as string) : undefined,
+          newTrailerId:    linkedTrailerId,
+          newTrailerNum:   linkedTrailerId ? trailers.find(t => t.id === linkedTrailerId)?.trailerNumber : undefined,
+          newPriority:     priority,
+          newStart:        `${startDate}T${startTime}`,
+          newEnd:          `${endDate}T${endTime}`,
+        },
+        {
+          customerName: currentEv?.customerId ? customers.find(c => c.id === currentEv.customerId)?.name : undefined,
+          trailerNum:   currentEv?.trailerId ? trailers.find(t => t.id === currentEv.trailerId)?.trailerNumber : undefined,
+        },
+      );
+      const ok = await applyLegsNow(
+        relayEntries.length > 0
+          ? { ...shared, auditLog: [...(auditLog ?? []), ...relayEntries] }
+          : shared,
+      );
       if (!ok) return;          // applyLegsNow already toasted the reason
       closeModal();
       return;
@@ -3849,12 +3883,13 @@ export default function EventModal() {
       auditLog: appendAuditEntry(auditLog, entry),
     });
     for (const leg of otherLegs) {
+      // No auditLog per leg — it's load-level, so N legs meant N
+      // competing updateLoad writes. The entry is written once above.
       updateEvent(leg.id, {
         status: 'cancelled',
         loadPrice: 0,
         loadedMiles: 0,
         driverPay: 0,
-        auditLog: appendAuditEntry(leg.auditLog ?? [], entry),
       });
     }
     setCancelDialogOpen(false);
@@ -3973,12 +4008,16 @@ export default function EventModal() {
         prevStatus: 'cancelled' as EventStatus,
         newStatus: prevStatus,
       };
+      // NB: no auditLog here. It's a LOAD-level field, so writing it
+      // per leg fired one updateLoad per leg — N writes of N different
+      // arrays, last one winning and clobbering the others' history.
+      // The entry is written once, on the viewed leg's update above.
+      void legEntry;
       updateEvent(leg.id, {
         status: prevStatus,
         ...(prevLP != null ? { loadPrice: prevLP } : {}),
         ...(prevLM != null ? { loadedMiles: prevLM } : {}),
         ...(prevDP != null ? { driverPay: prevDP } : {}),
-        auditLog: appendAuditEntry(leg.auditLog ?? [], legEntry),
       });
     }
     closeModal();
@@ -4608,6 +4647,116 @@ export default function EventModal() {
       return;
     }
     setEndDate(date); setEndTime(time);
+  };
+
+  /** Audit entries for a relay save. Reuses buildAuditEntry for the
+   *  load-level + viewed-leg diff (one differ, so a newly-audited field
+   *  can't silently skip relays), then adds leg-scoped entries for the
+   *  other legs' driver/truck/pay and structural entries for handoffs
+   *  added, removed or moved. Returns [] when nothing changed. */
+  const buildRelayAuditEntries = (
+    sharedNext: Parameters<typeof buildAuditEntry>[1],
+    prevNames: Parameters<typeof buildAuditEntry>[2],
+  ): LoadAuditEntry[] => {
+    const out: LoadAuditEntry[] = [];
+    const legCountNow = relayLegViews.length;
+    const labelFor = (i: number) => legLabel(i, legCountNow) || `Leg ${i + 1}`;
+
+    // 1. Load-level + viewed-leg diff, through the SAME differ the
+    //    single-leg path uses.
+    if (currentEv) {
+      const base = buildAuditEntry(currentEv, sharedNext, prevNames, currentUserName);
+      if (base) {
+        const vi = viewedLegIdx ?? 0;
+        out.push(legCountNow > 1
+          ? { ...base, leg: { index: vi, count: legCountNow, label: labelFor(vi), driverName: driverName || undefined } }
+          : base);
+      }
+    }
+
+    // 2. Per-leg driver / truck / pay on the legs that aren't open.
+    for (const v of relayLegViews) {
+      if (v.isViewed || !v.eventId) continue;
+      const persisted = relayLegs.find(l => l.id === v.eventId);
+      if (!persisted) continue;
+      const prevDriver = resolveDriverNameForEvent(persisted);
+      const driverChanged = (prevDriver || '') !== (v.driverName || '');
+      const assetChanged  = persisted.assetId !== v.assetId;
+      const payNow        = typeof v.pay === 'number' ? v.pay : undefined;
+      const payChanged    = (persisted.driverPay ?? 0) !== (payNow ?? 0)
+        && (persisted.driverPay != null || payNow != null);
+      if (!driverChanged && !assetChanged && !payChanged) continue;
+      out.push({
+        changedAt: new Date().toISOString(),
+        changedByName: currentUserName,
+        leg: { index: v.legIndex, count: legCountNow, label: labelFor(v.legIndex), driverName: v.driverName || undefined },
+        ...(driverChanged ? { prevDriverName: prevDriver || undefined, newDriverName: v.driverName || undefined } : {}),
+        ...(assetChanged  ? { prevAssetId: persisted.assetId, newAssetId: v.assetId } : {}),
+        ...(payChanged    ? { prevDriverPay: persisted.driverPay, newDriverPay: payNow } : {}),
+      });
+    }
+
+    // 3. Structural: handoffs added / removed / moved. Compares the
+    //    boundaries on screen against the ones the server last stored.
+    const serverStops = ((currentEv?.stops?.length ?? 0) > 0
+      ? currentEv?.stops
+      : relayLegs.find(l => (l.stops?.length ?? 0) > 0)?.stops) ?? [];
+    const prevBoundaries = handoffIndexes(serverStops).map(i => serverStops[i]);
+    const nextBoundaries = boundaryIdxs.map(i => stops[i]);
+    const nameOfStop = (st?: Stop) => st?.facilityName || st?.address || undefined;
+    const prevById = new Map(prevBoundaries.map(st => [st.id, st]));
+    const nextById = new Map(nextBoundaries.map(st => [st.id, st]));
+    nextBoundaries.forEach((st, i) => {
+      if (prevById.has(st.id)) return;
+      out.push({
+        changedAt: new Date().toISOString(),
+        changedByName: currentUserName,
+        relayCreated: true,   // back-compat with the old boolean reader
+        relayHandoff: {
+          action: 'added', index: i,
+          location: nameOfStop(st),
+          legLabel: labelFor(i + 1),
+          driverName: relayLegViews[i + 1]?.driverName || undefined,
+        },
+      });
+    });
+    prevBoundaries.forEach((st, i) => {
+      if (nextById.has(st.id)) return;
+      const goneLeg = relayLegs[i + 1];
+      out.push({
+        changedAt: new Date().toISOString(),
+        changedByName: currentUserName,
+        relayRemoved: true,   // back-compat
+        relayHandoff: {
+          action: 'removed', index: i,
+          prevLocation: nameOfStop(st),
+          legLabel: legLabel(i + 1, prevBoundaries.length + 1) || `Leg ${i + 2}`,
+          driverName: goneLeg ? (resolveDriverNameForEvent(goneLeg) || undefined) : undefined,
+        },
+      });
+    });
+    // Location / time edits on a handoff that survived.
+    nextBoundaries.forEach((st, i) => {
+      const before = prevById.get(st.id);
+      if (!before) return;
+      const bt = handoffTimesOf(before);
+      const at = handoffTimesOf(st);
+      const locChanged  = (nameOfStop(before) || '') !== (nameOfStop(st) || '');
+      const dropChanged = (bt.drop ?? '') !== (at.drop ?? '');
+      const pickChanged = (bt.pickup ?? '') !== (at.pickup ?? '');
+      if (!locChanged && !dropChanged && !pickChanged) return;
+      out.push({
+        changedAt: new Date().toISOString(),
+        changedByName: currentUserName,
+        relayHandoff: {
+          action: 'moved', index: i,
+          ...(locChanged  ? { prevLocation: nameOfStop(before), location: nameOfStop(st) } : {}),
+          ...(dropChanged ? { prevDropAt: bt.drop, newDropAt: at.drop } : {}),
+          ...(pickChanged ? { prevPickupAt: bt.pickup, newPickupAt: at.pickup } : {}),
+        },
+      });
+    });
+    return out;
   };
 
   /** Edit the handoff STOP itself (facility, address, and whatever the
@@ -7374,10 +7523,33 @@ export default function EventModal() {
                         parts.push({ key: 'sadd', node: <>{b(String(entry.stopsAdded))} stop{entry.stopsAdded > 1 ? 's' : ''} added</> });
                       if (entry.stopsRemoved)
                         parts.push({ key: 'srem', node: <>{b(String(entry.stopsRemoved))} stop{entry.stopsRemoved > 1 ? 's' : ''} removed</> });
-                      if (entry.relayCreated)
-                        parts.push({ key: 'rcreate', node: <>Load split as {b('relay')}</> });
-                      if (entry.relayRemoved)
-                        parts.push({ key: 'rremove', node: <>{b('Relay')} removed, load merged</> });
+                      // Structural relay changes. The richer relayHandoff
+                      // shape wins when present; the old booleans still
+                      // render for entries written before it existed.
+                      const rh = entry.relayHandoff;
+                      if (rh?.action === 'added') {
+                        parts.push({ key: 'rhadd', node: <>
+                          {b(`Handoff ${rh.index + 1}`)} added{rh.location ? <> at {b(rh.location)}</> : null}
+                          {rh.legLabel ? <> — {b(rh.legLabel)} created{rh.driverName ? <> for {b(rh.driverName)}</> : null}</> : null}
+                        </> });
+                      } else if (rh?.action === 'removed') {
+                        parts.push({ key: 'rhrem', node: <>
+                          {b(`Handoff ${rh.index + 1}`)} removed{rh.prevLocation ? <> at {b(rh.prevLocation)}</> : null}
+                          {rh.legLabel ? <> — {b(rh.legLabel)} merged away{rh.driverName ? <> (was {b(rh.driverName)})</> : null}</> : null}
+                        </> });
+                      } else if (rh?.action === 'moved') {
+                        if (rh.prevLocation !== undefined || rh.location !== undefined)
+                          parts.push({ key: 'rhloc', node: <>{b(`Handoff ${rh.index + 1}`)} moved from {b(rh.prevLocation || '—')} to {b(rh.location || '—')}</> });
+                        if (rh.prevDropAt !== undefined || rh.newDropAt !== undefined)
+                          parts.push({ key: 'rhdrop', node: <>{b(`Handoff ${rh.index + 1}`)} drop changed from {b(fmtAuditTime(rh.prevDropAt))} to {b(fmtAuditTime(rh.newDropAt))}</> });
+                        if (rh.prevPickupAt !== undefined || rh.newPickupAt !== undefined)
+                          parts.push({ key: 'rhpick', node: <>{b(`Handoff ${rh.index + 1}`)} pickup changed from {b(fmtAuditTime(rh.prevPickupAt))} to {b(fmtAuditTime(rh.newPickupAt))}</> });
+                      } else {
+                        if (entry.relayCreated)
+                          parts.push({ key: 'rcreate', node: <>Load split as {b('relay')}</> });
+                        if (entry.relayRemoved)
+                          parts.push({ key: 'rremove', node: <>{b('Relay')} removed, load merged</> });
+                      }
                       // Cancel entries carry mode in `loadCancelled`. Render
                       // a single plain-English line and suppress the
                       // generic status/deleted lines that would otherwise
@@ -7427,6 +7599,20 @@ export default function EventModal() {
                         <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                           {(parts.length > 0 || accLines.length === 0) && (
                             <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, fontSize: 12, flexWrap: 'wrap' }}>
+                              {/* Leg chip — names which leg a leg-scoped
+                                  entry describes. Absent on load-level
+                                  entries and on everything written
+                                  before entry.leg existed, so those
+                                  render exactly as they always did. */}
+                              {entry.leg && parts.length > 0 && (
+                                <span style={{
+                                  fontSize: 10, fontWeight: 700, letterSpacing: '0.02em',
+                                  padding: '1px 6px', borderRadius: 999, whiteSpace: 'nowrap',
+                                  background: '#ede9fe', color: RELAY_COLOR, border: '1px solid #ddd6fe',
+                                }}>
+                                  {entry.leg.label ?? `Leg ${entry.leg.index + 1}`}
+                                </span>
+                              )}
                               <span style={{ color: 'var(--gc-text-1)' }}>
                                 {parts.length > 0
                                   ? parts.flatMap((p, j) => j === 0

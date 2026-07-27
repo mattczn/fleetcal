@@ -829,6 +829,43 @@ export interface LoadAuditEntry {
   stopsRemoved?: number;
   relayCreated?: boolean;
   relayRemoved?: boolean;
+  /** Leg this entry describes, when the change is leg-scoped. Without
+   *  it a relay's flat pairs are ambiguous — "driver changed A → B"
+   *  never said WHICH leg. The label is frozen at write time for the
+   *  same reason prevCustomerName / prevTrailerNum are: the audit
+   *  fetch has no leg context later, and the load's leg count may have
+   *  changed since. Absent on load-level entries and on every entry
+   *  written before this existed, which render exactly as before. */
+  leg?: {
+    /** 0-based position at the time of the change. */
+    index:       number;
+    /** Leg count at the time, so "Leg 2/3" stays truthful. */
+    count?:      number;
+    /** Frozen display label, e.g. "Leg 2 · Transfer". */
+    label?:      string;
+    /** Driver on that leg at the time, for readability. */
+    driverName?: string;
+  };
+  /** Structural relay change — supersedes the relayCreated /
+   *  relayRemoved booleans, which only recorded THAT a relay changed,
+   *  not which handoff. Both are still written for back-compat so old
+   *  readers keep working. */
+  relayHandoff?: {
+    action:        'added' | 'removed' | 'moved';
+    /** 0-based handoff ordinal: handoff i sits between leg i and i+1. */
+    index:         number;
+    /** Handoff facility/address at write time. */
+    location?:     string;
+    prevLocation?: string;
+    /** Handoff times, for action:'moved'. */
+    prevDropAt?:   string;
+    newDropAt?:    string;
+    prevPickupAt?: string;
+    newPickupAt?:  string;
+    /** Leg added or removed by this change, frozen for readability. */
+    legLabel?:     string;
+    driverName?:   string;
+  };
   loadDeleted?: boolean;
   loadRestored?: boolean;
   /** Set when a dispatcher cancels the load. mode distinguishes the
