@@ -26,6 +26,7 @@ import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth, useUser } from '@clerk/nextjs';
+import { AuditEntryLines } from '@/lib/auditEntry';
 import {
   ArrowLeft, Truck, Loader2, Receipt, MapPin,
   ExternalLink as ExternalLinkIcon, Eye,
@@ -2067,97 +2068,9 @@ function LoadHistorySection({ load, calendarTimezone }: {
       </div>
       {expanded && hasHistory && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 10 }}>
-          {auditLog.map((entry, i) => {
-            const b = (txt: string) => <strong style={{ fontWeight: 700 }}>{txt}</strong>;
-            type Part = { key: string; node: React.ReactNode };
-            const parts: Part[] = [];
-            if (entry.prevDriverName !== undefined || entry.newDriverName !== undefined)
-              parts.push({ key: 'driver', node: <>{b('Driver')} changed from {b(entry.prevDriverName || '—')} to {b(entry.newDriverName || '—')}</> });
-            if (entry.prevLoadPrice !== undefined)
-              parts.push({ key: 'lprice', node: <>{b('Load price')} changed from {b(fmt$(entry.prevLoadPrice))} to {b(fmt$(entry.newLoadPrice))}</> });
-            if (entry.prevDriverPay !== undefined)
-              parts.push({ key: 'dpay', node: <>{b('Driver pay')} changed from {b(fmt$(entry.prevDriverPay))} to {b(fmt$(entry.newDriverPay))}</> });
-            if (entry.prevCustomerId !== undefined || entry.newCustomerId !== undefined)
-              parts.push({ key: 'customer', node: <>{b('Customer')} changed from {b(entry.prevCustomerName || entry.prevBroker || '—')} to {b(entry.newCustomerName || entry.newBroker || '—')}</> });
-            else if (entry.prevBroker !== undefined || entry.newBroker !== undefined)
-              parts.push({ key: 'broker', node: <>{b('Customer')} changed from {b(entry.prevBroker || '—')} to {b(entry.newBroker || '—')}</> });
-            if (entry.prevDispatcher !== undefined || entry.newDispatcher !== undefined)
-              parts.push({ key: 'disp', node: <>{b('Dispatcher')} changed from {b(entry.prevDispatcher || '—')} to {b(entry.newDispatcher || '—')}</> });
-            if (entry.prevPriority !== undefined || entry.newPriority !== undefined)
-              parts.push({ key: 'priority', node: <>{b('Priority')} {entry.newPriority ? <>flagged {b('on')}</> : <>flag {b('removed')}</>}</> });
-            if (entry.prevStart !== undefined || entry.newStart !== undefined)
-              parts.push({ key: 'start', node: <>{b('Start')} changed from {b(fmtAuditTime(entry.prevStart))} to {b(fmtAuditTime(entry.newStart))}</> });
-            if (entry.prevEnd !== undefined || entry.newEnd !== undefined)
-              parts.push({ key: 'end', node: <>{b('End')} changed from {b(fmtAuditTime(entry.prevEnd))} to {b(fmtAuditTime(entry.newEnd))}</> });
-            if (entry.prevBillingStatus !== undefined || entry.newBillingStatus !== undefined)
-              parts.push({ key: 'billing', node: <>{b('Billing')} changed from {b(entry.prevBillingStatus || '—')} to {b(entry.newBillingStatus || '—')}</> });
-            // Accessorial create/update/delete events. Mirrors the
-            // EventModal history footer renderer so an accessorial
-            // edit looks the same whether it came from the calendar
-            // modal or the load detail page below. Build a separate
-            // line per change so multi-row edits stay readable. */}
-            const fmtCat = (c: string) => c.replace(/_/g, ' ');
-            const onOff = (v?: boolean) => v ? 'on' : 'off';
-            for (const ac of (entry.accessorialsChanged ?? [])) {
-              const label = ac.description ? `${fmtCat(ac.category)} (${ac.description})` : fmtCat(ac.category);
-              if (ac.action === 'added') {
-                parts.push({
-                  key: `acc-add-${ac.id ?? Math.random()}`,
-                  node: <>{b(label)} {b('accessorial added')}{ac.amount != null ? <> — {b(fmt$(ac.amount))}</> : null}</>,
-                });
-                continue;
-              }
-              if (ac.action === 'removed') {
-                parts.push({
-                  key: `acc-rm-${ac.id ?? Math.random()}`,
-                  node: <>{b(label)} {b('accessorial removed')}{ac.amount != null ? <> · was {b(fmt$(ac.amount))}</> : null}</>,
-                });
-                continue;
-              }
-              // updated — list each changed pair the diff actually filled
-              const sub: React.ReactNode[] = [];
-              if (ac.prevAmount !== undefined)
-                sub.push(<>amount {b(fmt$(ac.prevAmount))} → {b(fmt$(ac.amount))}</>);
-              if (ac.prevStatus !== undefined || ac.newStatus !== undefined)
-                sub.push(<>status {b(ac.prevStatus || '—')} → {b(ac.newStatus || '—')}</>);
-              if (ac.prevBillable !== undefined || ac.newBillable !== undefined)
-                sub.push(<>billable {b(onOff(ac.prevBillable))} → {b(onOff(ac.newBillable))}</>);
-              if (ac.prevPayToDriver !== undefined || ac.newPayToDriver !== undefined)
-                sub.push(<>pay driver {b(onOff(ac.prevPayToDriver))} → {b(onOff(ac.newPayToDriver))}</>);
-              if (ac.prevPayDriverName !== undefined || ac.newPayDriverName !== undefined)
-                sub.push(<>pay-driver {b(ac.prevPayDriverName || '—')} → {b(ac.newPayDriverName || '—')}</>);
-              if (ac.prevCategory !== undefined)
-                sub.push(<>category {b(fmtCat(ac.prevCategory))} → {b(fmtCat(ac.category))}</>);
-              if (ac.prevDescription !== undefined || ac.newDescription !== undefined)
-                sub.push(<>description {b(ac.prevDescription || '—')} → {b(ac.newDescription || '—')}</>);
-              if (sub.length === 0) continue;
-              parts.push({
-                key: `acc-up-${ac.id ?? Math.random()}`,
-                node: (
-                  <>{b(label)} {b('accessorial updated')} — {sub.map((s, k) => (
-                    <span key={k}>{k > 0 && <span style={{ color: 'var(--gc-text-3)' }}>; </span>}{s}</span>
-                  ))}</>
-                ),
-              });
-            }
-            if (parts.length === 0) return null;
-            return (
-              <div key={i} style={{ fontSize: 12, lineHeight: 1.5, color: 'var(--gc-text-2)' }}>
-                <span style={{ color: 'var(--gc-text-3)' }}>
-                  {entry.changedByName ?? 'Unknown'}
-                  {entry.changedAt && <> · {fmtDate(entry.changedAt)}</>}
-                </span>
-                <div style={{ marginTop: 2 }}>
-                  {parts.map((p, j) => (
-                    <span key={p.key}>
-                      {j > 0 && <span style={{ color: 'var(--gc-text-3)' }}> · </span>}
-                      {p.node}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
+          {auditLog.map((entry, i) => (
+            <AuditEntryLines key={i} entry={entry} ctx={{ timeZone: calendarTimezone }} />
+          ))}
         </div>
       )}
     </div>

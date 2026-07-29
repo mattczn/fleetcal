@@ -33,6 +33,7 @@ import TimePicker from './TimePicker';
 import StopsSection from './StopsSection';
 import RelayLegsEditor, { RelayLegView, RelayHandoffView, RelayHandoffPhoto } from './RelayLegsEditor';
 import { legRoleFor, legLabel, byLegIndex, handoffIndexes, handoffTimesOf, isHandoffStop } from '@fleetcal/types';
+import { AuditEntryLines } from '@/lib/auditEntry';
 import { legStraightMiles } from '@/lib/legMiles';
 import { errorToast } from '@/lib/errorToast';
 import RouteMapPanel from './RouteMapPanel';
@@ -7531,154 +7532,16 @@ export default function EventModal() {
                 </div>
                 {historyExpanded && hasHistory && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 10 }}>
-                    {auditLog.map((entry, i) => {
-                      const b = (txt: string) => <strong style={{ fontWeight: 700 }}>{txt}</strong>;
-                      type Part = { key: string; node: React.ReactNode };
-                      const parts: Part[] = [];
-                      // Renamed Asset → Truck per user-facing convention
-                      // (dispatch ops talk about trucks, not assets).
-                      if (entry.prevAssetId !== undefined)
-                        parts.push({ key: 'asset', node: <>{b('Truck')} changed from {b(assetName(entry.prevAssetId))} to {b(entry.newAssetId !== undefined ? assetName(entry.newAssetId) : '—')}</> });
-                      if (entry.prevDriverName !== undefined || entry.newDriverName !== undefined)
-                        parts.push({ key: 'driver', node: <>{b('Driver')} changed from {b(entry.prevDriverName || '—')} to {b(entry.newDriverName || '—')}</> });
-                      if (entry.prevLoadPrice !== undefined)
-                        parts.push({ key: 'lprice', node: <>{b('Load price')} changed from {b(fmt$(entry.prevLoadPrice))} to {b(fmt$(entry.newLoadPrice))}</> });
-                      if (entry.prevDriverPay !== undefined)
-                        parts.push({ key: 'dpay', node: <>{b('Driver pay')} changed from {b(fmt$(entry.prevDriverPay))} to {b(fmt$(entry.newDriverPay))}</> });
-                      // Customer changes — prefer the named link when
-                      // available; fall back to the free-text broker
-                      // diff when only the text changed.
-                      if (entry.prevCustomerId !== undefined || entry.newCustomerId !== undefined)
-                        parts.push({ key: 'customer', node: <>{b('Customer')} changed from {b(entry.prevCustomerName || entry.prevBroker || '—')} to {b(entry.newCustomerName || entry.newBroker || '—')}</> });
-                      else if (entry.prevBroker !== undefined || entry.newBroker !== undefined)
-                        parts.push({ key: 'broker', node: <>{b('Customer')} changed from {b(entry.prevBroker || '—')} to {b(entry.newBroker || '—')}</> });
-                      if (entry.prevDispatcher !== undefined || entry.newDispatcher !== undefined)
-                        parts.push({ key: 'disp', node: <>{b('Dispatcher')} changed from {b(entry.prevDispatcher || '—')} to {b(entry.newDispatcher || '—')}</> });
-                      if (entry.prevTrailerId !== undefined || entry.newTrailerId !== undefined)
-                        parts.push({ key: 'trailer', node: <>{b('Trailer')} changed from {b(entry.prevTrailerNum || (entry.prevTrailerId ? `#${entry.prevTrailerId}` : '—'))} to {b(entry.newTrailerNum || (entry.newTrailerId ? `#${entry.newTrailerId}` : '—'))}</> });
-                      if (entry.prevPriority !== undefined || entry.newPriority !== undefined)
-                        parts.push({ key: 'priority', node: <>{b('Priority')} {entry.newPriority ? <>flagged {b('on')}</> : <>flag {b('removed')}</>}</> });
-                      // Render the times in the org's TZ via the same
-                      // formatter as the load chip strip. The stored
-                      // string is naive ISO; pass it through to the
-                      // existing fmtAuditTime helper.
-                      if (entry.prevStart !== undefined || entry.newStart !== undefined)
-                        parts.push({ key: 'start', node: <>{b('Start')} changed from {b(fmtAuditTime(entry.prevStart))} to {b(fmtAuditTime(entry.newStart))}</> });
-                      if (entry.prevEnd !== undefined || entry.newEnd !== undefined)
-                        parts.push({ key: 'end', node: <>{b('End')} changed from {b(fmtAuditTime(entry.prevEnd))} to {b(fmtAuditTime(entry.newEnd))}</> });
-                      if (entry.stopsAdded)
-                        parts.push({ key: 'sadd', node: <>{b(String(entry.stopsAdded))} stop{entry.stopsAdded > 1 ? 's' : ''} added</> });
-                      if (entry.stopsRemoved)
-                        parts.push({ key: 'srem', node: <>{b(String(entry.stopsRemoved))} stop{entry.stopsRemoved > 1 ? 's' : ''} removed</> });
-                      // Structural relay changes. The richer relayHandoff
-                      // shape wins when present; the old booleans still
-                      // render for entries written before it existed.
-                      const rh = entry.relayHandoff;
-                      if (rh?.action === 'added') {
-                        parts.push({ key: 'rhadd', node: <>
-                          {b(`Handoff ${rh.index + 1}`)} added{rh.location ? <> at {b(rh.location)}</> : null}
-                          {rh.legLabel ? <> — {b(rh.legLabel)} created{rh.driverName ? <> for {b(rh.driverName)}</> : null}</> : null}
-                        </> });
-                      } else if (rh?.action === 'removed') {
-                        parts.push({ key: 'rhrem', node: <>
-                          {b(`Handoff ${rh.index + 1}`)} removed{rh.prevLocation ? <> at {b(rh.prevLocation)}</> : null}
-                          {rh.legLabel ? <> — {b(rh.legLabel)} merged away{rh.driverName ? <> (was {b(rh.driverName)})</> : null}</> : null}
-                        </> });
-                      } else if (rh?.action === 'moved') {
-                        if (rh.prevLocation !== undefined || rh.location !== undefined)
-                          parts.push({ key: 'rhloc', node: <>{b(`Handoff ${rh.index + 1}`)} moved from {b(rh.prevLocation || '—')} to {b(rh.location || '—')}</> });
-                        if (rh.prevDropAt !== undefined || rh.newDropAt !== undefined)
-                          parts.push({ key: 'rhdrop', node: <>{b(`Handoff ${rh.index + 1}`)} drop changed from {b(fmtAuditTime(rh.prevDropAt))} to {b(fmtAuditTime(rh.newDropAt))}</> });
-                        if (rh.prevPickupAt !== undefined || rh.newPickupAt !== undefined)
-                          parts.push({ key: 'rhpick', node: <>{b(`Handoff ${rh.index + 1}`)} pickup changed from {b(fmtAuditTime(rh.prevPickupAt))} to {b(fmtAuditTime(rh.newPickupAt))}</> });
-                      } else {
-                        if (entry.relayCreated)
-                          parts.push({ key: 'rcreate', node: <>Load split as {b('relay')}</> });
-                        if (entry.relayRemoved)
-                          parts.push({ key: 'rremove', node: <>{b('Relay')} removed, load merged</> });
-                      }
-                      // Cancel entries carry mode in `loadCancelled`. Render
-                      // a single plain-English line and suppress the
-                      // generic status/deleted lines that would otherwise
-                      // duplicate the same event. The "remove-event" mode
-                      // used to render nothing at all — entry was saved,
-                      // user just couldn't see it.
-                      if (entry.loadCancelled) {
-                        const mode = entry.loadCancelled.mode;
-                        const label =
-                          mode === 'status'       ? <>Load {b('cancelled')} (kept on calendar)</> :
-                          mode === 'remove-event' ? <>Load {b('cancelled')} & removed from calendar</> :
-                          mode === 'permanent'    ? <>Load {b('cancelled')} & permanently deleted</> :
-                                                    <>Load {b('cancelled')}</>;
-                        parts.push({ key: 'cancelled', node: label });
-                      }
-                      if (entry.loadDeleted && !entry.loadCancelled)
-                        parts.push({ key: 'ldel', node: <>{b('Load')} deleted</> });
-                      if (entry.loadRestored)
-                        parts.push({ key: 'lrest', node: <>{b('Load')} reinstated</> });
-                      if ((entry.prevStatus !== undefined || entry.newStatus !== undefined) && !entry.loadCancelled)
-                        parts.push({ key: 'status', node: <>{b('Status')} changed from {b(entry.prevStatus ?? '—')} to {b(entry.newStatus ?? '—')}</> });
-                      if (entry.prevBillingStatus !== undefined || entry.newBillingStatus !== undefined)
-                        parts.push({ key: 'bstatus', node: <>{b('Billing')} status changed from {b(entry.prevBillingStatus ?? '—')} to {b(entry.newBillingStatus ?? '—')}</> });
-                      if (entry.documentUploaded)
-                        parts.push({ key: 'docup', node: <>{b(entry.documentUploaded.kind.toUpperCase())} document {b('uploaded')} ({entry.documentUploaded.fileName})</> });
-                      if (entry.documentDeleted)
-                        parts.push({ key: 'docdel', node: <>{b(entry.documentDeleted.kind.toUpperCase())} document {b('deleted')} ({entry.documentDeleted.fileName})</> });
-                      if (entry.stopCheckedIn) {
-                        const facility = entry.stopCheckedIn.stopFacility ?? 'stop';
-                        const distLbl = entry.stopCheckedIn.distanceMi == null
-                          ? null
-                          : entry.stopCheckedIn.distanceMi < 0.1 ? 'on-site' : `${entry.stopCheckedIn.distanceMi.toFixed(1)} mi off`;
-                        parts.push({ key: 'checkin', node: <>{b('Checked in')} at {b(facility)}{distLbl ? <> · {distLbl}</> : null}</> });
-                      }
-                      const fmtCat = (c: string) => c.replace('_', ' ');
-                      const accLines = (entry.accessorialsChanged ?? []).map((ac, ai) => {
-                        const label = b(ac.description ? `${fmtCat(ac.category)} (${ac.description})` : fmtCat(ac.category));
-                        if (ac.action === 'added')
-                          return <span key={`acc-${ai}`} style={{ color: 'var(--gc-text-1)' }}>{label} accessorial added{ac.amount != null ? <> — {b(`$${ac.amount.toLocaleString()}`)}</> : ''}</span>;
-                        if (ac.action === 'removed')
-                          return <span key={`acc-${ai}`} style={{ color: 'var(--gc-text-1)' }}>{label} accessorial removed</span>;
-                        const amtPart = ac.prevAmount !== undefined ? <> amount {b(`$${ac.prevAmount?.toLocaleString()}`)} → {b(`$${ac.amount?.toLocaleString()}`)}</> : null;
-                        const stPart  = ac.prevStatus ? <> status {b(ac.prevStatus)} → {b(ac.newStatus ?? '—')}</> : null;
-                        return <span key={`acc-${ai}`} style={{ color: 'var(--gc-text-1)' }}>{label} accessorial updated{amtPart}{stPart}</span>;
-                      });
-                      return (
-                        <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                          {(parts.length > 0 || accLines.length === 0) && (
-                            <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, fontSize: 12, flexWrap: 'wrap' }}>
-                              {/* Leg chip — names which leg a leg-scoped
-                                  entry describes. Absent on load-level
-                                  entries and on everything written
-                                  before entry.leg existed, so those
-                                  render exactly as they always did. */}
-                              {entry.leg && parts.length > 0 && (
-                                <span style={{
-                                  fontSize: 10, fontWeight: 700, letterSpacing: '0.02em',
-                                  padding: '1px 6px', borderRadius: 999, whiteSpace: 'nowrap',
-                                  background: '#ede9fe', color: RELAY_COLOR, border: '1px solid #ddd6fe',
-                                }}>
-                                  {entry.leg.label ?? `Leg ${entry.leg.index + 1}`}
-                                </span>
-                              )}
-                              <span style={{ color: 'var(--gc-text-1)' }}>
-                                {parts.length > 0
-                                  ? parts.flatMap((p, j) => j === 0
-                                    ? [<span key={p.key}>{p.node}</span>]
-                                    : [<span key={`sep-${p.key}`} style={{ color: 'var(--gc-text-3)', margin: '0 4px' }}>&amp;</span>, <span key={p.key}>{p.node}</span>])
-                                  : null}
-                              </span>
-                              {parts.length > 0 && <span style={{ color: 'var(--gc-text-3)', whiteSpace: 'nowrap' }}>· by {entry.changedByName} · {fmtDate(entry.changedAt)}</span>}
-                            </div>
-                          )}
-                          {accLines.map((line, ai) => (
-                            <div key={ai} style={{ display: 'flex', alignItems: 'baseline', gap: 6, fontSize: 12, flexWrap: 'wrap' }}>
-                              {line}
-                              <span style={{ color: 'var(--gc-text-3)', whiteSpace: 'nowrap' }}>· by {entry.changedByName} · {fmtDate(entry.changedAt)}</span>
-                            </div>
-                          ))}
-                        </div>
-                      );
-                    })}
+                    {auditLog.map((entry, i) => (
+                      <AuditEntryLines
+                        key={i}
+                        entry={entry}
+                        ctx={{
+                          timeZone: calendarTimezone,
+                          assetName: (id: number) => assets.find(a => a.id === id)?.name ?? `Asset ${id}`,
+                        }}
+                      />
+                    ))}
                   </div>
                 )}
               </div>
