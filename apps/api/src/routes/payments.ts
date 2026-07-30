@@ -522,7 +522,7 @@ interface ReceivableInvoiceRow {
   loads?: {
     internal_load_id: number | null;
     load_num:         string | null;
-    events?: { id: string; title: string | null; leg_index: number | null }[] | null;
+    events?: { id: string; title: string | null; leg_index: number | null; start: string | null }[] | null;
   } | null;
   customers?: { name: string | null } | null;
 }
@@ -605,6 +605,7 @@ function toReceivableInvoice(
     internalLoadId: r.loads?.internal_load_id ?? undefined,
     loadNum:        r.loads?.load_num ?? undefined,
     title:          leg?.title ?? undefined,
+    pickupAt:       leg?.start ?? undefined,
     pickupEventId:  leg?.id,
     customerId:     r.customer_id ?? undefined,
     customerName:   r.customers?.name ?? undefined,
@@ -622,7 +623,7 @@ function toReceivableInvoice(
 
 const RECEIVABLE_INVOICE_COLS =
   "id,invoice_number,status,total,issued_at,due_at,customer_id,load_id," +
-  "loads(internal_load_id,load_num,events(id,title,leg_index)),customers(name)";
+  "loads(internal_load_id,load_num,events(id,title,leg_index,start)),customers(name)";
 
 payments.get("/receivables", async (c) => {
   const orgId = c.get("orgId");
@@ -909,23 +910,34 @@ payments.get("/receivables/:customerId", async (c) => {
   let name = "No customer";
   let mcNum: string | undefined;
   let invoiceEmail: string | undefined;
+  let invoicePortal: string | undefined;
   let contactPhone: string | undefined;
+  let billingAddress: string | undefined;
+  let billingNotes: string | undefined;
+  let invoiceMethod: "email" | "portal" | undefined;
   if (!isNone) {
     const { data: cust } = await supabase
       .from("customers")
-      .select("id,name,mc_num,invoice_email,contact_phone")
+      .select("id,name,mc_num,invoice_method,invoice_email,invoice_portal,contact_phone,billing_address,invoice_instructions")
       .eq("id", customerId)
       .eq("org_id", orgId)
       .maybeSingle();
     if (!cust) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
     const row = cust as {
       name: string | null; mc_num: string | null;
-      invoice_email: string | null; contact_phone: string | null;
+      invoice_method: string | null; invoice_email: string | null;
+      invoice_portal: string | null; contact_phone: string | null;
+      billing_address: string | null; invoice_instructions: string | null;
     };
-    name         = row.name ?? "Unnamed customer";
-    mcNum        = row.mc_num        ?? undefined;
-    invoiceEmail = row.invoice_email ?? undefined;
-    contactPhone = row.contact_phone ?? undefined;
+    name          = row.name ?? "Unnamed customer";
+    mcNum         = row.mc_num         ?? undefined;
+    invoiceEmail  = row.invoice_email  ?? undefined;
+    invoicePortal = row.invoice_portal ?? undefined;
+    contactPhone  = row.contact_phone  ?? undefined;
+    billingAddress = row.billing_address ?? undefined;
+    billingNotes   = row.invoice_instructions ?? undefined;
+    invoiceMethod  = row.invoice_method === "portal" ? "portal"
+                   : row.invoice_method === "email"  ? "email" : undefined;
   }
 
   // Lifetime loads — head-only count, no rows pulled over the wire.
@@ -1062,7 +1074,8 @@ payments.get("/receivables/:customerId", async (c) => {
     customer: {
       customerId: isNone ? null : customerId,
       customerName: name,
-      mcNum, invoiceEmail, contactPhone, lifetimeLoads,
+      mcNum, contactPhone, lifetimeLoads,
+      invoiceMethod, invoiceEmail, invoicePortal, billingAddress, billingNotes,
       summary, paid90d, paid90dCount, weekly, invoices,
     },
   };

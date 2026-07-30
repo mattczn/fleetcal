@@ -36,6 +36,7 @@ import {
 import RequireCap from '@/components/auth/RequireCap';
 import AppShell from '@/components/nav/AppShell';
 import DataLoader from '@/components/DataLoader';
+import EventModal from '@/components/calendar/EventModal';
 import Tooltip from '@/components/ui/Tooltip';
 import { CopyableCell, CopyableLoadNum } from '@/components/queue/QueueTablePrimitives';
 import { useCalendarStore } from '@/store/useCalendarStore';
@@ -364,9 +365,12 @@ function ReceivablesPageInner() {
 
   return (
     <AppShell title="Receivables" icon={HandCoins} rightSlot={rightSlot} noPageScroll>
-      {/* Hydrates the calendar store that EventModal reads from — the
-          Title column opens a load in it. */}
+      {/* DataLoader hydrates the calendar store; EventModal is what
+          actually renders an opened load. openEditModal only sets store
+          state — without the modal mounted here the load appeared to
+          open, then only showed up on the calendar. */}
       <DataLoader />
+      <EventModal />
       <div className="flex-1 flex flex-col min-h-0" style={{ padding: '18px 24px', gap: 14 }}>
 
         {/* 1 — subtitle */}
@@ -704,12 +708,13 @@ function ReceivablesPageInner() {
                           letterSpacing: '.05em', color: 'var(--gc-text-3)',
                         }}>
                           <span />
+                          <span style={{ textAlign: 'right' }}>Age</span>
                           <span>Inv #</span>
                           <span>Load #</span>
                           <span>Title</span>
+                          <span>Pickup</span>
                           <span>Issued</span>
                           <span>Due</span>
-                          <span style={{ textAlign: 'right' }}>Age</span>
                           <span style={{ textAlign: 'right' }}>Total</span>
                           <span style={{ textAlign: 'right' }}>Balance</span>
                           <span style={{ textAlign: 'center' }}>Status</span>
@@ -735,6 +740,11 @@ function ReceivablesPageInner() {
                               <span style={{
                                 width: 15, height: 15, border: '1.5px solid var(--gc-border)', borderRadius: 3,
                               }} />
+                              {/* Age leads the row — how late it is, is the
+                                  reason anyone is reading this table. */}
+                              <span className="tabular-nums" style={{ textAlign: 'right', fontWeight: 800, color: ageColor(age) }}>
+                                {ageLabel(age)}
+                              </span>
                               {/* Same copy-to-clipboard primitives Billing uses, so
                                   the paste payload is identical across pages. */}
                               <span onClick={e => e.stopPropagation()}>
@@ -753,11 +763,9 @@ function ReceivablesPageInner() {
                                 title="Open load details">
                                 {inv.title ?? (inv.internalLoadId != null ? `#${inv.internalLoadId}` : '—')}
                               </button>
+                              <span style={{ color: 'var(--gc-text-3)' }}>{inv.pickupAt ? shortDate(inv.pickupAt) : '—'}</span>
                               <span style={{ color: 'var(--gc-text-3)' }}>{shortDate(inv.issuedAt)}</span>
                               <span style={{ color: 'var(--gc-text-3)' }}>{inv.dueAt ? shortDate(inv.dueAt) : '—'}</span>
-                              <span className="tabular-nums" style={{ textAlign: 'right', fontWeight: 800, color: ageColor(age) }}>
-                                {ageLabel(age)}
-                              </span>
                               <span className="tabular-nums" style={{ textAlign: 'right' }}>{money2(inv.total)}</span>
                               <span className="tabular-nums" style={{ textAlign: 'right', fontWeight: 800 }}>{money2(inv.balance)}</span>
                               <span style={{ textAlign: 'center' }}>
@@ -849,7 +857,7 @@ function ReceivablesPageInner() {
   );
 }
 
-const INNER_GRID = '34px 104px 108px 1fr 92px 92px 88px 104px 104px 100px';
+const INNER_GRID = '34px 78px 100px 104px 1fr 92px 92px 92px 104px 104px 100px';
 
 /** Status pill. Part-paid outranks age — "we got something" is the more
  *  useful fact than "it's late". Overdue starts past 30 days so the pill

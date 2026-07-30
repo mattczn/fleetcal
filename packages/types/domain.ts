@@ -1459,6 +1459,10 @@ export interface ReceivableInvoice {
   loadNum?:      string;
   /** Pickup leg's event title — the human label for the load. */
   title?:        string;
+  /** Pickup leg's scheduled start — when the freight actually moved, as
+   *  distinct from when it was invoiced. Naive local time, same as
+   *  events.start elsewhere. */
+  pickupAt?:     string;
   /** Event id of the pickup leg, for opening the load in EventModal. */
   pickupEventId?: string;
 
@@ -1529,10 +1533,21 @@ export interface CustomerReceivables {
   customerId:    string | null;
   customerName:  string;
   mcNum?:        string;
-  invoiceEmail?: string;
   contactPhone?: string;
   /** Distinct loads ever billed to this customer. */
   lifetimeLoads?: number;
+
+  // ── How this broker wants to be billed ──────────────────────────────
+  // Mirrors the Customer record; BrokerProfileModal remains the edit
+  // surface, so these are read-only here.
+  /** 'email' | 'portal'. Determines which of the two below matters. */
+  invoiceMethod?: 'email' | 'portal';
+  invoiceEmail?:  string;
+  invoicePortal?: string;
+  billingAddress?: string;
+  /** Free-text broker-wide billing policy (terms, required docs, factor
+   *  preferences) — customers.invoice_instructions. */
+  billingNotes?:  string;
 
   /** Same rollup shape the ledger row uses — byBucket, oldest, terms,
    *  avgDaysToPay. */

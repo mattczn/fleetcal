@@ -22,13 +22,18 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
   HandCoins, Mail, Phone, FileText, Truck, ArrowRightLeft, Download, ChevronLeft,
+  ExternalLink, MapPin, StickyNote, UserRound, Check, Loader2,
 } from 'lucide-react';
 import RequireCap from '@/components/auth/RequireCap';
 import AppShell from '@/components/nav/AppShell';
+import DataLoader from '@/components/DataLoader';
+import EventModal from '@/components/calendar/EventModal';
+import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 import Breadcrumbs from '@/app/admin/Breadcrumbs';
 import Tooltip from '@/components/ui/Tooltip';
 import { CopyableCell, CopyableLoadNum, StatusPill } from '@/components/queue/QueueTablePrimitives';
 import { InvoiceDetailModal } from '@/components/invoicing/InvoiceDetailModal';
+import { useCalendarStore } from '@/store/useCalendarStore';
 import { railway } from '@/lib/railway';
 import type { CustomerReceivables, ReceivableInvoice, AgingBucket } from '@fleetcal/types';
 import { AGING_BUCKETS, AGING_BUCKET_LABEL, agingBucketFor } from '@fleetcal/types';
@@ -66,7 +71,7 @@ const BUCKET_FG: Record<AgingBucket, string> = {
   current: '#3c4043', d1_30: '#b06000', d31_plus: '#c5221f',
 };
 
-const GRID = '34px 100px 1fr 92px 92px 88px 104px 104px 104px 96px';
+const GRID = '34px 78px 100px 104px 1fr 92px 92px 92px 100px 100px 100px 96px';
 
 type Scope = 'open' | 'paid' | 'all';
 
@@ -82,6 +87,9 @@ function CustomerViewInner() {
   const [search,  setSearch]  = useState('');
   const [term,    setTerm]    = useState('');
   const [openInvoiceId, setOpenInvoiceId] = useState<string | null>(null);
+  const [profileOpen,   setProfileOpen]   = useState(false);
+  const [selected,      setSelected]      = useState<Set<string>>(new Set());
+  const [markBusy,      setMarkBusy]      = useState(false);
 
   const load = useCallback(async () => {
     if (!customerId) return;
@@ -128,6 +136,59 @@ function CustomerViewInner() {
       .map(b => ({ bucket: b, rows: m.get(b) ?? [] }))
       .filter(g => g.rows.length > 0);
   }, [invoices, scope]);
+
+  const payable = useMemo(() => invoices.filter(i => i.balance > 0.005), [invoices]);
+  const allSelected = payable.length > 0 && payable.every(i => selected.has(i.id));
+
+  const toggleOne = useCallback((id: string) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+  const toggleAll = useCallback(() => {
+    setSelected(prev => (prev.size >= payable.length ? new Set() : new Set(payable.map(i => i.id))));
+  }, [payable]);
+
+  /** Walks the selection one at a time. Sequential rather than parallel
+   *  because each call recomputes its invoice server-side; a failure on
+   *  one shouldn't abandon the rest, so each is caught individually. */
+  async function markSelectedPaid() {
+    if (!selected.size || markBusy) return;
+    setMarkBusy(true);
+    const failed: string[] = [];
+    try {
+      for (const inv of payable.filter(i => selected.has(i.id))) {
+        try { await railway.markInvoicePaid(inv.id, {}); }
+        catch (e) { failed.push(inv.invoiceNumber); console.warn('[receivables] markPaid failed', inv.invoiceNumber, e); }
+      }
+      setSelected(new Set());
+      await load();
+      setErr(failed.length ? `Could not mark ${failed.length} invoice(s) paid: ${failed.join(', ')}` : null);
+    } finally {
+      setMarkBusy(false);
+    }
+  }
+
+  // EventModal keys on calendar events, so make sure the load's legs are
+  // in the store before opening. Same fallback Billing uses.
+  const mergeEvents   = useCalendarStore(st => st.mergeEvents);
+  const openEditModal = useCalendarStore(st => st.openEditModal);
+  const openLoadInModal = useCallback(async (inv: ReceivableInvoice) => {
+    if (!inv.pickupEventId) return;
+    const inStore = useCalendarStore.getState().events.some(e => e.id === inv.pickupEventId);
+    if (!inStore) {
+      try {
+        const { loads: legs } = await railway.getLoad(inv.loadId);
+        mergeEvents(legs);
+      } catch (e) {
+        console.error('[receivables] failed to load legs for modal:', e);
+        return;
+      }
+    }
+    openEditModal(inv.pickupEventId);
+  }, [mergeEvents, openEditModal]);
 
   const summary   = data?.summary;
   const balance   = summary?.openBalance ?? 0;
@@ -218,6 +279,18 @@ function CustomerViewInner() {
               )}
             </div>
           </div>
+
+          {data?.customerId && (
+            <button onClick={() => setProfileOpen(true)}
+              className="inline-flex items-center gap-1.5" style={{
+                height: 32, padding: '0 12px', border: '1px solid var(--gc-border)',
+                borderRadius: 8, background: 'var(--gc-surface)',
+                fontSize: 12, fontWeight: 700, color: 'var(--gc-text-2)', flex: 'none',
+              }}
+              title="Open the full customer record">
+              <UserRound size={13} /> View customer
+            </button>
+          )}
 
           <div style={{ textAlign: 'right', flex: 'none' }}>
             <div style={{
@@ -324,6 +397,53 @@ function CustomerViewInner() {
           </div>
         </div>
 
+        {/* ── How to bill them ─────────────────────────────────────── */}
+        {/* Read-only mirror of the Customer record — BrokerProfileModal
+            is the edit surface, reachable from View customer above, so
+            this doesn't duplicate a form. */}
+        <div style={{ flex: 'none', ...CARD, padding: '12px 16px' }}>
+          <div className="flex items-start flex-wrap" style={{ gap: 24 }}>
+            <BillingField
+              icon={data?.invoiceMethod === 'portal' ? <ExternalLink size={12} /> : <Mail size={12} />}
+              label="Invoice routing">
+              {data?.invoiceMethod === 'portal' ? 'Online portal'
+                : data?.invoiceMethod === 'email' ? 'Email'
+                : <Muted>not set</Muted>}
+            </BillingField>
+
+            {/* Only the destination that matches the routing is shown —
+                a stale email under a portal broker is a trap. */}
+            <BillingField icon={<Mail size={12} />}
+              label={data?.invoiceMethod === 'portal' ? 'Portal' : 'Billing email'}>
+              {data?.invoiceMethod === 'portal'
+                ? (data?.invoicePortal
+                    ? <a href={/^https?:\/\//.test(data.invoicePortal) ? data.invoicePortal : `https://${data.invoicePortal}`}
+                         target="_blank" rel="noopener noreferrer"
+                         className="hover:underline inline-flex items-center gap-1"
+                         style={{ color: 'var(--gc-blue-text)' }}>
+                        {data.invoicePortal} <ExternalLink size={11} />
+                      </a>
+                    : <Muted>no portal on file</Muted>)
+                : (data?.invoiceEmail
+                    ? <a href={`mailto:${data.invoiceEmail}`} className="hover:underline"
+                         style={{ color: 'var(--gc-blue-text)' }}>{data.invoiceEmail}</a>
+                    : <Muted>no billing email on file</Muted>)}
+            </BillingField>
+
+            <BillingField icon={<MapPin size={12} />} label="Billing address">
+              {data?.billingAddress
+                ? <span style={{ whiteSpace: 'pre-line' }}>{data.billingAddress}</span>
+                : <Muted>not set</Muted>}
+            </BillingField>
+
+            <BillingField icon={<StickyNote size={12} />} label="Billing notes" grow>
+              {data?.billingNotes
+                ? <span style={{ whiteSpace: 'pre-line' }}>{data.billingNotes}</span>
+                : <Muted>none</Muted>}
+            </BillingField>
+          </div>
+        </div>
+
         {/* ── Invoices ─────────────────────────────────────────────── */}
         <div className="flex flex-col" style={{ ...CARD, flex: 1, minHeight: 0, overflow: 'hidden' }}>
           <div className="flex items-center" style={{
@@ -347,7 +467,11 @@ function CustomerViewInner() {
               }} />
             <div className="flex" style={{ height: 30, border: '1px solid var(--gc-border)', borderRadius: 8, overflow: 'hidden' }}>
               {(['open', 'paid', 'all'] as Scope[]).map(s => (
-                <button key={s} onClick={() => setScope(s)}
+                <button key={s}
+                  // Clear on scope change in the handler rather than an
+                  // effect: a selection made under Open must not carry
+                  // into Paid, where Mark Paid means nothing.
+                  onClick={() => { setScope(s); setSelected(new Set()); }}
                   style={{
                     padding: '0 11px', fontSize: 12, fontWeight: 700, textTransform: 'capitalize',
                     background: scope === s ? '#1a73e8' : 'transparent',
@@ -364,12 +488,20 @@ function CustomerViewInner() {
             fontSize: 11, fontWeight: 700, letterSpacing: '.05em',
             textTransform: 'uppercase', color: 'var(--gc-text-3)',
           }}>
-            <span />
+            <span>
+              <input type="checkbox"
+                checked={allSelected}
+                onChange={toggleAll}
+                style={{ width: 15, height: 15, cursor: 'pointer' }}
+                title={allSelected ? 'Clear selection' : 'Select all payable'} />
+            </span>
+            <span style={{ textAlign: 'right' }}>Age</span>
             <span>Invoice</span>
             <span>Load</span>
+            <span>Title</span>
+            <span>Pickup</span>
             <span>Issued</span>
             <span>Due</span>
-            <span style={{ textAlign: 'right' }}>Age</span>
             <span style={{ textAlign: 'right' }}>Total</span>
             <span style={{ textAlign: 'right' }}>Paid</span>
             <span style={{ textAlign: 'right' }}>Balance</span>
@@ -405,11 +537,19 @@ function CustomerViewInner() {
                       {money0(g.rows.reduce((s, i) => s + i.balance, 0))}
                     </span>
                   </div>
-                  {g.rows.map(inv => <InvoiceRow key={inv.id} inv={inv} onOpen={setOpenInvoiceId} />)}
+                  {g.rows.map(inv => (
+                    <InvoiceRow key={inv.id} inv={inv} onOpen={setOpenInvoiceId}
+                      onOpenLoad={openLoadInModal}
+                      selected={selected.has(inv.id)} onToggle={toggleOne} />
+                  ))}
                 </div>
               ))
             ) : (
-              invoices.map(inv => <InvoiceRow key={inv.id} inv={inv} onOpen={setOpenInvoiceId} />)
+              invoices.map(inv => (
+                <InvoiceRow key={inv.id} inv={inv} onOpen={setOpenInvoiceId}
+                  onOpenLoad={openLoadInModal}
+                  selected={selected.has(inv.id)} onToggle={toggleOne} />
+              ))
             )}
           </div>
 
@@ -422,6 +562,14 @@ function CustomerViewInner() {
               {money0(invoices.reduce((s, i) => s + i.balance, 0))} outstanding
               {collected > 0 ? ` · ${money0(collected)} collected against them so far` : ''}
             </span>
+            {selected.size > 0 && (
+              <button onClick={() => void markSelectedPaid()} disabled={markBusy}
+                className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors disabled:opacity-60 inline-flex items-center gap-1.5"
+                style={{ background: '#dcfce7', color: '#15803d', border: '1px solid #86efac', marginLeft: 14 }}>
+                {markBusy ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+                Mark {selected.size} paid
+              </button>
+            )}
             <div style={{ flex: 1 }} />
             {/* Statement generation isn't built — rendered so the
                 affordance is where the design puts it. */}
@@ -436,8 +584,17 @@ function CustomerViewInner() {
         </div>
       </div>
 
+      {/* DataLoader hydrates the calendar store; EventModal renders an
+          opened load. Both must be mounted here — openEditModal only
+          sets store state. */}
+      <DataLoader />
+      <EventModal />
       {openInvoiceId && (
         <InvoiceDetailModal invoiceId={openInvoiceId} onClose={() => setOpenInvoiceId(null)} />
+      )}
+      {profileOpen && data?.customerId && (
+        <BrokerProfileModal initialBrokerId={data.customerId}
+          onClose={() => { setProfileOpen(false); void load(); }} />
       )}
     </AppShell>
   );
@@ -452,9 +609,16 @@ const CARD: React.CSSProperties = {
   boxShadow: '0 1px 2px rgba(60,64,67,.1)',
 };
 
-function InvoiceRow({ inv, onOpen }: { inv: ReceivableInvoice; onOpen: (id: string) => void }) {
+function InvoiceRow({ inv, onOpen, onOpenLoad, selected, onToggle }: {
+  inv: ReceivableInvoice;
+  onOpen: (id: string) => void;
+  onOpenLoad: (inv: ReceivableInvoice) => void;
+  selected: boolean;
+  onToggle: (id: string) => void;
+}) {
   const age    = inv.agingDays;
   const stripe = age != null && age > 30 ? '#c5221f' : age != null && age > 0 ? '#e37400' : 'transparent';
+  const payable = inv.balance > 0.005;
   return (
     <div onClick={() => onOpen(inv.id)}
       className="cursor-pointer"
@@ -464,10 +628,23 @@ function InvoiceRow({ inv, onOpen }: { inv: ReceivableInvoice; onOpen: (id: stri
         height: 40, alignItems: 'center', fontSize: 12.5,
         borderBottom: '1px solid #f1f3f4',
         boxShadow: stripe === 'transparent' ? undefined : `inset 3px 0 0 ${stripe}`,
+        background: selected ? 'var(--gc-blue-light, #e8f0fe)' : undefined,
       }}
-      onMouseOver={e => { e.currentTarget.style.background = 'var(--gc-hover)'; }}
-      onMouseOut={e => { e.currentTarget.style.background = 'transparent'; }}>
-      <span style={{ width: 15, height: 15, border: '1.5px solid var(--gc-border)', borderRadius: 3 }} />
+      onMouseOver={e => { if (!selected) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+      onMouseOut={e => { e.currentTarget.style.background = selected ? 'var(--gc-blue-light, #e8f0fe)' : 'transparent'; }}>
+      {/* Only invoices that still owe something can be marked paid, so
+          settled rows get no checkbox rather than a dead one. */}
+      <span onClick={e => e.stopPropagation()}>
+        {payable ? (
+          <input type="checkbox" checked={selected} onChange={() => onToggle(inv.id)}
+            style={{ width: 15, height: 15, cursor: 'pointer' }} />
+        ) : (
+          <span style={{ display: 'block', width: 15, height: 15 }} />
+        )}
+      </span>
+      <span className="tabular-nums" style={{
+        textAlign: 'right', fontWeight: age != null && age > 0 ? 800 : 700, color: ageColor(age),
+      }}>{ageLabel(age)}</span>
       <span onClick={e => e.stopPropagation()}>
         <CopyableCell value={inv.invoiceNumber} displayValue={inv.invoiceNumber} title="Copy invoice #" />
       </span>
@@ -476,11 +653,16 @@ function InvoiceRow({ inv, onOpen }: { inv: ReceivableInvoice; onOpen: (id: stri
           ? <CopyableLoadNum value={inv.loadNum} />
           : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
       </span>
+      <button type="button"
+        onClick={e => { e.stopPropagation(); if (inv.pickupEventId) onOpenLoad(inv); }}
+        className="text-left font-semibold hover:underline truncate"
+        style={{ color: 'var(--gc-blue)', maxWidth: '100%' }}
+        title="Open load details">
+        {inv.title ?? (inv.internalLoadId != null ? `#${inv.internalLoadId}` : '—')}
+      </button>
+      <span style={{ color: 'var(--gc-text-3)' }}>{inv.pickupAt ? shortDate(inv.pickupAt) : '—'}</span>
       <span style={{ color: 'var(--gc-text-3)' }}>{shortDate(inv.issuedAt)}</span>
       <span style={{ color: 'var(--gc-text-3)' }}>{inv.dueAt ? shortDate(inv.dueAt) : '—'}</span>
-      <span className="tabular-nums" style={{
-        textAlign: 'right', fontWeight: age != null && age > 0 ? 800 : 700, color: ageColor(age),
-      }}>{ageLabel(age)}</span>
       <span className="tabular-nums" style={{ textAlign: 'right' }}>{money2(inv.total)}</span>
       <span className="tabular-nums" style={{
         textAlign: 'right', color: inv.paidAmount > 0.005 ? '#137333' : 'var(--gc-text-3)',
@@ -509,6 +691,28 @@ function Pill({ bg, fg, children }: { bg: string; fg: string; children: React.Re
       style={{ background: bg, color: fg }}>
       {children}
     </span>
+  );
+}
+
+function Muted({ children }: { children: React.ReactNode }) {
+  return <span style={{ color: 'var(--gc-text-3)' }}>{children}</span>;
+}
+
+function BillingField({ icon, label, children, grow }: {
+  icon: React.ReactNode; label: string; children: React.ReactNode; grow?: boolean;
+}) {
+  return (
+    <div style={{ minWidth: 0, flex: grow ? 1 : 'none', maxWidth: grow ? undefined : 320 }}>
+      <div className="inline-flex items-center gap-1.5" style={{
+        fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase',
+        letterSpacing: '.06em', color: 'var(--gc-text-3)',
+      }}>
+        {icon}{label}
+      </div>
+      <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--gc-text-2)', marginTop: 2 }}>
+        {children}
+      </div>
+    </div>
   );
 }
 
