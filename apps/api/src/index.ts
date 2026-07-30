@@ -40,6 +40,7 @@ import driverSafetyScoringRoute from "./routes/driver-safety-scoring.js";
 import performanceEventsRoute from "./routes/performance-events.js";
 import orgSettingsRoute from "./routes/org-settings.js";
 import invoicesRoute from "./routes/invoices.js";
+import paymentsRoute from "./routes/payments.js";
 import checkCallsRoute from "./routes/check-calls.js";
 import stopsRoute from "./routes/stops.js";
 import driverRoute from "./routes/driver.js";
@@ -236,6 +237,9 @@ authed.route("/driver-safety-scoring", driverSafetyScoringRoute);
 authed.route("/performance-events", performanceEventsRoute);
 authed.route("/org-settings", orgSettingsRoute);
 authed.route("/invoices", invoicesRoute);
+// Receivables: payment evidence + the AR read model. Allocation writes
+// live on /invoices/:id/payments since they mutate the invoice.
+authed.route("/payments", paymentsRoute);
 authed.route("/stops", stopsRoute);
 // Top-level /check-calls/:id (DELETE). Per-load list/create paths are
 // mounted from inside loadsRoute as /loads/:loadId/check-calls.

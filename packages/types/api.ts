@@ -1478,6 +1478,170 @@ export interface VoidInvoiceResponse { invoice: Invoice; }
 // this module exclusively.
 export type { InvoiceStatus };
 
+// ── /v1/payments — receivables: proofs + allocations ────────────────────
+//
+// Split across two resource families:
+//   /v1/payments/proofs            — evidence CRUD + attachment upload
+//   /v1/invoices/:id/payments      — allocate money to one invoice
+//
+// Every write that touches an allocation returns the affected invoice so
+// the client can update its row without a refetch. invoices.paid_amount /
+// paid_at / status are recomputed server-side from the allocation set on
+// every such write — clients must never patch them directly.
+
+import type {
+  PaymentProof, PaymentProofKind, PaymentProofSource, PaymentMethod,
+  PaymentVarianceReason, InvoicePayment, ReceivableInvoice,
+  ReceivableCustomerSummary, AgingBucket,
+} from './domain';
+
+/** GET /v1/payments/proofs — filters are ANDed.
+ *  `unapplied=true` returns only proofs whose allocations sum to less
+ *  than the proof amount (including zero) — the review pile. */
+export interface ListPaymentProofsQuery {
+  customerId?: string;
+  kind?:       PaymentProofKind;
+  unapplied?:  boolean;
+  from?:       string;   // YYYY-MM-DD, inclusive, on occurred_on
+  to?:         string;
+  limit?:      number;
+}
+export interface ListPaymentProofsResponse { proofs: PaymentProof[]; }
+
+export interface GetPaymentProofResponse {
+  proof:    PaymentProof;
+  /** Allocations citing this proof, each expanded with its invoice
+   *  number + total so the UI can render "what did this cover". */
+  payments: (InvoicePayment & {
+    invoiceNumber?: string;
+    invoiceTotal?:  number;
+  })[];
+}
+
+/** POST /v1/payments/proofs — record evidence. The file itself uploads
+ *  separately via POST /v1/payments/proofs/:id/attachment (multipart), so
+ *  a proof can be created from a bank line with nothing to attach. */
+export interface CreatePaymentProofRequest {
+  kind:        PaymentProofKind;
+  source?:     PaymentProofSource;   // defaults to 'manual'
+  customerId?: string;
+  payerRaw?:   string;
+  occurredOn:  string;               // YYYY-MM-DD
+  amount:      number;
+  reference?:  string;
+  note?:       string;
+  /** Required for source csv/email/api — the idempotency key. */
+  externalId?: string;
+}
+export interface CreatePaymentProofResponse { proof: PaymentProof; }
+
+export interface UpdatePaymentProofRequest {
+  kind?:       PaymentProofKind;
+  customerId?: string | null;
+  payerRaw?:   string | null;
+  occurredOn?: string;
+  amount?:     number;
+  reference?:  string | null;
+  note?:       string | null;
+}
+export interface UpdatePaymentProofResponse { proof: PaymentProof; }
+
+/** DELETE /v1/payments/proofs/:id — removes the proof and its blob.
+ *  Allocations citing it survive with proofId cleared: the money still
+ *  moved, only the paperwork was wrong. `unlinkedPayments` reports how
+ *  many allocations were left unbacked. */
+export interface DeletePaymentProofResponse {
+  ok: true;
+  unlinkedPayments: number;
+}
+
+/** POST /v1/payments/proofs/:id/attachment — multipart, field `file`. */
+export interface UploadProofAttachmentResponse { proof: PaymentProof; }
+
+/** GET /v1/payments/proofs/:id/attachment — 302 to a signed URL. */
+
+/** GET /v1/invoices/:id/payments */
+export interface ListInvoicePaymentsResponse { payments: InvoicePayment[]; }
+
+/** POST /v1/invoices/:id/payments — apply money to this invoice.
+ *
+ *  Omitting `amount` applies the invoice's full outstanding balance,
+ *  which is the common case (broker paid exactly what was billed).
+ *  Supplying a short amount without a `varianceReason` is accepted but
+ *  the UI prompts for one — an unexplained short-pay is a collections
+ *  problem, not a data-entry preference. */
+export interface CreateInvoicePaymentRequest {
+  amount?:         number;
+  paidOn?:         string;           // defaults to today
+  method?:         PaymentMethod;
+  proofId?:        string;
+  varianceReason?: PaymentVarianceReason;
+  note?:           string;
+}
+export interface CreateInvoicePaymentResponse {
+  payment: InvoicePayment;
+  /** Recomputed — status may have flipped to paid. */
+  invoice: Invoice;
+}
+
+export interface UpdateInvoicePaymentRequest {
+  amount?:         number;
+  paidOn?:         string;
+  method?:         PaymentMethod | null;
+  proofId?:        string | null;
+  varianceReason?: PaymentVarianceReason | null;
+  note?:           string | null;
+}
+export interface UpdateInvoicePaymentResponse {
+  payment: InvoicePayment;
+  invoice: Invoice;
+}
+
+/** DELETE /v1/invoices/:id/payments/:paymentId — reverse an allocation.
+ *  Recomputes the invoice, which may drop it back out of `paid`. */
+export interface DeleteInvoicePaymentResponse {
+  ok: true;
+  invoice: Invoice;
+}
+
+/** GET /v1/receivables — everything the Receivables page needs in one
+ *  round trip: the invoice rows, the per-customer rail, and the summary
+ *  tiles. Computed server-side so the aging math has exactly one
+ *  implementation. */
+export interface ListReceivablesQuery {
+  customerId?: string;
+  bucket?:     AgingBucket;
+  /** 'open' (default) = sent/draft with a balance; 'paid' = fully
+   *  settled; 'all' = both. Void is always excluded. */
+  scope?:      'open' | 'paid' | 'all';
+  search?:     string;   // invoice number / load number
+  limit?:      number;
+}
+export interface ListReceivablesResponse {
+  invoices:  ReceivableInvoice[];
+  customers: ReceivableCustomerSummary[];
+  totals:    ReceivablesTotals;
+}
+
+export interface ReceivablesTotals {
+  openCount:       number;
+  openBalance:     number;
+  overdueCount:    number;
+  overdueBalance:  number;
+  /** Allocations dated within the trailing 30 days. */
+  collected30d:    number;
+  /** Open balance per aging bucket — drives the clickable tiles. */
+  byBucket:        Record<AgingBucket, { count: number; balance: number }>;
+  /** Invoices marked paid with no evidence attached anywhere. */
+  unbackedPaidCount: number;
+}
+
+export type {
+  PaymentProof, PaymentProofKind, PaymentProofSource, PaymentMethod,
+  PaymentVarianceReason, InvoicePayment, ReceivableInvoice,
+  ReceivableCustomerSummary, AgingBucket,
+};
+
 // ── /v1/driver/fuel-reports + /v1/fuel-reports ──────────────────────────
 //
 // Two surfaces share the same data shapes:

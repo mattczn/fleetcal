@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Calendar, BarChart2, Users, LayoutDashboard, FileCheck2, Receipt, Package, Gauge } from 'lucide-react';
+import { Calendar, BarChart2, Users, LayoutDashboard, FileCheck2, Receipt, Package, Gauge, HandCoins } from 'lucide-react';
 import type { Capability, OrgModule } from '@fleetcal/types';
 import { useNavGate } from '@/lib/useNavGate';
 
@@ -23,6 +23,9 @@ const NAV_LINKS: Array<{
   { href: '/dashboard',   label: 'Dashboard',      icon: BarChart2,       cap: 'dashboard.access' },
   { href: '/closeout',    label: 'Paperwork',      icon: FileCheck2,      cap: 'closeout.access',    module: 'closeout' },
   { href: '/accounting',  label: 'Billing',        icon: Receipt,         cap: 'accounting.access',  module: 'accounting' },
+  // Collections half of the billing pipeline — see the note in
+  // AppSidebar's PRIMARY_NAV. Both nav lists must stay in sync.
+  { href: '/receivables', label: 'Receivables',    icon: HandCoins,       cap: 'accounting.access',  module: 'accounting' },
   // Equipment subsumes the old Fuel + Maintenance nav links — one
   // page with three sub-tabs (Inspections / Maintenance / Fuel). The
   // /fuel and /maintenance routes still exist as redirects to

@@ -42,6 +42,14 @@ import {
   type MarkInvoicePaidResponse,
   type UnmarkInvoicePaidRequest,
   type UnmarkInvoicePaidResponse,
+  type ListInvoicePaymentsResponse,
+  type CreateInvoicePaymentRequest,
+  type CreateInvoicePaymentResponse,
+  type UpdateInvoicePaymentRequest,
+  type UpdateInvoicePaymentResponse,
+  type DeleteInvoicePaymentResponse,
+  type PaymentMethod,
+  type PaymentVarianceReason,
   type VoidInvoiceRequest,
   type VoidInvoiceResponse,
   type BatchResendInvoicesRequest,
@@ -63,6 +71,31 @@ import { appendLoadAudit } from "../lib/auditLog.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability, requireModule } from "../middleware/require.js";
 import { pMapWithLimit } from "../lib/concurrency.js";
+import { recomputeInvoicePaid, round2 } from "../lib/invoicePayments.js";
+import {
+  PAYMENT_COLS, PROOF_COLS, rowToPayment, rowToProof,
+  type PaymentRow, type ProofRow,
+} from "./payments.js";
+
+// invoice_payments / payment_proofs aren't in the generated Database
+// types until the schema is regenerated post-migration.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const supaAny = supabase as any;
+
+const PAYMENT_METHODS: readonly PaymentMethod[] =
+  ["ach", "check", "wire", "factoring", "other"];
+const VARIANCE_REASONS: readonly PaymentVarianceReason[] =
+  ["quick_pay", "short_pay", "deduction", "overpayment", "other"];
+
+/** Re-read an invoice after the allocation ledger moved it. Every
+ *  allocation write returns the invoice so the client can update a row
+ *  in place instead of refetching the list. */
+async function reloadInvoice(id: string, orgId: string): Promise<Invoice | null> {
+  const { data } = await supabase
+    .from("invoices").select(INVOICE_COLS)
+    .eq("id", id).eq("org_id", orgId).maybeSingle();
+  return data ? rowToInvoice(data as unknown as InvoiceRow) : null;
+}
 
 /**
  * Set loads.billing_status AND write a load-level audit entry in one
@@ -2083,37 +2116,80 @@ invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async
 // POST /v1/invoices/:id/mark-paid — sent → paid
 // ─────────────────────────────────────────────────────────────────────────
 
-invoices.post("/:id/mark-paid", async (c) => {
-  const orgId = c.get("orgId");
-  const id = c.req.param("id");
-  const body = await c.req.json<MarkInvoicePaidRequest>();
+// Since the receivables ledger landed (migration 20260730_receivables),
+// this endpoint no longer writes paid_* directly. It records an
+// allocation with no proof attached — "I know it's paid, the paperwork
+// isn't here yet" — and lets recomputeInvoicePaid() derive the summary
+// columns. That keeps a single writer for paid_amount and means a
+// payment recorded from the accounting board and one recorded from
+// Receivables are the same kind of row.
+//
+// Behaviour change worth knowing: omitting `amount` used to leave
+// paid_amount null. It now applies the invoice's full outstanding
+// balance, which is what the button has always meant.
 
-  const update = {
-    status:      "paid",
-    paid_at:     body.paidAt ?? new Date().toISOString(),
-    paid_amount: body.amount ?? null,
-    paid_method: body.method ?? null,
-    paid_note:   body.note   ?? null,
-  };
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data, error } = await supabase
+invoices.post("/:id/mark-paid", async (c) => {
+  const orgId  = c.get("orgId");
+  const userId = c.get("userId");
+  const id     = c.req.param("id");
+  const body   = await c.req.json<MarkInvoicePaidRequest>().catch(() => ({} as MarkInvoicePaidRequest));
+
+  const { data: existing } = await supabase
     .from("invoices")
-    .update(update as any)
+    .select("id,total,status,load_id")
     .eq("id", id)
     .eq("org_id", orgId)
-    .in("status", ["draft", "sent"])    // can mark paid from either state
-    .select(INVOICE_COLS)
-    .single();
-  if (error) {
-    return c.json({ error: "mark_paid_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+    .maybeSingle();
+  if (!existing) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+
+  const inv = existing as { id: string; total: number | null; status: string; load_id: string };
+  if (inv.status !== "draft" && inv.status !== "sent") {
+    return c.json({ error: "invalid_state", detail: "invoice is void or already paid" } satisfies ApiErrorResponse, 409);
   }
-  if (!data) return c.json({ error: "invalid_state", detail: "invoice is void or already paid" } satisfies ApiErrorResponse, 409);
+
+  // Balance rather than total: an invoice can already carry a partial
+  // payment when someone hits the board's Mark Paid to close it out.
+  const { data: priorRows } = await supaAny
+    .from("invoice_payments").select("amount")
+    .eq("org_id", orgId).eq("invoice_id", id);
+  const prior   = ((priorRows ?? []) as { amount: string | number }[])
+    .reduce((s, r) => s + Number(r.amount), 0);
+  const balance = round2(Number(inv.total ?? 0) - prior);
+  const amount  = body.amount ?? balance;
+
+  const paidOn = (body.paidAt ?? new Date().toISOString()).slice(0, 10);
+
+  const { error: allocErr } = await supaAny
+    .from("invoice_payments")
+    .insert({
+      org_id:     orgId,
+      invoice_id: id,
+      proof_id:   null,
+      amount:     round2(amount),
+      paid_on:    paidOn,
+      method:     body.method ?? null,
+      note:       body.note   ?? null,
+      created_by: userId,
+    });
+  if (allocErr) {
+    console.error("[POST /v1/invoices/:id/mark-paid] allocation insert:", allocErr);
+    return c.json({ error: "mark_paid_failed", detail: allocErr.message } satisfies ApiErrorResponse, 500);
+  }
+
+  await recomputeInvoicePaid(id, orgId);
+  // paid_note isn't derived from allocations — it's the operator's
+  // free-text on the invoice itself, so it stays a direct write.
+  if (body.note) {
+    await supaAny.from("invoices").update({ paid_note: body.note })
+      .eq("id", id).eq("org_id", orgId);
+  }
 
   // Mirror onto loads.billing_status so the closeout queue advances.
-  const invoice = data as unknown as InvoiceRow;
-  await setBillingStatus(invoice.load_id, orgId, "paid", undefined);
+  await setBillingStatus(inv.load_id, orgId, "paid", undefined);
 
-  const res: MarkInvoicePaidResponse = { invoice: rowToInvoice(invoice) };
+  const invoice = await reloadInvoice(id, orgId);
+  if (!invoice) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+  const res: MarkInvoicePaidResponse = { invoice };
   return c.json(res);
 });
 
@@ -2130,28 +2206,53 @@ invoices.post("/:id/mark-paid", async (c) => {
 // The reason (if any) is appended to paid_note so the audit trail
 // preserves WHY the payment was reversed.
 
+// Ledger note: this is a FULL reversal — it deletes every allocation on
+// the invoice, including proof-backed ones. That's the honest meaning of
+// "this invoice was not paid." The proofs themselves are separate rows
+// and survive; only their link to this invoice goes, so the remittance
+// stays available to re-apply. To reverse one payment out of several,
+// use DELETE /v1/invoices/:id/payments/:paymentId instead.
+
 invoices.post("/:id/unmark-paid", async (c) => {
   const orgId = c.get("orgId");
   const id = c.req.param("id");
   const body = await c.req.json<UnmarkInvoicePaidRequest>().catch(() => ({} as UnmarkInvoicePaidRequest));
 
-  const update = {
-    status:      "sent",
-    paid_at:     null,
-    paid_amount: null,
-    paid_method: null,
-    // Preserve the reversal reason in paid_note for audit / hover.
-    // Cleared if no reason supplied so a stale prior note doesn't
-    // linger after the reversal.
-    paid_note:   body.reason?.trim() ? `Unmarked paid: ${body.reason.trim()}` : null,
-  };
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data, error } = await supabase
+  const { data: existing } = await supabase
     .from("invoices")
-    .update(update as any)
+    .select("id,status,load_id")
     .eq("id", id)
     .eq("org_id", orgId)
-    .eq("status", "paid")   // only reverse from paid
+    .maybeSingle();
+  if (!existing) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+  if ((existing as { status: string }).status !== "paid") {
+    return c.json({ error: "invalid_state", detail: "invoice is not in paid state" } satisfies ApiErrorResponse, 409);
+  }
+
+  const { error: delErr } = await supaAny
+    .from("invoice_payments")
+    .delete()
+    .eq("org_id", orgId)
+    .eq("invoice_id", id);
+  if (delErr) {
+    console.error("[POST /v1/invoices/:id/unmark-paid] allocation delete:", delErr);
+    return c.json({ error: "unmark_paid_failed", detail: delErr.message } satisfies ApiErrorResponse, 500);
+  }
+
+  // With no allocations left, recompute clears paid_* and returns the
+  // invoice to 'sent'. paid_note is not derived, so the reversal reason
+  // is written separately — cleared when no reason was given, so a stale
+  // prior note doesn't linger.
+  await recomputeInvoicePaid(id, orgId);
+
+  const { data, error } = await supaAny
+    .from("invoices")
+    .update({
+      status:    "sent",
+      paid_note: body.reason?.trim() ? `Unmarked paid: ${body.reason.trim()}` : null,
+    })
+    .eq("id", id)
+    .eq("org_id", orgId)
     .select(INVOICE_COLS)
     .single();
   if (error) {
@@ -2564,6 +2665,261 @@ invoices.post("/batch-resend", requireCapability("accounting.send_invoice"), asy
   }
 
   const res: BatchResendInvoicesResponse = { groups };
+  return c.json(res);
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// Allocations — /v1/invoices/:id/payments
+// ─────────────────────────────────────────────────────────────────────────
+//
+// Applying money to an invoice. Each row is one payment against one
+// invoice, optionally citing the proof that evidences it.
+//
+// The amount is always supplied (or defaulted to the full balance) and
+// never derived by splitting a proof total across invoices. A broker
+// paying 14 loads with one ACH and deducting a lumper on load #3 gets 14
+// allocations with 14 correct amounts — the deduction lands on the load
+// it was taken against instead of being smeared across all of them.
+//
+// Every write recomputes the invoice, so status/paid_amount/paid_at stay
+// consistent with the ledger without the caller thinking about it.
+
+/** Shared validation for create + update. Returns an error list. */
+function validateAllocation(
+  body: CreateInvoicePaymentRequest | UpdateInvoicePaymentRequest,
+): string[] {
+  const errors: string[] = [];
+  if (body.amount !== undefined) {
+    if (typeof body.amount !== "number" || !Number.isFinite(body.amount) || body.amount === 0) {
+      errors.push("amount must be a non-zero number");
+    }
+  }
+  if (body.paidOn !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(body.paidOn)) {
+    errors.push("paidOn must be YYYY-MM-DD");
+  }
+  if (body.method != null && !PAYMENT_METHODS.includes(body.method)) {
+    errors.push(`method must be one of ${PAYMENT_METHODS.join("|")}`);
+  }
+  if (body.varianceReason != null && !VARIANCE_REASONS.includes(body.varianceReason)) {
+    errors.push(`varianceReason must be one of ${VARIANCE_REASONS.join("|")}`);
+  }
+  return errors;
+}
+
+/** Load the invoice for an allocation write, confirming org ownership
+ *  and that it isn't void. Returns null when it shouldn't be touched. */
+async function invoiceForAllocation(
+  id: string, orgId: string,
+): Promise<{ id: string; total: number; status: string; load_id: string } | null> {
+  const { data } = await supabase
+    .from("invoices")
+    .select("id,total,status,load_id")
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (!data) return null;
+  const inv = data as { id: string; total: number | null; status: string; load_id: string };
+  if (inv.status === "void") return null;
+  return { ...inv, total: Number(inv.total ?? 0) };
+}
+
+/** Confirm a proof exists in this org before citing it — an FK error
+ *  would otherwise surface as an opaque 500. */
+async function proofExists(proofId: string, orgId: string): Promise<boolean> {
+  const { data } = await supaAny
+    .from("payment_proofs").select("id")
+    .eq("id", proofId).eq("org_id", orgId).maybeSingle();
+  return !!data;
+}
+
+invoices.get("/:id/payments", async (c) => {
+  const orgId = c.get("orgId");
+  const id    = c.req.param("id");
+
+  const { data, error } = await supaAny
+    .from("invoice_payments")
+    .select(`${PAYMENT_COLS},payment_proofs(${PROOF_COLS})`)
+    .eq("org_id", orgId)
+    .eq("invoice_id", id)
+    .order("paid_on", { ascending: false })
+    .order("id", { ascending: false });
+  if (error) {
+    console.error("[GET /v1/invoices/:id/payments] failed:", error);
+    return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  }
+
+  type Joined = PaymentRow & { payment_proofs?: ProofRow | null };
+  const res: ListInvoicePaymentsResponse = {
+    payments: ((data ?? []) as Joined[]).map((r) =>
+      rowToPayment(r, r.payment_proofs ? rowToProof(r.payment_proofs) : undefined),
+    ),
+  };
+  return c.json(res);
+});
+
+invoices.post("/:id/payments", async (c) => {
+  const orgId  = c.get("orgId");
+  const userId = c.get("userId");
+  const id     = c.req.param("id");
+
+  let body: CreateInvoicePaymentRequest;
+  try { body = await c.req.json<CreateInvoicePaymentRequest>(); }
+  catch { return c.json({ error: "validation_failed", errors: ["body must be JSON"] } satisfies ApiErrorResponse, 400); }
+
+  const errors = validateAllocation(body);
+  if (errors.length) {
+    return c.json({ error: "validation_failed", errors } satisfies ApiErrorResponse, 400);
+  }
+
+  const inv = await invoiceForAllocation(id, orgId);
+  if (!inv) return c.json({ error: "not_found", detail: "invoice missing or void" } satisfies ApiErrorResponse, 404);
+
+  if (body.proofId && !(await proofExists(body.proofId, orgId))) {
+    return c.json({ error: "validation_failed", errors: ["proofId not found"] } satisfies ApiErrorResponse, 400);
+  }
+
+  // Default to whatever is still outstanding — the overwhelmingly
+  // common case is "the broker paid exactly what we billed".
+  const { data: priorRows } = await supaAny
+    .from("invoice_payments").select("amount")
+    .eq("org_id", orgId).eq("invoice_id", id);
+  const prior  = ((priorRows ?? []) as { amount: string | number }[])
+    .reduce((s, r) => s + Number(r.amount), 0);
+  const amount = round2(body.amount ?? round2(inv.total - prior));
+  if (amount === 0) {
+    return c.json({ error: "validation_failed", errors: ["invoice is already fully paid — pass an explicit amount to overpay"] } satisfies ApiErrorResponse, 400);
+  }
+
+  const { data, error } = await supaAny
+    .from("invoice_payments")
+    .insert({
+      org_id:          orgId,
+      invoice_id:      id,
+      proof_id:        body.proofId ?? null,
+      amount,
+      paid_on:         body.paidOn ?? new Date().toISOString().slice(0, 10),
+      method:          body.method ?? null,
+      variance_reason: body.varianceReason ?? null,
+      note:            body.note?.trim() || null,
+      created_by:      userId,
+    })
+    .select(PAYMENT_COLS)
+    .single();
+  if (error) {
+    // 23505 = the (invoice_id, proof_id) unique index — this proof was
+    // already applied to this invoice. A double-click, not a new payment.
+    if ((error as { code?: string }).code === "23505") {
+      return c.json({ error: "conflict", detail: "this proof is already applied to this invoice" } satisfies ApiErrorResponse, 409);
+    }
+    console.error("[POST /v1/invoices/:id/payments] failed:", error);
+    return c.json({ error: "insert_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  }
+
+  const settlement = await recomputeInvoicePaid(id, orgId);
+  // Advance the load only when the invoice actually closed out; a
+  // partial payment leaves it in the invoiced bucket where it belongs.
+  if (settlement?.isPaid) {
+    await setBillingStatus(inv.load_id, orgId, "paid", undefined);
+  }
+
+  const invoice = await reloadInvoice(id, orgId);
+  if (!invoice) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+  const res: CreateInvoicePaymentResponse = {
+    payment: rowToPayment(data as PaymentRow),
+    invoice,
+  };
+  return c.json(res, 201);
+});
+
+invoices.patch("/:id/payments/:paymentId", async (c) => {
+  const orgId     = c.get("orgId");
+  const id        = c.req.param("id");
+  const paymentId = c.req.param("paymentId");
+
+  let body: UpdateInvoicePaymentRequest;
+  try { body = await c.req.json<UpdateInvoicePaymentRequest>(); }
+  catch { return c.json({ error: "validation_failed", errors: ["body must be JSON"] } satisfies ApiErrorResponse, 400); }
+
+  const errors = validateAllocation(body);
+  if (errors.length) {
+    return c.json({ error: "validation_failed", errors } satisfies ApiErrorResponse, 400);
+  }
+  if (body.proofId && !(await proofExists(body.proofId, orgId))) {
+    return c.json({ error: "validation_failed", errors: ["proofId not found"] } satisfies ApiErrorResponse, 400);
+  }
+
+  const patch: Record<string, unknown> = {};
+  if (body.amount         !== undefined) patch.amount          = round2(body.amount);
+  if (body.paidOn         !== undefined) patch.paid_on         = body.paidOn;
+  if (body.method         !== undefined) patch.method          = body.method ?? null;
+  if (body.proofId        !== undefined) patch.proof_id        = body.proofId ?? null;
+  if (body.varianceReason !== undefined) patch.variance_reason = body.varianceReason ?? null;
+  if (body.note           !== undefined) patch.note            = body.note || null;
+  if (!Object.keys(patch).length) {
+    return c.json({ error: "validation_failed", errors: ["no fields to update"] } satisfies ApiErrorResponse, 400);
+  }
+
+  const { data, error } = await supaAny
+    .from("invoice_payments")
+    .update(patch)
+    .eq("id", paymentId)
+    .eq("invoice_id", id)
+    .eq("org_id", orgId)
+    .select(PAYMENT_COLS)
+    .maybeSingle();
+  if (error) {
+    if ((error as { code?: string }).code === "23505") {
+      return c.json({ error: "conflict", detail: "this proof is already applied to this invoice" } satisfies ApiErrorResponse, 409);
+    }
+    return c.json({ error: "update_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  }
+  if (!data) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+
+  const settlement = await recomputeInvoicePaid(id, orgId);
+  const inv = await invoiceForAllocation(id, orgId);
+  if (inv) {
+    await setBillingStatus(inv.load_id, orgId, settlement?.isPaid ? "paid" : "invoiced", undefined);
+  }
+
+  const invoice = await reloadInvoice(id, orgId);
+  if (!invoice) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+  const res: UpdateInvoicePaymentResponse = {
+    payment: rowToPayment(data as PaymentRow),
+    invoice,
+  };
+  return c.json(res);
+});
+
+invoices.delete("/:id/payments/:paymentId", async (c) => {
+  const orgId     = c.get("orgId");
+  const id        = c.req.param("id");
+  const paymentId = c.req.param("paymentId");
+
+  const { data, error } = await supaAny
+    .from("invoice_payments")
+    .delete()
+    .eq("id", paymentId)
+    .eq("invoice_id", id)
+    .eq("org_id", orgId)
+    .select("id")
+    .maybeSingle();
+  if (error) {
+    console.error("[DELETE /v1/invoices/:id/payments/:paymentId] failed:", error);
+    return c.json({ error: "delete_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  }
+  if (!data) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+
+  const settlement = await recomputeInvoicePaid(id, orgId);
+  const inv = await invoiceForAllocation(id, orgId);
+  if (inv) {
+    // Reversing the last payment drops the load back to invoiced so it
+    // reappears in the accounting queue rather than sitting in Paid.
+    await setBillingStatus(inv.load_id, orgId, settlement?.isPaid ? "paid" : "invoiced", undefined);
+  }
+
+  const invoice = await reloadInvoice(id, orgId);
+  if (!invoice) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+  const res: DeleteInvoicePaymentResponse = { ok: true, invoice };
   return c.json(res);
 });
 

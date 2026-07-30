@@ -65,6 +65,16 @@ import type {
   MarkInvoicePaidRequest, MarkInvoicePaidResponse,
   UnmarkInvoicePaidRequest, UnmarkInvoicePaidResponse,
   VoidInvoiceRequest, VoidInvoiceResponse,
+  ListReceivablesQuery, ListReceivablesResponse,
+  ListPaymentProofsQuery, ListPaymentProofsResponse,
+  GetPaymentProofResponse,
+  CreatePaymentProofRequest, CreatePaymentProofResponse,
+  UpdatePaymentProofRequest, UpdatePaymentProofResponse,
+  DeletePaymentProofResponse, UploadProofAttachmentResponse,
+  ListInvoicePaymentsResponse,
+  CreateInvoicePaymentRequest, CreateInvoicePaymentResponse,
+  UpdateInvoicePaymentRequest, UpdateInvoicePaymentResponse,
+  DeleteInvoicePaymentResponse,
   ListCheckCallsResponse, CreateCheckCallRequest, CreateCheckCallResponse,
   GetEventResponse,
   ListRecentStopsResponse,
@@ -1355,6 +1365,77 @@ class RailwayClient {
   }
   voidInvoice(id: string, body: VoidInvoiceRequest = {}) {
     return this.req<VoidInvoiceResponse>('POST', `/v1/invoices/${id}/void`, body);
+  }
+
+  // ── Receivables ──────────────────────────────────────────────────
+  //
+  // Evidence ("proofs") and the money applied to invoices
+  // ("allocations") are separate resources: one remittance routinely
+  // settles a dozen invoices, and evidence can land before anyone knows
+  // which invoices it covers. See migration 20260730_receivables.sql.
+
+  /** The whole Receivables page in one call — rows, per-customer rail,
+   *  and summary tiles, with the aging math done server-side. */
+  listReceivables(query: ListReceivablesQuery = {}) {
+    const qs = new URLSearchParams();
+    if (query.customerId) qs.set('customerId', query.customerId);
+    if (query.bucket)     qs.set('bucket',     query.bucket);
+    if (query.scope)      qs.set('scope',      query.scope);
+    if (query.search)     qs.set('search',     query.search);
+    if (query.limit)      qs.set('limit',      String(query.limit));
+    const s = qs.toString();
+    return this.req<ListReceivablesResponse>('GET', `/v1/payments/receivables${s ? `?${s}` : ''}`);
+  }
+
+  listPaymentProofs(query: ListPaymentProofsQuery = {}) {
+    const qs = new URLSearchParams();
+    if (query.customerId) qs.set('customerId', query.customerId);
+    if (query.kind)       qs.set('kind',       query.kind);
+    if (query.unapplied)  qs.set('unapplied',  'true');
+    if (query.from)       qs.set('from',       query.from);
+    if (query.to)         qs.set('to',         query.to);
+    if (query.limit)      qs.set('limit',      String(query.limit));
+    const s = qs.toString();
+    return this.req<ListPaymentProofsResponse>('GET', `/v1/payments/proofs${s ? `?${s}` : ''}`);
+  }
+  getPaymentProof(id: string) {
+    return this.req<GetPaymentProofResponse>('GET', `/v1/payments/proofs/${id}`);
+  }
+  createPaymentProof(body: CreatePaymentProofRequest) {
+    return this.req<CreatePaymentProofResponse>('POST', '/v1/payments/proofs', body);
+  }
+  updatePaymentProof(id: string, body: UpdatePaymentProofRequest) {
+    return this.req<UpdatePaymentProofResponse>('PATCH', `/v1/payments/proofs/${id}`, body);
+  }
+  /** Removes the proof and its file. Allocations citing it survive with
+   *  their proof link cleared — the money still moved. */
+  deletePaymentProof(id: string) {
+    return this.req<DeletePaymentProofResponse>('DELETE', `/v1/payments/proofs/${id}`);
+  }
+  /** Attach (or replace) the PDF/image. `file` field, multipart. */
+  uploadProofAttachment(id: string, file: File) {
+    const fd = new FormData();
+    fd.append('file', file);
+    return this.req<UploadProofAttachmentResponse>('POST', `/v1/payments/proofs/${id}/attachment`, fd);
+  }
+  proofAttachmentUrl(id: string) {
+    return this.req<{ url: string }>('GET', `/v1/payments/proofs/${id}/attachment`);
+  }
+
+  listInvoicePayments(invoiceId: string) {
+    return this.req<ListInvoicePaymentsResponse>('GET', `/v1/invoices/${invoiceId}/payments`);
+  }
+  /** Apply money to an invoice. Omit `amount` to settle the full
+   *  outstanding balance. Returns the recomputed invoice. */
+  createInvoicePayment(invoiceId: string, body: CreateInvoicePaymentRequest = {}) {
+    return this.req<CreateInvoicePaymentResponse>('POST', `/v1/invoices/${invoiceId}/payments`, body);
+  }
+  updateInvoicePayment(invoiceId: string, paymentId: string, body: UpdateInvoicePaymentRequest) {
+    return this.req<UpdateInvoicePaymentResponse>('PATCH', `/v1/invoices/${invoiceId}/payments/${paymentId}`, body);
+  }
+  /** Reverse one payment. The invoice recomputes and may leave `paid`. */
+  deleteInvoicePayment(invoiceId: string, paymentId: string) {
+    return this.req<DeleteInvoicePaymentResponse>('DELETE', `/v1/invoices/${invoiceId}/payments/${paymentId}`);
   }
   /**
    * Void the existing draft + create a fresh invoice with current load

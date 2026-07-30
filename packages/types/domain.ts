@@ -1339,6 +1339,176 @@ export interface Invoice {
   updatedAt:      string;
 }
 
+// ── Receivables: proofs + allocations ───────────────────────────────────
+//
+// Two records, deliberately separate — see migration
+// 20260730_receivables.sql for the full rationale.
+//
+//   PaymentProof   — evidence that money moved (remittance advice, bank
+//                    line, check). Stands alone; one proof routinely
+//                    covers many invoices.
+//   InvoicePayment — money applied to ONE invoice, optionally citing a
+//                    proof. The ledger. Per-invoice amounts are entered,
+//                    never prorated off the proof total.
+//
+// Invoice.paidAmount / paidAt are the recomputed summary of a payment's
+// allocations, not an independent source of truth.
+
+/** What kind of artifact backs the payment claim. */
+export type PaymentProofKind = 'remittance' | 'bank_transaction' | 'check' | 'other';
+
+/** How the proof entered FleetCal. `manual`/`upload` are operator
+ *  actions; `csv`/`email`/`api` are reserved for ingest adapters, which
+ *  must set `externalId` so re-runs are idempotent. */
+export type PaymentProofSource = 'manual' | 'upload' | 'csv' | 'email' | 'api';
+
+export type PaymentMethod = 'ach' | 'check' | 'wire' | 'factoring' | 'other';
+
+/** Why an applied amount differs from the invoice total. Classified at
+ *  allocation time so a deduction lands on the load it was taken against,
+ *  rather than being smeared across every invoice in the payment. */
+export type PaymentVarianceReason =
+  | 'quick_pay'    // broker's early-payment discount
+  | 'short_pay'    // paid less, no reason given
+  | 'deduction'    // chargeback, lumper, detention dispute
+  | 'overpayment'  // paid more than billed
+  | 'other';
+
+export interface PaymentProof {
+  id:           string;
+  orgId:        string;
+
+  kind:         PaymentProofKind;
+  source:       PaymentProofSource;
+
+  /** Resolved payer. Absent when evidence arrived before anyone
+   *  identified who sent it. */
+  customerId?:  string;
+  /** Payer name verbatim off the ACH descriptor or remittance header —
+   *  preserved even after customerId is resolved. */
+  payerRaw?:    string;
+
+  occurredOn:   string;            // YYYY-MM-DD
+  /** Total on the proof itself, which may exceed the sum applied. */
+  amount:       number;
+  reference?:   string;            // check no. / ACH trace / bank txn id
+
+  // Attachment (private bucket, signed-URL reads).
+  storagePath?: string;
+  fileName?:    string;
+  mimeType?:    string;
+  sizeBytes?:   number;
+
+  note?:        string;
+  externalId?:  string;
+
+  /** Sum of this proof's allocations. Server-computed on read; lets the
+   *  UI flag a proof that isn't fully applied yet. */
+  appliedAmount?: number;
+
+  createdAt:    string;
+  updatedAt:    string;
+  createdBy:    string;
+}
+
+export interface InvoicePayment {
+  id:              string;
+  orgId:           string;
+  invoiceId:       string;
+  /** Null when the payment was recorded without evidence. Attachable
+   *  later without touching the allocation. */
+  proofId?:        string;
+
+  /** Applied to this invoice specifically. Negative for a clawback. */
+  amount:          number;
+  paidOn:          string;         // YYYY-MM-DD
+  method?:         PaymentMethod;
+  varianceReason?: PaymentVarianceReason;
+  note?:           string;
+
+  createdAt:       string;
+  updatedAt:       string;
+  createdBy:       string;
+
+  /** Denormalized proof summary, populated when the API expands it, so
+   *  the invoice drawer can render evidence without a second fetch. */
+  proof?:          PaymentProof;
+}
+
+/** An invoice plus its settlement state — one Receivables table row.
+ *
+ *  Deliberately NOT `{ invoice: Invoice }`: Invoice carries the full
+ *  rendered `snapshot` jsonb, and shipping that for every row would make
+ *  a 400-invoice AR list several megabytes. This is the flat projection
+ *  the table actually renders; open the invoice detail for the rest.
+ *
+ *  `balance` and `agingDays` are computed server-side so every surface
+ *  buckets identically. */
+export interface ReceivableInvoice {
+  id:            string;
+  invoiceNumber: string;
+  status:        InvoiceStatus;
+  loadId:        string;
+  /** loads.internal_load_id — what the operator calls the load. */
+  loadNumber?:   string;
+  customerId?:   string;
+  customerName?: string;
+
+  total:         number;
+  issuedAt:      string;
+  dueAt?:        string;
+
+  /** Sum of allocations. Mirrors invoices.paid_amount. */
+  paidAmount:    number;
+  balance:       number;
+  /** Days past due. Negative = not yet due. Null when the invoice has no
+   *  due date to measure against. */
+  agingDays:     number | null;
+
+  paymentCount:  number;
+  lastPaidOn?:   string;
+  /** False when no allocation cites a proof — someone marked it paid on
+   *  trust and evidence was never attached. Surfaced in the table so
+   *  unbacked claims are visible rather than indistinguishable. */
+  hasProof:      boolean;
+}
+
+/** Standard AR aging buckets. `current` covers anything not yet due. */
+export type AgingBucket = 'current' | 'd1_30' | 'd31_60' | 'd61_plus';
+
+export const AGING_BUCKETS: readonly AgingBucket[] = [
+  'current', 'd1_30', 'd31_60', 'd61_plus',
+] as const;
+
+export const AGING_BUCKET_LABEL: Record<AgingBucket, string> = {
+  current:  'Current',
+  d1_30:    '1–30 days',
+  d31_60:   '31–60 days',
+  d61_plus: '61+ days',
+};
+
+/** Single source of truth for bucketing. `agingDays` is days PAST due,
+ *  so <= 0 means not yet due. A null (no due date) counts as current —
+ *  we don't dun an invoice we never set terms on. */
+export function agingBucketFor(agingDays: number | null): AgingBucket {
+  if (agingDays === null || agingDays <= 0) return 'current';
+  if (agingDays <= 30) return 'd1_30';
+  if (agingDays <= 60) return 'd31_60';
+  return 'd61_plus';
+}
+
+/** Per-customer rollup for the Receivables left rail. */
+export interface ReceivableCustomerSummary {
+  customerId:   string | null;      // null = invoices with no customer set
+  customerName: string;
+  openCount:    number;
+  openBalance:  number;
+  overdueCount: number;
+  overdueBalance: number;
+  /** Most recent allocation date across this customer's invoices. */
+  lastPaidOn?:  string;
+}
+
 // ── Fuel report ─────────────────────────────────────────────────────────
 //
 // Driver-submitted record of a fuel purchase. Authored from the driver
