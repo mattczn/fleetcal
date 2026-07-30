@@ -206,7 +206,7 @@ const FINALIZED_HINT = 'Locked — driver pay has been finalized for this week. 
  * primary answer to "is this driver paid fairly for what they hauled",
  * which on a relay is pay ÷ that leg's share of the price.
  */
-const pctChip = (p: number | null, basis: string, emphasis = false) => p === null ? null : (
+const pctChip = (p: number | null, basis: string, emphasis = false, detail?: string) => p === null ? null : (
   <span className="px-1.5 py-0.5 rounded-lg normal-case tracking-normal font-semibold whitespace-nowrap"
     style={{
       fontSize: 10,
@@ -214,7 +214,7 @@ const pctChip = (p: number | null, basis: string, emphasis = false) => p === nul
       color:      emphasis ? '#1d4ed8' : 'var(--gc-text-3)',
       border:     `1px solid ${emphasis ? '#bfdbfe' : 'var(--gc-border-light)'}`,
     }}
-    title={`Driver pay is ${fmtPct(p)}% ${basis}`}>
+    title={`Driver pay is ${fmtPct(p)}% ${basis}${detail ? ` — ${detail}` : ''}`}>
     {fmtPct(p)}% <span style={{ fontWeight: 500, opacity: 0.85 }}>{basis}</span>
   </span>
 );
@@ -259,7 +259,14 @@ function LegCard({
   const showReset  = !disabled && !finalized.finalized && autoForLeg != null && !isAutoPay;
   const payLabelSuffix = (
     <span className="flex items-center gap-1 flex-wrap">
-      {pctChip(pctOfLeg, isRelay ? PAY_BASIS_LABEL.leg : PAY_BASIS_LABEL.load, isRelay)}
+      {pctChip(
+        pctOfLeg,
+        isRelay ? PAY_BASIS_LABEL.leg : PAY_BASIS_LABEL.load,
+        isRelay,
+        isRelay && legRevenue != null && legRevenue > 0
+          ? `this leg is worth $${legRevenue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${shareOfMiles == null ? ' (even split — leg miles unknown)' : ''}`
+          : undefined,
+      )}
       {isRelay && pctOfLoad !== null && pctChip(pctOfLoad, PAY_BASIS_LABEL.load)}
       {showReset && (
         <button type="button"
@@ -394,17 +401,10 @@ function LegCard({
         </Field>
         {canViewDriverPay && (
           <Field label="Driver Pay" labelSuffix={payLabelSuffix}>
-            {/* Name the denominator in plain text too — the chip says
-                "of leg", this says what the leg is worth. */}
-            {isRelay && legRevenue != null && legRevenue > 0 && (
-              <div className="text-[10px] mb-1" style={{ color: 'var(--gc-text-3)' }}>
-                Leg share of load price:{' '}
-                <strong style={{ color: '#5b21b6' }}>
-                  ${legRevenue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                </strong>
-                {shareOfMiles == null ? ' (even split — leg miles unknown)' : ''}
-              </div>
-            )}
+            {/* The leg's dollar share lives on the "% of leg" chip's
+                tooltip rather than its own line — an extra row here made
+                the pay column taller than driver/truck and broke the
+                single-row layout. */}
             <PayInput
               value={leg.pay}
               onChange={v => onChangeLeg(leg.key, { pay: v })}
