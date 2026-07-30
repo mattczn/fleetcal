@@ -31,7 +31,7 @@ import { useRouter } from 'next/navigation';
 import {
   HandCoins, Wallet, CircleCheckBig, Clock, OctagonAlert, Inbox,
   ChevronRight, ChevronDown, ChevronLeft, MoreVertical, Search,
-  ArrowDownWideNarrow, ArrowRightLeft, Download, Mail, Info, Loader2,
+  ArrowDownWideNarrow, ArrowRightLeft, Download, Mail, Info, Loader2, Check,
 } from 'lucide-react';
 import RequireCap from '@/components/auth/RequireCap';
 import AppShell from '@/components/nav/AppShell';
@@ -42,6 +42,7 @@ import { CopyableCell, CopyableLoadNum } from '@/components/queue/QueueTablePrim
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { railway } from '@/lib/railway';
 import RecordPaymentPanel from './RecordPaymentPanel';
+import BulkPaymentPanel from './BulkPaymentPanel';
 import type {
   ReceivableInvoice, ReceivableCustomerSummary, ReceivablesTotals, AgingBucket,
 } from '@fleetcal/types';
@@ -186,6 +187,8 @@ function ReceivablesPageInner() {
   const [tilesCompact, setTilesCompact] = useState(false);
   const [sortOpen,   setSortOpen]   = useState(false);
   const [active,     setActive]     = useState<ReceivableInvoice | null>(null);
+  const [selected,   setSelected]   = useState<Set<string>>(new Set());
+  const [bulkOpen,   setBulkOpen]   = useState(false);
 
   // EventModal keys on calendar events, so opening a load means making
   // sure its legs are in the calendar store first. Same fetch-on-demand
@@ -613,12 +616,21 @@ function ReceivablesPageInner() {
               const showAll   = showAllFor === key;
               const shown     = showAll ? all : all.slice(0, 5);
               const notDue    = all.filter(i => (i.agingDays ?? -1) <= 0).length;
+              // Only what's visible AND still owed can be batch-marked.
+              const payableShown = shown.filter(i => i.balance > 0.005);
 
               return (
                 <div key={key} style={expanded ? { background: '#f8fbff', boxShadow: 'inset 3px 0 0 #1a73e8' } : undefined}>
                   {/* customer row */}
                   <div
-                    onClick={() => { setExpandedId(expanded ? null : key); setShowAllFor(null); }}
+                    onClick={() => {
+                      setExpandedId(expanded ? null : key);
+                      setShowAllFor(null);
+                      // Only one customer is ever expanded, so clearing
+                      // here is what keeps a payment batch to a single
+                      // broker — no cross-customer guard needed.
+                      setSelected(new Set());
+                    }}
                     className="cursor-pointer"
                     style={{
                       display: 'grid', gridTemplateColumns: grid, gap: 12, padding: '0 14px',
@@ -645,7 +657,6 @@ function ReceivablesPageInner() {
                       {(
                         <div className="truncate" style={{ fontSize: 11, fontWeight: 600, color: 'var(--gc-text-3)' }}>
                           {c.openCount} open · {c.overdueBalance > 0 ? `${money0(c.overdueBalance)} past due` : 'nothing past due'}
-                          {c.termsDays ? ` · net ${c.termsDays}` : ''}
                         </div>
                       )}
                     </div>
@@ -657,10 +668,9 @@ function ReceivablesPageInner() {
                           <span key={k} style={{ width: pct(bb[k]), background: SEG_COLOR[k], flex: 'none' }} />
                         ))}
                       </div>
-                      {(
+                      {c.avgDaysToPay != null && (
                         <div className="truncate" style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--gc-text-3)' }}>
-                          {c.avgDaysToPay != null ? `pays in ${c.avgDaysToPay}d on average` : 'no payment history yet'}
-                          {c.termsDays ? ` · terms net ${c.termsDays}` : ''}
+                          pays in {c.avgDaysToPay}d on average
                         </div>
                       )}
                     </div>
@@ -707,7 +717,14 @@ function ReceivablesPageInner() {
                           fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase',
                           letterSpacing: '.05em', color: 'var(--gc-text-3)',
                         }}>
-                          <span />
+                          <span onClick={e => e.stopPropagation()}>
+                            <input type="checkbox"
+                              checked={payableShown.length > 0 && payableShown.every(i => selected.has(i.id))}
+                              onChange={() => setSelected(prev =>
+                                prev.size >= payableShown.length ? new Set() : new Set(payableShown.map(i => i.id)))}
+                              style={{ width: 15, height: 15, cursor: 'pointer' }}
+                              title="Select all payable" />
+                          </span>
                           <span style={{ textAlign: 'right' }}>Age</span>
                           <span>Inv #</span>
                           <span>Load #</span>
@@ -734,12 +751,23 @@ function ReceivablesPageInner() {
                                 height: 40, alignItems: 'center', fontSize: 12.5,
                                 borderBottom: '1px solid #f1f3f4',
                                 boxShadow: stripe === 'transparent' ? undefined : `inset 3px 0 0 ${stripe}`,
+                                background: selected.has(inv.id) ? 'var(--gc-blue-light, #e8f0fe)' : undefined,
                               }}
-                              onMouseOver={e => { e.currentTarget.style.background = 'var(--gc-hover)'; }}
-                              onMouseOut={e => { e.currentTarget.style.background = 'transparent'; }}>
-                              <span style={{
-                                width: 15, height: 15, border: '1.5px solid var(--gc-border)', borderRadius: 3,
-                              }} />
+                              onMouseOver={e => { if (!selected.has(inv.id)) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+                              onMouseOut={e => { e.currentTarget.style.background = selected.has(inv.id) ? 'var(--gc-blue-light, #e8f0fe)' : 'transparent'; }}>
+                              <span onClick={e => e.stopPropagation()}>
+                                {inv.balance > 0.005 ? (
+                                  <input type="checkbox" checked={selected.has(inv.id)}
+                                    onChange={() => setSelected(prev => {
+                                      const next = new Set(prev);
+                                      if (next.has(inv.id)) next.delete(inv.id); else next.add(inv.id);
+                                      return next;
+                                    })}
+                                    style={{ width: 15, height: 15, cursor: 'pointer' }} />
+                                ) : (
+                                  <span style={{ display: 'block', width: 15, height: 15 }} />
+                                )}
+                              </span>
                               {/* Age leads the row — how late it is, is the
                                   reason anyone is reading this table. */}
                               <span className="tabular-nums" style={{ textAlign: 'right', fontWeight: 800, color: ageColor(age) }}>
@@ -794,19 +822,23 @@ function ReceivablesPageInner() {
                             </button>
                           )}
                           <div style={{ flex: 1 }} />
+                          {selected.size > 0 && (
+                            <button onClick={e => { e.stopPropagation(); setBulkOpen(true); }}
+                              className="inline-flex items-center gap-1.5"
+                              style={{
+                                height: 28, padding: '0 10px', borderRadius: 8,
+                                background: '#dcfce7', color: '#15803d', border: '1px solid #86efac',
+                                fontSize: 11.5, fontWeight: 700,
+                              }}>
+                              <Check size={12} /> Mark {selected.size} paid
+                            </button>
+                          )}
                           <span className="inline-flex items-center gap-1.5" style={{
                             height: 28, padding: '0 10px', border: '1px solid var(--gc-border)',
                             borderRadius: 8, fontSize: 11.5, fontWeight: 700, color: 'var(--gc-text-2)',
                             opacity: 0.55, cursor: 'default',
                           }}>
                             <Mail size={12} /> Statement
-                          </span>
-                          <span className="inline-flex items-center gap-1.5" style={{
-                            height: 28, padding: '0 10px', borderRadius: 8,
-                            background: '#1a73e8', color: '#fff', fontSize: 11.5, fontWeight: 700,
-                            opacity: 0.55, cursor: 'default',
-                          }}>
-                            <ArrowRightLeft size={12} /> Apply a payment
                           </span>
                         </div>
                       </div>
@@ -846,6 +878,22 @@ function ReceivablesPageInner() {
       {/* Recording a payment still lives here: the redesign's "Apply a
           payment" workspace isn't built, so an invoice row opens the
           existing panel rather than leaving no way to record money. */}
+      {bulkOpen && (() => {
+        const key  = expandedId ?? '';
+        const rowsForKey = (invoicesByCustomer.get(key) ?? []).filter(i => selected.has(i.id));
+        const cust = customers.find(c => (c.customerId ?? NO_CUSTOMER) === key);
+        if (!rowsForKey.length) return null;
+        return (
+          <BulkPaymentPanel
+            invoices={rowsForKey}
+            customerId={cust?.customerId ?? undefined}
+            customerName={cust?.customerName ?? 'Customer'}
+            onSaved={() => { setSelected(new Set()); void load(); }}
+            onClose={() => setBulkOpen(false)}
+          />
+        );
+      })()}
+
       {active && (
         <RecordPaymentPanel
           row={active}

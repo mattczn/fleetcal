@@ -21,14 +21,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
-  HandCoins, Mail, Phone, FileText, Truck, ArrowRightLeft, Download, ChevronLeft,
-  ExternalLink, MapPin, StickyNote, UserRound, Check, Loader2,
+  HandCoins, Mail, Phone, Truck, ArrowRightLeft, Download, ChevronLeft,
+  ExternalLink, MapPin, StickyNote, UserRound, Check,
 } from 'lucide-react';
 import RequireCap from '@/components/auth/RequireCap';
 import AppShell from '@/components/nav/AppShell';
 import DataLoader from '@/components/DataLoader';
 import EventModal from '@/components/calendar/EventModal';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
+import BulkPaymentPanel from '../BulkPaymentPanel';
 import Breadcrumbs from '@/app/admin/Breadcrumbs';
 import Tooltip from '@/components/ui/Tooltip';
 import { CopyableCell, CopyableLoadNum, StatusPill } from '@/components/queue/QueueTablePrimitives';
@@ -89,7 +90,12 @@ function CustomerViewInner() {
   const [openInvoiceId, setOpenInvoiceId] = useState<string | null>(null);
   const [profileOpen,   setProfileOpen]   = useState(false);
   const [selected,      setSelected]      = useState<Set<string>>(new Set());
-  const [markBusy,      setMarkBusy]      = useState(false);
+  const [bulkOpen,      setBulkOpen]      = useState(false);
+  // Scrolling the invoice list collapses the blocks above it. Hysteresis
+  // (40 down / 8 up) rather than a single threshold, so a row sitting
+  // near the boundary doesn't flicker the whole header on every wheel
+  // tick. Same treatment as the ledger's bucket tiles.
+  const [compact,       setCompact]       = useState(false);
 
   const load = useCallback(async () => {
     if (!customerId) return;
@@ -151,25 +157,10 @@ function CustomerViewInner() {
     setSelected(prev => (prev.size >= payable.length ? new Set() : new Set(payable.map(i => i.id))));
   }, [payable]);
 
-  /** Walks the selection one at a time. Sequential rather than parallel
-   *  because each call recomputes its invoice server-side; a failure on
-   *  one shouldn't abandon the rest, so each is caught individually. */
-  async function markSelectedPaid() {
-    if (!selected.size || markBusy) return;
-    setMarkBusy(true);
-    const failed: string[] = [];
-    try {
-      for (const inv of payable.filter(i => selected.has(i.id))) {
-        try { await railway.markInvoicePaid(inv.id, {}); }
-        catch (e) { failed.push(inv.invoiceNumber); console.warn('[receivables] markPaid failed', inv.invoiceNumber, e); }
-      }
-      setSelected(new Set());
-      await load();
-      setErr(failed.length ? `Could not mark ${failed.length} invoice(s) paid: ${failed.join(', ')}` : null);
-    } finally {
-      setMarkBusy(false);
-    }
-  }
+  const selectedInvoices = useMemo(
+    () => payable.filter(i => selected.has(i.id)),
+    [payable, selected],
+  );
 
   // EventModal keys on calendar events, so make sure the load's legs are
   // in the store before opening. Same fallback Billing uses.
@@ -251,16 +242,18 @@ function CustomerViewInner() {
         )}
 
         {/* ── Identity ─────────────────────────────────────────────── */}
-        <div style={{ flex: 'none', ...CARD, padding: '14px 16px' }} className="flex items-center gap-3.5">
+        <div style={{ flex: 'none', ...CARD, padding: compact ? '9px 16px' : '14px 16px', transition: 'padding 140ms ease' }}
+             className="flex items-center gap-3.5">
           <span style={{
-            width: 44, height: 44, borderRadius: 11, flex: 'none',
+            width: compact ? 30 : 44, height: compact ? 30 : 44, borderRadius: 11, flex: 'none',
+            transition: 'width 140ms ease, height 140ms ease',
             background: 'var(--gc-blue-light, #e8f0fe)', display: 'grid', placeItems: 'center',
-            fontSize: 15, fontWeight: 800, color: 'var(--gc-blue-text)',
+            fontSize: compact ? 12 : 15, fontWeight: 800, color: 'var(--gc-blue-text)',
           }}>{initials || '—'}</span>
 
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="truncate" style={{ fontSize: 20, fontWeight: 800, letterSpacing: '-0.3px' }}>
+              <span className="truncate" style={{ fontSize: compact ? 15 : 20, fontWeight: 800, letterSpacing: '-0.3px' }}>
                 {data?.customerName ?? (loading ? 'Loading…' : 'Customer')}
               </span>
               {(summary?.overdueCount ?? 0) > 0 && (
@@ -270,8 +263,8 @@ function CustomerViewInner() {
             </div>
             <div className="flex items-center flex-wrap" style={{
               gap: 14, marginTop: 4, fontSize: 11.5, fontWeight: 600, color: 'var(--gc-text-3)',
+              display: compact ? 'none' : undefined,
             }}>
-              {summary?.termsDays != null && <Meta icon={<FileText size={12} />}>net {summary.termsDays}</Meta>}
               {data?.invoiceEmail && <Meta icon={<Mail size={12} />}>{data.invoiceEmail}</Meta>}
               {data?.contactPhone && <Meta icon={<Phone size={12} />}>{data.contactPhone}</Meta>}
               {data?.lifetimeLoads != null && (
@@ -297,13 +290,17 @@ function CustomerViewInner() {
               fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase',
               letterSpacing: '.08em', color: 'var(--gc-text-3)',
             }}>Open balance</div>
-            <div className="tabular-nums" style={{ fontSize: 26, fontWeight: 800, letterSpacing: '-0.6px' }}>
+            <div className="tabular-nums" style={{
+              fontSize: compact ? 18 : 26, fontWeight: 800, letterSpacing: '-0.6px',
+              transition: 'font-size 140ms ease',
+            }}>
               {money0(balance)}
             </div>
           </div>
         </div>
 
         {/* ── Visuals ──────────────────────────────────────────────── */}
+        {!compact && (
         <div className="flex" style={{ flex: 'none', gap: 12 }}>
 
           {/* A — aging breakdown */}
@@ -396,11 +393,13 @@ function CustomerViewInner() {
             </div>
           </div>
         </div>
+        )}
 
         {/* ── How to bill them ─────────────────────────────────────── */}
         {/* Read-only mirror of the Customer record — BrokerProfileModal
             is the edit surface, reachable from View customer above, so
             this doesn't duplicate a form. */}
+        {!compact && (
         <div style={{ flex: 'none', ...CARD, padding: '12px 16px' }}>
           <div className="flex items-start flex-wrap" style={{ gap: 24 }}>
             <BillingField
@@ -443,6 +442,7 @@ function CustomerViewInner() {
             </BillingField>
           </div>
         </div>
+        )}
 
         {/* ── Invoices ─────────────────────────────────────────────── */}
         <div className="flex flex-col" style={{ ...CARD, flex: 1, minHeight: 0, overflow: 'hidden' }}>
@@ -509,7 +509,12 @@ function CustomerViewInner() {
           </div>
 
           {/* Every row renders — no pagination on one broker's book. */}
-          <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+          <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}
+               onScroll={e => {
+                 const y = e.currentTarget.scrollTop;
+                 if (y > 40 && !compact) setCompact(true);
+                 else if (y < 8 && compact) setCompact(false);
+               }}>
             {loading ? (
               <div style={{ padding: 24, fontSize: 12.5, color: 'var(--gc-text-3)' }}>Loading…</div>
             ) : invoices.length === 0 ? (
@@ -563,10 +568,10 @@ function CustomerViewInner() {
               {collected > 0 ? ` · ${money0(collected)} collected against them so far` : ''}
             </span>
             {selected.size > 0 && (
-              <button onClick={() => void markSelectedPaid()} disabled={markBusy}
-                className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors disabled:opacity-60 inline-flex items-center gap-1.5"
+              <button onClick={() => setBulkOpen(true)}
+                className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors inline-flex items-center gap-1.5"
                 style={{ background: '#dcfce7', color: '#15803d', border: '1px solid #86efac', marginLeft: 14 }}>
-                {markBusy ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+                <Check size={12} />
                 Mark {selected.size} paid
               </button>
             )}
@@ -591,6 +596,15 @@ function CustomerViewInner() {
       <EventModal />
       {openInvoiceId && (
         <InvoiceDetailModal invoiceId={openInvoiceId} onClose={() => setOpenInvoiceId(null)} />
+      )}
+      {bulkOpen && selectedInvoices.length > 0 && (
+        <BulkPaymentPanel
+          invoices={selectedInvoices}
+          customerId={data?.customerId ?? undefined}
+          customerName={data?.customerName ?? 'Customer'}
+          onSaved={() => { setSelected(new Set()); void load(); }}
+          onClose={() => setBulkOpen(false)}
+        />
       )}
       {profileOpen && data?.customerId && (
         <BrokerProfileModal initialBrokerId={data.customerId}
