@@ -251,7 +251,7 @@ export default function RecordPaymentPanel({ row, onSaved, onClose }: RecordPaym
             </div>
             <div className="text-xs mt-0.5 truncate" style={{ color: 'var(--gc-text-3)' }}>
               {row.customerName ?? 'No customer'}
-              {row.loadNumber ? ` · Load ${row.loadNumber}` : ''}
+              {row.loadNum ? ` · Load ${row.loadNum}` : ''}
             </div>
           </div>
           <button onClick={onClose} className="p-1 rounded shrink-0"

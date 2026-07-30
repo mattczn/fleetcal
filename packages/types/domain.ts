@@ -1449,8 +1449,19 @@ export interface ReceivableInvoice {
   invoiceNumber: string;
   status:        InvoiceStatus;
   loadId:        string;
-  /** loads.internal_load_id — what the operator calls the load. */
-  loadNumber?:   string;
+
+  /** FleetCal's own load sequence. invoiceNumber is derived from this,
+   *  so the two are normally the same string — don't render both. */
+  internalLoadId?: number;
+  /** The BROKER's load number (loads.load_num) — the identifier that
+   *  gets pasted into a broker portal. This is what "Load #" means to an
+   *  operator, and it is NOT internalLoadId. */
+  loadNum?:      string;
+  /** Pickup leg's event title — the human label for the load. */
+  title?:        string;
+  /** Event id of the pickup leg, for opening the load in EventModal. */
+  pickupEventId?: string;
+
   customerId?:   string;
   customerName?: string;
 
@@ -1473,18 +1484,22 @@ export interface ReceivableInvoice {
   hasProof:      boolean;
 }
 
-/** Standard AR aging buckets. `current` covers anything not yet due. */
-export type AgingBucket = 'current' | 'd1_30' | 'd31_60' | 'd61_plus';
+/** AR aging buckets. `current` covers anything not yet due.
+ *
+ *  Three buckets, not the textbook four: 31–60 and 61+ were collapsed
+ *  into a single `d31_plus` because the operational decision is the
+ *  same either way — past a month overdue, someone picks up the phone.
+ *  Splitting it bought a column of precision nobody acted on. */
+export type AgingBucket = 'current' | 'd1_30' | 'd31_plus';
 
 export const AGING_BUCKETS: readonly AgingBucket[] = [
-  'current', 'd1_30', 'd31_60', 'd61_plus',
+  'current', 'd1_30', 'd31_plus',
 ] as const;
 
 export const AGING_BUCKET_LABEL: Record<AgingBucket, string> = {
-  current:  'Current',
-  d1_30:    '1–30 days',
-  d31_60:   '31–60 days',
-  d61_plus: '61+ days',
+  current:   'Current',
+  d1_30:     '1–30 days',
+  d31_plus:  '31+ days',
 };
 
 /** Single source of truth for bucketing. `agingDays` is days PAST due,
@@ -1493,8 +1508,7 @@ export const AGING_BUCKET_LABEL: Record<AgingBucket, string> = {
 export function agingBucketFor(agingDays: number | null): AgingBucket {
   if (agingDays === null || agingDays <= 0) return 'current';
   if (agingDays <= 30) return 'd1_30';
-  if (agingDays <= 60) return 'd31_60';
-  return 'd61_plus';
+  return 'd31_plus';
 }
 
 /** Per-customer rollup — one row of the Receivables ledger.

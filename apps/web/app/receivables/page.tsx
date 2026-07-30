@@ -10,7 +10,7 @@
  * a week across 100+ brokers, a per-invoice table is 640 open rows and
  * unreadable; the same book collapses to ~112 customer rows, each
  * carrying its own aging mix, and any row opens into its invoices in
- * place. A density control trades row height for per-row detail.
+ * place.
  *
  * One fetch, filtered client-side. `/v1/payments/receivables` is called
  * with `scope` only — never with bucket/customer/search — so the tiles
@@ -20,23 +20,24 @@
  * needs no round trip: their invoices are already here.
  *
  * Why this doesn't use OpsTable: the ledger needs master-detail
- * expansion and a third density tier (34/46/62px). OpsTable has neither
- * — it offers compact/comfortable at fixed 36/52px and no row
- * expansion — and teaching it both would change a primitive that
- * Billing, Paperwork, Equipment and Payroll all depend on. The grid
- * below is deliberately local to this page.
+ * expansion, which OpsTable has no notion of, and teaching it would
+ * change a primitive that Billing, Paperwork, Equipment and Payroll all
+ * depend on. The grid below is deliberately local to this page.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import React from 'react';
 import {
-  HandCoins, Wallet, CircleCheckBig, Clock, AlarmClock, OctagonAlert, Inbox,
+  HandCoins, Wallet, CircleCheckBig, Clock, OctagonAlert, Inbox,
   ChevronRight, ChevronDown, ChevronLeft, MoreVertical, Search,
   ArrowDownWideNarrow, ArrowRightLeft, Download, Mail, Info, Loader2,
 } from 'lucide-react';
 import RequireCap from '@/components/auth/RequireCap';
 import AppShell from '@/components/nav/AppShell';
+import DataLoader from '@/components/DataLoader';
 import Tooltip from '@/components/ui/Tooltip';
+import { CopyableCell, CopyableLoadNum } from '@/components/queue/QueueTablePrimitives';
+import { useCalendarStore } from '@/store/useCalendarStore';
 import { railway } from '@/lib/railway';
 import RecordPaymentPanel from './RecordPaymentPanel';
 import type {
@@ -49,9 +50,6 @@ const money0 = (n: number) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);
 const money2 = (n: number) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
-/** Abbreviated for the aging-mix chips, where four numbers share ~210px. */
-const kmoney = (n: number) => (n >= 1000 ? `$${Math.round(n / 1000)}K` : money0(n));
-
 const shortDate = (iso: string) =>
   new Date(iso).toLocaleDateString([], { month: 'short', day: '2-digit', year: '2-digit' });
 
@@ -89,18 +87,15 @@ const TILES: TileDef[] = [
     subtitle: 'Not due yet', formula: 'Balance owing where the due date has not passed. Invoices with no due date count here — we do not chase terms we never set.' },
   { key: 'd1_30',    label: '1–30 days',  icon: Clock,          tint: '#b06000', tintLight: '#fef7e0', tintText: '#b06000',
     subtitle: 'Just past terms', formula: '1 to 30 days past the due date. Usually a broker on their normal pay cycle rather than a problem.' },
-  { key: 'd31_60',   label: '31–60 days', icon: AlarmClock,     tint: '#c5221f', tintLight: '#fce8e6', tintText: '#c5221f',
-    subtitle: 'Chase these', formula: '31 to 60 days past due. Past any normal pay cycle — worth a call.' },
-  { key: 'd61_plus', label: '61+ days',   icon: OctagonAlert,   tint: '#c5221f', tintLight: '#fce8e6', tintText: '#c5221f',
-    subtitle: 'At risk', formula: 'More than 60 days past due. Collection risk.', redCount: true },
+  { key: 'd31_plus', label: '31+ days',   icon: OctagonAlert,   tint: '#c5221f', tintLight: '#fce8e6', tintText: '#c5221f',
+    subtitle: 'Over a month late', formula: 'More than 30 days past the due date. Past any normal broker pay cycle — someone needs to pick up the phone.', redCount: true },
   { key: 'to_apply', label: 'To apply',   icon: Inbox,          tint: '#1a73e8', tintLight: '#e8f0fe', tintText: '#1558d6',
     subtitle: 'Money not yet matched', formula: 'Payment evidence recorded but not fully applied to invoices — remittances and bank lines still to be matched.', sep: true },
 ];
 
-// ── density ───────────────────────────────────────────────────────────
+// ── row metrics ───────────────────────────────────────────────────────
 
-type Density = 'compact' | 'comfortable' | 'detail';
-type SortBy  = 'pastDue' | 'balance' | 'oldest' | 'name';
+type SortBy = 'pastDue' | 'balance' | 'oldest' | 'name';
 
 const SORT_LABEL: Record<SortBy, string> = {
   pastDue: 'Past due $',
@@ -109,39 +104,35 @@ const SORT_LABEL: Record<SortBy, string> = {
   name:    'A–Z',
 };
 
-const DENSITY: Record<Density, {
-  rowH: number; barH: number; nameSize: number; balSize: number;
-  showSub: boolean; showBehaviour: boolean; showAmounts: boolean; pageSize: number;
-}> = {
-  compact:     { rowH: 34, barH: 6,  nameSize: 12.5, balSize: 13, showSub: false, showBehaviour: false, showAmounts: false, pageSize: 22 },
-  comfortable: { rowH: 46, barH: 8,  nameSize: 13.5, balSize: 15, showSub: true,  showBehaviour: false, showAmounts: false, pageSize: 15 },
-  detail:      { rowH: 62, barH: 10, nameSize: 13.5, balSize: 15, showSub: true,  showBehaviour: true,  showAmounts: true,  pageSize: 10 },
-};
+/** One density. The prototype offered Compact / Comfortable / Detail;
+ *  in practice only this middle tier earned its keep, so the segmented
+ *  control is gone and its numbers are inlined here. The behaviour line
+ *  ("pays in 41d on average") was Detail-only and rides along, since
+ *  without a Detail tier there is nowhere else for it to live and it's
+ *  the most useful thing the row knows about a broker. */
+const ROW_H     = 46;
+const BAR_H     = 8;
+const NAME_SIZE = 13.5;
+const BAL_SIZE  = 15;
+const PAGE_SIZE = 15;
 
 /** Aging ramp — cool to hot, left to right. */
 const SEG_COLOR: Record<AgingBucket, string> = {
-  current: '#c6dafc', d1_30: '#fddc9a', d31_60: '#f6aea9', d61_plus: '#c5221f',
+  current: '#c6dafc', d1_30: '#fddc9a', d31_plus: '#c5221f',
 };
-const CHIP_STYLE: Record<AgingBucket, { bg: string; fg: string; weight: number }> = {
-  current:  { bg: '#f1f3f4', fg: '#3c4043', weight: 700 },
-  d1_30:    { bg: '#fef7e0', fg: '#b06000', weight: 700 },
-  d31_60:   { bg: '#fce8e6', fg: '#c5221f', weight: 700 },
-  d61_plus: { bg: '#c5221f', fg: '#ffffff', weight: 800 },
-};
-const ORDERED: AgingBucket[] = ['current', 'd1_30', 'd31_60', 'd61_plus'];
+const ORDERED: AgingBucket[] = ['current', 'd1_30', 'd31_plus'];
 
 const EMPTY_TOTALS: ReceivablesTotals = {
   openCount: 0, openBalance: 0, overdueCount: 0, overdueBalance: 0,
   collected30d: 0, unbackedPaidCount: 0,
   byBucket: {
     current: { count: 0, balance: 0 }, d1_30: { count: 0, balance: 0 },
-    d31_60: { count: 0, balance: 0 }, d61_plus: { count: 0, balance: 0 },
+    d31_plus: { count: 0, balance: 0 },
   },
 };
 
 const NO_CUSTOMER = '__none__';
-const LS_DENSITY  = 'receivables-v2:density';
-const LS_SORT     = 'receivables-v2:sort';
+const LS_SORT = 'receivables-v2:sort';
 
 type Scope = 'open' | 'paid' | 'all';
 
@@ -158,7 +149,6 @@ function ReceivablesPageInner() {
   const [search,     setSearch]     = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [sortBy,     setSortBy]     = useState<SortBy>('pastDue');
-  const [density,    setDensity]    = useState<Density>('comfortable');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showAllFor, setShowAllFor] = useState<string | null>(null);
   const [page,       setPage]       = useState(0);
@@ -166,23 +156,38 @@ function ReceivablesPageInner() {
   const [sortOpen,   setSortOpen]   = useState(false);
   const [active,     setActive]     = useState<ReceivableInvoice | null>(null);
 
+  // EventModal keys on calendar events, so opening a load means making
+  // sure its legs are in the calendar store first. Same fetch-on-demand
+  // fallback Billing and Paperwork use.
+  const mergeEvents   = useCalendarStore(s => s.mergeEvents);
+  const openEditModal = useCalendarStore(s => s.openEditModal);
+
+  const openLoadInModal = useCallback(async (inv: ReceivableInvoice) => {
+    if (!inv.pickupEventId) return;
+    const inStore = useCalendarStore.getState().events.some(e => e.id === inv.pickupEventId);
+    if (!inStore) {
+      try {
+        const { loads: legs } = await railway.getLoad(inv.loadId);
+        mergeEvents(legs);
+      } catch (e) {
+        console.error('[receivables] failed to load legs for modal:', e);
+        return;
+      }
+    }
+    openEditModal(inv.pickupEventId);
+  }, [mergeEvents, openEditModal]);
+
   // Restore persisted view prefs. An effect rather than a lazy useState
   // initializer on purpose: reading localStorage during render makes the
   // server and client disagree on first paint. Same treatment as
   // AppSidebar's collapse state.
   useEffect(() => {
     try {
-      const d = window.localStorage.getItem(LS_DENSITY);
-      if (d === 'compact' || d === 'comfortable' || d === 'detail') setDensity(d);
       const s = window.localStorage.getItem(LS_SORT);
       if (s === 'pastDue' || s === 'balance' || s === 'oldest' || s === 'name') setSortBy(s);
     } catch { /* private mode — defaults are fine */ }
   }, []);
 
-  const chooseDensity = (d: Density) => {
-    setDensity(d); setPage(0);
-    try { window.localStorage.setItem(LS_DENSITY, d); } catch { /* ignore */ }
-  };
   const chooseSort = (s: SortBy) => {
     setSortBy(s); setSortOpen(false); setPage(0);
     try { window.localStorage.setItem(LS_SORT, s); } catch { /* ignore */ }
@@ -266,15 +271,12 @@ function ReceivablesPageInner() {
     return sorted;
   }, [customers, bucket, searchTerm, invoiceMatchCustomers, sortBy, scope]);
 
-  const d          = DENSITY[density];
-  const pageCount  = Math.max(1, Math.ceil(filtered.length / d.pageSize));
+  const pageCount  = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const safePage   = Math.min(page, pageCount - 1);
-  const pageRows   = filtered.slice(safePage * d.pageSize, (safePage + 1) * d.pageSize);
+  const pageRows   = filtered.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
   const shownTotal = filtered.reduce((s, c) => s + c.openBalance, 0);
 
-  const grid = density === 'detail'
-    ? '24px minmax(180px,1fr) 300px 84px 64px 108px 132px 30px'
-    : '24px minmax(180px,1fr) 210px 84px 64px 108px 132px 30px';
+  const grid = '24px minmax(180px,1fr) 210px 84px 64px 108px 132px 30px';
 
   const tileStats = (key: TileKey): { count: number; total: number } => {
     if (key === 'all')      return { count: totals.openCount, total: totals.openBalance };
@@ -284,15 +286,14 @@ function ReceivablesPageInner() {
   };
 
   function exportAging() {
-    const head = ['Customer', 'Open invoices', 'Oldest days over', 'Current', '1-30', '31-60', '61+', 'Past due', 'Balance'];
+    const head = ['Customer', 'Open invoices', 'Oldest days over', 'Current', '1-30', '31+', 'Past due', 'Balance'];
     const body = filtered.map(c => [
       `"${c.customerName.replace(/"/g, '""')}"`,
       c.openCount,
       c.oldestAgingDays ?? '',
       c.byBucket?.current ?? 0,
       c.byBucket?.d1_30 ?? 0,
-      c.byBucket?.d31_60 ?? 0,
-      c.byBucket?.d61_plus ?? 0,
+      c.byBucket?.d31_plus ?? 0,
       c.overdueBalance,
       c.openBalance,
     ].join(','));
@@ -333,6 +334,9 @@ function ReceivablesPageInner() {
 
   return (
     <AppShell title="Receivables" icon={HandCoins} rightSlot={rightSlot} noPageScroll>
+      {/* Hydrates the calendar store that EventModal reads from — the
+          Title column opens a load in it. */}
+      <DataLoader />
       <div className="flex-1 flex flex-col min-h-0" style={{ padding: '18px 24px', gap: 14 }}>
 
         {/* 1 — subtitle */}
@@ -519,22 +523,6 @@ function ReceivablesPageInner() {
               )}
             </div>
 
-            <div className="flex" style={{
-              height: 30, border: '1px solid var(--gc-border)', borderRadius: 8, overflow: 'hidden',
-            }}>
-              {(['compact', 'comfortable', 'detail'] as Density[]).map(k => (
-                <button key={k} onClick={() => chooseDensity(k)}
-                  style={{
-                    padding: '0 11px', height: 28, fontSize: 12, fontWeight: 700,
-                    textTransform: 'capitalize',
-                    background: density === k ? '#1a73e8' : 'transparent',
-                    color:      density === k ? '#fff' : 'var(--gc-text-3)',
-                  }}>
-                  {k}
-                </button>
-              ))}
-            </div>
-
             <div className="flex rounded border overflow-hidden" style={{ borderColor: 'var(--gc-border)', height: 30 }}>
               {(['open', 'paid', 'all'] as Scope[]).map(s => (
                 <button key={s} onClick={() => { setScope(s); setBucket(null); setPage(0); }}
@@ -585,7 +573,7 @@ function ReceivablesPageInner() {
             ) : pageRows.map(c => {
               const key       = c.customerId ?? NO_CUSTOMER;
               const expanded  = expandedId === key;
-              const bb        = c.byBucket ?? { current: 0, d1_30: 0, d31_60: 0, d61_plus: 0 };
+              const bb        = c.byBucket ?? { current: 0, d1_30: 0, d31_plus: 0 };
               const pct = (v: number) => (c.openBalance > 0 ? `${(v / c.openBalance * 100).toFixed(1)}%` : '0%');
               const all       = invoicesByCustomer.get(key) ?? [];
               const showAll   = showAllFor === key;
@@ -600,7 +588,7 @@ function ReceivablesPageInner() {
                     className="cursor-pointer"
                     style={{
                       display: 'grid', gridTemplateColumns: grid, gap: 12, padding: '0 14px',
-                      height: d.rowH, alignItems: 'center',
+                      height: ROW_H, alignItems: 'center',
                       borderBottom: '1px solid #f1f3f4',
                     }}
                     onMouseOver={e => { if (!expanded) e.currentTarget.style.background = 'var(--gc-hover)'; }}
@@ -611,10 +599,10 @@ function ReceivablesPageInner() {
                       : <ChevronRight size={15} style={{ color: 'var(--gc-text-3)' }} />}
 
                     <div className="min-w-0">
-                      <div className="truncate" style={{ fontSize: d.nameSize, fontWeight: 700, color: 'var(--gc-blue-text)' }}>
+                      <div className="truncate" style={{ fontSize: NAME_SIZE, fontWeight: 700, color: 'var(--gc-blue-text)' }}>
                         {c.customerName}
                       </div>
-                      {d.showSub && (
+                      {(
                         <div className="truncate" style={{ fontSize: 11, fontWeight: 600, color: 'var(--gc-text-3)' }}>
                           {c.openCount} open · {c.overdueBalance > 0 ? `${money0(c.overdueBalance)} past due` : 'nothing past due'}
                           {c.termsDays ? ` · net ${c.termsDays}` : ''}
@@ -624,24 +612,12 @@ function ReceivablesPageInner() {
 
                     {/* aging mix */}
                     <div className="flex flex-col" style={{ gap: 4 }}>
-                      <div className="flex" style={{ height: d.barH, borderRadius: 999, overflow: 'hidden', gap: 2 }}>
+                      <div className="flex" style={{ height: BAR_H, borderRadius: 999, overflow: 'hidden', gap: 2 }}>
                         {ORDERED.map(k => (
                           <span key={k} style={{ width: pct(bb[k]), background: SEG_COLOR[k], flex: 'none' }} />
                         ))}
                       </div>
-                      {d.showAmounts && (
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 4 }}>
-                          {ORDERED.map(k => (
-                            <span key={k} className="tabular-nums" style={{
-                              textAlign: 'right', fontSize: 11, borderRadius: 5, padding: '2px 5px',
-                              background: CHIP_STYLE[k].bg, color: CHIP_STYLE[k].fg, fontWeight: CHIP_STYLE[k].weight,
-                            }}>
-                              {bb[k] ? kmoney(bb[k]) : '—'}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                      {d.showBehaviour && (
+                      {(
                         <div className="truncate" style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--gc-text-3)' }}>
                           {c.avgDaysToPay != null ? `pays in ${c.avgDaysToPay}d on average` : 'no payment history yet'}
                           {c.termsDays ? ` · terms net ${c.termsDays}` : ''}
@@ -667,7 +643,7 @@ function ReceivablesPageInner() {
                     </span>
 
                     <span className="tabular-nums" style={{
-                      textAlign: 'right', fontSize: d.balSize, fontWeight: 800, color: 'var(--gc-text-1)',
+                      textAlign: 'right', fontSize: BAL_SIZE, fontWeight: 800, color: 'var(--gc-text-1)',
                     }}>
                       {money0(c.openBalance)}
                     </span>
@@ -692,8 +668,9 @@ function ReceivablesPageInner() {
                           letterSpacing: '.05em', color: 'var(--gc-text-3)',
                         }}>
                           <span />
-                          <span>Invoice</span>
-                          <span>Load</span>
+                          <span>Inv #</span>
+                          <span>Load #</span>
+                          <span>Title</span>
                           <span>Issued</span>
                           <span>Due</span>
                           <span style={{ textAlign: 'right' }}>Age</span>
@@ -722,10 +699,24 @@ function ReceivablesPageInner() {
                               <span style={{
                                 width: 15, height: 15, border: '1.5px solid var(--gc-border)', borderRadius: 3,
                               }} />
-                              <span style={{ fontWeight: 700, color: '#1967d2' }}>{inv.invoiceNumber}</span>
-                              <span className="truncate" style={{ color: 'var(--gc-text-2)' }}>
-                                {inv.loadNumber ? `Load ${inv.loadNumber}` : '—'}
+                              {/* Same copy-to-clipboard primitives Billing uses, so
+                                  the paste payload is identical across pages. */}
+                              <span onClick={e => e.stopPropagation()}>
+                                <CopyableCell value={inv.invoiceNumber} displayValue={inv.invoiceNumber}
+                                  title="Copy invoice #" />
                               </span>
+                              <span onClick={e => e.stopPropagation()}>
+                                {inv.loadNum
+                                  ? <CopyableLoadNum value={inv.loadNum} />
+                                  : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
+                              </span>
+                              <button type="button"
+                                onClick={e => { e.stopPropagation(); void openLoadInModal(inv); }}
+                                className="text-left font-semibold hover:underline truncate"
+                                style={{ color: 'var(--gc-blue)', maxWidth: '100%' }}
+                                title="Open load details">
+                                {inv.title ?? (inv.internalLoadId != null ? `#${inv.internalLoadId}` : '—')}
+                              </button>
                               <span style={{ color: 'var(--gc-text-3)' }}>{shortDate(inv.issuedAt)}</span>
                               <span style={{ color: 'var(--gc-text-3)' }}>{inv.dueAt ? shortDate(inv.dueAt) : '—'}</span>
                               <span className="tabular-nums" style={{ textAlign: 'right', fontWeight: 800, color: ageColor(age) }}>
@@ -790,7 +781,7 @@ function ReceivablesPageInner() {
             <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--gc-text-3)' }}>
               {filtered.length === 0
                 ? 'No customers'
-                : `Showing ${safePage * d.pageSize + 1}–${safePage * d.pageSize + pageRows.length} of ${filtered.length} customers · ${money0(shownTotal)} outstanding`}
+                : `Showing ${safePage * PAGE_SIZE + 1}–${safePage * PAGE_SIZE + pageRows.length} of ${filtered.length} customers · ${money0(shownTotal)} outstanding`}
             </span>
             <div style={{ flex: 1 }} />
             <div className="flex items-center gap-2">
@@ -822,7 +813,7 @@ function ReceivablesPageInner() {
   );
 }
 
-const INNER_GRID = '34px 104px 1fr 96px 96px 92px 108px 108px 104px';
+const INNER_GRID = '34px 104px 108px 1fr 92px 92px 88px 104px 104px 100px';
 
 /** Status pill. Part-paid outranks age — "we got something" is the more
  *  useful fact than "it's late". Overdue starts past 30 days so the pill

@@ -517,8 +517,21 @@ interface ReceivableInvoiceRow {
   due_at:         string | null;
   customer_id:    string | null;
   load_id:        string;
-  loads?:     { internal_load_id: number | null } | null;
+  loads?: {
+    internal_load_id: number | null;
+    load_num:         string | null;
+    events?: { id: string; title: string | null; leg_index: number | null }[] | null;
+  } | null;
   customers?: { name: string | null } | null;
+}
+
+/** Lowest-leg-index event for a load — the pickup leg on a relay, and
+ *  the only leg otherwise. Its title labels the load, and its id is what
+ *  the calendar's EventModal opens on. */
+function pickupLeg(r: ReceivableInvoiceRow) {
+  const legs = r.loads?.events ?? [];
+  if (!legs.length) return undefined;
+  return [...legs].sort((a, b) => (a.leg_index ?? 0) - (b.leg_index ?? 0))[0];
 }
 
 /** Whole days between `due` and today, positive when past due. Both
@@ -554,9 +567,17 @@ payments.get("/receivables", async (c) => {
   const buildInvoiceQuery = () => {
     let query = supabase
       .from("invoices")
+      // load_num is the BROKER's load number and the one operators paste
+      // into portals. internal_load_id is FleetCal's own sequence, which
+      // invoice_number is derived from — surfacing it as "Load #" just
+      // repeated the invoice number in a second column.
+      //
+      // The embedded events give both the title and the pickup leg's
+      // event id, which is what EventModal keys on. One join instead of a
+      // per-row fetch when a title is clicked.
       .select(
         "id,invoice_number,status,total,issued_at,due_at,customer_id,load_id," +
-        "loads(internal_load_id),customers(name)",
+        "loads(internal_load_id,load_num,events(id,title,leg_index)),customers(name)",
       )
       .eq("org_id", orgId)
       .neq("status", "void");
@@ -623,7 +644,10 @@ payments.get("/receivables", async (c) => {
       invoiceNumber: r.invoice_number,
       status:        r.status as InvoiceStatus,
       loadId:        r.load_id,
-      loadNumber:    r.loads?.internal_load_id != null ? String(r.loads.internal_load_id) : undefined,
+      internalLoadId: r.loads?.internal_load_id ?? undefined,
+      loadNum:       r.loads?.load_num ?? undefined,
+      title:         pickupLeg(r)?.title ?? undefined,
+      pickupEventId: pickupLeg(r)?.id,
       customerId:    r.customer_id ?? undefined,
       customerName:  r.customers?.name ?? undefined,
       total,
@@ -665,7 +689,7 @@ payments.get("/receivables", async (c) => {
       openBalance:    0,
       overdueCount:   0,
       overdueBalance: 0,
-      byBucket:       { current: 0, d1_30: 0, d31_60: 0, d61_plus: 0 },
+      byBucket:       { current: 0, d1_30: 0, d31_plus: 0 },
       oldestAgingDays: null,
     };
     const open = inv.balance > 0.005;
