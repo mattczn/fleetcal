@@ -25,7 +25,7 @@ const NAV_LINKS: Array<{
   { href: '/accounting',  label: 'Billing',        icon: Receipt,         cap: 'accounting.access',  module: 'accounting' },
   // Collections half of the billing pipeline — see the note in
   // AppSidebar's PRIMARY_NAV. Both nav lists must stay in sync.
-  { href: '/receivables', label: 'Receivables',    icon: HandCoins,       cap: 'accounting.access',  module: 'accounting' },
+  { href: '/receivables', label: 'Receivables',    icon: HandCoins,       cap: 'receivables.access', module: 'receivables' },
   // Equipment subsumes the old Fuel + Maintenance nav links — one
   // page with three sub-tabs (Inspections / Maintenance / Fuel). The
   // /fuel and /maintenance routes still exist as redirects to

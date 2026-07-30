@@ -414,7 +414,7 @@ function RailRow({ label, total, count, sub, amber, selected, onClick }: {
 
 export default function ReceivablesPage() {
   return (
-    <RequireCap cap="accounting.access" module="accounting">
+    <RequireCap cap="receivables.access" module="receivables">
       <ReceivablesPageInner />
     </RequireCap>
   );

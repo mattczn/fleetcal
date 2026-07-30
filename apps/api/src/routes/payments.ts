@@ -49,6 +49,7 @@ import { supabase as supabaseTyped } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability, requireModule } from "../middleware/require.js";
 import { appliedByProof, round2 } from "../lib/invoicePayments.js";
+import { fetchAllRows } from "../lib/fetchAllRows.js";
 
 // payment_proofs / invoice_payments aren't in the generated Database
 // types until the schema is regenerated post-migration.
@@ -155,11 +156,16 @@ export function rowToPayment(r: PaymentRow, proof?: PaymentProof): InvoicePaymen
 
 const payments = new Hono<{ Variables: AuthVariables }>();
 
-// Receivables is part of the billing pipeline — same module and
-// capability gate as the rest of /v1/invoices. There is no separate
-// "receivables" module: org_settings already describes `accounting` as
-// "draft invoices, send to brokers, track payments".
-payments.use("*", requireModule("accounting"), requireCapability("accounting.access"));
+// Receivables is its own module and its own capability — a carrier can
+// run the invoice pipeline without a collections desk, and collecting
+// is a bookkeeping job that needn't belong to whoever sends invoices.
+//
+// Note what is NOT gated here: the allocation endpoints on
+// /v1/invoices/:id/payments stay behind `accounting`. Mark Paid on the
+// Billing board writes an allocation, and it has to keep working for an
+// org with Receivables switched off. This gate covers the evidence
+// surface and the AR read model only.
+payments.use("*", requireModule("receivables"), requireCapability("receivables.access"));
 
 // ── Proofs ────────────────────────────────────────────────────────────
 
@@ -167,38 +173,45 @@ payments.get("/proofs", async (c) => {
   const orgId = c.get("orgId");
   const q     = c.req.query();
 
-  let query = supabase
-    .from("payment_proofs")
-    .select(PROOF_COLS)
-    .eq("org_id", orgId)
-    .order("occurred_on", { ascending: false })
-    // Tiebreak on id: occurred_on is a date, so same-day proofs would
-    // otherwise page nondeterministically (unordered .range() has bitten
-    // this codebase before).
-    .order("id", { ascending: false })
-    .limit(Math.min(Number(q.limit) || 200, 1000));
+  const buildQuery = () => {
+    let query = supabase
+      .from("payment_proofs")
+      .select(PROOF_COLS)
+      .eq("org_id", orgId);
+    if (q.customerId) query = query.eq("customer_id", q.customerId);
+    if (q.kind)       query = query.eq("kind", q.kind);
+    if (q.from)       query = query.gte("occurred_on", q.from);
+    if (q.to)         query = query.lte("occurred_on", q.to);
+    return query;
+  };
 
-  if (q.customerId) query = query.eq("customer_id", q.customerId);
-  if (q.kind)       query = query.eq("kind", q.kind);
-  if (q.from)       query = query.gte("occurred_on", q.from);
-  if (q.to)         query = query.lte("occurred_on", q.to);
-
-  const { data, error } = await query;
-  if (error) {
-    console.error("[GET /v1/payments/proofs] failed:", error);
-    return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  // Paged rather than limited. `unapplied` filters on the allocation sum,
+  // which lives in another table and so can't be a SQL predicate — with a
+  // hard .limit() the filter would only ever see the first page, and an
+  // older unapplied remittance would be invisible forever. Page the set,
+  // then filter, then cap for display.
+  let rows: ProofRow[];
+  try {
+    rows = await fetchAllRows<ProofRow>("proofs", buildQuery);
+  } catch (e) {
+    console.error("[GET /v1/payments/proofs] failed:", e);
+    return c.json({
+      error: "fetch_failed",
+      detail: e instanceof Error ? e.message : "proof fetch failed",
+    } satisfies ApiErrorResponse, 500);
   }
 
-  const rows    = (data ?? []) as ProofRow[];
   const applied = await appliedByProof(orgId, rows.map((r) => r.id));
   let proofs    = rows.map((r) => rowToProof(r, applied[r.id] ?? 0));
 
-  // `unapplied` is a post-filter rather than a SQL predicate: it depends
-  // on the allocation sum, which lives in another table. Cheap enough at
-  // AR volumes and avoids a view that would need its own migration.
   if (q.unapplied === "true") {
     proofs = proofs.filter((p) => (p.appliedAmount ?? 0) < p.amount - 0.005);
   }
+
+  // Newest evidence first, then cap.
+  proofs.sort((a, b) => b.occurredOn.localeCompare(a.occurredOn));
+  const cap = Math.min(Number(q.limit) || 200, 1000);
+  if (proofs.length > cap) proofs = proofs.slice(0, cap);
 
   const res: ListPaymentProofsResponse = { proofs };
   return c.json(res);
@@ -526,34 +539,43 @@ payments.get("/receivables", async (c) => {
   // Void invoices are never receivable — no money is expected. Draft is
   // included because an issued-but-unsent invoice is still money owed
   // that the operator wants to see aging.
-  let query = supabase
-    .from("invoices")
-    .select(
-      "id,invoice_number,status,total,issued_at,due_at,customer_id,load_id," +
-      "loads(internal_load_id),customers(name)",
-    )
-    .eq("org_id", orgId)
-    .neq("status", "void")
-    .order("issued_at", { ascending: false })
-    .order("id", { ascending: false })
-    .limit(Math.min(Number(q.limit) || 1000, 5000));
-
+  //
+  // Paged, not limited: PostgREST caps responses at 1000 rows in silence,
+  // so a `.limit(5000)` reads as working while quietly dropping every
+  // invoice past the first thousand — and since the tiles and the rail
+  // are summed from these rows, a truncated fetch produces a confidently
+  // wrong Outstanding total. The full set is the point.
+  //
   // `scope` and `search` define the working set, so they narrow in SQL.
   // `customerId` and `bucket` are selections WITHIN that set and are
   // applied after the rail and tiles are computed — otherwise picking a
   // customer would collapse the rail to the one customer you already
   // picked, and clicking an aging tile would rewrite the tiles.
-  if (scope === "open") query = query.in("status", ["draft", "sent"]);
-  if (scope === "paid") query = query.eq("status", "paid");
-  if (q.search?.trim()) query = query.ilike("invoice_number", `%${q.search.trim()}%`);
+  const buildInvoiceQuery = () => {
+    let query = supabase
+      .from("invoices")
+      .select(
+        "id,invoice_number,status,total,issued_at,due_at,customer_id,load_id," +
+        "loads(internal_load_id),customers(name)",
+      )
+      .eq("org_id", orgId)
+      .neq("status", "void");
+    if (scope === "open") query = query.in("status", ["draft", "sent"]);
+    if (scope === "paid") query = query.eq("status", "paid");
+    if (q.search?.trim()) query = query.ilike("invoice_number", `%${q.search.trim()}%`);
+    return query;
+  };
 
-  const { data, error } = await query;
-  if (error) {
-    console.error("[GET /v1/payments/receivables] failed:", error);
-    return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  let invRows: ReceivableInvoiceRow[];
+  try {
+    invRows = await fetchAllRows<ReceivableInvoiceRow>("receivables/invoices", buildInvoiceQuery);
+  } catch (e) {
+    console.error("[GET /v1/payments/receivables] failed:", e);
+    return c.json({
+      error: "fetch_failed",
+      detail: e instanceof Error ? e.message : "invoice fetch failed",
+    } satisfies ApiErrorResponse, 500);
   }
-
-  const invRows = (data ?? []) as ReceivableInvoiceRow[];
 
   // One query for every allocation on the returned invoices, rather than
   // per-invoice. AR lists run into the hundreds; N+1 here would be the
@@ -561,15 +583,25 @@ payments.get("/receivables", async (c) => {
   const invIds = invRows.map((r) => r.id);
   const allocByInvoice = new Map<string, { amount: number; paidOn: string; hasProof: boolean }[]>();
   if (invIds.length) {
-    // Chunked: PostgREST builds `in.(...)` into the URL, and a few
-    // thousand uuids blows past the request-line limit.
+    // Chunked because PostgREST builds `in.(...)` into the URL and a few
+    // thousand uuids blows past the request-line limit; paged within each
+    // chunk because 300 invoices can carry more than 1000 allocations
+    // between them once partial payments are in play.
+    type AllocRow = {
+      id: string; invoice_id: string; amount: string | number;
+      paid_on: string; proof_id: string | null;
+    };
     for (let i = 0; i < invIds.length; i += 300) {
-      const { data: allocs } = await supabase
-        .from("invoice_payments")
-        .select("invoice_id,amount,paid_on,proof_id")
-        .eq("org_id", orgId)
-        .in("invoice_id", invIds.slice(i, i + 300));
-      for (const a of (allocs ?? []) as { invoice_id: string; amount: string | number; paid_on: string; proof_id: string | null }[]) {
+      const slice = invIds.slice(i, i + 300);
+      const allocs = await fetchAllRows<AllocRow>(
+        "receivables/allocations",
+        () => supabase
+          .from("invoice_payments")
+          .select("id,invoice_id,amount,paid_on,proof_id")
+          .eq("org_id", orgId)
+          .in("invoice_id", slice),
+      );
+      for (const a of allocs) {
         const list = allocByInvoice.get(a.invoice_id) ?? [];
         list.push({ amount: Number(a.amount), paidOn: a.paid_on, hasProof: a.proof_id !== null });
         allocByInvoice.set(a.invoice_id, list);
@@ -605,6 +637,11 @@ payments.get("/receivables", async (c) => {
       hasProof:      allocs.some((a) => a.hasProof),
     };
   });
+
+  // fetchAllRows pages by id, so restore a sensible default order here.
+  // The table re-sorts client-side, but the payload shouldn't arrive in
+  // uuid order.
+  invoices.sort((a, b) => b.issuedAt.localeCompare(a.issuedAt));
 
   // ── Per-customer rail ───────────────────────────────────────────────
   // Built from the same rows the table renders, so the rail and the
@@ -664,15 +701,19 @@ payments.get("/receivables", async (c) => {
   // Collections velocity is a question about payments, not invoices, so
   // it reads the ledger directly — an invoice paid this month may have
   // been issued long before the window.
+  // Paged for the same reason as the invoice fetch: a busy month can
+  // clear 1000 allocations, and a silently-truncated sum here would
+  // under-report collections without looking broken.
   const since = new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
-  const { data: recent } = await supabase
-    .from("invoice_payments")
-    .select("amount")
-    .eq("org_id", orgId)
-    .gte("paid_on", since);
-  const collected30d = round2(
-    ((recent ?? []) as { amount: string | number }[]).reduce((s, r) => s + Number(r.amount), 0),
+  const recent = await fetchAllRows<{ id: string; amount: string | number }>(
+    "receivables/collected30d",
+    () => supabase
+      .from("invoice_payments")
+      .select("id,amount")
+      .eq("org_id", orgId)
+      .gte("paid_on", since),
   );
+  const collected30d = round2(recent.reduce((s, r) => s + Number(r.amount), 0));
 
   const totals: ReceivablesTotals = {
     openCount, openBalance, overdueCount, overdueBalance,

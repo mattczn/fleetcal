@@ -154,6 +154,14 @@ export type Capability =
   // Accounting + payroll — Admin/Owner only by default
   | "accounting.access"
   | "accounting.send_invoice"
+
+  // Receivables — the collections desk. Separate from accounting.access
+  // on purpose: seeing what a broker still owes across every load, and
+  // recording money against invoices, is a bookkeeping job that doesn't
+  // have to belong to whoever sends invoices. Recording a payment from
+  // the Billing board still rides accounting.access, so revoking this
+  // hides the AR view without breaking Mark Paid.
+  | "receivables.access"
   | "payroll.access"
   | "payroll.adjust"
   | "payroll.finalize"
@@ -215,6 +223,7 @@ const ALL_CAPS: Capability[] = [
   "dispatchers.view", "dispatchers.create", "dispatchers.edit", "dispatchers.delete",
   "closeout.access", "closeout.release", "closeout.flag",
   "accounting.access", "accounting.send_invoice",
+  "receivables.access",
   "payroll.access", "payroll.adjust", "payroll.finalize",
   "maintenance.access", "maintenance.edit", "inspections.access",
   "fuel.access", "fuel.edit",
@@ -349,6 +358,7 @@ export const CAPABILITY_CATALOG: CapabilityInfo[] = [
   { cap: "dashboard.access",  label: "Dashboard",     group: "Module access", hint: "Top-line KPIs, revenue + driver pay totals." },
   { cap: "closeout.access",   label: "Paperwork",     group: "Module access", hint: "POD verification + flag queue." },
   { cap: "accounting.access", label: "Billing",       group: "Module access", hint: "Invoice list, send/void, payment status." },
+  { cap: "receivables.access", label: "Receivables",  group: "Module access", hint: "Open AR by customer, aging buckets, and recording payments with the remittance or bank line that backs them. Independent of Billing — a bookkeeper can collect without being able to send invoices." },
   { cap: "payroll.access",    label: "Payroll",       group: "Module access", hint: "Per-driver weekly pay + adjustments." },
   { cap: "maintenance.access", label: "Maintenance",  group: "Module access", hint: "Equipment → Maintenance tab: work orders + defects." },
   { cap: "inspections.access", label: "Inspections",  group: "Module access", hint: "Equipment → Inspections tab: driver-submitted pre/post-trip inspections." },

@@ -24,6 +24,7 @@
  */
 
 import { supabase as supabaseTyped } from "./supabase.js";
+import { fetchAllRows } from "./fetchAllRows.js";
 
 // invoice_payments / payment_proofs aren't in the generated Database
 // types until the schema is regenerated post-migration.
@@ -147,16 +148,26 @@ export async function appliedByProof(
   proofIds: string[],
 ): Promise<Record<string, number>> {
   if (!proofIds.length) return {};
-  const { data } = await supabase
-    .from("invoice_payments")
-    .select("proof_id,amount")
-    .eq("org_id", orgId)
-    .in("proof_id", proofIds);
 
   const out: Record<string, number> = {};
-  for (const r of (data ?? []) as { proof_id: string | null; amount: string | number }[]) {
-    if (!r.proof_id) continue;
-    out[r.proof_id] = round2((out[r.proof_id] ?? 0) + Number(r.amount));
+  // Chunked for URL length, paged within each chunk because PostgREST
+  // caps responses at 1000 rows silently — a truncated read here would
+  // under-report how much of a proof is applied, which is exactly the
+  // signal the unapplied queue is filtering on.
+  for (let i = 0; i < proofIds.length; i += 300) {
+    const slice = proofIds.slice(i, i + 300);
+    const rows = await fetchAllRows<{ id: string; proof_id: string | null; amount: string | number }>(
+      "appliedByProof",
+      () => supabase
+        .from("invoice_payments")
+        .select("id,proof_id,amount")
+        .eq("org_id", orgId)
+        .in("proof_id", slice),
+    );
+    for (const r of rows) {
+      if (!r.proof_id) continue;
+      out[r.proof_id] = round2((out[r.proof_id] ?? 0) + Number(r.amount));
+    }
   }
   return out;
 }

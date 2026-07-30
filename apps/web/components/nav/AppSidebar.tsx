@@ -78,11 +78,10 @@ export const PRIMARY_NAV: NavItem[] = [
   { kind: 'leaf', href: '/board',       label: 'Command Center', icon: LayoutDashboard, cap: 'loads.edit',        module: 'dispatch_board' },
   { kind: 'leaf', href: '/closeout',    label: 'Paperwork',      icon: FileCheck2,      cap: 'closeout.access',   module: 'closeout' },
   { kind: 'leaf', href: '/accounting',  label: 'Billing',        icon: Receipt,         cap: 'accounting.access', module: 'accounting' },
-  // Receivables is the collections half of the billing pipeline —
-  // same module + capability as Billing, no separate flag. Billing
-  // asks "did we invoice it"; Receivables asks "did they pay, and how
-  // do we know".
-  { kind: 'leaf', href: '/receivables', label: 'Receivables',    icon: HandCoins,       cap: 'accounting.access', module: 'accounting' },
+  // Collections half of the billing pipeline, but its own module and
+  // capability: Billing asks "did we invoice it", Receivables asks "did
+  // they pay, and how do we know". Off by default for new orgs.
+  { kind: 'leaf', href: '/receivables', label: 'Receivables',    icon: HandCoins,       cap: 'receivables.access', module: 'receivables' },
   {
     kind: 'group',
     href: '/equipment?tab=maintenance',
