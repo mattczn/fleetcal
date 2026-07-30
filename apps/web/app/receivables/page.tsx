@@ -43,6 +43,7 @@ import RecordPaymentPanel from './RecordPaymentPanel';
 import type {
   ReceivableInvoice, ReceivableCustomerSummary, ReceivablesTotals, AgingBucket,
 } from '@fleetcal/types';
+import { AGING_BUCKETS } from '@fleetcal/types';
 
 // ── formatting ────────────────────────────────────────────────────────
 
@@ -131,6 +132,33 @@ const EMPTY_TOTALS: ReceivablesTotals = {
   },
 };
 
+/** Coerce a server payload into the bucket shape THIS bundle knows.
+ *
+ *  Web and API deploy independently, so every push opens a window where
+ *  a browser holds one bundle and talks to the other side's build — and
+ *  a browser can sit on a stale bundle long after. When the two disagree
+ *  about the bucket set, an unguarded `byBucket[key]` is `undefined` and
+ *  the page dies on `.count`. That is exactly what the 31-60 / 61+ merge
+ *  did in the three minutes between the two deploys.
+ *
+ *  Rather than guard at each read site and hope none is ever missed,
+ *  normalize once here: unknown buckets are dropped, missing ones read
+ *  as zero. A brief window of slightly-wrong numbers beats a blank page,
+ *  and it resolves itself on the next load. */
+const ZERO_CELL = { count: 0, balance: 0 };
+
+function normalizeTotals(t: ReceivablesTotals | undefined | null): ReceivablesTotals {
+  const byBucket = {} as ReceivablesTotals['byBucket'];
+  for (const b of AGING_BUCKETS) byBucket[b] = t?.byBucket?.[b] ?? { ...ZERO_CELL };
+  return { ...EMPTY_TOTALS, ...(t ?? {}), byBucket };
+}
+
+function normalizeCustomer(c: ReceivableCustomerSummary): ReceivableCustomerSummary {
+  const byBucket = {} as Record<AgingBucket, number>;
+  for (const b of AGING_BUCKETS) byBucket[b] = c.byBucket?.[b] ?? 0;
+  return { ...c, byBucket };
+}
+
 const NO_CUSTOMER = '__none__';
 const LS_SORT = 'receivables-v2:sort';
 
@@ -201,9 +229,9 @@ function ReceivablesPageInner() {
         railway.listReceivables({ scope }),
         railway.listPaymentProofs({ unapplied: true }).catch(() => ({ proofs: [] })),
       ]);
-      setRows(res.invoices);
-      setCustomers(res.customers);
-      setTotals(res.totals);
+      setRows(res.invoices ?? []);
+      setCustomers((res.customers ?? []).map(normalizeCustomer));
+      setTotals(normalizeTotals(res.totals));
       setToApply({
         count: proofs.proofs.length,
         total: proofs.proofs.reduce((s, p) => s + (p.amount - (p.appliedAmount ?? 0)), 0),
@@ -281,7 +309,7 @@ function ReceivablesPageInner() {
   const tileStats = (key: TileKey): { count: number; total: number } => {
     if (key === 'all')      return { count: totals.openCount, total: totals.openBalance };
     if (key === 'to_apply') return { count: toApply?.count ?? 0, total: toApply?.total ?? 0 };
-    const cell = totals.byBucket[key];
+    const cell = totals.byBucket?.[key] ?? ZERO_CELL;
     return { count: cell.count, total: cell.balance };
   };
 
