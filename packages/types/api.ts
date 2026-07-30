@@ -1037,7 +1037,20 @@ export interface CreatePayrollAdjustmentRequest {
    *  adjustment (cleanliness deduction). */
   inspectionReportId?: string | null;
 }
-export interface CreatePayrollAdjustmentResponse { adjustment: PayrollAdjustment; }
+/** Adjustment writes are ACCEPTED even when the target week is already
+ *  finalized — see apps/api/src/routes/payroll.ts for the reasoning —
+ *  but the caller is told, so the UI can surface the divergence instead
+ *  of pretending the finalized stub moved. `finalizedRecordId` is the
+ *  live record for that (driver, week). */
+export interface PayrollWeekFinalizedFlag {
+  weekFinalized?:     boolean;
+  finalizedRecordId?: string;
+  finalizedTotalPay?: number;
+}
+export interface CreatePayrollAdjustmentResponse extends PayrollWeekFinalizedFlag {
+  adjustment: PayrollAdjustment;
+}
+export type DeletePayrollAdjustmentResponse = PayrollWeekFinalizedFlag;
 
 // ── Driver scoring ────────────────────────────────────────────────────────
 // GET /v1/driver-scoring?from=YYYY-MM-DD&to=YYYY-MM-DD  (Curzon-only)
@@ -1071,14 +1084,32 @@ export interface DriverScorecardResponse {
 // Query params:
 //   driverName  — required when listing
 //   weekStart?  — filter to a single week
+//   includeSuperseded=1 — also return records that were reopened or
+//     replaced by a re-finalize. OFF by default: every summing caller
+//     (dashboard KPI, pay history) would double-count them.
 export interface ListPayrollRecordsResponse { records: PayrollRecord[]; }
 export interface UpsertPayrollRecordRequest {
   driverName: string;
   weekStart:  string;
   totalPay:   number;
   notes?:     string | null;
+  /** The frozen detail behind `totalPay`. Omitting it still records a
+   *  total, but the resulting record can't reprint the stub it paid for —
+   *  clients that can build the lines should always send them. */
+  lineItems?: import("./domain").PayrollLineItem[] | null;
+  /** Display label for whoever pressed Finalize. The Clerk user id comes
+   *  from the JWT server-side; this is only for rendering. */
+  finalizedByName?: string | null;
 }
-export interface UpsertPayrollRecordResponse { record: PayrollRecord; }
+export interface UpsertPayrollRecordResponse {
+  record: PayrollRecord;
+  /** The record this one replaced, if the week was already finalized.
+   *  It still exists (superseded, not deleted). */
+  supersededRecord?: PayrollRecord;
+}
+/** Reopen. The record is superseded, never deleted — the amount that was
+ *  signed off on, and who signed it, stay queryable forever. */
+export interface DeletePayrollRecordResponse { record: PayrollRecord; }
 
 // ── /v1/org-settings ────────────────────────────────────────────────────
 

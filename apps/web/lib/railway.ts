@@ -49,7 +49,9 @@ import type {
   ListSavedLocationsResponse, CreateSavedLocationRequest, CreateSavedLocationResponse,
   UpdateSavedLocationRequest, UpdateSavedLocationResponse,
   ListPayrollAdjustmentsResponse, CreatePayrollAdjustmentRequest, CreatePayrollAdjustmentResponse,
+  DeletePayrollAdjustmentResponse,
   ListPayrollRecordsResponse, UpsertPayrollRecordRequest, UpsertPayrollRecordResponse,
+  DeletePayrollRecordResponse,
   ListDriverScoresResponse, ListDriverSafetyScoresResponse,
   GetOrgSettingsResponse, UpdateOrgSettingsRequest, UpdateOrgSettingsResponse,
   CreateInvoiceRequest, CreateInvoiceResponse,
@@ -1003,7 +1005,12 @@ class RailwayClient {
   createPayrollAdjustment(body: CreatePayrollAdjustmentRequest) {
     return this.req<CreatePayrollAdjustmentResponse>('POST', '/v1/payroll/adjustments', body);
   }
-  deletePayrollAdjustment(id: string)        { return this.req<void>('DELETE', `/v1/payroll/adjustments/${id}`); }
+  /** Resolves with `weekFinalized: true` when the adjustment's week
+   *  already has a live payroll record — the write still happens (see
+   *  the API route's note), the caller is expected to surface it. */
+  deletePayrollAdjustment(id: string) {
+    return this.req<DeletePayrollAdjustmentResponse>('DELETE', `/v1/payroll/adjustments/${id}`);
+  }
 
   /** Every filter is optional. Omitting them all returns every
    *  finalized record for the org. Use weekStartFrom/To to scope to
@@ -1014,19 +1021,28 @@ class RailwayClient {
     weekStart?:     string;
     weekStartFrom?: string;
     weekStartTo?:   string;
+    /** Include reopened / replaced records. Off by default — anything
+     *  that SUMS records would double-count a re-finalized week. */
+    includeSuperseded?: boolean;
   } = {}) {
     const qs = new URLSearchParams();
     if (query.driverName)    qs.set('driverName',    query.driverName);
     if (query.weekStart)     qs.set('weekStart',     query.weekStart);
     if (query.weekStartFrom) qs.set('weekStartFrom', query.weekStartFrom);
     if (query.weekStartTo)   qs.set('weekStartTo',   query.weekStartTo);
+    if (query.includeSuperseded) qs.set('includeSuperseded', '1');
     const s = qs.toString();
     return this.req<ListPayrollRecordsResponse>('GET', `/v1/payroll/records${s ? `?${s}` : ''}`);
   }
   upsertPayrollRecord(body: UpsertPayrollRecordRequest) {
     return this.req<UpsertPayrollRecordResponse>('POST', '/v1/payroll/records', body);
   }
-  deletePayrollRecord(id: string)            { return this.req<void>('DELETE', `/v1/payroll/records/${id}`); }
+  /** Reopen — supersedes the record (soft), never deletes it. */
+  deletePayrollRecord(id: string, reopenedByName?: string | null) {
+    return this.req<DeletePayrollRecordResponse>(
+      'DELETE', `/v1/payroll/records/${id}`, { reopenedByName: reopenedByName ?? null },
+    );
+  }
 
   // ── Org settings ──────────────────────────────────────────────────────
   getOrgSettings()                           { return this.req<GetOrgSettingsResponse>('GET', '/v1/org-settings'); }

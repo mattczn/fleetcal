@@ -32,6 +32,19 @@
  * Idempotent: upserts on (org_id, driver_name, week_start), so re-running
  * picks up new finalized weeks and refreshes existing ones.
  *
+ * !! STALE AS OF 20260728_payroll_records_snapshot.sql !!
+ * That migration made payroll_records append-only: the plain unique
+ * constraint on (org_id, driver_name, week_start) was replaced by a
+ * PARTIAL unique index over live rows (`where superseded_at is null`),
+ * which Postgres will not infer for ON CONFLICT. The `.upsert(...,
+ * { onConflict })` below will now fail at runtime. This script has
+ * already run for its historical import; before running it again,
+ * convert it to the same supersede-then-insert flow POST
+ * /v1/payroll/records uses (stamp superseded_at / superseded_by /
+ * superseded_reason = 'refinalize' on the live row, then insert). It
+ * also writes no line_items — the source data only ever had weekly
+ * totals, so its rows stay "total only, no frozen detail".
+ *
  * Run
  * ---
  *   cd apps/api

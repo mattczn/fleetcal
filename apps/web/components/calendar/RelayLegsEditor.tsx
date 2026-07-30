@@ -17,7 +17,7 @@
  */
 
 import { Fragment, useState } from 'react';
-import { ArrowLeftRight, Plus, Loader2 } from 'lucide-react';
+import { ArrowLeftRight, Plus, Loader2, Route, RotateCcw } from 'lucide-react';
 import { legLabel, handoffTimesOf } from '@fleetcal/types';
 import { StyledSelect } from '@/components/ui/StyledSelect';
 import { ApptInput } from './StopsSection';
@@ -29,6 +29,9 @@ import { HandoffPhotosButton } from '@/components/calendar/RelayHandoffPhotos';
 import FinalizedPayBanner from '@/components/payroll/FinalizedPayBanner';
 import { useLoadPayFinalized } from '@/lib/useLoadPayFinalized';
 import { isActiveOn } from '@/lib/lifecycle';
+import {
+  PAY_BASIS_LABEL, autoPayFor, fmtPct, legRevenues, payMatchesPct, payPctOf,
+} from '@/lib/legPay';
 import type { Asset, Driver, Stop } from '@/lib/types';
 
 const RELAY_COLOR = '#7c3aed';
@@ -92,6 +95,14 @@ interface Props {
   startDate: string;
   canViewDriverPay: boolean;
   disabled?: boolean;
+  /** Org's configured driver-pay percentage (0-100), or null when the
+   *  org hasn't set one. Powers the per-leg "Set to N% of leg" reset —
+   *  the relay equivalent of the solo form's "Reset to N%" — which
+   *  computes against the LEG's share of the price, not the whole load. */
+  driverPayPct?: number | null;
+  /** One-off explanation shown above the legs, e.g. after a solo load's
+   *  whole-load pay was re-prorated across new legs. Absent = hidden. */
+  payNotice?: { text: string; onUndo?: () => void } | null;
   /** Parent load id — enables handoff photo upload/view. */
   loadId?: string;
   handoffPhotos: RelayHandoffPhoto[];
@@ -189,22 +200,39 @@ function PayInput({ value, onChange, disabled, disabledTitle }: {
 
 const FINALIZED_HINT = 'Locked — driver pay has been finalized for this week. Reopen the payroll record on the Payroll page to edit.';
 
-const pctChip = (p: number | null) => p === null ? null : (
-  <span className="px-1.5 py-0.5 rounded-lg normal-case tracking-normal font-semibold"
-    style={{ fontSize: 10, background: '#f1f3f4', color: 'var(--gc-text-3)', border: '1px solid var(--gc-border-light)' }}>
-    {p % 1 === 0 ? p.toFixed(0) : p.toFixed(1)}%
+/**
+ * A pay percentage ALWAYS renders with the thing it is a percentage OF.
+ * `basis` is the label text ("of leg" / "of load"); `emphasis` marks the
+ * primary answer to "is this driver paid fairly for what they hauled",
+ * which on a relay is pay ÷ that leg's share of the price.
+ */
+const pctChip = (p: number | null, basis: string, emphasis = false) => p === null ? null : (
+  <span className="px-1.5 py-0.5 rounded-lg normal-case tracking-normal font-semibold whitespace-nowrap"
+    style={{
+      fontSize: 10,
+      background: emphasis ? '#dbeafe' : '#f1f3f4',
+      color:      emphasis ? '#1d4ed8' : 'var(--gc-text-3)',
+      border:     `1px solid ${emphasis ? '#bfdbfe' : 'var(--gc-border-light)'}`,
+    }}
+    title={`Driver pay is ${fmtPct(p)}% ${basis}`}>
+    {fmtPct(p)}% <span style={{ fontWeight: 500, opacity: 0.85 }}>{basis}</span>
   </span>
 );
 
 function LegCard({
-  leg, legCount, loadPrice, shareOfMiles, assets, drivers, startDate,
+  leg, legCount, loadPrice, legRevenue, shareOfMiles, driverPayPct, assets, drivers, startDate,
   canViewDriverPay, disabled, canonicalDriverName, onChangeLeg, onOpenLeg,
 }: {
   leg: RelayLegView;
   legCount: number;
   loadPrice: number | null;
+  /** THIS leg's share of the load price — miles-prorated, or an even
+   *  1/N split while any leg's miles are unknown. The denominator for
+   *  the leg's primary pay percentage. */
+  legRevenue: number | null;
   /** 0..1 share of the whole haul's miles, or null when unknown. */
   shareOfMiles: number | null;
+  driverPayPct?: number | null;
   assets: Asset[];
   drivers: Driver[];
   startDate: string;
@@ -217,9 +245,36 @@ function LegCard({
   const finalized = useLoadPayFinalized(leg.driverName, leg.startIso ?? '');
   const label = legLabel(leg.legIndex, legCount) || `Leg ${leg.legIndex + 1}`;
   const payNum = typeof leg.pay === 'number' ? leg.pay : null;
-  const pct = loadPrice != null && loadPrice > 0 && payNum != null && payNum > 0
-    ? Math.round((payNum / loadPrice) * 1000) / 10
-    : null;
+  const isRelay = legCount > 1;
+  // Primary: pay ÷ THIS LEG's share of the price — the number that
+  // answers "is this driver paid fairly for what they hauled". The
+  // whole-load percentage stays visible as a secondary, muted chip so
+  // the two can be compared but never confused.
+  const pctOfLeg  = payPctOf(payNum, legRevenue);
+  const pctOfLoad = payPctOf(payNum, loadPrice);
+  // The relay counterpart of the solo form's "Reset to N%": resets to
+  // legShare × pct, never loadPrice × pct.
+  const autoForLeg = autoPayFor(legRevenue, driverPayPct ?? null);
+  const isAutoPay  = payMatchesPct(payNum, legRevenue, driverPayPct ?? null);
+  const showReset  = !disabled && !finalized.finalized && autoForLeg != null && !isAutoPay;
+  const payLabelSuffix = (
+    <span className="flex items-center gap-1 flex-wrap">
+      {pctChip(pctOfLeg, isRelay ? PAY_BASIS_LABEL.leg : PAY_BASIS_LABEL.load, isRelay)}
+      {isRelay && pctOfLoad !== null && pctChip(pctOfLoad, PAY_BASIS_LABEL.load)}
+      {showReset && (
+        <button type="button"
+          onClick={() => onChangeLeg(leg.key, { pay: autoForLeg })}
+          title={`Set this leg's pay to ${driverPayPct}% of its ${isRelay ? 'share' : 'price'} ($${autoForLeg.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`}
+          className="flex items-center gap-1 rounded transition-colors normal-case tracking-normal font-semibold"
+          style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--gc-text-3)', padding: '1px 4px', fontSize: 10 }}
+          onMouseEnter={e => { e.currentTarget.style.color = '#1d4ed8'; e.currentTarget.style.background = '#dbeafe'; }}
+          onMouseLeave={e => { e.currentTarget.style.color = 'var(--gc-text-3)'; e.currentTarget.style.background = 'transparent'; }}>
+          <RotateCcw size={10} />
+          Set to {driverPayPct}% {isRelay ? PAY_BASIS_LABEL.leg : PAY_BASIS_LABEL.load}
+        </button>
+      )}
+    </span>
+  );
 
   const inputStyle: React.CSSProperties = {
     width: '100%', border: '1px solid var(--gc-border)', borderRadius: 8,
@@ -293,11 +348,17 @@ function LegCard({
             </button>
           )}
         </div>
+        {/* DISTANCE chip — deliberately not shaped like the money chips
+            beside the pay input (relay purple, pill, route icon, and the
+            unit spelled out) so "30% of miles" can never be read as
+            comparable to "27% of leg". */}
         {leg.miles != null && (
-          <span className="text-[11px] font-semibold px-2 py-0.5 rounded-lg"
-            style={{ background: '#ede9fe', color: '#5b21b6' }}>
+          <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full inline-flex items-center gap-1"
+            style={{ background: '#ede9fe', color: '#5b21b6', border: '1px solid #ddd6fe' }}
+            title="Distance — not a share of money">
+            <Route size={11} />
             {leg.isDraft ? '≈' : ''}{Math.round(leg.miles).toLocaleString()} mi
-            {shareOfMiles != null ? ` · ${Math.round(shareOfMiles * 100)}% of haul` : ''}
+            {shareOfMiles != null ? ` · ${Math.round(shareOfMiles * 100)}% of miles` : ''}
           </span>
         )}
       </div>
@@ -332,7 +393,18 @@ function LegCard({
           />
         </Field>
         {canViewDriverPay && (
-          <Field label="Driver Pay" labelSuffix={pctChip(pct)}>
+          <Field label="Driver Pay" labelSuffix={payLabelSuffix}>
+            {/* Name the denominator in plain text too — the chip says
+                "of leg", this says what the leg is worth. */}
+            {isRelay && legRevenue != null && legRevenue > 0 && (
+              <div className="text-[10px] mb-1" style={{ color: 'var(--gc-text-3)' }}>
+                Leg share of load price:{' '}
+                <strong style={{ color: '#5b21b6' }}>
+                  ${legRevenue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </strong>
+                {shareOfMiles == null ? ' (even split — leg miles unknown)' : ''}
+              </div>
+            )}
             <PayInput
               value={leg.pay}
               onChange={v => onChangeLeg(leg.key, { pay: v })}
@@ -355,7 +427,8 @@ function LegCard({
 
 export default function RelayLegsEditor({
   legs, handoffs, loadPrice, assets, drivers, startDate,
-  canViewDriverPay, disabled, loadId, handoffPhotos, onSelectPhoto, onPhotosUploaded,
+  canViewDriverPay, disabled, driverPayPct, payNotice,
+  loadId, handoffPhotos, onSelectPhoto, onPhotosUploaded,
   canonicalDriverName, onChangeLeg, onOpenLeg, onAddHandoff, onAddHandoffForLeg, onRemoveHandoff,
   builderMode, onChangeHandoffTimes, onChangeHandoffStop,
 }: Props) {
@@ -371,9 +444,11 @@ export default function RelayLegsEditor({
   const totalPay = legs.reduce((s, l) => s + (typeof l.pay === 'number' ? l.pay : 0), 0);
   const allMilesKnown = legs.length > 0 && legs.every(l => l.miles != null && l.miles > 0);
   const totalMiles = allMilesKnown ? legs.reduce((s, l) => s + (l.miles ?? 0), 0) : null;
-  const totalPct = loadPrice != null && loadPrice > 0 && totalPay > 0
-    ? Math.round((totalPay / loadPrice) * 1000) / 10
-    : null;
+  // Per-leg denominators, from the one shared rule (lib/legPay) that
+  // payroll and the load page use too — so the same leg can't read 8%
+  // here and 27% there ever again.
+  const revenuePerLeg = legRevenues(loadPrice, legs.map(l => l.miles));
+  const totalPct = payPctOf(totalPay, loadPrice);
   const fmt$ = (n: number) => `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
   return (
@@ -404,6 +479,24 @@ export default function RelayLegsEditor({
           </button>
         )}
       </div>
+
+      {/* Pay bookkeeping the dispatcher didn't do by hand — currently
+          the re-proration that runs when a solo load is split. Silent
+          money moves are how a leg ends up carrying the whole load's
+          pay, so this says what happened and offers the way back. */}
+      {payNotice && canViewDriverPay && (
+        <div className="flex items-start justify-between gap-3 rounded-lg px-3 py-2"
+          style={{ background: '#fef3c7', border: '1px solid #fde68a', color: '#92400e', fontSize: 11.5 }}>
+          <span>{payNotice.text}</span>
+          {payNotice.onUndo && (
+            <button type="button" onClick={payNotice.onUndo}
+              className="shrink-0 font-semibold underline underline-offset-2"
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#92400e', fontSize: 11.5 }}>
+              Undo
+            </button>
+          )}
+        </div>
+      )}
 
       {legs.map((leg, i) => {
         const handoff = i > 0 ? handoffs[i - 1] : null;
@@ -536,6 +629,8 @@ export default function RelayLegsEditor({
               leg={leg}
               legCount={legCount}
               loadPrice={loadPrice}
+              legRevenue={revenuePerLeg[i] ?? null}
+              driverPayPct={driverPayPct}
               shareOfMiles={totalMiles != null && leg.miles != null ? (leg.miles / totalMiles) : null}
               assets={assets}
               drivers={drivers}
@@ -579,7 +674,8 @@ export default function RelayLegsEditor({
           <span>
             <strong>{totalPay > 0 ? fmt$(totalPay) : '—'}</strong>
             {loadPrice != null && loadPrice > 0 && (
-              <> of {fmt$(loadPrice)}{totalPct != null ? ` · ${totalPct % 1 === 0 ? totalPct.toFixed(0) : totalPct.toFixed(1)}%` : ''}</>
+              <> of {fmt$(loadPrice)} load price
+                {totalPct != null ? ` · ${fmtPct(totalPct)}% ${PAY_BASIS_LABEL.load}` : ''}</>
             )}
           </span>
         </div>

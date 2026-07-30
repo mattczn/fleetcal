@@ -762,7 +762,27 @@ function DriverProfilePanel({ driver, events, deletedEvents, assets, updateDrive
       const [y, m, d] = rec.weekStart.split('-').map(Number);
       const sat = new Date(y, m - 1, d);
       const fri = new Date(y, m - 1, d + 6);
-      // Fetch the week's events for this driver + the adjustments in parallel
+      const weekLabelFrozen = `${fmtDate(sat)} – ${fmtDate(fri)}`;
+      // Snapshot records reprint from their own frozen lines — don't go
+      // near live data. This is a pay stub that was already issued; the
+      // whole point is that it can't drift. (Before snapshots existed,
+      // this path recomputed the stub from current events, so reprinting
+      // an old week could hand the driver a different document than the
+      // one they were paid on.)
+      if (rec.lineItems?.length) {
+        printPayroll({
+          orgName:    organization?.name    ?? 'My Organization',
+          orgLogoUrl: organization?.imageUrl,
+          weekLabel:  weekLabelFrozen,
+          sat,
+          fri,
+          drivers: [{ driverName: driver.name ?? '', loads: [], adjustments: [], record: rec }],
+        });
+        return;
+      }
+      // Legacy record (total only) — fall back to reconstructing from
+      // the week's live data. Best available, but not guaranteed to
+      // match what was issued.
       const [rangeResult, allAdjs] = await Promise.all([
         fetchEventsInRange(orgId, sat.toISOString(), fri.toISOString()),
         fetchPayrollAdjustments(orgId, rec.weekStart),
@@ -773,11 +793,10 @@ function DriverProfilePanel({ driver, events, deletedEvents, assets, updateDrive
       const adjs = allAdjs.filter(
         a => a.driverName.toLowerCase() === (driver.name ?? '').toLowerCase()
       );
-      const weekLabel = `${fmtDate(sat)} – ${fmtDate(fri)}`;
       printPayroll({
         orgName:    organization?.name    ?? 'My Organization',
         orgLogoUrl: organization?.imageUrl,
-        weekLabel,
+        weekLabel:  weekLabelFrozen,
         sat,
         fri,
         drivers: [{ driverName: driver.name ?? '', loads, adjustments: adjs, record: rec }],

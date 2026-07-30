@@ -392,6 +392,37 @@ export interface DriverScore {
   bonusEligible: boolean;
 }
 
+/** One frozen line of a finalized pay stub.
+ *
+ *  Snapshotted at Finalize time into payroll_records.line_items. Each item
+ *  carries everything the stub needs to be reprinted without consulting
+ *  live data — that is the whole point: a stub reprinted a month later
+ *  must be the same document that was issued.
+ *
+ *  `amount` is signed dollars (deductions negative). `id` is the source
+ *  row's identity ONLY so the UI can diff a snapshot against current
+ *  values; it is not a live reference and the source row may be gone. */
+export interface PayrollLineItem {
+  kind: "load" | "adjustment" | "accessorial";
+  /** events.id / payroll_adjustments.id / "acc-<loadId>-<accessorialId>". */
+  id: string;
+  amount: number;
+  /** Display text — event title, adjustment description, accessorial note. */
+  label: string;
+  /** YYYY-MM-DD. For loads this is the pickup date as it stood at finalize. */
+  date?: string;
+  // ── loads only ──
+  eventId?: string;
+  loadId?: string;
+  loadNum?: string;
+  /** "Leg 2 · Transfer" for relay legs; "Both" for a single-leg load. */
+  legLabel?: string;
+  legIndex?: number;
+  legCount?: number;
+  // ── adjustments / accessorials only ──
+  category?: string;
+}
+
 export interface PayrollRecord {
   id: string;
   driverName: string;
@@ -399,6 +430,26 @@ export interface PayrollRecord {
   totalPay: number;
   finalizedAt: string;
   notes?: string;
+  /** The frozen detail behind `totalPay`. Absent on records finalized
+   *  before the 20260728 snapshot migration and on the historical rows
+   *  written by backfill-payroll-records.ts — those only ever knew a
+   *  weekly total. Treat absent as "no frozen detail available", never
+   *  as "zero pay": `totalPay` is still authoritative for the number. */
+  lineItems?: PayrollLineItem[];
+  /** Clerk user id that pressed Finalize. Authoritative. */
+  finalizedBy?: string;
+  /** Display label captured from the client at finalize time. Convenience
+   *  for rendering; `finalizedBy` is the identity. */
+  finalizedByName?: string;
+  /** Set when this record stopped being in force. Records are append-only:
+   *  Reopen and Re-finalize supersede rather than delete, so a week's whole
+   *  payment history survives. Live records have this null. */
+  supersededAt?: string;
+  supersededBy?: string;
+  supersededByName?: string;
+  /** 'reopen'     — a human unlocked the week.
+   *  'refinalize' — replaced by a fresh snapshot after the numbers changed. */
+  supersededReason?: "reopen" | "refinalize";
 }
 
 // ── Org settings ────────────────────────────────────────────────────────

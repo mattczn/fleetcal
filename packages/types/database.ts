@@ -1809,31 +1809,54 @@ export type Database = {
         }
         Relationships: []
       }
+      // Snapshot + append-only history columns added by
+      // 20260728_payroll_records_snapshot.sql.
       payroll_records: {
         Row: {
           driver_name: string
           finalized_at: string
+          finalized_by: string | null
+          finalized_by_name: string | null
           id: string
+          line_items: Json | null
           notes: string | null
           org_id: string
+          superseded_at: string | null
+          superseded_by: string | null
+          superseded_by_name: string | null
+          superseded_reason: string | null
           total_pay: number
           week_start: string
         }
         Insert: {
           driver_name: string
           finalized_at?: string
+          finalized_by?: string | null
+          finalized_by_name?: string | null
           id?: string
+          line_items?: Json | null
           notes?: string | null
           org_id: string
+          superseded_at?: string | null
+          superseded_by?: string | null
+          superseded_by_name?: string | null
+          superseded_reason?: string | null
           total_pay: number
           week_start: string
         }
         Update: {
           driver_name?: string
           finalized_at?: string
+          finalized_by?: string | null
+          finalized_by_name?: string | null
           id?: string
+          line_items?: Json | null
           notes?: string | null
           org_id?: string
+          superseded_at?: string | null
+          superseded_by?: string | null
+          superseded_by_name?: string | null
+          superseded_reason?: string | null
           total_pay?: number
           week_start?: string
         }

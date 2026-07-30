@@ -169,6 +169,14 @@ export default function NewLoadScreen() {
       let next = { ...prev, ...p };
       // If load price changed and driver pay is empty or auto-derived, recompute.
       // Skip when driverPay is also explicitly in this same patch (e.g. AI parse).
+      //
+      // The base is the WHOLE load price, which is correct here because
+      // this screen only ever creates single-leg loads — for a single
+      // leg, the leg's share IS the load price. If relay creation is
+      // ever added, the base must become that leg's miles-prorated
+      // share (apps/web/lib/legPay.ts holds the shared rule).
+      // driverPayPct is null when the org hasn't configured one, which
+      // means "don't auto-compute" — never substitute a literal here.
       if ("loadPrice" in p && !("driverPay" in p) && driverPayPct != null) {
         const lp = p.loadPrice ? parseFloat(p.loadPrice) : NaN;
         const dpEmptyOrAuto = !next.driverPay || driverPayAuto;

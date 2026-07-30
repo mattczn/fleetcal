@@ -2,20 +2,23 @@
 
 import { useMemo, useState, useEffect, useRef, useCallback, Fragment } from 'react';
 import Link from 'next/link';
-import { useOrganization } from '@clerk/nextjs';
-import { Users, ChevronDown, Loader2, AlertCircle, Check, Pencil, Plus, X, Trash2, CornerDownRight, Lock, Unlock, Download, RotateCcw, Info } from 'lucide-react';
+import { useOrganization, useUser } from '@clerk/nextjs';
+import { Users, ChevronDown, Loader2, AlertCircle, Check, Pencil, Plus, X, Trash2, CornerDownRight, Lock, Unlock, Download, RotateCcw, Info, Eye, History } from 'lucide-react';
 import Tooltip from '@/components/ui/Tooltip';
 import CopyChip from '@/components/ui/CopyChip';
 import DriversModal from '@/components/sidebar/DriversModal';
 import {
   fetchPayrollAdjustments, addPayrollAdjustment, deletePayrollAdjustment,
-  fetchPayrollRecord, finalizeDriverPay, unfinalizeDriverPay,
+  fetchPayrollRecord, fetchPayrollRecordsForWeek, finalizeDriverPay, unfinalizeDriverPay,
   type PayrollAdjustment, type PayrollRecord,
 } from '@/lib/db';
-import { parseDate, fmtDate, fmtDateFull, fmtMoney, printPayroll, type PrintDriver } from '@/lib/payrollPdf';
+import { parseDate, fmtDate, fmtDateFull, fmtMoney, printPayroll } from '@/lib/payrollPdf';
+import {
+  buildPayrollLineItems, diffPayrollSnapshot, groupSnapshot, sumLineItems,
+} from '@/lib/payrollSnapshot';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { railway } from '@/lib/railway';
-import type { LoadSummary } from '@fleetcal/types';
+import type { LoadSummary, PayrollLineItem } from '@fleetcal/types';
 import DataLoader from '@/components/DataLoader';
 import AppShell from '@/components/nav/AppShell';
 import type { CalendarEvent } from '@/lib/types';
@@ -206,7 +209,7 @@ const INPUT_STYLE: React.CSSProperties = {
 // ─── Adjustments section ─────────────────────────────────────────────────────
 
 function AdjustmentsSection({
-  orgId, driverName, driverAliases, weekStart, sat, onTotalChange, onListChange, refreshTick,
+  orgId, driverName, driverAliases, weekStart, sat, onListChange, refreshTick,
 }: {
   orgId: string;
   /** Canonical display name — used when writing new adjustments
@@ -219,7 +222,9 @@ function AdjustmentsSection({
   driverAliases: string[];
   weekStart: string;
   sat: Date;
-  onTotalChange: (total: number) => void;
+  /** The parent derives every total from this list — there is no separate
+   *  total callback, so the number on the card and the lines behind it
+   *  can never disagree. */
   onListChange: (list: PayrollAdjustment[]) => void;
   refreshTick?: number;
 }) {
@@ -242,7 +247,6 @@ function AdjustmentsSection({
 
   function sync(list: PayrollAdjustment[]) {
     setAdjustments(list);
-    onTotalChange(list.reduce((s, a) => s + a.amount, 0));
     onListChange(list);
   }
 
@@ -514,6 +518,116 @@ function AdjustmentsSection({
   );
 }
 
+// ─── Frozen stub (finalized week) ────────────────────────────────────────────
+//
+// Renders a finalized week FROM ITS SNAPSHOT. Same columns as the live
+// table minus the two dispatcher-only metrics (Miles, Load Value) —
+// those are properties of the load today, not of the payment that was
+// made, and the snapshot deliberately doesn't freeze them. Everything
+// here is read-only: this is the document that was issued.
+//
+// Titles stay clickable when the source load still exists, so a finalized
+// week never traps you — you can open and edit the load, and the card
+// then tells you the numbers have diverged.
+
+function FrozenStubTable({ groups, liveLoadIds, onOpenLoad }: {
+  groups: { loads: PayrollLineItem[]; adjustments: PayrollLineItem[]; accessorials: PayrollLineItem[] };
+  liveLoadIds: Set<string>;
+  onOpenLoad: (eventId: string) => void;
+}) {
+  const section = (title: string, items: PayrollLineItem[], tint: string, color: string) =>
+    items.length > 0 && (
+      <div style={{ borderTop: '1px solid var(--gc-border-light)', padding: '12px 20px 14px' }}>
+        <div className="text-[11px] font-semibold uppercase tracking-wide mb-2" style={{ color: 'var(--gc-text-3)' }}>
+          {title}
+        </div>
+        <div className="space-y-1.5">
+          {items.map(li => (
+            <div key={li.id} className="flex items-center gap-3 text-sm">
+              <span className="px-2 py-0.5 rounded-lg text-[11px] font-semibold whitespace-nowrap"
+                style={{ background: tint, color }}>
+                {li.category ?? '—'}
+              </span>
+              <span className="flex-1 truncate" style={{ color: 'var(--gc-text-2)' }}>
+                {li.label || <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
+              </span>
+              <span className="font-semibold whitespace-nowrap"
+                style={{ color: li.amount >= 0 ? '#1e8e3e' : '#d93025' }}>
+                {li.amount >= 0 ? '+' : ''}{fmtMoney(li.amount)}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+
+  return (
+    <>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
+              {['Date', 'Leg', 'Event Title', 'Load #', 'Driver Pay'].map(h => (
+                <th key={h} className="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--gc-text-3)' }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {groups.loads.length === 0 && (
+              <tr><td colSpan={5} className="px-4 py-3 text-sm" style={{ color: 'var(--gc-text-3)' }}>
+                No loads on this pay record — the total came from adjustments only.
+              </td></tr>
+            )}
+            {groups.loads.map(li => {
+              const stillLive = !!li.eventId && liveLoadIds.has(li.eventId);
+              return (
+                <tr key={li.id} style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
+                  <td className="px-4 py-3 whitespace-nowrap" style={{ color: 'var(--gc-text-2)' }}>
+                    {li.date
+                      ? parseDate(li.date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+                      : '—'}
+                  </td>
+                  <td className="px-4 py-3 whitespace-nowrap">
+                    <span className="px-2 py-0.5 rounded-lg text-[11px] font-semibold whitespace-nowrap"
+                      style={{ background: 'var(--gc-hover)', color: 'var(--gc-text-2)' }}>
+                      {li.legLabel ?? 'Both'}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 max-w-[280px]">
+                    {stillLive ? (
+                      <button onClick={() => onOpenLoad(li.eventId!)}
+                        className="inline-flex max-w-full text-left font-medium hover:underline truncate"
+                        style={{ color: 'var(--gc-blue)' }} title={li.label}>
+                        {li.label || '(no title)'}
+                      </button>
+                    ) : (
+                      <Tooltip content={<>This load is no longer part of the live week — it was edited, moved to another week, or deleted after the pay record was issued. The line stays on the stub because it was paid.</>}>
+                        <span className="truncate inline-block max-w-full" style={{ color: 'var(--gc-text-2)', cursor: 'help', borderBottom: '1px dotted var(--gc-text-3)' }}>
+                          {li.label || '(no title)'}
+                        </span>
+                      </Tooltip>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 whitespace-nowrap">
+                    {li.loadNum
+                      ? <CopyChip value={li.loadNum} style={{ fontSize: 12, fontWeight: 600, color: 'var(--gc-text-2)' }} />
+                      : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
+                  </td>
+                  <td className="px-4 py-3 font-semibold whitespace-nowrap" style={{ color: 'var(--gc-text-1)' }}>
+                    {fmtMoney(li.amount)}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {section('Accessorials (as paid)', groups.accessorials, '#1a73e81a', '#1a73e8')}
+      {section('Adjustments (as paid)', groups.adjustments, 'var(--gc-hover)', 'var(--gc-text-2)')}
+    </>
+  );
+}
+
 // ─── Driver payroll card ──────────────────────────────────────────────────────
 
 interface DriverRow {
@@ -545,11 +659,18 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
   const openEditModal = useCalendarStore(s => s.openEditModal);
   const updateEvent   = useCalendarStore(s => s.updateEvent);
   const allEvents     = useCalendarStore(s => s.events);
-  const [adjTotal,      setAdjTotal]      = useState(0);
+  const { user }      = useUser();
   const [adjList,       setAdjList]       = useState<PayrollAdjustment[]>([]);
   const [record,        setRecord]        = useState<PayrollRecord | null>(null);
   const [finalizing,    setFinalizing]    = useState(false);
   const [confirmFin,    setConfirmFin]    = useState(false);
+  // Finalized cards render the FROZEN snapshot by default. This flips to
+  // the live, editable view — the escape hatch that keeps a finalized
+  // week from trapping anyone. Editing a load is never blocked; the card
+  // just tells you the stub and the current numbers have parted ways.
+  const [showLive,      setShowLive]      = useState(false);
+  const [reopening,     setReopening]     = useState(false);
+  const [confirmReopen, setConfirmReopen] = useState(false);
   const [showProfile,   setShowProfile]   = useState(false);
   const [printing,      setPrinting]      = useState(false);
   const [trashConfirm,  setTrashConfirm]  = useState<string | null>(null); // adj.id pending confirm
@@ -634,11 +755,53 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
     return totalPrice / legs.length;
   }, [allEvents]);
 
-  const loadPay  = row.loads.reduce((s, l) => s + (l.driverPay ?? 0), 0);
-  const accTotal = payToDriverAccs.reduce((s, a) => s + a.amount, 0);
-  const totalPay = loadPay + adjTotal + accTotal;
   const totalRev = row.loads.reduce((s, l) => s + legRevenue(l), 0);
   const isFinalized = record !== null;
+
+  // ── Snapshot vs live ────────────────────────────────────────────────
+  //
+  // `liveLineItems` is what this week computes RIGHT NOW. It is what a
+  // Finalize would freeze, and what a finalized week gets diffed
+  // against. It is NOT what a finalized card displays.
+  const liveLineItems = useMemo(() => buildPayrollLineItems({
+    loads: row.loads,
+    adjustments: adjList,
+    accessorials: payToDriverAccs,
+    allEvents,
+  }), [row.loads, adjList, payToDriverAccs, allEvents]);
+  const liveTotal = useMemo(() => sumLineItems(liveLineItems), [liveLineItems]);
+  // Which snapshot lines still correspond to a load in the live store —
+  // decides whether a frozen row's title is clickable.
+  const liveLoadIdSet = useMemo(
+    () => new Set(allEvents.map(e => e.id)),
+    [allEvents],
+  );
+
+  // The frozen detail, when this record has any. Records finalized
+  // before the 20260728 migration (and the historical backfill rows)
+  // carry only a total — for those, `record.totalPay` is still the
+  // number we display, we just can't render frozen rows.
+  const snapshot = record?.lineItems?.length ? record.lineItems : null;
+  const snapshotGroups = useMemo(
+    () => (snapshot ? groupSnapshot(snapshot) : null),
+    [snapshot],
+  );
+
+  const drift = useMemo(
+    () => (record ? diffPayrollSnapshot(snapshot, record.totalPay, liveLineItems) : null),
+    [record, snapshot, liveLineItems],
+  );
+
+  // THE fix: once a week is finalized, the recorded total is the number
+  // this card shows — everywhere on it. Previously the header re-summed
+  // live values while the footer printed the record, so one card could
+  // display two different totals five lines apart.
+  const displayTotal = isFinalized ? record!.totalPay : liveTotal;
+  // `totalPay` keeps its old meaning for the finalize action: the amount
+  // that WOULD be recorded if you finalized right now.
+  const totalPay = liveTotal;
+  /** Rendering the issued stub rather than a live recompute. */
+  const frozenView = isFinalized && !!snapshot && !showLive;
 
   // Remove a payToDriver accessorial by setting payToDriver: false on the source event
   async function removeAccAdj(adjId: string) {
@@ -696,11 +859,15 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
         weekLabel,
         sat,
         fri,
+        // `record` carries the frozen line items when the week is
+        // finalized — printPayroll renders THOSE and ignores the live
+        // loads/adjustments, so a reprint reproduces the issued stub.
         drivers: [{
           driverName: row.driverName,
           loads: row.loads,
           adjustments: [...adjList, ...payToDriverAccs],
           record,
+          allEvents,
         }],
       });
     } finally {
@@ -731,17 +898,35 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
     return () => { cancelled = true; };
   }, [orgId, row.driverName, row.aliases, weekStart]);
 
-  async function handleFinalize() {
+  const actorName =
+    user?.fullName?.trim() ||
+    user?.primaryEmailAddress?.emailAddress ||
+    null;
+
+  /** Freeze the week: the total AND every line behind it. Used both for
+   *  the first Finalize and for Re-finalize after a correction — the
+   *  server supersedes the previous record rather than overwriting it,
+   *  so the earlier amount survives. */
+  async function snapshotWeek() {
     setFinalizing(true);
-    const rec = await finalizeDriverPay(orgId, row.driverName, weekStart, totalPay);
-    if (rec) setRecord(rec);
+    const rec = await finalizeDriverPay(
+      orgId, row.driverName, weekStart,
+      sumLineItems(liveLineItems), liveLineItems, actorName,
+    );
+    if (rec) { setRecord(rec); setShowLive(false); }
     setFinalizing(false); setConfirmFin(false);
   }
 
   async function handleReopen() {
     if (!record) return;
-    await unfinalizeDriverPay(record.id);
+    setReopening(true);
+    // Soft — the API supersedes the record and keeps it, along with who
+    // reopened it and when. Nothing about the payment is destroyed.
+    await unfinalizeDriverPay(record.id, actorName);
     setRecord(null);
+    setShowLive(false);
+    setReopening(false);
+    setConfirmReopen(false);
   }
 
   return (
@@ -776,8 +961,12 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
               )}
             </div>
             <div className="text-xs" style={{ color: 'var(--gc-text-3)' }}>
-              {row.loads.length} load{row.loads.length !== 1 ? 's' : ''}
+              {/* Finalized cards count the loads ON THE STUB, not the
+                  loads the week happens to compute today. */}
+              {(frozenView ? snapshotGroups!.loads.length : row.loads.length)} load
+              {(frozenView ? snapshotGroups!.loads.length : row.loads.length) !== 1 ? 's' : ''}
               {isFinalized && ` · Finalized ${new Date(record!.finalizedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`}
+              {isFinalized && record!.finalizedByName ? ` by ${record!.finalizedByName}` : ''}
             </div>
           </div>
         </button>
@@ -791,20 +980,26 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
         <div className="flex items-center gap-4">
           <div className="text-right">
             <div className="text-[11px] font-semibold uppercase tracking-wide mb-0.5 inline-flex items-center gap-1" style={{ color: 'var(--gc-text-3)' }}>
-              Driver Pay
+              {isFinalized ? 'Driver Pay · Finalized' : 'Driver Pay'}
               <Tooltip
                 placement="bottom"
                 content={
-                  <>
-                    Per-load <strong>driver pay</strong> for every leg this driver delivered this week
-                    {' '}+ payroll <strong>adjustments</strong> (bonuses, deductions, deferred amounts)
-                    {' '}+ pay-to-driver <strong>accessorials</strong> matched to this driver by name.
-                  </>
+                  isFinalized ? (
+                    <>
+                      The amount <strong>recorded when this week was finalized</strong>. It does not move when loads or adjustments change afterwards — that is the point of finalizing. If current values have diverged, the banner below says by how much.
+                    </>
+                  ) : (
+                    <>
+                      Per-load <strong>driver pay</strong> for every leg this driver delivered this week
+                      {' '}+ payroll <strong>adjustments</strong> (bonuses, deductions, deferred amounts)
+                      {' '}+ pay-to-driver <strong>accessorials</strong> matched to this driver by name.
+                    </>
+                  )
                 }>
                 <Info size={11} style={{ color: 'var(--gc-text-3)', opacity: 0.6, cursor: 'help' }} />
               </Tooltip>
             </div>
-            <div className="text-[18px] font-semibold" style={{ color: isFinalized ? '#1e8e3e' : 'var(--gc-text-1)' }}>{fmtMoney(totalPay)}</div>
+            <div className="text-[18px] font-semibold" style={{ color: isFinalized ? '#1e8e3e' : 'var(--gc-text-1)' }}>{fmtMoney(displayTotal)}</div>
           </div>
           <div className="text-right">
             <div className="text-[11px] font-semibold uppercase tracking-wide mb-0.5 inline-flex items-center gap-1" style={{ color: 'var(--gc-text-3)' }}>
@@ -837,8 +1032,110 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
         </div>
       </div>
 
-      {/* Auto-suggest banner for spanning relay loads */}
-      {spanningRelayLoadIds.size > 0 && (
+      {/* ── Drift banner ──────────────────────────────────────────────
+          Shown when a finalized week's live values no longer match what
+          was frozen. We never silently reconcile (that would rewrite a
+          pay record) and we never block the edit that caused it — we
+          say what changed and offer to re-snapshot. */}
+      {isFinalized && drift?.differs && (
+        <div
+          className="px-5 py-3 text-xs print:hidden"
+          style={{ background: '#f59e0b0e', borderTop: '1px solid var(--gc-border-light)', color: '#b45309' }}
+        >
+          <div className="flex items-start gap-2">
+            <AlertCircle size={14} style={{ marginTop: 1, flexShrink: 0 }} />
+            <div className="flex-1">
+              <div className="font-semibold">
+                Current values differ from what was finalized
+              </div>
+              <div className="mt-1" style={{ color: 'var(--gc-text-2)' }}>
+                Finalized <strong>{fmtMoney(drift.snapshotTotal)}</strong>
+                {' · '}current <strong>{fmtMoney(drift.liveTotal)}</strong>
+                {' · '}
+                <strong style={{ color: drift.delta >= 0 ? '#1e8e3e' : '#d93025' }}>
+                  {drift.delta >= 0 ? '+' : ''}{fmtMoney(drift.delta)}
+                </strong>
+                {drift.hasDetail && (drift.added.length > 0 || drift.removed.length > 0 || drift.changed.length > 0) && (
+                  <>
+                    {' — '}
+                    {[
+                      drift.changed.length > 0 ? `${drift.changed.length} line${drift.changed.length !== 1 ? 's' : ''} changed` : null,
+                      drift.added.length   > 0 ? `${drift.added.length} added`   : null,
+                      drift.removed.length > 0 ? `${drift.removed.length} no longer in this week` : null,
+                    ].filter(Boolean).join(', ')}
+                  </>
+                )}
+                {!drift.hasDetail && (
+                  <> — this record predates line-item snapshots, so only the totals can be compared.</>
+                )}
+              </div>
+              <div className="mt-2 flex items-center gap-2 flex-wrap">
+                <button
+                  onClick={snapshotWeek}
+                  disabled={finalizing}
+                  className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg"
+                  style={{ background: '#1e8e3e', color: '#fff', opacity: finalizing ? 0.7 : 1, cursor: 'pointer' }}
+                  title="Record today’s numbers as the new finalized amount. The previous record is kept, not overwritten."
+                >
+                  {finalizing ? <Loader2 size={12} className="animate-spin" /> : <Lock size={12} />}
+                  Re-finalize at {fmtMoney(drift.liveTotal)}
+                </button>
+                <button
+                  onClick={() => setShowLive(v => !v)}
+                  className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
+                  style={{ color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)', background: 'transparent' }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                >
+                  {showLive ? <History size={12} /> : <Eye size={12} />}
+                  {showLive ? 'Back to finalized stub' : 'View current values'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Frozen-view notice — no drift, just a reminder that these rows
+          are the issued record rather than a live computation. */}
+      {frozenView && !drift?.differs && (
+        <div
+          className="flex items-center gap-2 px-5 py-2 text-xs print:hidden"
+          style={{ background: '#1e8e3e08', borderTop: '1px solid var(--gc-border-light)', color: 'var(--gc-text-3)' }}
+        >
+          <Lock size={12} />
+          Showing the finalized record as issued.
+          <button
+            onClick={() => setShowLive(true)}
+            className="font-semibold"
+            style={{ color: 'var(--gc-blue)', background: 'transparent', border: 'none', cursor: 'pointer' }}
+          >
+            View current values
+          </button>
+        </div>
+      )}
+      {isFinalized && showLive && (
+        <div
+          className="flex items-center gap-2 px-5 py-2 text-xs print:hidden"
+          style={{ background: 'var(--gc-hover)', borderTop: '1px solid var(--gc-border-light)', color: 'var(--gc-text-3)' }}
+        >
+          <Eye size={12} />
+          Showing current values — editable. The finalized record is unchanged.
+          {snapshot && (
+            <button
+              onClick={() => setShowLive(false)}
+              className="font-semibold"
+              style={{ color: 'var(--gc-blue)', background: 'transparent', border: 'none', cursor: 'pointer' }}
+            >
+              Back to finalized stub
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Auto-suggest banner for spanning relay loads — an action prompt,
+          so it only belongs on the live, editable view. */}
+      {!frozenView && spanningRelayLoadIds.size > 0 && (
         <div
           className="flex items-center gap-2 px-5 py-2.5 text-xs font-medium print:hidden"
           style={{ background: '#f59e0b0e', borderTop: '1px solid var(--gc-border-light)', color: '#d97706' }}
@@ -851,7 +1148,17 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
         </div>
       )}
 
-      {/* Loads table */}
+      {/* Finalized week → the frozen stub. Not a recompute. */}
+      {frozenView && (
+        <FrozenStubTable
+          groups={snapshotGroups!}
+          liveLoadIds={liveLoadIdSet}
+          onOpenLoad={openEditModal}
+        />
+      )}
+
+      {/* Loads table (live view) */}
+      {!frozenView && (
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
@@ -1126,9 +1433,10 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
           </tbody>
         </table>
       </div>
+      )}
 
       {/* Accessorial adjustments (payToDriver items from load events) */}
-      {payToDriverAccs.length > 0 && (
+      {!frozenView && payToDriverAccs.length > 0 && (
         <div style={{ borderTop: '1px solid var(--gc-border-light)', padding: '12px 20px 14px' }}>
           <div className="text-[11px] font-semibold uppercase tracking-wide mb-2" style={{ color: 'var(--gc-text-3)' }}>
             Accessorials
@@ -1183,12 +1491,19 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
         </div>
       )}
 
-      <AdjustmentsSection
-        orgId={orgId} driverName={row.driverName} driverAliases={row.aliases}
-        weekStart={weekStart}
-        sat={sat} onTotalChange={setAdjTotal}
-        onListChange={setAdjList}
-      />
+      {/* Kept MOUNTED in the frozen view, just hidden: it is the only
+          source of the live adjustment list, and the drift banner above
+          needs that list to tell you the stub and today's numbers have
+          diverged. Switching to "current values" reveals it (and its
+          Add / Defer controls) again. */}
+      <div style={frozenView ? { display: 'none' } : undefined}>
+        <AdjustmentsSection
+          orgId={orgId} driverName={row.driverName} driverAliases={row.aliases}
+          weekStart={weekStart}
+          sat={sat}
+          onListChange={setAdjList}
+        />
+      </div>
 
       {/* Finalize footer */}
       <div className="flex items-center justify-between px-5 py-3"
@@ -1196,30 +1511,53 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
         <div className="text-sm" style={{ color: 'var(--gc-text-3)' }}>
           {isFinalized
             ? `Recorded ${fmtMoney(record!.totalPay)} on ${new Date(record!.finalizedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+              + (record!.finalizedByName ? ` by ${record!.finalizedByName}` : '')
+              + (snapshot ? ` · ${snapshot.length} line${snapshot.length !== 1 ? 's' : ''} frozen` : ' · total only (no frozen detail)')
             : 'Review loads and adjustments before finalizing.'}
         </div>
         <div className="flex items-center gap-2">
           {isFinalized ? (
-            <Tooltip
-              content={
-                <>
-                  <strong>Reopen</strong> this driver&rsquo;s pay for the week. Removes the payroll record so loads + adjustments can be edited again. Use sparingly once a pay stub has been issued.
-                </>
-              }>
-              <button onClick={handleReopen}
-                className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
-                style={{ color: 'var(--gc-text-3)', border: '1px solid var(--gc-border)' }}
-                onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
-                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                <Unlock size={11} /> Reopen
-              </button>
-            </Tooltip>
+            confirmReopen ? (
+              <>
+                <span className="text-sm font-medium" style={{ color: 'var(--gc-text-2)' }}>
+                  Reopen {row.driverName}&rsquo;s {fmtMoney(record!.totalPay)} for this week?
+                </span>
+                <button onClick={handleReopen} disabled={reopening}
+                  className="flex items-center gap-1.5 text-sm font-semibold px-4 py-1.5 rounded-lg"
+                  style={{ background: '#b45309', color: '#fff', opacity: reopening ? 0.7 : 1, cursor: 'pointer' }}>
+                  {reopening ? <Loader2 size={13} className="animate-spin" /> : <Unlock size={13} />}
+                  Reopen
+                </button>
+                <button onClick={() => setConfirmReopen(false)}
+                  className="text-sm px-3 py-1.5 rounded-lg transition-colors"
+                  style={{ color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <Tooltip
+                content={
+                  <>
+                    <strong>Reopen</strong> this driver&rsquo;s pay for the week so it can be finalized again at a new amount. The existing record is <strong>kept</strong> — superseded, not deleted — along with the amount, who finalized it, and who reopened it.
+                  </>
+                }>
+                <button onClick={() => setConfirmReopen(true)}
+                  className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
+                  style={{ color: 'var(--gc-text-3)', border: '1px solid var(--gc-border)' }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                  <Unlock size={11} /> Reopen
+                </button>
+              </Tooltip>
+            )
           ) : confirmFin ? (
             <>
               <span className="text-sm font-medium" style={{ color: 'var(--gc-text-2)' }}>
                 Record {fmtMoney(totalPay)} for {row.driverName}?
               </span>
-              <button onClick={handleFinalize} disabled={finalizing}
+              <button onClick={snapshotWeek} disabled={finalizing}
                 className="flex items-center gap-1.5 text-sm font-semibold px-4 py-1.5 rounded-lg"
                 style={{ background: '#1e8e3e', color: '#fff', opacity: finalizing ? 0.7 : 1 }}>
                 {finalizing ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
@@ -1238,7 +1576,7 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
               placement="top"
               content={
                 <>
-                  <strong>Lock</strong> this driver&rsquo;s pay for the week. Writes a payroll record with the current Driver Pay total so it&rsquo;s preserved even if loads or adjustments change later. Use <em>Reopen</em> to unlock.
+                  <strong>Lock</strong> this driver&rsquo;s pay for the week. Records the total <em>and every line behind it</em> — the card and the printed stub then keep showing exactly these numbers even if loads or adjustments change later. If they do change, the card says so and offers to re-finalize. Use <em>Reopen</em> to unlock.
                 </>
               }>
               <button onClick={() => setConfirmFin(true)}
@@ -1350,6 +1688,11 @@ export default function PayrollView() {
   const [fetching, setFetching] = useState(false);
   // Driver names that have adjustments this week (even with no loads — e.g. deferred carry-ins)
   const [adjDriverNames, setAdjDriverNames] = useState<string[]>([]);
+  // Driver names with a FINALIZED record for this week. A finalized week
+  // must keep its card even when the week no longer computes any loads
+  // for that driver — e.g. the load was edited across the Saturday
+  // boundary after payday. The stub exists, so it stays on screen.
+  const [recordDriverNames, setRecordDriverNames] = useState<string[]>([]);
 
   const { sat, fri } = weekOptions[weekIdx];
   const weekStart = sat.toISOString().split('T')[0];
@@ -1372,6 +1715,17 @@ export default function PayrollView() {
       setAdjDriverNames(names);
     });
   }, [orgId, weekStart]); // eslint-disable-line
+
+  // Finalized records for the week — see recordDriverNames above.
+  useEffect(() => {
+    if (!orgId || !weekStart) return;
+    let cancelled = false;
+    fetchPayrollRecordsForWeek(weekStart).then(recs => {
+      if (cancelled) return;
+      setRecordDriverNames([...new Set(recs.map(r => r.driverName).filter(Boolean))]);
+    });
+    return () => { cancelled = true; };
+  }, [orgId, weekStart]);
 
   // Pull the canonical week load set from the same server endpoint the
   // Dashboard uses (/v1/reports/loads via listLoadSummaries). That's
@@ -1517,7 +1871,11 @@ export default function PayrollView() {
     // but no loads — keeps deferred carry-ins from disappearing.
     // Match by any alias the record's canonical or legacy name
     // would generate.
-    for (const adjName of adjDriverNames) {
+    //
+    // Drivers with a FINALIZED record go through the same path: a week
+    // that was paid must keep its card even if every load has since been
+    // edited out of it, or the stub would vanish with no trace.
+    for (const adjName of [...new Set([...adjDriverNames, ...recordDriverNames])]) {
       if (!adjName) continue;
       const lower = adjName.toLowerCase();
       // Already represented by some group's alias set?
@@ -1563,7 +1921,7 @@ export default function PayrollView() {
       return a.driverName.localeCompare(b.driverName);
     });
     return rows;
-  }, [weekEvents, adjDriverNames, drivers]);
+  }, [weekEvents, adjDriverNames, recordDriverNames, drivers]);
 
   // Total driver pay across every leg — each driver gets paid for
   // their leg, so summing every event's driverPay is the correct

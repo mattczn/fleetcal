@@ -369,9 +369,15 @@ export async function addPayrollAdjustment(
   } catch (err) { console.error('addPayrollAdjustment:', err); return null; }
 }
 
-export async function deletePayrollAdjustment(id: string): Promise<void> {
-  try { await railway.deletePayrollAdjustment(id); }
-  catch (err) { console.error('deletePayrollAdjustment:', err); }
+/** Resolves true when the adjustment's week has a live payroll record.
+ *  The delete happens either way — the API accepts writes into finalized
+ *  weeks by design and reports the divergence rather than blocking it. */
+export async function deletePayrollAdjustment(id: string): Promise<boolean> {
+  try {
+    const res = await railway.deletePayrollAdjustment(id);
+    return !!res?.weekFinalized;
+  }
+  catch (err) { console.error('deletePayrollAdjustment:', err); return false; }
 }
 
 // ── Payroll records (finalized payments) ─────────────────────────────────────
@@ -387,18 +393,49 @@ export async function fetchPayrollRecord(
   } catch (err) { console.error('fetchPayrollRecord:', err); return null; }
 }
 
+export type PayrollLineItem = import('@fleetcal/types').PayrollLineItem;
+
+/** Finalize a driver-week — writes the frozen line detail alongside the
+ *  total so the week can be re-rendered and reprinted exactly as issued.
+ *
+ *  `lineItems` must sum to `totalPay`; the API rejects a snapshot that
+ *  doesn't foot. Re-finalizing an already-finalized week supersedes the
+ *  previous record instead of overwriting it. */
 export async function finalizeDriverPay(
   _orgId: string, driverName: string, weekStart: string, totalPay: number,
+  lineItems?: PayrollLineItem[], finalizedByName?: string | null,
 ): Promise<PayrollRecord | null> {
   try {
-    const { record } = await railway.upsertPayrollRecord({ driverName, weekStart, totalPay });
+    const { record } = await railway.upsertPayrollRecord({
+      driverName, weekStart, totalPay,
+      lineItems: lineItems ?? null,
+      finalizedByName: finalizedByName ?? null,
+    });
     return record;
   } catch (err) { console.error('finalizeDriverPay:', err); return null; }
 }
 
-export async function unfinalizeDriverPay(id: string): Promise<void> {
-  try { await railway.deletePayrollRecord(id); }
-  catch (err) { console.error('unfinalizeDriverPay:', err); }
+/** Reopen — the record is superseded server-side, not deleted. Returns
+ *  the retired record (carrying who reopened it and when) or null. */
+export async function unfinalizeDriverPay(
+  id: string, reopenedByName?: string | null,
+): Promise<PayrollRecord | null> {
+  try {
+    const { record } = await railway.deletePayrollRecord(id, reopenedByName ?? null);
+    return record;
+  }
+  catch (err) { console.error('unfinalizeDriverPay:', err); return null; }
+}
+
+/** Every live finalized record for one week, across drivers.
+ *
+ *  The payroll page needs this to keep a finalized driver on screen even
+ *  when the week no longer computes any loads for them — e.g. the load
+ *  was edited across the Saturday boundary after the week was paid. The
+ *  stub still exists, so the card still shows. */
+export async function fetchPayrollRecordsForWeek(weekStart: string): Promise<PayrollRecord[]> {
+  try { return (await railway.listPayrollRecords({ weekStart })).records; }
+  catch (err) { console.error('fetchPayrollRecordsForWeek:', err); return []; }
 }
 
 export async function fetchPayrollRecordsForDriver(_orgId: string, driverName: string): Promise<PayrollRecord[]> {

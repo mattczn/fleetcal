@@ -67,6 +67,22 @@ const loads = new Hono<{ Variables: AuthVariables }>();
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────
 
+/**
+ * Haversine distance in miles. Used only to weight a leg's share of a
+ * load at INSERT time, when routed miles don't exist yet — the same
+ * approximation apps/web/lib/legMiles.ts uses for the revenue split.
+ */
+function straightLineMiles(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const R = 3958.8;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
 const STOP_COLS =
   "id,event_id,sequence,type,facility_name,address,city,state,timezone," +
   "appt_start,appt_end,schedule_type,is_handoff,handoff_drop_at,handoff_pickup_at," +
@@ -372,35 +388,6 @@ loads.post("/", requireCapability("loads.create"), async (c) => {
     return c.json({ error: "load_insert_failed", detail: loadErr?.message } satisfies ApiErrorResponse, 500);
   }
 
-  // Driver-pay auto-fill: when the org has configured a driverPayPct
-  // and the dispatcher creating the load didn't supply driver_pay
-  // (typically because they don't have payroll visibility), compute
-  // it server-side as load.price × pct so reports stay accurate
-  // regardless of who created the load.
-  //
-  // Single-leg loads: the calculated total lands on the one event.
-  // Relay loads: skipped here — splitting by leg miles requires the
-  // stops to be geocoded, which they may not be at insert time.
-  // Dispatchers with payroll access set relay leg pay manually.
-  let autoDriverPay: number | null = null;
-  if (body.events.length === 1) {
-    const linehaul = typeof body.load.loadPrice === "number" ? body.load.loadPrice : null;
-    const noPaySent = body.events[0].driverPay == null || body.events[0].driverPay === 0;
-    if (linehaul && linehaul > 0 && noPaySent) {
-      const { data: settingsRow } = await supabase
-        .from("org_settings")
-        .select("rate_con_settings")
-        .eq("org_id", orgId)
-        .maybeSingle();
-      const rcs = (settingsRow as { rate_con_settings: { driverPayPct?: number } | null } | null)?.rate_con_settings;
-      const pct = typeof rcs?.driverPayPct === "number" ? rcs.driverPayPct : null;
-      if (pct != null && pct > 0) {
-        autoDriverPay = Math.round(linehaul * (pct / 100) * 100) / 100;
-        console.log(`[POST /v1/loads] auto-filled driver_pay=${autoDriverPay} (linehaul=${linehaul} × ${pct}%) for load ${loadRow.id}`);
-      }
-    }
-  }
-
   // 2. Insert events
   //
   // Default status follows the same auto-flip rule as PATCH events:
@@ -418,6 +405,65 @@ loads.post("/", requireCapability("loads.create"), async (c) => {
     body.events[1].relayRole === "pickup"
       ? [body.events[1], body.events[0]]
       : body.events;
+
+  // ── Driver-pay auto-fill ────────────────────────────────────────────
+  // When the org has configured a driverPayPct and the dispatcher who
+  // created the load didn't supply driver_pay (typically because they
+  // don't have payroll visibility), compute it server-side so reports
+  // stay accurate regardless of who created the load.
+  //
+  // LEG-AWARE. A leg's pay base is that LEG's share of the price, not
+  // the whole price — otherwise every leg of a 3-leg load is created
+  // carrying the whole load's pay and the load pays out 3×. The share
+  // rule mirrors apps/web/lib/legPay.ts exactly: miles-prorated, with an
+  // even 1/N split whenever any leg's distance can't be established.
+  // Single-leg loads are the same rule with N = 1 (share === price).
+  //
+  // Distance comes from straight-line stop coords, which is all we have
+  // at insert time (routed miles are cached lazily later). Un-geocoded
+  // stops simply fall through to the even split.
+  const autoDriverPayByIdx: Array<number | null> = orderedEvents.map(() => null);
+  {
+    const linehaul = typeof body.load.loadPrice === "number" ? body.load.loadPrice : null;
+    if (linehaul && linehaul > 0) {
+      const { data: settingsRow } = await supabase
+        .from("org_settings")
+        .select("rate_con_settings")
+        .eq("org_id", orgId)
+        .maybeSingle();
+      const rcs = (settingsRow as { rate_con_settings: { driverPayPct?: number } | null } | null)?.rate_con_settings;
+      const pct = typeof rcs?.driverPayPct === "number" ? rcs.driverPayPct : null;
+      if (pct != null && pct > 0) {
+        const legMiles = orderedEvents.map((ev) => {
+          const pts = (ev.stops ?? []).filter(
+            (st): st is typeof st & { lat: number; lng: number } => st.lat != null && st.lng != null,
+          );
+          if (pts.length < 2) return null;
+          let total = 0;
+          for (let i = 1; i < pts.length; i++) {
+            total += straightLineMiles(pts[i - 1].lat, pts[i - 1].lng, pts[i].lat, pts[i].lng);
+          }
+          return total > 0 ? total : null;
+        });
+        const n = orderedEvents.length;
+        const knownAll = n > 1 && legMiles.every((m) => m != null);
+        const totalMiles = knownAll ? legMiles.reduce<number>((sum, m) => sum + (m ?? 0), 0) : 0;
+        orderedEvents.forEach((ev, i) => {
+          // Never overwrite a pay figure the caller actually sent.
+          if (ev.driverPay != null && ev.driverPay !== 0) return;
+          const share = n <= 1
+            ? 1
+            : (knownAll && totalMiles > 0 ? (legMiles[i] ?? 0) / totalMiles : 1 / n);
+          autoDriverPayByIdx[i] = Math.round(linehaul * share * (pct / 100) * 100) / 100;
+        });
+        console.log(
+          `[POST /v1/loads] auto-filled driver_pay ${JSON.stringify(autoDriverPayByIdx)} `
+          + `(linehaul=${linehaul} × ${pct}% across ${n} leg${n === 1 ? "" : "s"}, `
+          + `${n <= 1 ? "single leg" : knownAll ? "miles-prorated" : "even split — leg miles unknown"}) for load ${loadRow.id}`,
+        );
+      }
+    }
+  }
   const eventInserts = orderedEvents.map((ev, i) =>
     appLoadToEventInsert(
       {
@@ -425,8 +471,9 @@ loads.post("/", requireCapability("loads.create"), async (c) => {
         loadId:    loadRow.id,
         eventKind: "revenue",
         status:    ev.status ?? (ev.driverId != null ? "assigned" : "scheduled"),
-        // Apply the auto-fill only to single-leg loads — see above.
-        driverPay: autoDriverPay != null ? autoDriverPay : ev.driverPay,
+        // Per-leg auto-fill (leg share × pct); null whenever the caller
+        // supplied a figure or the org has no configured percentage.
+        driverPay: autoDriverPayByIdx[i] != null ? autoDriverPayByIdx[i]! : ev.driverPay,
         // Position is authoritative: leg_index from array order,
         // relay_role derived (first=pickup, last=delivery, mid=transfer).
         legIndex:  i,

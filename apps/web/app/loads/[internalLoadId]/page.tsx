@@ -65,6 +65,9 @@ import {
 import { railway, RailwayError } from '@/lib/railway';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { displayBrokerName } from '@/lib/customerMatch';
+import {
+  PAY_BASIS_LABEL, autoPayFor, fmtPct, legRevenues, payMatchesPct, payPctOf,
+} from '@/lib/legPay';
 import type { Load, Invoice, Customer, InternalNote, LoadStatus } from '@fleetcal/types';
 import { byLegIndex, legLabel } from '@fleetcal/types';
 
@@ -900,11 +903,18 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
 // component so the finalized-payroll hook runs once per leg without
 // breaking the rules of hooks when the leg count varies.
 function LegPayField({
-  leg, label, loadPrice, iStyle, onFocus, onCommit,
+  leg, label, loadPrice, legRevenue, isRelay, driverPayPct, iStyle, onFocus, onCommit,
 }: {
   leg: Load;
   label: string;
   loadPrice: number | undefined;
+  /** THIS leg's miles-prorated share of the load price — the
+   *  denominator for the leg's primary pay percentage. Same shared rule
+   *  (lib/legPay) the calendar modal and payroll use. */
+  legRevenue: number | null;
+  isRelay: boolean;
+  /** Org default rate — powers "Set to N% of leg". */
+  driverPayPct: number | null;
   iStyle: React.CSSProperties;
   onFocus: (e: React.FocusEvent<HTMLInputElement>) => void;
   /** null = clear the leg's pay. */
@@ -913,16 +923,52 @@ function LegPayField({
   const { finalized } = useLoadPayFinalized(leg.driverName, leg.start);
   const payNum = typeof leg.driverPay === 'number' ? leg.driverPay : 0;
   const lp = typeof loadPrice === 'number' ? loadPrice : 0;
-  const pct = lp > 0 && payNum > 0 ? Math.round((payNum / lp) * 1000) / 10 : null;
-  const pctChip = pct === null ? null : (
-    <span className="px-1.5 py-0.5 rounded-lg normal-case tracking-normal font-semibold"
-      style={{ fontSize: 10, background: '#f1f3f4', color: 'var(--gc-text-3)', border: '1px solid var(--gc-border-light)' }}>
-      {pct % 1 === 0 ? pct.toFixed(0) : pct.toFixed(1)}%
+  // Primary = pay ÷ THIS LEG's share (the fair-pay question); the
+  // whole-load percentage stays as a secondary muted chip. Both are
+  // labelled with what they're a percentage OF.
+  const pctOfLeg  = payPctOf(payNum, isRelay ? legRevenue : lp);
+  const pctOfLoad = payPctOf(payNum, lp);
+  const autoForLeg = autoPayFor(isRelay ? legRevenue : lp, driverPayPct);
+  const isAutoPay  = payMatchesPct(payNum, isRelay ? legRevenue : lp, driverPayPct);
+  const basis = isRelay ? PAY_BASIS_LABEL.leg : PAY_BASIS_LABEL.load;
+  const chip = (p: number | null, b: string, emphasis: boolean) => p === null ? null : (
+    <span className="px-1.5 py-0.5 rounded-lg normal-case tracking-normal font-semibold whitespace-nowrap"
+      style={{
+        fontSize: 10,
+        background: emphasis ? '#dbeafe' : '#f1f3f4',
+        color:      emphasis ? '#1d4ed8' : 'var(--gc-text-3)',
+        border:     `1px solid ${emphasis ? '#bfdbfe' : 'var(--gc-border-light)'}`,
+      }}
+      title={`Driver pay is ${fmtPct(p)}% ${b}`}>
+      {fmtPct(p)}% <span style={{ fontWeight: 500, opacity: 0.85 }}>{b}</span>
+    </span>
+  );
+  const pctChip = (
+    <span className="flex items-center gap-1 flex-wrap">
+      {chip(pctOfLeg, basis, isRelay)}
+      {isRelay && pctOfLoad !== null && chip(pctOfLoad, PAY_BASIS_LABEL.load, false)}
+      {!finalized && autoForLeg != null && !isAutoPay && (
+        <button type="button" onClick={() => onCommit(autoForLeg)}
+          title={`Set this leg's pay to ${driverPayPct}% of its ${isRelay ? 'share' : 'price'}`}
+          className="flex items-center gap-1 rounded transition-colors normal-case tracking-normal font-semibold"
+          style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--gc-text-3)', padding: '1px 4px', fontSize: 10 }}
+          onMouseEnter={e => { e.currentTarget.style.color = '#1d4ed8'; e.currentTarget.style.background = '#dbeafe'; }}
+          onMouseLeave={e => { e.currentTarget.style.color = 'var(--gc-text-3)'; e.currentTarget.style.background = 'transparent'; }}>
+          <RotateCcw size={10} />
+          Set to {driverPayPct}% {basis}
+        </button>
+      )}
     </span>
   );
   const finalizedHint = 'Locked — driver pay has been finalized for this week. Reopen the payroll record on the Payroll page to edit.';
   return (
     <Field label={label} labelSuffix={pctChip}>
+      {isRelay && legRevenue != null && legRevenue > 0 && (
+        <div className="text-[10px] mb-1" style={{ color: 'var(--gc-text-3)' }}>
+          Leg share of load price:{' '}
+          <strong style={{ color: '#5b21b6' }}>{moneyFmt.format(legRevenue)}</strong>
+        </div>
+      )}
       <input type="number" value={payNum === 0 ? '' : payNum}
         placeholder="0.00"
         onChange={e => {
@@ -1016,6 +1062,11 @@ function LoadFormPane({
   // Relay = more than one leg. legs[0] mirrors `primary` (same draft
   // overlay applied by the page).
   const isRelayLoad = legs.length > 1;
+  // Each leg's share of the load price, from the ONE shared rule
+  // (lib/legPay): miles-prorated, even 1/N while any leg's miles are
+  // unknown. This is the denominator every per-leg pay % uses, here and
+  // in the calendar modal and on the payroll page.
+  const legRevenueByIdx = legRevenues(primary.loadPrice, legs.map(l => l.loadedMiles));
 
   // ── Derived values ──────────────────────────────────────────────────
   // Linked customer — first try the FK (canonical source). If the load
@@ -1103,18 +1154,14 @@ function LoadFormPane({
   // Pay label rendering the live (driverPay / loadPrice) percentage,
   // plus a "Reset to default" button when the manual value diverges
   // from the org default. Persisted on Save like any other field.
-  const driverPayPctValue = (() => {
-    const lp = typeof primary.loadPrice === 'number' ? primary.loadPrice : 0;
-    const dp = typeof primary.driverPay === 'number' ? primary.driverPay : 0;
-    if (lp <= 0 || dp <= 0) return null;
-    return Math.round((dp / lp) * 1000) / 10;
-  })();
-  const driverPayIsAuto = driverPayPct != null && driverPayPctValue != null
-    && Math.abs(driverPayPctValue - driverPayPct) < 0.05;
+  // SOLO loads: the base is the whole load price, and the chip says so.
+  // (On a relay this slot shows the read-only total; per-leg
+  // percentages live in LegPayField and are "of leg".)
+  const driverPayPctValue = payPctOf(primary.driverPay, primary.loadPrice);
+  const driverPayIsAuto = payMatchesPct(primary.driverPay, primary.loadPrice, driverPayPct);
   function resetDriverPay() {
-    const lp = typeof primary.loadPrice === 'number' ? primary.loadPrice : 0;
-    if (driverPayPct == null || lp <= 0) return;
-    const auto = Math.round(lp * (driverPayPct / 100) * 100) / 100;
+    const auto = autoPayFor(primary.loadPrice, driverPayPct);
+    if (auto == null) return;
     onChange({ driverPay: auto });
   }
   const driverPayLabelSuffix = driverPayPctValue !== null ? (
@@ -1125,17 +1172,17 @@ function LoadFormPane({
           color:      driverPayIsAuto ? '#1d4ed8' : 'var(--gc-text-3)',
           border:     `1px solid ${driverPayIsAuto ? '#bfdbfe' : 'var(--gc-border-light)'}`,
         }}>
-        {driverPayPctValue % 1 === 0 ? driverPayPctValue.toFixed(0) : driverPayPctValue.toFixed(1)}%
+        {fmtPct(driverPayPctValue)}% <span style={{ fontWeight: 500, opacity: 0.85 }}>{PAY_BASIS_LABEL.load}</span>
       </span>
       {!driverPayIsAuto && driverPayPct != null && (
         <button type="button" onClick={resetDriverPay}
-          title={`Reset to ${driverPayPct}%`}
+          title={`Reset to ${driverPayPct}% of the load price`}
           className="flex items-center gap-1 rounded transition-colors"
           style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--gc-text-3)', padding: '1px 4px' }}
           onMouseEnter={e => { e.currentTarget.style.color = '#1d4ed8'; e.currentTarget.style.background = '#dbeafe'; }}
           onMouseLeave={e => { e.currentTarget.style.color = 'var(--gc-text-3)'; e.currentTarget.style.background = 'transparent'; }}>
           <RotateCcw size={10} />
-          <span style={{ fontSize: 10 }}>Reset to {driverPayPct}%</span>
+          <span style={{ fontSize: 10 }}>Set to {driverPayPct}% {PAY_BASIS_LABEL.load}</span>
         </button>
       )}
     </span>
@@ -1542,6 +1589,9 @@ function LoadFormPane({
                 leg={leg}
                 label={`${legLabel(i, legs.length)} Pay`}
                 loadPrice={primary.loadPrice}
+                legRevenue={legRevenueByIdx[i] ?? null}
+                isRelay
+                driverPayPct={driverPayPct}
                 iStyle={iStyle}
                 onFocus={focusH}
                 onCommit={(value) => {

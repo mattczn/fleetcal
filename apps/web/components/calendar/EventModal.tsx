@@ -35,6 +35,9 @@ import RelayLegsEditor, { RelayLegView, RelayHandoffView, RelayHandoffPhoto } fr
 import { legRoleFor, legLabel, byLegIndex, handoffIndexes, handoffTimesOf, isHandoffStop } from '@fleetcal/types';
 import { AuditEntryLines } from '@/lib/auditEntry';
 import { legStraightMiles } from '@/lib/legMiles';
+import {
+  PAY_BASIS_LABEL, autoPayFor, fmtPct, payPctOf, proratePayAcrossLegs,
+} from '@/lib/legPay';
 import { errorToast } from '@/lib/errorToast';
 import RouteMapPanel from './RouteMapPanel';
 import DriverSummaryPanel from './DriverSummaryPanel';
@@ -2276,6 +2279,16 @@ export default function EventModal() {
   const [legEdits,           setLegEdits]           = useState<Record<string, { assetId?: number; driverName?: string }>>({});
   const [draftLegs,          setDraftLegs]          = useState<Array<{ key: string; assetId: number; driverName: string }>>([]);
   const [pendingSplitStopId, setPendingSplitStopId] = useState<string | null>(null);
+  /**
+   * Set when splitting a solo load re-prorated its whole-load driver pay
+   * across the new legs. Rendered as a banner at the top of the relay
+   * editor with an Undo, because moving someone's money without saying
+   * so is exactly the failure this work exists to fix.
+   * `restore` is the legPays snapshot from just before the split.
+   */
+  const [splitPayNotice, setSplitPayNotice] = useState<
+    { text: string; onUndo?: () => void } | null
+  >(null);
   /** Event id of the leg the pending handoff splits — any leg, not just
    *  the viewed one (per-leg "+ Add handoff" on each card). null while
    *  no split is pending; falls back to the viewed leg for safety. */
@@ -2541,6 +2554,15 @@ export default function EventModal() {
   // auto-set, so manual entries aren't clobbered.
   useEffect(() => {
     if (driverPayPct == null) return;
+    // RELAY GUARD. `driverPay` on a relay is a per-LEG figure and the
+    // base for it is that leg's share of the price, not the whole load
+    // price — so this whole-load auto-fill has no correct value to
+    // write. Leg pay is filled from each leg card's "Set to N% of leg"
+    // (legShare × pct) instead. Without this guard the form field was
+    // silently rewritten to loadPrice × pct on every price edit, and
+    // that figure has leaked onto legs before (see applyLegsNow's
+    // driverPay strip).
+    if (isRelayContext) return;
     const lpRaw = fieldValues['loadPrice'];
     const lp = typeof lpRaw === 'number' ? lpRaw : parseFloat(String(lpRaw ?? ''));
     if (!Number.isFinite(lp) || lp <= 0) return;
@@ -2548,13 +2570,13 @@ export default function EventModal() {
     const dp = typeof dpRaw === 'number' ? dpRaw : parseFloat(String(dpRaw ?? ''));
     const dpIsSet = Number.isFinite(dp) && dp > 0;
     if (!driverPayAutoSet.current && dpIsSet) return;
-    const auto = Math.round(lp * (driverPayPct / 100) * 100) / 100;
-    if (dp === auto) return; // avoid no-op state updates
+    const auto = autoPayFor(lp, driverPayPct);
+    if (auto == null || dp === auto) return; // avoid no-op state updates
     setFieldValues(prev => ({ ...prev, driverPay: auto }));
     driverPayAutoSet.current = true;
     setDriverPayIsAuto(true);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fieldValues['loadPrice'], driverPayPct]);
+  }, [fieldValues['loadPrice'], driverPayPct, isRelayContext]);
 
   // Resolve the driver name to display for an event. Looks up by
   // driverId FK first — rename-resistant — then falls back to the
@@ -2615,12 +2637,12 @@ export default function EventModal() {
   };
 
   useEffect(() => {
-    if (!modalOpen) { setConfirmDel(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setRateConOriginal(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setOtherLegMiles({}); setShowDriverSummary(false); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setLoadInvoices([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); setInternalNotes([]); setOriginalInternalNotes([]); setNoteComposer(''); setNoteComposerOpen(false); setPendingNewBroker(null); setLegPays({}); setLegEdits({}); setDraftLegs([]); setPendingSplitStopId(null); setPendingSplitTargetId(null); pendingSplitLockRef.current = false; setLegAnchors({}); setExplicitClears({}); setLegsFetchingLoadIds([]); setSuggestAssetSwap(null); setSuggestDriverSwap(null); return; }
+    if (!modalOpen) { setConfirmDel(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setRateConOriginal(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setOtherLegMiles({}); setShowDriverSummary(false); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setLoadInvoices([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); setInternalNotes([]); setOriginalInternalNotes([]); setNoteComposer(''); setNoteComposerOpen(false); setPendingNewBroker(null); setLegPays({}); setLegEdits({}); setDraftLegs([]); setPendingSplitStopId(null); setPendingSplitTargetId(null); setSplitPayNotice(null); pendingSplitLockRef.current = false; setLegAnchors({}); setExplicitClears({}); setLegsFetchingLoadIds([]); setSuggestAssetSwap(null); setSuggestDriverSwap(null); return; }
     setParseState('idle'); setParseError('');
     setRateConPdf(undefined); setRateConOriginal(undefined); setShowPdfViewer(false); setShowMapPanel(modalShowMap);
     setIsDirty(false); setShowSavePrompt(false);
     setRelayGroupId(undefined); setRelayRole(undefined);
-    setLegPays({}); setLegEdits({}); setDraftLegs([]); setPendingSplitStopId(null); setPendingSplitTargetId(null);
+    setLegPays({}); setLegEdits({}); setDraftLegs([]); setPendingSplitStopId(null); setPendingSplitTargetId(null); setSplitPayNotice(null);
     pendingSplitLockRef.current = false;
     reinstatingRef.current = false;
     unsplittingRef.current = false;
@@ -2760,8 +2782,12 @@ export default function EventModal() {
         // wins. Otherwise keep whatever the AI extracted (if any).
         driverPayAutoSet.current = false;
         setDriverPayIsAuto(false);
-        if (driverPayPct != null && Number.isFinite(lpNum) && lpNum > 0) {
-          vals['driverPay'] = Math.round(lpNum * (driverPayPct / 100) * 100) / 100;
+        // Relay guard: on a multi-leg load the pay base is the LEG's
+        // share of the price, so there is no correct whole-load figure
+        // to write here — the leg cards' "Set to N% of leg" owns it.
+        const batchAutoPay = isRelayContext ? null : autoPayFor(lpNum, driverPayPct);
+        if (batchAutoPay != null) {
+          vals['driverPay'] = batchAutoPay;
           driverPayAutoSet.current = true;
           setDriverPayIsAuto(true);
         }
@@ -4126,6 +4152,70 @@ export default function EventModal() {
     closeModal();
   };
 
+  /**
+   * Split-time pay bookkeeping — runs ONLY when a load that had one leg
+   * gains its first handoff.
+   *
+   * A solo load's driver-pay figure is the pay for the WHOLE haul. Left
+   * on leg 1 after a split it silently pays one driver for a trip two
+   * drivers ran: the number looks deliberate, nothing on screen says
+   * otherwise, and it survives all the way to payroll.
+   *
+   * We RE-PRORATE rather than clear. Clearing throws away the only pay
+   * figure the dispatcher entered and risks legs saving with no pay at
+   * all — a driver paid nothing is a worse failure than a driver paid an
+   * approximate share, and the approximate share is one edit away from
+   * right. Prorating by leg miles also keeps the load's total payout
+   * exactly what was agreed (the last leg absorbs the rounding cent) and
+   * puts pay on the SAME denominator revenue already uses, so each leg's
+   * "% of leg" chip reads sensibly from the first paint. The banner in
+   * the relay editor says what happened and offers Undo; every leg's
+   * input stays editable, and nothing is written until Save.
+   */
+  const reproratePayForSplit = (nextStops: Stop[], keys: string[]) => {
+    if (!canViewDriverPay || keys.length < 2) return;
+    const prior = legPays;
+    const buffered = prior[keys[0]];
+    const base = typeof buffered === 'number' && buffered > 0
+      ? buffered
+      : (() => {
+          const raw = fieldValues['driverPay'];
+          const n = typeof raw === 'number' ? raw : parseFloat(String(raw ?? ''));
+          if (Number.isFinite(n) && n > 0) return n;
+          return currentEv?.driverPay ?? 0;
+        })();
+    if (!(base > 0)) return;
+    // Haversine per new leg window — the routed values haven't been
+    // computed for a leg that didn't exist a moment ago, and legPay's
+    // fallback (even split) covers the case where any window has too
+    // few geocoded stops.
+    const miles = keys.map((_, i) => {
+      const mi = legStraightMiles({ stops: legWindowSlice(nextStops, i) });
+      return mi > 0 ? mi : null;
+    });
+    const shares = proratePayAcrossLegs(base, miles);
+    setLegPays(prev => {
+      const next = { ...prev };
+      keys.forEach((k, i) => { next[k] = shares[i]; });
+      return next;
+    });
+    const money = (n: number) => `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const evenly = miles.some(m => m == null);
+    setSplitPayNotice({
+      text: `${money(base)} was this load's driver pay for the WHOLE haul. It's been split across ${keys.length} legs `
+        + `${evenly ? 'evenly — leg miles aren’t known yet' : 'by leg miles'}: ${shares.map(money).join(' + ')}. `
+        + 'Adjust any leg before saving.',
+      onUndo: () => {
+        setLegPays(p => {
+          const n = { ...p };
+          keys.forEach(k => { if (k in prior) n[k] = prior[k]; else delete n[k]; });
+          return n;
+        });
+        setSplitPayNotice(null);
+      },
+    });
+  };
+
   /** "Add handoff" — splits ONE leg by dropping a new relay point at
    *  the end of its stop window. Identical in create and edit mode:
    *  the per-leg "+" names the leg; the header "+" targets the viewed
@@ -4227,7 +4317,8 @@ export default function EventModal() {
       insertIdx = i;
     }
     const next = [...stops.slice(0, insertIdx), relayStop, ...stops.slice(insertIdx)];
-    setStops(next.map((s, i) => ({ ...s, sequence: i + 1 })));
+    const nextStops = next.map((s, i) => ({ ...s, sequence: i + 1 }));
+    setStops(nextStops);
 
     // New leg defaults: a different truck than the leg being split, and
     // that truck's preferred driver.
@@ -4242,6 +4333,11 @@ export default function EventModal() {
       setPendingSplitTargetId(targetLeg?.id ?? modalEventId ?? null);
     } else {
       setDraftLegs(prev => [...prev, draft]);
+    }
+    // Solo → 2 legs (legacy split flow). The whole-load pay figure must
+    // not stay on leg 1 as though it were that leg's pay.
+    if (!isExistingRelayLeg && draftLegs.length === 0) {
+      reproratePayForSplit(nextStops, ['leg0', draft.key]);
     }
     markDirty();
   };
@@ -4437,8 +4533,15 @@ export default function EventModal() {
       apptStart: dropIso,
       apptEnd:   pickupIso,
     };
-    setStops(prev => [...prev.slice(0, idx + 1), relayStop, ...prev.slice(idx + 1)]
-      .map((s, i) => ({ ...s, sequence: i + 1 })));
+    const nextStops = [...stops.slice(0, idx + 1), relayStop, ...stops.slice(idx + 1)]
+      .map((s, i) => ({ ...s, sequence: i + 1 }));
+    setStops(nextStops);
+    // First handoff on a load that had ONE leg: its driver-pay figure
+    // covered the whole haul, so re-prorate it across the two new legs
+    // (visible + undoable via the relay editor's banner).
+    if (boundaryIdxs.length === 0) {
+      reproratePayForSplit(nextStops, [anchorIdIn(nextStops, 0), anchorIdIn(nextStops, 1)]);
+    }
     markDirty();
   };
 
@@ -4959,12 +5062,14 @@ export default function EventModal() {
           // Driver-pay precedence: if a percentage is configured in settings,
           // it always wins (the user's intent — they set it to drive every load).
           // Only fall back to AI-extracted driverPay when no percentage is set.
-          if (driverPayPct != null) {
-            const auto = Math.round(lpNum * (driverPayPct / 100) * 100) / 100;
-            setFieldValues(prev => ({ ...prev, driverPay: auto }));
+          // Relay guard — see the auto-fill effect: leg pay is a share
+          // of the LEG, never of the whole load price.
+          const autoPay = isRelayContext ? null : autoPayFor(lpNum, driverPayPct);
+          if (autoPay != null) {
+            setFieldValues(prev => ({ ...prev, driverPay: autoPay }));
             driverPayAutoSet.current = true;
             setDriverPayIsAuto(true);
-          } else if (Number.isFinite(dpNum) && dpNum > 0) {
+          } else if (!isRelayContext && Number.isFinite(dpNum) && dpNum > 0) {
             setField('driverPay', dpNum);
             driverPayAutoSet.current = false;
             setDriverPayIsAuto(false);
@@ -5122,12 +5227,13 @@ export default function EventModal() {
       if (parsed.specialInstructions) setField('specialInstructions', parsed.specialInstructions);
       if (Number.isFinite(lpNum) && lpNum > 0) {
         setField('loadPrice', lpNum);
-        if (driverPayPct != null) {
-          const auto = Math.round(lpNum * (driverPayPct / 100) * 100) / 100;
-          setFieldValues(prev => ({ ...prev, driverPay: auto }));
+        // Relay guard — same rule as the initial parse above.
+        const autoPay = isRelayContext ? null : autoPayFor(lpNum, driverPayPct);
+        if (autoPay != null) {
+          setFieldValues(prev => ({ ...prev, driverPay: autoPay }));
           driverPayAutoSet.current = true;
           setDriverPayIsAuto(true);
-        } else if (Number.isFinite(dpNum) && dpNum > 0) {
+        } else if (!isRelayContext && Number.isFinite(dpNum) && dpNum > 0) {
           setField('driverPay', dpNum);
         }
       }
@@ -5249,19 +5355,23 @@ export default function EventModal() {
   const endLabel   = isExistingRelayLeg && viewedLegIdx != null && viewedLegIdx < relayLegCountTotal - 1 ? 'Drop at Yard' : 'End';
   const startLabel = isExistingRelayLeg && (viewedLegIdx ?? 0) > 0 ? 'Pickup from Yard' : 'Start';
 
-  const driverPayPctValue = (() => {
-    const lp = typeof fieldValues['loadPrice'] === 'number' ? fieldValues['loadPrice'] : parseFloat(String(fieldValues['loadPrice'] ?? '')) || 0;
-    const dp = typeof fieldValues['driverPay']  === 'number' ? fieldValues['driverPay']  : parseFloat(String(fieldValues['driverPay']  ?? '')) || 0;
-    if (lp <= 0 || dp <= 0) return null;
-    return Math.round((dp / lp) * 1000) / 10;
-  })();
+  // SOLO loads only (the relay branch swaps this slot for the read-only
+  // total tile). The base here is the whole load price, and the chip
+  // says so — "of load" — so it can never be compared against a leg
+  // card's "of leg" without noticing they're different denominators.
+  const soloDriverPayBase = typeof fieldValues['loadPrice'] === 'number'
+    ? fieldValues['loadPrice']
+    : parseFloat(String(fieldValues['loadPrice'] ?? '')) || 0;
+  const driverPayPctValue = payPctOf(
+    typeof fieldValues['driverPay'] === 'number' ? fieldValues['driverPay'] : parseFloat(String(fieldValues['driverPay'] ?? '')) || 0,
+    soloDriverPayBase,
+  );
 
   const recalcDriverPay = () => {
-    const lp = typeof fieldValues['loadPrice'] === 'number' ? fieldValues['loadPrice'] : parseFloat(String(fieldValues['loadPrice'] ?? '')) || 0;
-    if (driverPayPct == null || lp <= 0) return;
+    const auto = autoPayFor(soloDriverPayBase, driverPayPct);
+    if (auto == null) return;
     const current = typeof fieldValues['driverPay'] === 'number' ? fieldValues['driverPay'] : parseFloat(String(fieldValues['driverPay'] ?? '')) || 0;
     setPrevDriverPay(current > 0 ? current : null);
-    const auto = Math.round(lp * (driverPayPct / 100) * 100) / 100;
     setFieldValues(prev => ({ ...prev, driverPay: auto }));
     driverPayAutoSet.current = true;
     setDriverPayIsAuto(true);
@@ -5283,11 +5393,11 @@ export default function EventModal() {
           color:      driverPayIsAuto ? '#1d4ed8' : 'var(--gc-text-3)',
           border:     `1px solid ${driverPayIsAuto ? '#bfdbfe' : 'var(--gc-border-light)'}`,
         }}>
-        {driverPayPctValue % 1 === 0 ? driverPayPctValue.toFixed(0) : driverPayPctValue.toFixed(1)}%
+        {fmtPct(driverPayPctValue)}% <span style={{ fontWeight: 500, opacity: 0.85 }}>{PAY_BASIS_LABEL.load}</span>
       </span>
       {!driverPayIsAuto && driverPayPct != null && (
         <button type="button" onClick={recalcDriverPay}
-          title={`Reset to ${driverPayPct}%`}
+          title={`Reset to ${driverPayPct}% of the load price`}
           className="flex items-center gap-1 rounded transition-colors"
           style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--gc-text-3)', padding: '1px 4px' }}
           onMouseEnter={e => { e.currentTarget.style.color = '#1d4ed8'; e.currentTarget.style.background = '#dbeafe'; }}
@@ -5296,7 +5406,7 @@ export default function EventModal() {
             <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
             <path d="M3 3v5h5"/>
           </svg>
-          <span style={{ fontSize: 10 }}>Reset to default</span>
+          <span style={{ fontSize: 10 }}>Set to {driverPayPct}% {PAY_BASIS_LABEL.load}</span>
         </button>
       )}
       {driverPayIsAuto && prevDriverPay != null && (
@@ -5501,13 +5611,12 @@ export default function EventModal() {
     ? fieldValues['loadPrice']
     : parseFloat(String(fieldValues['loadPrice'] ?? '')) || 0;
   const relayTotalPay    = relayLegViews.reduce((sum, l) => sum + (typeof l.pay === 'number' ? l.pay : 0), 0);
-  const relayTotalPct    = relayLp > 0 && relayTotalPay > 0
-    ? Math.round((relayTotalPay / relayLp) * 1000) / 10
-    : null;
+  const relayTotalPct    = payPctOf(relayTotalPay, relayLp);
   const relayTotalSuffix = relayTotalPct !== null ? (
-    <span className="px-1.5 py-0.5 rounded-lg normal-case tracking-normal font-semibold"
-      style={{ fontSize: 10, background: '#f1f3f4', color: 'var(--gc-text-3)', border: '1px solid var(--gc-border-light)' }}>
-      {relayTotalPct % 1 === 0 ? relayTotalPct.toFixed(0) : relayTotalPct.toFixed(1)}%
+    <span className="px-1.5 py-0.5 rounded-lg normal-case tracking-normal font-semibold whitespace-nowrap"
+      style={{ fontSize: 10, background: '#f1f3f4', color: 'var(--gc-text-3)', border: '1px solid var(--gc-border-light)' }}
+      title={`Every leg's pay added up is ${fmtPct(relayTotalPct)}% of the load price`}>
+      {fmtPct(relayTotalPct)}% <span style={{ fontWeight: 500, opacity: 0.85 }}>{PAY_BASIS_LABEL.load}</span>
     </span>
   ) : null;
   // Self-contained slot replacement: uses noLabelFields so this Field
@@ -7186,6 +7295,11 @@ export default function EventModal() {
                         startDate={startDate}
                         canViewDriverPay={canViewDriverPay}
                         disabled={isReadOnly}
+                        // Org default rate — powers each leg's
+                        // "Set to N% of leg" (legShare × pct), the relay
+                        // counterpart of the solo form's "Reset to N%".
+                        driverPayPct={driverPayPct}
+                        payNotice={splitPayNotice}
                         loadId={currentEv?.loadId}
                         handoffPhotos={relayHandoffPhotos}
                         onSelectPhoto={(docId) => {

@@ -1,8 +1,10 @@
 // ─── Shared payroll PDF utilities ─────────────────────────────────────────────
 // Used by both PayrollView (current week) and DriversModal (pay history).
 
+import type { PayrollLineItem } from '@fleetcal/types';
 import type { CalendarEvent } from './types';
 import type { PayrollAdjustment, PayrollRecord } from './db';
+import { legLabelForEvent } from './payrollSnapshot';
 
 // ─── Formatting helpers ───────────────────────────────────────────────────────
 
@@ -32,7 +34,70 @@ export interface PrintDriver {
   driverName: string;
   loads: CalendarEvent[];
   adjustments: PayrollAdjustment[];
+  /** When this record carries `lineItems`, the stub is rendered FROM THE
+   *  SNAPSHOT and `loads`/`adjustments` are ignored — reprinting a
+   *  finalized week has to produce the document that was issued, not a
+   *  fresh computation over data that may have moved since. */
   record: PayrollRecord | null;
+  /** Sibling relay legs, for resolving leg labels on live (unfinalized)
+   *  stubs. Snapshot stubs carry their labels already. */
+  allEvents?: readonly CalendarEvent[];
+}
+
+// ─── Row model ────────────────────────────────────────────────────────────────
+// Both the frozen and the live path collapse to this, so the table markup
+// below has exactly one shape to render.
+
+interface StubRow {
+  kind: 'load' | 'adjustment' | 'accessorial';
+  date: string;
+  leg: string;
+  title: string;
+  loadNum: string;
+  amount: number | null;
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, ch => (
+    ch === '&' ? '&amp;' :
+    ch === '<' ? '&lt;'  :
+    ch === '>' ? '&gt;'  :
+    ch === '"' ? '&quot;' : '&#39;'
+  ));
+}
+
+/** Rows straight from the frozen snapshot — no live lookups at all. */
+function rowsFromSnapshot(items: readonly PayrollLineItem[]): StubRow[] {
+  return items.map(li => ({
+    kind:    li.kind,
+    date:    li.date ? parseDate(li.date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) : '',
+    leg:     li.legLabel ?? '',
+    title:   li.label || (li.category ?? ''),
+    loadNum: li.loadNum ? `#${li.loadNum}` : '—',
+    amount:  li.amount,
+  }));
+}
+
+/** Rows computed from current data — the only correct source for a week
+ *  that hasn't been finalized yet. */
+function rowsFromLive(d: PrintDriver): StubRow[] {
+  const loadRows: StubRow[] = d.loads.map(l => ({
+    kind:    'load',
+    date:    parseDate(l.start).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }),
+    leg:     legLabelForEvent(l, d.allEvents),
+    title:   l.title ?? '',
+    loadNum: l.loadNum ? `#${l.loadNum}` : '—',
+    amount:  l.driverPay ?? null,
+  }));
+  const adjRows: StubRow[] = d.adjustments.map(a => ({
+    kind:    'adjustment',
+    date:    '',
+    leg:     '',
+    title:   `${a.category}${a.description ? ` — ${a.description}` : ''}`,
+    loadNum: '',
+    amount:  a.amount,
+  }));
+  return [...loadRows, ...adjRows];
 }
 
 // ─── PDF generator ────────────────────────────────────────────────────────────
@@ -46,50 +111,60 @@ export function printPayroll(opts: {
   drivers: PrintDriver[];
 }) {
   const { orgName, orgLogoUrl, weekLabel, sat, fri, drivers } = opts;
-  const totalPay = drivers.reduce((s, d) => {
-    const lp = d.loads.reduce((ss, l) => ss + (l.driverPay ?? 0), 0);
-    const ap = d.adjustments.reduce((ss, a) => ss + a.amount, 0);
-    return s + lp + ap;
-  }, 0);
 
-  const driverRows = drivers.map(d => {
-    const loadPay = d.loads.reduce((s, l) => s + (l.driverPay ?? 0), 0);
-    const adjPay  = d.adjustments.reduce((s, a) => s + a.amount, 0);
-    const total   = loadPay + adjPay;
+  // Resolve each driver ONCE: a finalized record with frozen lines wins
+  // over live data, everywhere — header total, row list, load count.
+  // Reprinting a paid week must reproduce the issued document; before
+  // this, the stub was recomputed from live values every time, so an
+  // edit made after payday silently rewrote history.
+  const resolved = drivers.map(d => {
+    const snapshot = d.record?.lineItems?.length ? d.record.lineItems : null;
+    const rows  = snapshot ? rowsFromSnapshot(snapshot) : rowsFromLive(d);
+    const total = snapshot
+      ? d.record!.totalPay
+      : rows.reduce((s, r) => s + (r.amount ?? 0), 0);
+    return { driver: d, rows, total, frozen: !!snapshot };
+  });
+
+  const totalPay = resolved.reduce((s, r) => s + r.total, 0);
+
+  const driverRows = resolved.map(({ driver: d, rows, total, frozen }) => {
+    const loadCount = rows.filter(r => r.kind === 'load').length;
     // Miles column intentionally omitted from the printable PDF — the
     // driver-facing stub hides the dispatcher's loaded-miles metric so
     // drivers can't reverse-engineer rate-per-mile or load profitability.
     // The on-screen PayrollView keeps the miles column for dispatchers.
-    const loadRows = d.loads.map(l => {
-      const date = parseDate(l.start).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-      const leg  = l.relayRole === 'pickup' ? 'Pickup'
-                 : l.relayRole === 'transfer' ? 'Transfer'
-                 : l.relayRole === 'delivery' ? 'Delivery'
-                 : 'Both';
-      return `<tr>
-        <td>${date}</td>
-        <td>${leg}</td>
-        <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${l.title ?? ''}</td>
-        <td>${l.loadNum ? `#${l.loadNum}` : '—'}</td>
-        <td class="num">${l.driverPay != null ? fmtMoney(l.driverPay) : '—'}</td>
+    const bodyRows = rows.map(r => {
+      if (r.kind === 'load') {
+        return `<tr>
+        <td>${escapeHtml(r.date)}</td>
+        <td>${escapeHtml(r.leg)}</td>
+        <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(r.title)}</td>
+        <td>${escapeHtml(r.loadNum)}</td>
+        <td class="num">${r.amount != null ? fmtMoney(r.amount) : '—'}</td>
+      </tr>`;
+      }
+      // 5 columns total (Date, Leg, Event, Load #, Driver Pay).
+      // Adjustments + accessorials span the first 4 for their
+      // description; the last column is the amount.
+      const amt = r.amount ?? 0;
+      return `
+      <tr class="adj-row">
+        <td colspan="4" style="padding-left:16px;color:#444">${escapeHtml(r.title)}</td>
+        <td class="num" style="color:${amt >= 0 ? '#1e8e3e' : '#d93025'}">${amt >= 0 ? '+' : ''}${fmtMoney(amt)}</td>
       </tr>`;
     }).join('');
-    // 5 columns total (Date, Leg, Event, Load #, Driver Pay).
-    // Adjustment spans first 4 columns for the description, last column
-    // is the amount.
-    const adjRows = d.adjustments.map(a => `
-      <tr class="adj-row">
-        <td colspan="4" style="padding-left:16px;color:#444">${a.category}${a.description ? ` — ${a.description}` : ''}</td>
-        <td class="num" style="color:${a.amount >= 0 ? '#1e8e3e' : '#d93025'}">${a.amount >= 0 ? '+' : ''}${fmtMoney(a.amount)}</td>
-      </tr>`).join('');
     const finBadge = d.record ? `<span class="paid-badge">✓ Paid</span>` : '';
+    const finalizedBy = d.record?.finalizedByName
+      ? ` by ${escapeHtml(d.record.finalizedByName)}`
+      : '';
     return `
       <div class="driver-block">
         <div class="driver-header">
-          <div class="driver-avatar">${d.driverName.charAt(0).toUpperCase()}</div>
+          <div class="driver-avatar">${escapeHtml(d.driverName.charAt(0).toUpperCase())}</div>
           <div>
-            <div class="driver-name">${d.driverName} ${finBadge}</div>
-            <div class="driver-sub">${d.loads.length} load${d.loads.length !== 1 ? 's' : ''}${d.record ? ` · Finalized ${new Date(d.record.finalizedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}` : ''}</div>
+            <div class="driver-name">${escapeHtml(d.driverName)} ${finBadge}</div>
+            <div class="driver-sub">${loadCount} load${loadCount !== 1 ? 's' : ''}${d.record ? ` · Finalized ${new Date(d.record.finalizedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}${finalizedBy}` : ''}</div>
           </div>
           <div style="margin-left:auto;text-align:right">
             <div class="stat-label">Driver Pay</div>
@@ -98,8 +173,11 @@ export function printPayroll(opts: {
         </div>
         <table>
           <thead><tr><th>Date</th><th>Leg</th><th>Event Title</th><th>Load #</th><th class="num">Driver Pay</th></tr></thead>
-          <tbody>${loadRows}${adjRows}</tbody>
+          <tbody>${bodyRows}</tbody>
         </table>
+        ${frozen
+          ? `<div class="frozen-note">Figures as finalized — this stub reproduces the record issued on ${new Date(d.record!.finalizedAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}.</div>`
+          : ''}
       </div>`;
   }).join('');
 
@@ -131,6 +209,7 @@ export function printPayroll(opts: {
     td { padding: 8px 12px; border-bottom: 1px solid #e8e8e8; color: #222; }
     .num { text-align: right; font-weight: 600; }
     .adj-row td { background: #f5f5f5; font-size: 11px; color: #333; }
+    .frozen-note { padding: 7px 16px; font-size: 10px; color: #555; background: #fafafa; border-top: 1px solid #e8e8e8; }
     .footer { margin-top: 32px; padding-top: 12px; border-top: 1px solid #ccc; font-size: 11px; color: #555; text-align: center; }
     @media print { body { padding: 16px; } .driver-block { page-break-inside: avoid; } }
   </style></head><body>
@@ -144,7 +223,7 @@ export function printPayroll(opts: {
   <div class="summary">
     <div><div class="stat-label">Total Driver Pay</div><div class="stat-value">${fmtMoney(totalPay)}</div></div>
     ${drivers.length > 1 ? `<div><div class="stat-label">Drivers</div><div class="stat-value">${drivers.length}</div></div>` : ''}
-    <div><div class="stat-label">Loads</div><div class="stat-value">${drivers.reduce((s, d) => s + d.loads.length, 0)}</div></div>
+    <div><div class="stat-label">Loads</div><div class="stat-value">${resolved.reduce((s, r) => s + r.rows.filter(x => x.kind === 'load').length, 0)}</div></div>
   </div>
   ${driverRows}
   <div class="footer">Generated ${new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })} · ${orgName} Payroll</div>

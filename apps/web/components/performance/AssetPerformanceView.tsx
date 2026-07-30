@@ -118,7 +118,12 @@ const COLUMNS: ColumnDef[] = [
   { key: 'totalDriverPay', label: 'Driver pay',    help: 'Sum of event.driver_pay for loads in the window',
     align: 'right', fmt: (a) => fmtMoney(a.totalDriverPay),
     num: (a) => a.totalDriverPay, higherBetter: false },
-  { key: 'driverPayPct',   label: 'Pay %',         help: 'Driver pay / revenue',
+  // Named denominator: this is a percentage of the TRUCK's revenue for
+  // the window (relay legs already counted at their prorated share),
+  // NOT of any single load price or leg share. A bare "Pay %" here read
+  // as comparable to the modal's per-load chips, which it isn't.
+  { key: 'driverPayPct',   label: 'Pay % of truck rev',
+    help: 'Driver pay ÷ this truck\'s revenue in the window (relay legs counted at their miles-prorated share)',
     align: 'right', fmt: (a) => fmtPct(a.driverPayPct),
     num: (a) => a.driverPayPct, higherBetter: false },
   { key: 'netToTruck',     label: 'Net to truck',  help: 'Revenue − driver pay (before fuel + maintenance)',
