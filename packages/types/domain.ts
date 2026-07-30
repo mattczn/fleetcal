@@ -1497,7 +1497,12 @@ export function agingBucketFor(agingDays: number | null): AgingBucket {
   return 'd61_plus';
 }
 
-/** Per-customer rollup for the Receivables left rail. */
+/** Per-customer rollup — one row of the Receivables ledger.
+ *
+ *  Computed server-side, not in the client, so the aging figures on the
+ *  bucket tiles, the per-customer aging mix, and the Age column on an
+ *  expanded invoice are all derived from one implementation and cannot
+ *  drift apart. */
 export interface ReceivableCustomerSummary {
   customerId:   string | null;      // null = invoices with no customer set
   customerName: string;
@@ -1507,6 +1512,26 @@ export interface ReceivableCustomerSummary {
   overdueBalance: number;
   /** Most recent allocation date across this customer's invoices. */
   lastPaidOn?:  string;
+
+  /** Open balance split by aging bucket. Sums to openBalance. Drives the
+   *  per-customer aging mix bar and its amount chips. */
+  byBucket:     Record<AgingBucket, number>;
+
+  /** Days past due on this customer's oldest open invoice. Negative when
+   *  nothing is due yet; null when they have no open invoice carrying a
+   *  due date. */
+  oldestAgingDays: number | null;
+
+  /** Payment terms in days, taken as the most common (due − issued) gap
+   *  across this customer's invoices rather than a stored field — the
+   *  invoices are the record of what terms were actually written. Absent
+   *  when no invoice carries a due date. */
+  termsDays?:   number;
+
+  /** Mean days from issue to settlement across the last year of paid
+   *  invoices. How they actually pay, as opposed to termsDays, which is
+   *  what they agreed to. Absent until they've paid something. */
+  avgDaysToPay?: number;
 }
 
 // ── Fuel report ─────────────────────────────────────────────────────────

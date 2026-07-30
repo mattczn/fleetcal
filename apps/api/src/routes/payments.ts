@@ -647,6 +647,14 @@ payments.get("/receivables", async (c) => {
   // Built from the same rows the table renders, so the rail and the
   // table can never disagree. Note the consequence: with scope=open the
   // rail shows open balances only, which is what the rail is for.
+  // Terms are read off the invoices rather than a stored customer field:
+  // the invoice is the record of what terms were actually written, and
+  // `customers` has no structured terms column (only free-text
+  // invoice_instructions). Collected per customer, then reduced to the
+  // most common gap — a one-off net-15 rush load shouldn't restate a
+  // net-30 broker.
+  const termGaps = new Map<string, number[]>();
+
   const custMap = new Map<string, ReceivableCustomerSummary>();
   for (const inv of invoices) {
     const key = inv.customerId ?? "__none__";
@@ -657,14 +665,35 @@ payments.get("/receivables", async (c) => {
       openBalance:    0,
       overdueCount:   0,
       overdueBalance: 0,
+      byBucket:       { current: 0, d1_30: 0, d31_60: 0, d61_plus: 0 },
+      oldestAgingDays: null,
     };
     const open = inv.balance > 0.005;
     if (open) {
       cur.openCount   += 1;
       cur.openBalance  = round2(cur.openBalance + inv.balance);
+      const b = agingBucketFor(inv.agingDays);
+      cur.byBucket[b] = round2(cur.byBucket[b] + inv.balance);
       if (inv.agingDays !== null && inv.agingDays > 0) {
         cur.overdueCount   += 1;
         cur.overdueBalance  = round2(cur.overdueBalance + inv.balance);
+      }
+      // "Oldest" means most days past due among what's still owed, so
+      // only open invoices count — a settled 90-day-old invoice isn't a
+      // collections problem anymore.
+      if (inv.agingDays !== null &&
+          (cur.oldestAgingDays === null || inv.agingDays > cur.oldestAgingDays)) {
+        cur.oldestAgingDays = inv.agingDays;
+      }
+    }
+    if (inv.dueAt) {
+      const gap = Math.round(
+        (Date.parse(inv.dueAt) - Date.parse(inv.issuedAt)) / 86_400_000,
+      );
+      if (Number.isFinite(gap) && gap > 0 && gap <= 180) {
+        const list = termGaps.get(key) ?? [];
+        list.push(gap);
+        termGaps.set(key, list);
       }
     }
     if (inv.lastPaidOn && (!cur.lastPaidOn || inv.lastPaidOn > cur.lastPaidOn)) {
@@ -672,6 +701,62 @@ payments.get("/receivables", async (c) => {
     }
     custMap.set(key, cur);
   }
+
+  // ── Payment behaviour ───────────────────────────────────────────────
+  // "Pays in 41d on average" needs settled invoices, which the default
+  // scope=open fetch deliberately excludes — so it's its own bounded
+  // read: the last year of paid invoices, issue date to settle date.
+  // paid_at is maintained by recomputeInvoicePaid, so this needs no
+  // allocation join.
+  const behaviourSince = new Date(Date.now() - 365 * 86_400_000).toISOString();
+  try {
+    const paidRows = await fetchAllRows<{
+      id: string; customer_id: string | null; issued_at: string; paid_at: string | null;
+    }>("receivables/behaviour", () => supabase
+      .from("invoices")
+      .select("id,customer_id,issued_at,paid_at")
+      .eq("org_id", orgId)
+      .eq("status", "paid")
+      .gte("paid_at", behaviourSince));
+
+    const daysByCustomer = new Map<string, number[]>();
+    for (const r of paidRows) {
+      if (!r.paid_at) continue;
+      const d = Math.round((Date.parse(r.paid_at) - Date.parse(r.issued_at)) / 86_400_000);
+      // Guard against clock skew and backfilled history landing a
+      // negative or absurd figure in front of the operator.
+      if (!Number.isFinite(d) || d < 0 || d > 365) continue;
+      const key = r.customer_id ?? "__none__";
+      const list = daysByCustomer.get(key) ?? [];
+      list.push(d);
+      daysByCustomer.set(key, list);
+    }
+    for (const [key, days] of daysByCustomer) {
+      const cur = custMap.get(key);
+      if (!cur || !days.length) continue;
+      cur.avgDaysToPay = Math.round(days.reduce((s, d) => s + d, 0) / days.length);
+    }
+  } catch (e) {
+    // Non-fatal: the behaviour line is Detail-density garnish, not the
+    // reason anyone opened this page.
+    console.warn("[receivables] payment-behaviour rollup skipped:", e);
+  }
+
+  // Terms = the mode of the observed gaps, not the mean: brokers write
+  // round terms (15/30/45) and averaging a net-30 book with one net-15
+  // yields a meaningless "net 29".
+  for (const [key, gaps] of termGaps) {
+    const cur = custMap.get(key);
+    if (!cur || !gaps.length) continue;
+    const freq = new Map<number, number>();
+    for (const g of gaps) freq.set(g, (freq.get(g) ?? 0) + 1);
+    let best = gaps[0], bestN = 0;
+    for (const [g, n] of freq) {
+      if (n > bestN || (n === bestN && g < best)) { best = g; bestN = n; }
+    }
+    cur.termsDays = best;
+  }
+
   const customers = [...custMap.values()]
     .sort((a, b) => b.openBalance - a.openBalance || a.customerName.localeCompare(b.customerName));
 

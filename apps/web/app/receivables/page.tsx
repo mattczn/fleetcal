@@ -1,352 +1,816 @@
 'use client';
 
 /**
- * /receivables — who owes us, how much, and how we know when they pay.
+ * /receivables — collections. Where we stand, then one broker at a time.
  *
- * Three zones, mirroring /expenses:
- *   RAIL   (left)   customers with an open balance; click to filter.
- *   TABLE  (center) one row per invoice with balance, age, and whether
- *                   the payment is backed by evidence.
- *   PANEL  (drawer) RecordPaymentPanel — record money, attach proof.
+ * Layout follows Billing and Paperwork: aging tiles across the top that
+ * double as filters, then a single ledger card underneath.
  *
- * The tiles and the rail are computed over the whole scope, not the
- * current selection, so clicking a customer or an aging tile narrows the
- * table without rewriting the numbers you were reading. Everything comes
- * from one call to /v1/payments/receivables, which owns the aging math
- * so the tiles, the rail, and the Age column can't disagree.
+ * The ledger is one row PER CUSTOMER, not per invoice. At ~150 invoices
+ * a week across 100+ brokers, a per-invoice table is 640 open rows and
+ * unreadable; the same book collapses to ~112 customer rows, each
+ * carrying its own aging mix, and any row opens into its invoices in
+ * place. A density control trades row height for per-row detail.
  *
- * Relationship to /accounting: that page runs the invoice pipeline
- * (draft → send → paid) and its Mark Paid still works. Both write the
- * same allocation ledger, so a payment recorded there shows up here with
- * its proof slot empty, waiting for the remittance.
+ * One fetch, filtered client-side. `/v1/payments/receivables` is called
+ * with `scope` only — never with bucket/customer/search — so the tiles
+ * and the per-customer rollups are always computed over the whole scope.
+ * Clicking a tile narrows what you're looking at without rewriting the
+ * numbers you were just reading. It also means expanding a customer
+ * needs no round trip: their invoices are already here.
+ *
+ * Why this doesn't use OpsTable: the ledger needs master-detail
+ * expansion and a third density tier (34/46/62px). OpsTable has neither
+ * — it offers compact/comfortable at fixed 36/52px and no row
+ * expansion — and teaching it both would change a primitive that
+ * Billing, Paperwork, Equipment and Payroll all depend on. The grid
+ * below is deliberately local to this page.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { FileText, AlertTriangle, Search, RefreshCw } from 'lucide-react';
+import React from 'react';
+import {
+  HandCoins, Wallet, CircleCheckBig, Clock, AlarmClock, OctagonAlert, Inbox,
+  ChevronRight, ChevronDown, ChevronLeft, MoreVertical, Search,
+  ArrowDownWideNarrow, ArrowRightLeft, Download, Mail, Info, Loader2,
+} from 'lucide-react';
 import RequireCap from '@/components/auth/RequireCap';
 import AppShell from '@/components/nav/AppShell';
-import { OpsTable, type OpsColumn } from '@/components/ui/OpsTable';
+import Tooltip from '@/components/ui/Tooltip';
 import { railway } from '@/lib/railway';
 import RecordPaymentPanel from './RecordPaymentPanel';
 import type {
   ReceivableInvoice, ReceivableCustomerSummary, ReceivablesTotals, AgingBucket,
 } from '@fleetcal/types';
-import { AGING_BUCKETS, AGING_BUCKET_LABEL } from '@fleetcal/types';
 
-const fmtMoney0 = (n: number) =>
-  new Intl.NumberFormat('en-US', {
-    style: 'currency', currency: 'USD', maximumFractionDigits: 0,
-  }).format(n);
+// ── formatting ────────────────────────────────────────────────────────
 
-const fmtMoney2 = (n: number) =>
+const money0 = (n: number) =>
+  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);
+const money2 = (n: number) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
+/** Abbreviated for the aging-mix chips, where four numbers share ~210px. */
+const kmoney = (n: number) => (n >= 1000 ? `$${Math.round(n / 1000)}K` : money0(n));
 
-/** Rail key for invoices with no customer — mirrors the server's
- *  sentinel so the filter round-trips. */
-const NO_CUSTOMER = '__none__';
+const shortDate = (iso: string) =>
+  new Date(iso).toLocaleDateString([], { month: 'short', day: '2-digit', year: '2-digit' });
 
-type Scope = 'open' | 'paid' | 'all';
+/** Age colouring, matching Billing's two-step: amber once past terms,
+ *  red past 30 days over. */
+const ageColor = (d: number | null) =>
+  d === null || d <= 0 ? 'var(--gc-text-3)' : d <= 30 ? '#b06000' : '#c5221f';
+
+const ageLabel = (d: number | null) =>
+  d === null ? '—' : d <= 0 ? `${Math.abs(d)}d left` : `${d}d over`;
+
+// ── buckets ───────────────────────────────────────────────────────────
+
+type TileKey = AgingBucket | 'all' | 'to_apply';
+
+interface TileDef {
+  key:       TileKey;
+  label:     string;
+  icon:      React.ComponentType<{ size?: number; style?: React.CSSProperties }>;
+  tint:      string;
+  tintLight: string;
+  tintText:  string;
+  subtitle:  string;
+  formula:   string;
+  /** Hairline divider before this tile. */
+  sep?:      boolean;
+  /** Renders the count in red — the only tile that colors it. */
+  redCount?: boolean;
+}
+
+const TILES: TileDef[] = [
+  { key: 'all',      label: 'All open',   icon: Wallet,         tint: '#1a73e8', tintLight: '#e8f0fe', tintText: '#1558d6',
+    subtitle: 'Every unsettled invoice', formula: 'Every invoice with a balance owing, whatever its age. Void invoices are excluded — no money is expected on those.' },
+  { key: 'current',  label: 'Current',    icon: CircleCheckBig, tint: '#188038', tintLight: '#e6f4ea', tintText: '#137333',
+    subtitle: 'Not due yet', formula: 'Balance owing where the due date has not passed. Invoices with no due date count here — we do not chase terms we never set.' },
+  { key: 'd1_30',    label: '1–30 days',  icon: Clock,          tint: '#b06000', tintLight: '#fef7e0', tintText: '#b06000',
+    subtitle: 'Just past terms', formula: '1 to 30 days past the due date. Usually a broker on their normal pay cycle rather than a problem.' },
+  { key: 'd31_60',   label: '31–60 days', icon: AlarmClock,     tint: '#c5221f', tintLight: '#fce8e6', tintText: '#c5221f',
+    subtitle: 'Chase these', formula: '31 to 60 days past due. Past any normal pay cycle — worth a call.' },
+  { key: 'd61_plus', label: '61+ days',   icon: OctagonAlert,   tint: '#c5221f', tintLight: '#fce8e6', tintText: '#c5221f',
+    subtitle: 'At risk', formula: 'More than 60 days past due. Collection risk.', redCount: true },
+  { key: 'to_apply', label: 'To apply',   icon: Inbox,          tint: '#1a73e8', tintLight: '#e8f0fe', tintText: '#1558d6',
+    subtitle: 'Money not yet matched', formula: 'Payment evidence recorded but not fully applied to invoices — remittances and bank lines still to be matched.', sep: true },
+];
+
+// ── density ───────────────────────────────────────────────────────────
+
+type Density = 'compact' | 'comfortable' | 'detail';
+type SortBy  = 'pastDue' | 'balance' | 'oldest' | 'name';
+
+const SORT_LABEL: Record<SortBy, string> = {
+  pastDue: 'Past due $',
+  balance: 'Balance',
+  oldest:  'Oldest first',
+  name:    'A–Z',
+};
+
+const DENSITY: Record<Density, {
+  rowH: number; barH: number; nameSize: number; balSize: number;
+  showSub: boolean; showBehaviour: boolean; showAmounts: boolean; pageSize: number;
+}> = {
+  compact:     { rowH: 34, barH: 6,  nameSize: 12.5, balSize: 13, showSub: false, showBehaviour: false, showAmounts: false, pageSize: 22 },
+  comfortable: { rowH: 46, barH: 8,  nameSize: 13.5, balSize: 15, showSub: true,  showBehaviour: false, showAmounts: false, pageSize: 15 },
+  detail:      { rowH: 62, barH: 10, nameSize: 13.5, balSize: 15, showSub: true,  showBehaviour: true,  showAmounts: true,  pageSize: 10 },
+};
+
+/** Aging ramp — cool to hot, left to right. */
+const SEG_COLOR: Record<AgingBucket, string> = {
+  current: '#c6dafc', d1_30: '#fddc9a', d31_60: '#f6aea9', d61_plus: '#c5221f',
+};
+const CHIP_STYLE: Record<AgingBucket, { bg: string; fg: string; weight: number }> = {
+  current:  { bg: '#f1f3f4', fg: '#3c4043', weight: 700 },
+  d1_30:    { bg: '#fef7e0', fg: '#b06000', weight: 700 },
+  d31_60:   { bg: '#fce8e6', fg: '#c5221f', weight: 700 },
+  d61_plus: { bg: '#c5221f', fg: '#ffffff', weight: 800 },
+};
+const ORDERED: AgingBucket[] = ['current', 'd1_30', 'd31_60', 'd61_plus'];
 
 const EMPTY_TOTALS: ReceivablesTotals = {
   openCount: 0, openBalance: 0, overdueCount: 0, overdueBalance: 0,
   collected30d: 0, unbackedPaidCount: 0,
   byBucket: {
-    current:  { count: 0, balance: 0 },
-    d1_30:    { count: 0, balance: 0 },
-    d31_60:   { count: 0, balance: 0 },
-    d61_plus: { count: 0, balance: 0 },
+    current: { count: 0, balance: 0 }, d1_30: { count: 0, balance: 0 },
+    d31_60: { count: 0, balance: 0 }, d61_plus: { count: 0, balance: 0 },
   },
 };
 
-/** Age colouring. Amber once past due, red past 30 — the same two-step
- *  the accounting board uses so a row that reads urgent there reads
- *  urgent here. */
-function ageColor(days: number | null): string {
-  if (days === null || days <= 0) return 'var(--gc-text-3)';
-  if (days <= 30) return '#b45309';
-  return '#c5221f';
-}
+const NO_CUSTOMER = '__none__';
+const LS_DENSITY  = 'receivables-v2:density';
+const LS_SORT     = 'receivables-v2:sort';
 
-function ageLabel(days: number | null): string {
-  if (days === null) return '—';
-  if (days <= 0) return `${Math.abs(days)}d left`;
-  return `${days}d over`;
-}
+type Scope = 'open' | 'paid' | 'all';
 
 function ReceivablesPageInner() {
   const [rows,      setRows]      = useState<ReceivableInvoice[]>([]);
   const [customers, setCustomers] = useState<ReceivableCustomerSummary[]>([]);
   const [totals,    setTotals]    = useState<ReceivablesTotals>(EMPTY_TOTALS);
+  const [toApply,   setToApply]   = useState<{ count: number; total: number } | null>(null);
   const [loading,   setLoading]   = useState(true);
   const [err,       setErr]       = useState<string | null>(null);
 
   const [scope,      setScope]      = useState<Scope>('open');
-  const [customerId, setCustomerId] = useState<string | null>(null);
   const [bucket,     setBucket]     = useState<AgingBucket | null>(null);
   const [search,     setSearch]     = useState('');
   const [searchTerm, setSearchTerm] = useState('');
+  const [sortBy,     setSortBy]     = useState<SortBy>('pastDue');
+  const [density,    setDensity]    = useState<Density>('comfortable');
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [showAllFor, setShowAllFor] = useState<string | null>(null);
+  const [page,       setPage]       = useState(0);
+  const [tilesCompact, setTilesCompact] = useState(false);
+  const [sortOpen,   setSortOpen]   = useState(false);
+  const [active,     setActive]     = useState<ReceivableInvoice | null>(null);
 
-  const [active, setActive] = useState<ReceivableInvoice | null>(null);
+  // Restore persisted view prefs. An effect rather than a lazy useState
+  // initializer on purpose: reading localStorage during render makes the
+  // server and client disagree on first paint. Same treatment as
+  // AppSidebar's collapse state.
+  useEffect(() => {
+    try {
+      const d = window.localStorage.getItem(LS_DENSITY);
+      if (d === 'compact' || d === 'comfortable' || d === 'detail') setDensity(d);
+      const s = window.localStorage.getItem(LS_SORT);
+      if (s === 'pastDue' || s === 'balance' || s === 'oldest' || s === 'name') setSortBy(s);
+    } catch { /* private mode — defaults are fine */ }
+  }, []);
 
+  const chooseDensity = (d: Density) => {
+    setDensity(d); setPage(0);
+    try { window.localStorage.setItem(LS_DENSITY, d); } catch { /* ignore */ }
+  };
+  const chooseSort = (s: SortBy) => {
+    setSortBy(s); setSortOpen(false); setPage(0);
+    try { window.localStorage.setItem(LS_SORT, s); } catch { /* ignore */ }
+  };
+
+  // Scope is the ONLY server-side filter — see the file header.
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await railway.listReceivables({
-        scope,
-        ...(customerId ? { customerId } : {}),
-        ...(bucket     ? { bucket }     : {}),
-        ...(searchTerm ? { search: searchTerm } : {}),
-      });
+      const [res, proofs] = await Promise.all([
+        railway.listReceivables({ scope }),
+        railway.listPaymentProofs({ unapplied: true }).catch(() => ({ proofs: [] })),
+      ]);
       setRows(res.invoices);
       setCustomers(res.customers);
       setTotals(res.totals);
+      setToApply({
+        count: proofs.proofs.length,
+        total: proofs.proofs.reduce((s, p) => s + (p.amount - (p.appliedAmount ?? 0)), 0),
+      });
       setErr(null);
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Failed to load receivables');
     } finally {
       setLoading(false);
     }
-  }, [scope, customerId, bucket, searchTerm]);
+  }, [scope]);
 
   useEffect(() => { void load(); }, [load]);
 
-  // Debounced so typing an invoice number doesn't fire a request per
-  // keystroke against a table that can hold thousands of rows.
   useEffect(() => {
-    const t = setTimeout(() => setSearchTerm(search.trim()), 300);
+    const t = setTimeout(() => { setSearchTerm(search.trim().toLowerCase()); setPage(0); }, 300);
     return () => clearTimeout(t);
   }, [search]);
 
-  // No effect syncing `active` against refetched rows: the panel derives
-  // its own applied/balance from the allocations it fetches, and the
-  // fields it takes from this row (number, customer, load, total) don't
-  // move when a payment is recorded. Holding the row is enough, and it
-  // keeps the drawer open when settling an invoice drops it out of the
-  // Open scope.
+  // Invoices grouped by customer, for expansion. Built once per fetch
+  // rather than filtered per render — at 640 rows across 112 customers
+  // a linear scan per open row is wasted work.
+  const invoicesByCustomer = useMemo(() => {
+    const m = new Map<string, ReceivableInvoice[]>();
+    for (const inv of rows) {
+      const key = inv.customerId ?? NO_CUSTOMER;
+      const list = m.get(key) ?? [];
+      list.push(inv);
+      m.set(key, list);
+    }
+    // Oldest first — the ones being chased belong at the top.
+    for (const list of m.values()) {
+      list.sort((a, b) => (b.agingDays ?? -99999) - (a.agingDays ?? -99999));
+    }
+    return m;
+  }, [rows]);
 
-  const railTotalOpen = useMemo(
-    () => customers.reduce((s, c) => s + c.openBalance, 0),
-    [customers],
+  /** An invoice-number search hit should surface its customer even
+   *  though the query doesn't match the customer's name. */
+  const invoiceMatchCustomers = useMemo(() => {
+    if (!searchTerm) return null;
+    const hits = new Set<string>();
+    for (const inv of rows) {
+      if (inv.invoiceNumber.toLowerCase().includes(searchTerm)) {
+        hits.add(inv.customerId ?? NO_CUSTOMER);
+      }
+    }
+    return hits;
+  }, [rows, searchTerm]);
+
+  const filtered = useMemo(() => {
+    let list = customers.filter(c => c.openCount > 0 || scope !== 'open');
+    if (bucket) list = list.filter(c => (c.byBucket?.[bucket] ?? 0) > 0.005);
+    if (searchTerm) {
+      list = list.filter(c =>
+        c.customerName.toLowerCase().includes(searchTerm) ||
+        invoiceMatchCustomers?.has(c.customerId ?? NO_CUSTOMER));
+    }
+    const sorted = [...list];
+    sorted.sort((a, b) =>
+      sortBy === 'balance' ? b.openBalance - a.openBalance
+      : sortBy === 'oldest' ? (b.oldestAgingDays ?? -99999) - (a.oldestAgingDays ?? -99999)
+      : sortBy === 'name'   ? a.customerName.localeCompare(b.customerName)
+      : b.overdueBalance - a.overdueBalance);
+    return sorted;
+  }, [customers, bucket, searchTerm, invoiceMatchCustomers, sortBy, scope]);
+
+  const d          = DENSITY[density];
+  const pageCount  = Math.max(1, Math.ceil(filtered.length / d.pageSize));
+  const safePage   = Math.min(page, pageCount - 1);
+  const pageRows   = filtered.slice(safePage * d.pageSize, (safePage + 1) * d.pageSize);
+  const shownTotal = filtered.reduce((s, c) => s + c.openBalance, 0);
+
+  const grid = density === 'detail'
+    ? '24px minmax(180px,1fr) 300px 84px 64px 108px 132px 30px'
+    : '24px minmax(180px,1fr) 210px 84px 64px 108px 132px 30px';
+
+  const tileStats = (key: TileKey): { count: number; total: number } => {
+    if (key === 'all')      return { count: totals.openCount, total: totals.openBalance };
+    if (key === 'to_apply') return { count: toApply?.count ?? 0, total: toApply?.total ?? 0 };
+    const cell = totals.byBucket[key];
+    return { count: cell.count, total: cell.balance };
+  };
+
+  function exportAging() {
+    const head = ['Customer', 'Open invoices', 'Oldest days over', 'Current', '1-30', '31-60', '61+', 'Past due', 'Balance'];
+    const body = filtered.map(c => [
+      `"${c.customerName.replace(/"/g, '""')}"`,
+      c.openCount,
+      c.oldestAgingDays ?? '',
+      c.byBucket?.current ?? 0,
+      c.byBucket?.d1_30 ?? 0,
+      c.byBucket?.d31_60 ?? 0,
+      c.byBucket?.d61_plus ?? 0,
+      c.overdueBalance,
+      c.openBalance,
+    ].join(','));
+    const blob = new Blob([[head.join(','), ...body].join('\n')], { type: 'text/csv' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url;
+    a.download = `receivables-aging-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  const rightSlot = (
+    <div className="flex items-center gap-2">
+      <button onClick={exportAging}
+        className="inline-flex items-center gap-1.5"
+        style={{
+          height: 32, padding: '0 12px', border: '1px solid var(--gc-border)',
+          borderRadius: 8, background: 'var(--gc-surface)',
+          fontSize: 12, fontWeight: 700, color: 'var(--gc-text-2)',
+        }}>
+        <Download size={13} /> Export aging
+      </button>
+      {/* Inert this pass — the remittance-matching workspace it opens
+          isn't built yet. Rendered so the affordance is in place. */}
+      <Tooltip content="Remittance matching isn't wired up yet — record payments from an invoice row for now." placement="bottom">
+        <span className="inline-flex items-center gap-1.5"
+          style={{
+            height: 32, padding: '0 12px', borderRadius: 8,
+            background: '#1a73e8', color: '#fff',
+            fontSize: 12, fontWeight: 700, opacity: 0.55, cursor: 'default',
+          }}>
+          <ArrowRightLeft size={13} /> Apply a payment
+        </span>
+      </Tooltip>
+    </div>
   );
 
-  const columns = useMemo<OpsColumn<ReceivableInvoice>[]>(() => [
-    {
-      key: 'invoiceNumber', header: 'Invoice', width: 120, sortable: true, alwaysVisible: true,
-      render: r => (
-        <span className="font-semibold" style={{ color: 'var(--gc-blue-text)' }}>
-          {r.invoiceNumber}
-        </span>
-      ),
-      subRender: r => r.loadNumber ? `Load ${r.loadNumber}` : null,
-    },
-    {
-      key: 'customerName', header: 'Customer', width: '1fr', sortable: true,
-      render: r => r.customerName ?? <span style={{ color: 'var(--gc-text-3)' }}>No customer</span>,
-    },
-    {
-      key: 'issuedAt', header: 'Issued', width: 105, sortable: true,
-      render: r => new Date(r.issuedAt).toLocaleDateString([], { month: 'short', day: 'numeric', year: '2-digit' }),
-    },
-    {
-      key: 'dueAt', header: 'Due', width: 105, sortable: true,
-      sortValue: r => r.dueAt ?? '',
-      render: r => r.dueAt
-        ? new Date(r.dueAt).toLocaleDateString([], { month: 'short', day: 'numeric', year: '2-digit' })
-        : '—',
-    },
-    {
-      key: 'agingDays', header: 'Age', width: 90, align: 'right', sortable: true,
-      // Null (no due date) sorts as "least urgent" rather than 0, which
-      // would otherwise rank it alongside due-today.
-      sortValue: r => r.agingDays ?? -99999,
-      render: r => (
-        <span className="tabular-nums text-xs font-semibold" style={{ color: ageColor(r.agingDays) }}>
-          {ageLabel(r.agingDays)}
-        </span>
-      ),
-    },
-    {
-      key: 'total', header: 'Total', width: 110, align: 'right', sortable: true,
-      render: r => <span className="tabular-nums">{fmtMoney2(r.total)}</span>,
-    },
-    {
-      key: 'paidAmount', header: 'Paid', width: 110, align: 'right', sortable: true,
-      render: r => (
-        <span className="tabular-nums" style={{ color: r.paidAmount > 0 ? '#188038' : 'var(--gc-text-3)' }}>
-          {r.paidAmount > 0 ? fmtMoney2(r.paidAmount) : '—'}
-        </span>
-      ),
-    },
-    {
-      key: 'balance', header: 'Balance', width: 110, align: 'right', sortable: true,
-      render: r => (
-        <span className="tabular-nums font-semibold"
-              style={{ color: r.balance > 0.005 ? 'var(--gc-text-1)' : '#188038' }}>
-          {fmtMoney2(r.balance)}
-        </span>
-      ),
-    },
-    {
-      key: 'hasProof', header: 'Proof', width: 74, align: 'center', sortable: true,
-      headerTooltip: 'Whether any payment on this invoice cites evidence — a remittance, bank line, or check.',
-      sortValue: r => (r.paymentCount === 0 ? 0 : r.hasProof ? 2 : 1),
-      render: r => {
-        if (r.paymentCount === 0) return <span style={{ color: 'var(--gc-text-3)' }}>—</span>;
-        return r.hasProof
-          ? <FileText size={13} style={{ color: '#188038' }} aria-label="Backed by evidence" />
-          : <AlertTriangle size={13} style={{ color: '#b45309' }} aria-label="Marked paid without proof" />;
-      },
-    },
-  ], []);
-
   return (
-    <AppShell>
-      <div className="flex flex-col h-full min-h-0">
-        {/* Header */}
-        <div className="shrink-0 px-6 pt-5 pb-4 flex items-start justify-between gap-4"
-             style={{ borderBottom: '1px solid var(--gc-border)' }}>
-          <div>
-            <h1 className="text-[22px] font-semibold leading-tight" style={{ color: 'var(--gc-text-1)' }}>
-              Receivables
-            </h1>
-            <div className="text-sm mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
-              {totals.openCount} open · {fmtMoney0(totals.openBalance)} outstanding
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="relative">
-              <Search size={13} className="absolute left-2 top-1/2 -translate-y-1/2"
-                      style={{ color: 'var(--gc-text-3)' }} />
-              <input
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                placeholder="Invoice #"
-                className="text-xs pl-7 pr-2 py-1.5 rounded border"
-                style={{
-                  borderColor: 'var(--gc-border)', background: 'var(--gc-surface)',
-                  color: 'var(--gc-text-1)', outline: 'none', width: 140,
-                }} />
-            </div>
-            <div className="flex rounded border overflow-hidden" style={{ borderColor: 'var(--gc-border)' }}>
-              {(['open', 'paid', 'all'] as Scope[]).map(s => (
-                <button key={s} onClick={() => { setScope(s); setBucket(null); }}
-                        className="text-xs font-semibold px-2.5 py-1.5 capitalize"
-                        style={{
-                          background: scope === s ? '#1a73e8' : 'transparent',
-                          color:      scope === s ? '#fff' : 'var(--gc-text-3)',
-                        }}>
-                  {s}
-                </button>
-              ))}
-            </div>
-            <button onClick={() => void load()} disabled={loading}
-                    className="text-xs font-semibold px-2.5 py-1.5 rounded border inline-flex items-center gap-1.5"
-                    style={{ borderColor: 'var(--gc-border)', color: 'var(--gc-text-2)' }}>
-              <RefreshCw size={13} /> Refresh
-            </button>
-          </div>
+    <AppShell title="Receivables" icon={HandCoins} rightSlot={rightSlot} noPageScroll>
+      <div className="flex-1 flex flex-col min-h-0" style={{ padding: '18px 24px', gap: 14 }}>
+
+        {/* 1 — subtitle */}
+        <div className="fleetcal-page-subtitle" style={{ flex: 'none', fontSize: 12.5, color: 'var(--gc-text-3)' }}>
+          Collections view.{' '}
+          <span style={{ color: 'var(--gc-text-2)', fontWeight: 700 }}>{money0(totals.openBalance)}</span>
+          {' '}across {totals.openCount.toLocaleString()} open invoice{totals.openCount === 1 ? '' : 's'} from{' '}
+          {customers.filter(c => c.openCount > 0).length.toLocaleString()} customers · aging as of{' '}
+          {new Date().toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}
         </div>
 
-        {/* Rail + table */}
-        <div className="flex-1 min-h-0 flex">
-          <aside className="shrink-0 overflow-y-auto py-3 flex flex-col"
-                 style={{ width: 236, borderRight: '1px solid var(--gc-border)' }}>
-            <div className="px-3 pb-2 text-[11px] font-bold uppercase tracking-wider"
-                 style={{ color: 'var(--gc-text-3)' }}>
-              Customers
-            </div>
-            <RailRow label="All customers" total={railTotalOpen}
-                     selected={customerId === null} onClick={() => setCustomerId(null)} />
-            {customers.map(c => {
-              const key = c.customerId ?? NO_CUSTOMER;
-              return (
-                <RailRow
-                  key={key}
-                  label={c.customerName}
-                  total={c.openBalance}
-                  count={c.openCount}
-                  amber={c.overdueCount > 0}
-                  sub={c.overdueCount > 0 ? `${c.overdueCount} overdue` : undefined}
-                  selected={customerId === key}
-                  onClick={() => setCustomerId(customerId === key ? null : key)}
-                />
-              );
-            })}
-            {!loading && customers.length === 0 && (
-              <div className="px-3 py-2 text-xs" style={{ color: 'var(--gc-text-3)' }}>
-                Nothing outstanding.
-              </div>
-            )}
-          </aside>
-
-          <main className="flex-1 min-w-0 overflow-y-auto px-6 py-4">
-            {/* Tiles */}
-            <div className="grid gap-2 mb-3"
-                 style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
-              <Tile label="Outstanding" value={fmtMoney0(totals.openBalance)}
-                    sub={`${totals.openCount} invoice${totals.openCount === 1 ? '' : 's'}`}
-                    accent="#1a73e8" />
-              <Tile label="Overdue" value={fmtMoney0(totals.overdueBalance)}
-                    sub={`${totals.overdueCount} past due`}
-                    accent={totals.overdueBalance > 0 ? '#c5221f' : 'var(--gc-text-3)'} />
-              <Tile label="Collected 30d" value={fmtMoney0(totals.collected30d)}
-                    sub="payments recorded" accent="#188038" />
-              <Tile label="Paid, no proof" value={String(totals.unbackedPaidCount)}
-                    sub="evidence missing"
-                    accent={totals.unbackedPaidCount > 0 ? '#b45309' : 'var(--gc-text-3)'} />
-            </div>
-
-            {/* Aging buckets — clickable filters */}
-            <div className="flex flex-wrap gap-1.5 mb-4">
-              {AGING_BUCKETS.map(b => {
-                const cell = totals.byBucket[b];
-                const on   = bucket === b;
+        {/* 2 — bucket tiles */}
+        <div style={{ flex: 'none' }}>
+          {tilesCompact ? (
+            <div className="fleetcal-buckets-compact flex items-center gap-2 flex-wrap">
+              {TILES.map(b => {
+                const activeTile = b.key === 'all' ? bucket === null : bucket === b.key;
+                const s = tileStats(b.key);
                 return (
-                  <button key={b} onClick={() => setBucket(on ? null : b)}
-                          className="text-xs px-2.5 py-1.5 rounded border inline-flex items-center gap-2"
-                          style={{
-                            borderColor: on ? '#1a73e8' : 'var(--gc-border)',
-                            background:  on ? 'var(--gc-blue-bg, #e8f0fe)' : 'transparent',
-                            color: on ? '#1a73e8' : 'var(--gc-text-2)',
-                          }}>
-                    <span className="font-semibold">{AGING_BUCKET_LABEL[b]}</span>
-                    <span className="tabular-nums">{fmtMoney0(cell.balance)}</span>
-                    <span style={{ color: 'var(--gc-text-3)' }}>({cell.count})</span>
+                  <button key={b.key}
+                    onClick={() => { if (b.key !== 'to_apply') { setBucket(b.key === 'all' ? null : b.key as AgingBucket); setPage(0); } }}
+                    className="fleetcal-bucket-compact inline-flex items-center gap-2 transition-colors"
+                    title={`${b.label} — ${b.subtitle}`}
+                    style={{
+                      height: 34, padding: '0 12px', borderRadius: 999,
+                      background: activeTile ? b.tint : 'var(--gc-surface)',
+                      color:      activeTile ? '#fff' : 'var(--gc-text-2)',
+                      border:     activeTile ? '1px solid transparent' : '1px solid var(--gc-border-light)',
+                      fontSize: 12.5, fontWeight: 700,
+                      cursor: b.key === 'to_apply' ? 'default' : 'pointer',
+                      opacity: b.key === 'to_apply' ? 0.75 : 1,
+                    }}>
+                    <span style={{ width: 9, height: 9, borderRadius: 999, background: activeTile ? '#fff' : b.tint, flex: 'none' }} />
+                    {b.label}
+                    {loading
+                      ? <Loader2 size={12} className="animate-spin" style={{ color: activeTile ? '#fff' : b.tint }} />
+                      : <span style={{ fontWeight: 800 }}>{s.count.toLocaleString()}</span>}
+                    <span className="tabular-nums" style={{ color: activeTile ? 'rgba(255,255,255,0.85)' : 'var(--gc-text-3)', fontWeight: 600 }}>
+                      {money0(s.total)}
+                    </span>
                   </button>
                 );
               })}
             </div>
+          ) : (
+            <div className="fleetcal-buckets flex items-stretch gap-2">
+              {TILES.map((b, i) => {
+                const activeTile = b.key === 'all' ? bucket === null : bucket === b.key;
+                const s    = tileStats(b.key);
+                const Icon = b.icon;
+                const next = TILES[i + 1];
+                const inert = b.key === 'to_apply';
+                return (
+                  <React.Fragment key={b.key}>
+                    {b.sep && <span style={{ width: 1, background: 'var(--gc-border-light)', margin: '6px 3px' }} />}
+                    <button
+                      onClick={() => { if (!inert) { setBucket(b.key === 'all' ? null : b.key as AgingBucket); setPage(0); } }}
+                      className="fleetcal-bucket text-left rounded-2xl transition-all relative overflow-hidden flex-1 min-w-0"
+                      style={{
+                        background: 'var(--gc-surface)',
+                        border:     activeTile ? '1px solid transparent' : '1px solid var(--gc-border-light)',
+                        boxShadow:  activeTile ? 'var(--shadow-soft)' : 'var(--shadow-1)',
+                        transform:  activeTile ? 'translateY(-2px)' : 'translateY(0)',
+                        padding:    '13px 15px',
+                        cursor:     inert ? 'default' : 'pointer',
+                      }}>
+                      <span style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, background: activeTile ? b.tint : 'transparent' }} />
+                      <div className="flex items-center gap-2.5">
+                        <span style={{ width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', background: b.tintLight, flex: 'none' }}>
+                          <Icon size={17} style={{ color: b.tint }} />
+                        </span>
+                        <span className="text-[13.5px] font-extrabold truncate" style={{ color: 'var(--gc-text-1)' }}>
+                          {b.label}
+                        </span>
+                        <Tooltip content={b.formula} placement="bottom">
+                          <Info size={11} style={{ color: 'var(--gc-text-3)', opacity: 0.6, cursor: 'help' }} />
+                        </Tooltip>
+                        {loading ? (
+                          <Loader2 size={14} className="ml-auto animate-spin" style={{ color: b.tint }} />
+                        ) : (
+                          <span className="ml-auto tabular-nums" style={{
+                            fontSize: 22, fontWeight: 800, lineHeight: 1,
+                            color: b.redCount ? '#c5221f' : 'var(--gc-text-1)',
+                          }}>
+                            {s.count.toLocaleString()}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-baseline justify-between gap-2 mt-2">
+                        <span className="text-[11.5px] font-semibold truncate" style={{ color: 'var(--gc-text-3)' }}>
+                          {b.subtitle}
+                        </span>
+                        <span className="tabular-nums" style={{
+                          fontSize: 13.5, fontWeight: 800,
+                          color: activeTile ? b.tintText : 'var(--gc-text-2)',
+                        }}>
+                          {money0(s.total)}
+                        </span>
+                      </div>
+                    </button>
+                    {next && !next.sep && (
+                      <span className="fleetcal-chevron hidden md:flex items-center justify-center"
+                            style={{ width: 18, color: 'var(--gc-border)', flex: 'none' }}>
+                        <ChevronRight size={16} />
+                      </span>
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </div>
+          )}
+        </div>
 
-            {err && (
-              <div className="rounded-lg border p-4 mb-4 text-sm"
-                   style={{ borderColor: '#ef4444', background: '#fef2f2', color: '#991b1b' }}>
-                {err}
-              </div>
-            )}
+        {err && (
+          <div style={{
+            flex: 'none', borderRadius: 12, background: '#fee2e2',
+            border: '1px solid #fecaca', color: '#991b1b', fontSize: 14, padding: 14,
+          }}>
+            {err}
+          </div>
+        )}
 
-            <OpsTable
-              columns={columns}
-              data={rows}
-              loading={loading}
-              rowKey={r => r.id}
-              onRowClick={r => setActive(r)}
-              activeRowId={active?.id ?? null}
-              countLabel="invoice"
-              density="compact"
-              pageSize={50}
-              defaultSort={{ key: 'agingDays', dir: 'desc' }}
-              columnPicker
-              persistKey="receivables-v1"
-              emptyLabel={
-                scope === 'open'
+        {/* 3 — ledger card */}
+        <div className="flex flex-col" style={{
+          flex: 1, minHeight: 0, background: 'var(--gc-surface)',
+          border: '1px solid var(--gc-border-light)', borderRadius: 14,
+          boxShadow: '0 1px 2px rgba(60,64,67,.1)', overflow: 'hidden',
+        }}>
+
+          {/* toolbar */}
+          <div className="flex items-center" style={{
+            height: 50, flex: 'none', padding: '0 14px', gap: 10,
+            borderBottom: '1px solid var(--gc-border-light)',
+          }}>
+            <span style={{ fontSize: 13.5, fontWeight: 800, color: 'var(--gc-text-1)' }}>By customer</span>
+            <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--gc-text-3)' }}>
+              {filtered.length.toLocaleString()} with an open balance · showing {pageRows.length}
+            </span>
+            <div style={{ flex: 1 }} />
+
+            <div className="relative">
+              <Search size={13} className="absolute left-2 top-1/2 -translate-y-1/2" style={{ color: 'var(--gc-text-3)' }} />
+              <input value={search} onChange={e => setSearch(e.target.value)}
+                placeholder="Customer or invoice #"
+                style={{
+                  height: 30, paddingLeft: 26, paddingRight: 10, width: 190,
+                  border: '1px solid var(--gc-border)', borderRadius: 8,
+                  fontSize: 12, color: 'var(--gc-text-1)', outline: 'none',
+                  background: 'var(--gc-surface)',
+                }} />
+            </div>
+
+            <div className="relative">
+              <button onClick={() => setSortOpen(o => !o)}
+                className="inline-flex items-center gap-1.5"
+                style={{
+                  height: 30, padding: '0 10px', border: '1px solid var(--gc-border)',
+                  borderRadius: 8, fontSize: 12, fontWeight: 700, color: 'var(--gc-text-2)',
+                  background: 'var(--gc-surface)',
+                }}>
+                <ArrowDownWideNarrow size={13} /> {SORT_LABEL[sortBy]}
+              </button>
+              {sortOpen && (
+                <>
+                  <div className="fixed inset-0" style={{ zIndex: 40 }} onClick={() => setSortOpen(false)} />
+                  <div className="absolute right-0 mt-1 rounded-lg border overflow-hidden" style={{
+                    zIndex: 41, minWidth: 150, borderColor: 'var(--gc-border)',
+                    background: 'var(--gc-surface)', boxShadow: 'var(--shadow-2, 0 8px 24px rgba(0,0,0,0.15))',
+                  }}>
+                    {(Object.keys(SORT_LABEL) as SortBy[]).map(s => (
+                      <button key={s} onClick={() => chooseSort(s)}
+                        className="w-full text-left"
+                        style={{
+                          padding: '7px 11px', fontSize: 12,
+                          fontWeight: sortBy === s ? 700 : 600,
+                          color: sortBy === s ? '#1a73e8' : 'var(--gc-text-2)',
+                          background: sortBy === s ? 'var(--gc-blue-light, #e8f0fe)' : 'transparent',
+                        }}>
+                        {SORT_LABEL[s]}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="flex" style={{
+              height: 30, border: '1px solid var(--gc-border)', borderRadius: 8, overflow: 'hidden',
+            }}>
+              {(['compact', 'comfortable', 'detail'] as Density[]).map(k => (
+                <button key={k} onClick={() => chooseDensity(k)}
+                  style={{
+                    padding: '0 11px', height: 28, fontSize: 12, fontWeight: 700,
+                    textTransform: 'capitalize',
+                    background: density === k ? '#1a73e8' : 'transparent',
+                    color:      density === k ? '#fff' : 'var(--gc-text-3)',
+                  }}>
+                  {k}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex rounded border overflow-hidden" style={{ borderColor: 'var(--gc-border)', height: 30 }}>
+              {(['open', 'paid', 'all'] as Scope[]).map(s => (
+                <button key={s} onClick={() => { setScope(s); setBucket(null); setPage(0); }}
+                  style={{
+                    padding: '0 10px', fontSize: 12, fontWeight: 700, textTransform: 'capitalize',
+                    background: scope === s ? '#1a73e8' : 'transparent',
+                    color:      scope === s ? '#fff' : 'var(--gc-text-3)',
+                  }}>
+                  {s}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* header row */}
+          <div style={{
+            display: 'grid', gridTemplateColumns: grid, gap: 12, padding: '0 14px',
+            height: 36, flex: 'none', alignItems: 'center',
+            borderBottom: '1px solid var(--gc-border-light)',
+            fontSize: 11, fontWeight: 700, letterSpacing: '.05em',
+            textTransform: 'uppercase', color: 'var(--gc-text-3)',
+          }}>
+            <span />
+            <span>Customer</span>
+            <span>Aging mix</span>
+            <span style={{ textAlign: 'right' }}>Oldest</span>
+            <span style={{ textAlign: 'right' }}>Open</span>
+            <span style={{ textAlign: 'right' }}>Past due</span>
+            <span style={{ textAlign: 'right' }}>Balance</span>
+            <span />
+          </div>
+
+          {/* body — the page's only scroll container */}
+          <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}
+               onScroll={e => {
+                 const y = e.currentTarget.scrollTop;
+                 if (y > 40 && !tilesCompact) setTilesCompact(true);
+                 else if (y < 8 && tilesCompact) setTilesCompact(false);
+               }}>
+            {loading ? (
+              <div style={{ padding: 24, fontSize: 12.5, color: 'var(--gc-text-3)' }}>Loading…</div>
+            ) : pageRows.length === 0 ? (
+              <div style={{ padding: 24, fontSize: 13, color: 'var(--gc-text-3)' }}>
+                {scope === 'open'
                   ? 'Nothing outstanding — every invoice in this view is settled.'
-                  : 'No invoices match the current filters.'
-              }
-            />
-          </main>
+                  : 'No customers match the current filters.'}
+              </div>
+            ) : pageRows.map(c => {
+              const key       = c.customerId ?? NO_CUSTOMER;
+              const expanded  = expandedId === key;
+              const bb        = c.byBucket ?? { current: 0, d1_30: 0, d31_60: 0, d61_plus: 0 };
+              const pct = (v: number) => (c.openBalance > 0 ? `${(v / c.openBalance * 100).toFixed(1)}%` : '0%');
+              const all       = invoicesByCustomer.get(key) ?? [];
+              const showAll   = showAllFor === key;
+              const shown     = showAll ? all : all.slice(0, 5);
+              const notDue    = all.filter(i => (i.agingDays ?? -1) <= 0).length;
+
+              return (
+                <div key={key} style={expanded ? { background: '#f8fbff', boxShadow: 'inset 3px 0 0 #1a73e8' } : undefined}>
+                  {/* customer row */}
+                  <div
+                    onClick={() => { setExpandedId(expanded ? null : key); setShowAllFor(null); }}
+                    className="cursor-pointer"
+                    style={{
+                      display: 'grid', gridTemplateColumns: grid, gap: 12, padding: '0 14px',
+                      height: d.rowH, alignItems: 'center',
+                      borderBottom: '1px solid #f1f3f4',
+                    }}
+                    onMouseOver={e => { if (!expanded) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+                    onMouseOut={e => { e.currentTarget.style.background = 'transparent'; }}>
+
+                    {expanded
+                      ? <ChevronDown size={15} style={{ color: '#1a73e8' }} />
+                      : <ChevronRight size={15} style={{ color: 'var(--gc-text-3)' }} />}
+
+                    <div className="min-w-0">
+                      <div className="truncate" style={{ fontSize: d.nameSize, fontWeight: 700, color: 'var(--gc-blue-text)' }}>
+                        {c.customerName}
+                      </div>
+                      {d.showSub && (
+                        <div className="truncate" style={{ fontSize: 11, fontWeight: 600, color: 'var(--gc-text-3)' }}>
+                          {c.openCount} open · {c.overdueBalance > 0 ? `${money0(c.overdueBalance)} past due` : 'nothing past due'}
+                          {c.termsDays ? ` · net ${c.termsDays}` : ''}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* aging mix */}
+                    <div className="flex flex-col" style={{ gap: 4 }}>
+                      <div className="flex" style={{ height: d.barH, borderRadius: 999, overflow: 'hidden', gap: 2 }}>
+                        {ORDERED.map(k => (
+                          <span key={k} style={{ width: pct(bb[k]), background: SEG_COLOR[k], flex: 'none' }} />
+                        ))}
+                      </div>
+                      {d.showAmounts && (
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 4 }}>
+                          {ORDERED.map(k => (
+                            <span key={k} className="tabular-nums" style={{
+                              textAlign: 'right', fontSize: 11, borderRadius: 5, padding: '2px 5px',
+                              background: CHIP_STYLE[k].bg, color: CHIP_STYLE[k].fg, fontWeight: CHIP_STYLE[k].weight,
+                            }}>
+                              {bb[k] ? kmoney(bb[k]) : '—'}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {d.showBehaviour && (
+                        <div className="truncate" style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--gc-text-3)' }}>
+                          {c.avgDaysToPay != null ? `pays in ${c.avgDaysToPay}d on average` : 'no payment history yet'}
+                          {c.termsDays ? ` · terms net ${c.termsDays}` : ''}
+                        </div>
+                      )}
+                    </div>
+
+                    <span className="tabular-nums" style={{
+                      textAlign: 'right', fontSize: 12.5, fontWeight: 800, color: ageColor(c.oldestAgingDays),
+                    }}>
+                      {c.oldestAgingDays == null ? '—' : `${Math.max(c.oldestAgingDays, 0)}d`}
+                    </span>
+
+                    <span style={{ textAlign: 'right', fontSize: 12.5, fontWeight: 600, color: 'var(--gc-text-2)' }}>
+                      {c.openCount}
+                    </span>
+
+                    <span className="tabular-nums" style={{
+                      textAlign: 'right', fontSize: 12.5, fontWeight: 700,
+                      color: c.overdueBalance > 0 ? '#c5221f' : 'var(--gc-text-3)',
+                    }}>
+                      {c.overdueBalance > 0 ? money0(c.overdueBalance) : '—'}
+                    </span>
+
+                    <span className="tabular-nums" style={{
+                      textAlign: 'right', fontSize: d.balSize, fontWeight: 800, color: 'var(--gc-text-1)',
+                    }}>
+                      {money0(c.openBalance)}
+                    </span>
+
+                    <span style={{ textAlign: 'right' }}>
+                      <MoreVertical size={15} style={{ color: 'var(--gc-text-3)' }} />
+                    </span>
+                  </div>
+
+                  {/* expanded invoices */}
+                  {expanded && (
+                    <div style={{ padding: '0 14px 14px 40px' }}>
+                      <div style={{
+                        border: '1px solid var(--gc-border-light)', borderRadius: 10,
+                        background: 'var(--gc-surface)', overflow: 'hidden',
+                      }}>
+                        <div style={{
+                          display: 'grid', gridTemplateColumns: INNER_GRID, gap: 10, padding: '0 12px',
+                          height: 34, alignItems: 'center', background: 'var(--gc-bg)',
+                          borderBottom: '1px solid var(--gc-border-light)',
+                          fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase',
+                          letterSpacing: '.05em', color: 'var(--gc-text-3)',
+                        }}>
+                          <span />
+                          <span>Invoice</span>
+                          <span>Load</span>
+                          <span>Issued</span>
+                          <span>Due</span>
+                          <span style={{ textAlign: 'right' }}>Age</span>
+                          <span style={{ textAlign: 'right' }}>Total</span>
+                          <span style={{ textAlign: 'right' }}>Balance</span>
+                          <span style={{ textAlign: 'center' }}>Status</span>
+                        </div>
+
+                        {shown.map(inv => {
+                          const age    = inv.agingDays;
+                          const stripe = age != null && age > 30 ? '#c5221f' : age != null && age > 0 ? '#e37400' : 'transparent';
+                          const st     = statusOf(inv);
+                          return (
+                            <div key={inv.id}
+                              onClick={() => setActive(inv)}
+                              className="cursor-pointer"
+                              title="Record a payment against this invoice"
+                              style={{
+                                display: 'grid', gridTemplateColumns: INNER_GRID, gap: 10, padding: '0 12px',
+                                height: 40, alignItems: 'center', fontSize: 12.5,
+                                borderBottom: '1px solid #f1f3f4',
+                                boxShadow: stripe === 'transparent' ? undefined : `inset 3px 0 0 ${stripe}`,
+                              }}
+                              onMouseOver={e => { e.currentTarget.style.background = 'var(--gc-hover)'; }}
+                              onMouseOut={e => { e.currentTarget.style.background = 'transparent'; }}>
+                              <span style={{
+                                width: 15, height: 15, border: '1.5px solid var(--gc-border)', borderRadius: 3,
+                              }} />
+                              <span style={{ fontWeight: 700, color: '#1967d2' }}>{inv.invoiceNumber}</span>
+                              <span className="truncate" style={{ color: 'var(--gc-text-2)' }}>
+                                {inv.loadNumber ? `Load ${inv.loadNumber}` : '—'}
+                              </span>
+                              <span style={{ color: 'var(--gc-text-3)' }}>{shortDate(inv.issuedAt)}</span>
+                              <span style={{ color: 'var(--gc-text-3)' }}>{inv.dueAt ? shortDate(inv.dueAt) : '—'}</span>
+                              <span className="tabular-nums" style={{ textAlign: 'right', fontWeight: 800, color: ageColor(age) }}>
+                                {ageLabel(age)}
+                              </span>
+                              <span className="tabular-nums" style={{ textAlign: 'right' }}>{money2(inv.total)}</span>
+                              <span className="tabular-nums" style={{ textAlign: 'right', fontWeight: 800 }}>{money2(inv.balance)}</span>
+                              <span style={{ textAlign: 'center' }}>
+                                <span style={{
+                                  fontSize: 10.5, fontWeight: 700, borderRadius: 999, padding: '2px 8px',
+                                  background: st.bg, color: st.fg,
+                                }}>
+                                  {st.label}
+                                </span>
+                              </span>
+                            </div>
+                          );
+                        })}
+
+                        <div className="flex items-center gap-2" style={{
+                          padding: '9px 12px', background: 'var(--gc-bg)', fontSize: 11.5,
+                        }}>
+                          <span style={{ fontWeight: 600, color: 'var(--gc-text-3)' }}>
+                            Showing {shown.length} of {all.length}
+                            {notDue > 0 ? ` · ${notDue} current, not due` : ''}
+                          </span>
+                          {!showAll && all.length > shown.length && (
+                            <button onClick={e => { e.stopPropagation(); setShowAllFor(key); }}
+                              style={{ fontWeight: 700, color: '#1967d2' }}>
+                              Show all
+                            </button>
+                          )}
+                          <div style={{ flex: 1 }} />
+                          <span className="inline-flex items-center gap-1.5" style={{
+                            height: 28, padding: '0 10px', border: '1px solid var(--gc-border)',
+                            borderRadius: 8, fontSize: 11.5, fontWeight: 700, color: 'var(--gc-text-2)',
+                            opacity: 0.55, cursor: 'default',
+                          }}>
+                            <Mail size={12} /> Statement
+                          </span>
+                          <span className="inline-flex items-center gap-1.5" style={{
+                            height: 28, padding: '0 10px', borderRadius: 8,
+                            background: '#1a73e8', color: '#fff', fontSize: 11.5, fontWeight: 700,
+                            opacity: 0.55, cursor: 'default',
+                          }}>
+                            <ArrowRightLeft size={12} /> Apply a payment
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* card footer */}
+          <div className="flex items-center" style={{
+            height: 42, flex: 'none', padding: '0 14px', background: 'var(--gc-bg)',
+            borderTop: '1px solid var(--gc-border-light)',
+          }}>
+            <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--gc-text-3)' }}>
+              {filtered.length === 0
+                ? 'No customers'
+                : `Showing ${safePage * d.pageSize + 1}–${safePage * d.pageSize + pageRows.length} of ${filtered.length} customers · ${money0(shownTotal)} outstanding`}
+            </span>
+            <div style={{ flex: 1 }} />
+            <div className="flex items-center gap-2">
+              <PagerButton disabled={safePage === 0} onClick={() => setPage(p => Math.max(0, p - 1))}>
+                <ChevronLeft size={14} />
+              </PagerButton>
+              <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--gc-text-2)' }}>
+                Page {safePage + 1} of {pageCount}
+              </span>
+              <PagerButton disabled={safePage >= pageCount - 1} onClick={() => setPage(p => p + 1)}>
+                <ChevronRight size={14} />
+              </PagerButton>
+            </div>
+          </div>
         </div>
       </div>
 
+      {/* Recording a payment still lives here: the redesign's "Apply a
+          payment" workspace isn't built, so an invoice row opens the
+          existing panel rather than leaving no way to record money. */}
       {active && (
         <RecordPaymentPanel
           row={active}
@@ -358,56 +822,33 @@ function ReceivablesPageInner() {
   );
 }
 
-// ── bits ──────────────────────────────────────────────────────────────
+const INNER_GRID = '34px 104px 1fr 96px 96px 92px 108px 108px 104px';
 
-function Tile({ label, value, sub, accent }: {
-  label: string; value: string; sub: string; accent: string;
-}) {
-  return (
-    <div className="rounded-lg border px-3 py-2"
-         style={{ borderColor: 'var(--gc-border)', borderLeft: `3px solid ${accent}` }}>
-      <div className="text-[10px] font-bold uppercase tracking-wider"
-           style={{ color: 'var(--gc-text-3)' }}>
-        {label}
-      </div>
-      <div className="text-[19px] font-semibold tabular-nums leading-tight mt-0.5"
-           style={{ color: 'var(--gc-text-1)' }}>
-        {value}
-      </div>
-      <div className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>{sub}</div>
-    </div>
-  );
+/** Status pill. Part-paid outranks age — "we got something" is the more
+ *  useful fact than "it's late". Overdue starts past 30 days so the pill
+ *  agrees with the row's red stripe. */
+function statusOf(inv: ReceivableInvoice): { label: string; bg: string; fg: string } {
+  if (inv.paidAmount > 0.005 && inv.balance > 0.005) {
+    return { label: 'Part paid', bg: '#e6f4ea', fg: '#137333' };
+  }
+  const a = inv.agingDays;
+  if (a != null && a > 30) return { label: 'Overdue', bg: '#fce8e6', fg: '#c5221f' };
+  if (a != null && a > 0)  return { label: 'Due',     bg: '#f1f3f4', fg: '#5f6368' };
+  return { label: 'Current', bg: '#f1f3f4', fg: '#5f6368' };
 }
 
-function RailRow({ label, total, count, sub, amber, selected, onClick }: {
-  label: string; total: number; count?: number; sub?: string;
-  amber?: boolean; selected?: boolean; onClick: () => void;
+function PagerButton({ disabled, onClick, children }: {
+  disabled: boolean; onClick: () => void; children: React.ReactNode;
 }) {
   return (
-    <button onClick={onClick}
-            className="w-full text-left px-3 py-1.5 flex items-start justify-between gap-2"
-            style={{ background: selected ? 'var(--gc-blue-bg, #e8f0fe)' : 'transparent' }}>
-      <span className="min-w-0 flex-1">
-        <span className="block text-xs font-medium truncate"
-              style={{ color: selected ? '#1a73e8' : 'var(--gc-text-2)' }}>
-          {label}
-        </span>
-        {sub && (
-          <span className="block text-[10px]" style={{ color: amber ? '#b45309' : 'var(--gc-text-3)' }}>
-            {sub}
-          </span>
-        )}
-      </span>
-      <span className="shrink-0 text-right">
-        <span className="block text-xs tabular-nums" style={{ color: 'var(--gc-text-1)' }}>
-          {fmtMoney0(total)}
-        </span>
-        {count != null && (
-          <span className="block text-[10px] tabular-nums" style={{ color: 'var(--gc-text-3)' }}>
-            {count}
-          </span>
-        )}
-      </span>
+    <button onClick={onClick} disabled={disabled}
+      className="grid place-items-center"
+      style={{
+        width: 26, height: 26, border: '1px solid var(--gc-border)', borderRadius: 7,
+        background: 'var(--gc-surface)', color: 'var(--gc-text-2)',
+        opacity: disabled ? 0.4 : 1, cursor: disabled ? 'default' : 'pointer',
+      }}>
+      {children}
     </button>
   );
 }
