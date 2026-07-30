@@ -4574,8 +4574,29 @@ export default function EventModal() {
       // and re-sending it would re-insert the rows and change the ids
       // the anchors were just re-seeded to.
       if (sharedFields) {
-        const { stops: _reconciledStops, ...loadAndLegFields } = sharedFields;
-        void _reconciledStops;
+        const {
+          stops: _reconciledStops,
+          // Fields the reconcile ALREADY wrote per leg from the legs
+          // editor. They must never be broadcast from the form's shared
+          // bag, because the form holds ONE value — the viewed leg's, or
+          // for driverPay a figure computed against the WHOLE load price
+          // — and pushing it to every leg overwrites each leg's own
+          // number. On a 3-leg load that multiplied real payout: every
+          // leg got the whole-load pay figure and each was paid
+          // separately. Per-leg values have exactly one source: the legs
+          // payload built above.
+          driverPay: _legDriverPay,
+          driverId:  _legDriverId,
+          driverName: _legDriverName,
+          assetId:   _legAssetId,
+          start:     _legStart,
+          end:       _legEnd,
+          status:    _legStatus,
+          ...loadAndLegFields
+        } = sharedFields as Record<string, unknown>;
+        void _reconciledStops; void _legDriverPay; void _legDriverId;
+        void _legDriverName; void _legAssetId; void _legStart;
+        void _legEnd; void _legStatus;
         const legsForFields = (fresh.length > 0 ? fresh : relayLegs);
         if (legsForFields.length > 0) {
           await saveRelayLegs(legsForFields.map(l => ({ id: l.id, updates: loadAndLegFields })));
