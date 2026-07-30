@@ -1492,7 +1492,7 @@ export type { InvoiceStatus };
 import type {
   PaymentProof, PaymentProofKind, PaymentProofSource, PaymentMethod,
   PaymentVarianceReason, InvoicePayment, ReceivableInvoice,
-  ReceivableCustomerSummary, AgingBucket,
+  ReceivableCustomerSummary, AgingBucket, CustomerReceivables, WeeklyCollection,
 } from './domain';
 
 /** GET /v1/payments/proofs — filters are ANDed.
@@ -1636,10 +1636,20 @@ export interface ReceivablesTotals {
   unbackedPaidCount: number;
 }
 
+/** GET /v1/payments/receivables/:customerId — the customer view in one
+ *  call. Pass the literal `__none__` for invoices with no customer set,
+ *  matching the sentinel the ledger uses. */
+export interface GetCustomerReceivablesQuery {
+  scope?: 'open' | 'paid' | 'all';
+}
+export interface GetCustomerReceivablesResponse {
+  customer: CustomerReceivables;
+}
+
 export type {
   PaymentProof, PaymentProofKind, PaymentProofSource, PaymentMethod,
   PaymentVarianceReason, InvoicePayment, ReceivableInvoice,
-  ReceivableCustomerSummary, AgingBucket,
+  ReceivableCustomerSummary, AgingBucket, CustomerReceivables, WeeklyCollection,
 };
 
 // ── /v1/driver/fuel-reports + /v1/fuel-reports ──────────────────────────

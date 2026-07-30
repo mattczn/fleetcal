@@ -13,6 +13,7 @@
  */
 
 import { useEffect, useLayoutEffect, useRef, useState, forwardRef } from 'react';
+import type { InvoiceStatus } from '@fleetcal/types';
 import { createPortal } from 'react-dom';
 import {
   Check, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, X, MessageSquare, Columns3, Users, GripVertical,
@@ -1369,5 +1370,26 @@ export function ReorderableColumnsMenu({
         </div>
       )}
     </div>
+  );
+}
+
+/** Invoice lifecycle pill — draft/sent/paid/void.
+ *
+ *  Lives here rather than in accounting/page.tsx because Receivables'
+ *  customer view renders the same Sent/Unsent states and the two pages
+ *  must not drift into two palettes for one concept. */
+export function StatusPill({ status }: { status: InvoiceStatus }) {
+  const palette: Record<InvoiceStatus, { bg: string; fg: string; border: string; label: string }> = {
+    draft: { bg: '#f1f5f9', fg: '#475569', border: '#cbd5e1', label: 'Unsent' },
+    sent:  { bg: '#eff6ff', fg: '#1d4ed8', border: '#bfdbfe', label: 'Sent'   },
+    paid:  { bg: '#dcfce7', fg: '#166534', border: '#86efac', label: 'Paid'   },
+    void:  { bg: '#fef2f2', fg: '#991b1b', border: '#fecaca', label: 'Void'   },
+  };
+  const p = palette[status];
+  return (
+    <span className="text-[10.5px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full inline-block"
+      style={{ background: p.bg, color: p.fg, border: `1px solid ${p.border}` }}>
+      {p.label}
+    </span>
   );
 }

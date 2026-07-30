@@ -39,7 +39,7 @@ import { InvoiceDetailModal } from '@/components/invoicing/InvoiceDetailModal';
 import InternalNotesModal from '@/components/closeout/InternalNotesModal';
 import {
   Th, Td, DocBadge, RequiredDocBadge, AccessorialsCell, CopyableCell, CopyableLoadNum, NotesButton,
-  FastTooltip,
+  FastTooltip, StatusPill,
   moneyFmt, fmtShortDate, daysSince,
 } from '@/components/queue/QueueTablePrimitives';
 import { OpsTable, type OpsColumn, type OpsFilter } from '@/components/ui/OpsTable';
@@ -1993,23 +1993,8 @@ function ageFg(days: number): string {
 // (BucketEmpty removed — OpsTable owns its own empty-state messaging
 // via the emptyLabel prop on the consumer.)
 
-// ─── Status pill ────────────────────────────────────────────────────────
-
-function StatusPill({ status }: { status: InvoiceStatus }) {
-  const palette: Record<InvoiceStatus, { bg: string; fg: string; border: string; label: string }> = {
-    draft: { bg: '#f1f5f9', fg: '#475569', border: '#cbd5e1', label: 'Unsent' },
-    sent:  { bg: '#eff6ff', fg: '#1d4ed8', border: '#bfdbfe', label: 'Sent'   },
-    paid:  { bg: '#dcfce7', fg: '#166534', border: '#86efac', label: 'Paid'   },
-    void:  { bg: '#fef2f2', fg: '#991b1b', border: '#fecaca', label: 'Void'   },
-  };
-  const p = palette[status];
-  return (
-    <span className="text-[10.5px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full inline-block"
-      style={{ background: p.bg, color: p.fg, border: `1px solid ${p.border}` }}>
-      {p.label}
-    </span>
-  );
-}
+// StatusPill moved to components/queue/QueueTablePrimitives so the
+// Receivables customer view renders the same palette.
 
 // ─── Invoice Summary modal (batch generate from loads) ──────────────────
 // Identical to the previous implementation — preserved here.

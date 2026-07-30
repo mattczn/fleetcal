@@ -41,6 +41,8 @@ import type {
   DeletePaymentProofResponse,
   UploadProofAttachmentResponse,
   ListReceivablesResponse,
+  GetCustomerReceivablesResponse,
+  WeeklyCollection,
   ApiErrorResponse,
 } from "@fleetcal/types";
 import { agingBucketFor, AGING_BUCKETS } from "@fleetcal/types";
@@ -544,6 +546,84 @@ function daysPastDue(due: string | null, today: number): number | null {
   return Math.floor((today - dueMs) / 86_400_000);
 }
 
+
+type AllocSummary = { amount: number; paidOn: string; hasProof: boolean };
+
+/** Every allocation for the given invoices, keyed by invoice id.
+ *
+ *  One query set rather than per-invoice: AR lists run into the hundreds
+ *  and N+1 here would dominate the request. Chunked because PostgREST
+ *  builds `in.(...)` into the URL and a few thousand uuids blows past the
+ *  request-line limit; paged within each chunk because 300 invoices can
+ *  carry more than 1000 allocations between them once partial payments
+ *  are in play. */
+async function allocationsFor(
+  orgId: string, invoiceIds: string[],
+): Promise<Map<string, AllocSummary[]>> {
+  const out = new Map<string, AllocSummary[]>();
+  if (!invoiceIds.length) return out;
+  type AllocRow = {
+    id: string; invoice_id: string; amount: string | number;
+    paid_on: string; proof_id: string | null;
+  };
+  for (let i = 0; i < invoiceIds.length; i += 300) {
+    const slice = invoiceIds.slice(i, i + 300);
+    const allocs = await fetchAllRows<AllocRow>(
+      "receivables/allocations",
+      () => supabase
+        .from("invoice_payments")
+        .select("id,invoice_id,amount,paid_on,proof_id")
+        .eq("org_id", orgId)
+        .in("invoice_id", slice),
+    );
+    for (const a of allocs) {
+      const list = out.get(a.invoice_id) ?? [];
+      list.push({ amount: Number(a.amount), paidOn: a.paid_on, hasProof: a.proof_id !== null });
+      out.set(a.invoice_id, list);
+    }
+  }
+  return out;
+}
+
+/** Project a joined invoice row + its allocations into the shape both
+ *  the ledger and the customer view render. Single implementation so the
+ *  Age column can't say one thing on one page and another elsewhere. */
+function toReceivableInvoice(
+  r: ReceivableInvoiceRow, allocs: AllocSummary[], today: number,
+): ReceivableInvoice {
+  const total      = Number(r.total ?? 0);
+  const paidAmount = round2(allocs.reduce((s, a) => s + a.amount, 0));
+  const lastPaidOn = allocs.length
+    ? allocs.reduce((a, b) => (a.paidOn >= b.paidOn ? a : b)).paidOn
+    : undefined;
+  const leg = pickupLeg(r);
+  return {
+    id:             r.id,
+    invoiceNumber:  r.invoice_number,
+    status:         r.status as InvoiceStatus,
+    loadId:         r.load_id,
+    internalLoadId: r.loads?.internal_load_id ?? undefined,
+    loadNum:        r.loads?.load_num ?? undefined,
+    title:          leg?.title ?? undefined,
+    pickupEventId:  leg?.id,
+    customerId:     r.customer_id ?? undefined,
+    customerName:   r.customers?.name ?? undefined,
+    total,
+    issuedAt:       r.issued_at,
+    dueAt:          r.due_at ?? undefined,
+    paidAmount,
+    balance:        round2(total - paidAmount),
+    agingDays:      daysPastDue(r.due_at, today),
+    paymentCount:   allocs.length,
+    lastPaidOn,
+    hasProof:       allocs.some((a) => a.hasProof),
+  };
+}
+
+const RECEIVABLE_INVOICE_COLS =
+  "id,invoice_number,status,total,issued_at,due_at,customer_id,load_id," +
+  "loads(internal_load_id,load_num,events(id,title,leg_index)),customers(name)";
+
 payments.get("/receivables", async (c) => {
   const orgId = c.get("orgId");
   const q     = c.req.query();
@@ -567,18 +647,7 @@ payments.get("/receivables", async (c) => {
   const buildInvoiceQuery = () => {
     let query = supabase
       .from("invoices")
-      // load_num is the BROKER's load number and the one operators paste
-      // into portals. internal_load_id is FleetCal's own sequence, which
-      // invoice_number is derived from — surfacing it as "Load #" just
-      // repeated the invoice number in a second column.
-      //
-      // The embedded events give both the title and the pickup leg's
-      // event id, which is what EventModal keys on. One join instead of a
-      // per-row fetch when a title is clicked.
-      .select(
-        "id,invoice_number,status,total,issued_at,due_at,customer_id,load_id," +
-        "loads(internal_load_id,load_num,events(id,title,leg_index)),customers(name)",
-      )
+      .select(RECEIVABLE_INVOICE_COLS)
       .eq("org_id", orgId)
       .neq("status", "void");
     if (scope === "open") query = query.in("status", ["draft", "sent"]);
@@ -598,69 +667,13 @@ payments.get("/receivables", async (c) => {
     } satisfies ApiErrorResponse, 500);
   }
 
-  // One query for every allocation on the returned invoices, rather than
-  // per-invoice. AR lists run into the hundreds; N+1 here would be the
-  // page's dominant cost.
-  const invIds = invRows.map((r) => r.id);
-  const allocByInvoice = new Map<string, { amount: number; paidOn: string; hasProof: boolean }[]>();
-  if (invIds.length) {
-    // Chunked because PostgREST builds `in.(...)` into the URL and a few
-    // thousand uuids blows past the request-line limit; paged within each
-    // chunk because 300 invoices can carry more than 1000 allocations
-    // between them once partial payments are in play.
-    type AllocRow = {
-      id: string; invoice_id: string; amount: string | number;
-      paid_on: string; proof_id: string | null;
-    };
-    for (let i = 0; i < invIds.length; i += 300) {
-      const slice = invIds.slice(i, i + 300);
-      const allocs = await fetchAllRows<AllocRow>(
-        "receivables/allocations",
-        () => supabase
-          .from("invoice_payments")
-          .select("id,invoice_id,amount,paid_on,proof_id")
-          .eq("org_id", orgId)
-          .in("invoice_id", slice),
-      );
-      for (const a of allocs) {
-        const list = allocByInvoice.get(a.invoice_id) ?? [];
-        list.push({ amount: Number(a.amount), paidOn: a.paid_on, hasProof: a.proof_id !== null });
-        allocByInvoice.set(a.invoice_id, list);
-      }
-    }
-  }
+  const allocByInvoice = await allocationsFor(orgId, invRows.map((r) => r.id));
 
   const today = Date.parse(new Date().toISOString().slice(0, 10) + "T00:00:00Z");
 
-  const invoices: ReceivableInvoice[] = invRows.map((r) => {
-    const allocs      = allocByInvoice.get(r.id) ?? [];
-    const total       = Number(r.total ?? 0);
-    const paidAmount  = round2(allocs.reduce((s, a) => s + a.amount, 0));
-    const lastPaidOn  = allocs.length
-      ? allocs.reduce((a, b) => (a.paidOn >= b.paidOn ? a : b)).paidOn
-      : undefined;
-    return {
-      id:            r.id,
-      invoiceNumber: r.invoice_number,
-      status:        r.status as InvoiceStatus,
-      loadId:        r.load_id,
-      internalLoadId: r.loads?.internal_load_id ?? undefined,
-      loadNum:       r.loads?.load_num ?? undefined,
-      title:         pickupLeg(r)?.title ?? undefined,
-      pickupEventId: pickupLeg(r)?.id,
-      customerId:    r.customer_id ?? undefined,
-      customerName:  r.customers?.name ?? undefined,
-      total,
-      issuedAt:      r.issued_at,
-      dueAt:         r.due_at ?? undefined,
-      paidAmount,
-      balance:       round2(total - paidAmount),
-      agingDays:     daysPastDue(r.due_at, today),
-      paymentCount:  allocs.length,
-      lastPaidOn,
-      hasProof:      allocs.some((a) => a.hasProof),
-    };
-  });
+  const invoices: ReceivableInvoice[] = invRows.map(
+    (r) => toReceivableInvoice(r, allocByInvoice.get(r.id) ?? [], today),
+  );
 
   // fetchAllRows pages by id, so restore a sensible default order here.
   // The table re-sorts client-side, but the payload shouldn't arrive in
@@ -842,5 +855,227 @@ payments.get("/receivables", async (c) => {
   const res: ListReceivablesResponse = { invoices: filtered, customers, totals };
   return c.json(res);
 });
+
+
+// ── Customer view ─────────────────────────────────────────────────────
+//
+// GET /v1/payments/receivables/:customerId
+//
+// Everything one broker's page renders, in one call. Aging, average
+// days-to-pay and the weekly series are all computed here rather than in
+// the client: the number an operator chases a broker over shouldn't
+// depend on which page they read it from.
+
+const NO_CUSTOMER = "__none__";
+
+payments.get("/receivables/:customerId", async (c) => {
+  const orgId      = c.get("orgId");
+  const customerId = c.req.param("customerId");
+  const q          = c.req.query();
+  const scope      = (q.scope === "paid" || q.scope === "all") ? q.scope : "open";
+  const isNone     = customerId === NO_CUSTOMER;
+
+  // ── Invoices ────────────────────────────────────────────────────────
+  const buildQuery = () => {
+    let query = supabase
+      .from("invoices")
+      .select(RECEIVABLE_INVOICE_COLS)
+      .eq("org_id", orgId)
+      .neq("status", "void");
+    query = isNone ? query.is("customer_id", null) : query.eq("customer_id", customerId);
+    if (scope === "open") query = query.in("status", ["draft", "sent"]);
+    if (scope === "paid") query = query.eq("status", "paid");
+    return query;
+  };
+
+  let invRows: ReceivableInvoiceRow[];
+  try {
+    invRows = await fetchAllRows<ReceivableInvoiceRow>("customer/invoices", buildQuery);
+  } catch (e) {
+    console.error("[GET /v1/payments/receivables/:customerId] failed:", e);
+    return c.json({
+      error: "fetch_failed",
+      detail: e instanceof Error ? e.message : "invoice fetch failed",
+    } satisfies ApiErrorResponse, 500);
+  }
+
+  const allocByInvoice = await allocationsFor(orgId, invRows.map((r) => r.id));
+  const today    = Date.parse(new Date().toISOString().slice(0, 10) + "T00:00:00Z");
+  const invoices = invRows
+    .map((r) => toReceivableInvoice(r, allocByInvoice.get(r.id) ?? [], today))
+    .sort((a, b) => (b.agingDays ?? -99999) - (a.agingDays ?? -99999));
+
+  // ── Identity ────────────────────────────────────────────────────────
+  let name = "No customer";
+  let mcNum: string | undefined;
+  let invoiceEmail: string | undefined;
+  let contactPhone: string | undefined;
+  if (!isNone) {
+    const { data: cust } = await supabase
+      .from("customers")
+      .select("id,name,mc_num,invoice_email,contact_phone")
+      .eq("id", customerId)
+      .eq("org_id", orgId)
+      .maybeSingle();
+    if (!cust) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+    const row = cust as {
+      name: string | null; mc_num: string | null;
+      invoice_email: string | null; contact_phone: string | null;
+    };
+    name         = row.name ?? "Unnamed customer";
+    mcNum        = row.mc_num        ?? undefined;
+    invoiceEmail = row.invoice_email ?? undefined;
+    contactPhone = row.contact_phone ?? undefined;
+  }
+
+  // Lifetime loads — head-only count, no rows pulled over the wire.
+  let lifetimeLoads: number | undefined;
+  try {
+    let lq = supabase.from("loads").select("id", { count: "exact", head: true }).eq("org_id", orgId);
+    lq = isNone ? lq.is("customer_id", null) : lq.eq("customer_id", customerId);
+    const { count } = await lq;
+    lifetimeLoads = count ?? undefined;
+  } catch { /* non-fatal — the meta row just omits it */ }
+
+  // ── Rollup ──────────────────────────────────────────────────────────
+  // Same shape and same arithmetic as a ledger row.
+  const summary: ReceivableCustomerSummary = {
+    customerId:      isNone ? null : customerId,
+    customerName:    name,
+    openCount:       0,
+    openBalance:     0,
+    overdueCount:    0,
+    overdueBalance:  0,
+    byBucket:        { current: 0, d1_30: 0, d31_plus: 0 },
+    oldestAgingDays: null,
+  };
+  const gaps: number[] = [];
+  for (const inv of invoices) {
+    if (inv.balance > 0.005) {
+      summary.openCount  += 1;
+      summary.openBalance = round2(summary.openBalance + inv.balance);
+      const b = agingBucketFor(inv.agingDays);
+      summary.byBucket[b] = round2(summary.byBucket[b] + inv.balance);
+      if (inv.agingDays !== null && inv.agingDays > 0) {
+        summary.overdueCount  += 1;
+        summary.overdueBalance = round2(summary.overdueBalance + inv.balance);
+      }
+      if (inv.agingDays !== null &&
+          (summary.oldestAgingDays === null || inv.agingDays > summary.oldestAgingDays)) {
+        summary.oldestAgingDays = inv.agingDays;
+      }
+    }
+    if (inv.dueAt) {
+      const g = Math.round((Date.parse(inv.dueAt) - Date.parse(inv.issuedAt)) / 86_400_000);
+      if (Number.isFinite(g) && g > 0 && g <= 180) gaps.push(g);
+    }
+    if (inv.lastPaidOn && (!summary.lastPaidOn || inv.lastPaidOn > summary.lastPaidOn)) {
+      summary.lastPaidOn = inv.lastPaidOn;
+    }
+  }
+  if (gaps.length) {
+    const freq = new Map<number, number>();
+    for (const g of gaps) freq.set(g, (freq.get(g) ?? 0) + 1);
+    let best = gaps[0], bestN = 0;
+    for (const [g, n] of freq) if (n > bestN || (n === bestN && g < best)) { best = g; bestN = n; }
+    summary.termsDays = best;
+  }
+
+  // ── Behaviour + collections ─────────────────────────────────────────
+  // Both read paid invoices, which scope=open excludes by definition, so
+  // they get their own bounded query.
+  const sinceYear = new Date(Date.now() - 365 * 86_400_000).toISOString();
+  try {
+    let bq = supabase
+      .from("invoices")
+      .select("id,issued_at,paid_at")
+      .eq("org_id", orgId)
+      .eq("status", "paid")
+      .gte("paid_at", sinceYear);
+    bq = isNone ? bq.is("customer_id", null) : bq.eq("customer_id", customerId);
+    const paidRows = await fetchAllRows<{ id: string; issued_at: string; paid_at: string | null }>(
+      "customer/behaviour", () => bq);
+    const days: number[] = [];
+    for (const r of paidRows) {
+      if (!r.paid_at) continue;
+      const d = Math.round((Date.parse(r.paid_at) - Date.parse(r.issued_at)) / 86_400_000);
+      if (Number.isFinite(d) && d >= 0 && d <= 365) days.push(d);
+    }
+    if (days.length) {
+      summary.avgDaysToPay = Math.round(days.reduce((a, b) => a + b, 0) / days.length);
+    }
+  } catch (e) {
+    console.warn("[customer receivables] behaviour rollup skipped:", e);
+  }
+
+  // Allocations drive both the 90-day figure and the weekly chart — the
+  // ledger is the record of when money actually arrived, which is not
+  // the same question as when an invoice was issued.
+  let paid90d = 0, paid90dCount = 0;
+  const weekTotals = new Map<string, { amount: number; count: number }>();
+  try {
+    const since12w = mondayOf(new Date(Date.now() - 84 * 86_400_000));
+    const since90d = new Date(Date.now() - 90 * 86_400_000).toISOString().slice(0, 10);
+    const earliest = since12w < since90d ? since12w : since90d;
+
+    // Embedded !inner filter keeps the customer scoping in SQL rather
+    // than pulling every allocation in the org back to filter here.
+    let pq = supabase
+      .from("invoice_payments")
+      .select("id,amount,paid_on,invoices!inner(customer_id)")
+      .eq("org_id", orgId)
+      .gte("paid_on", earliest);
+    pq = isNone
+      ? pq.is("invoices.customer_id", null)
+      : pq.eq("invoices.customer_id", customerId);
+
+    const rows = await fetchAllRows<{ id: string; amount: string | number; paid_on: string }>(
+      "customer/collections", () => pq);
+
+    for (const r of rows) {
+      const amt = Number(r.amount);
+      if (r.paid_on >= since90d) { paid90d = round2(paid90d + amt); paid90dCount += 1; }
+      if (r.paid_on >= since12w) {
+        const wk  = mondayOf(new Date(r.paid_on + "T12:00:00Z"));
+        const cur = weekTotals.get(wk) ?? { amount: 0, count: 0 };
+        cur.amount = round2(cur.amount + amt);
+        cur.count += 1;
+        weekTotals.set(wk, cur);
+      }
+    }
+  } catch (e) {
+    console.warn("[customer receivables] collections rollup skipped:", e);
+  }
+
+  // Emit all 12 weeks including empties — a gap week should render as a
+  // flat bar, not shift the chart's other bars sideways.
+  const weekly: WeeklyCollection[] = [];
+  const firstMonday = mondayOf(new Date(Date.now() - 77 * 86_400_000));
+  for (let i = 0; i < 12; i++) {
+    const wk = new Date(Date.parse(firstMonday + "T00:00:00Z") + i * 7 * 86_400_000)
+      .toISOString().slice(0, 10);
+    const cell = weekTotals.get(wk);
+    weekly.push({ weekStart: wk, amount: cell?.amount ?? 0, count: cell?.count ?? 0 });
+  }
+
+  const res: GetCustomerReceivablesResponse = {
+    customer: {
+      customerId: isNone ? null : customerId,
+      customerName: name,
+      mcNum, invoiceEmail, contactPhone, lifetimeLoads,
+      summary, paid90d, paid90dCount, weekly, invoices,
+    },
+  };
+  return c.json(res);
+});
+
+/** ISO date of the Monday on or before `d`. Weeks are Monday-anchored so
+ *  a week's bar covers one working week rather than straddling two. */
+function mondayOf(d: Date): string {
+  const t = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  const dow = (t.getUTCDay() + 6) % 7;   // Mon = 0
+  t.setUTCDate(t.getUTCDate() - dow);
+  return t.toISOString().slice(0, 10);
+}
 
 export default payments;

@@ -27,6 +27,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import React from 'react';
+import { useRouter } from 'next/navigation';
 import {
   HandCoins, Wallet, CircleCheckBig, Clock, OctagonAlert, Inbox,
   ChevronRight, ChevronDown, ChevronLeft, MoreVertical, Search,
@@ -165,6 +166,7 @@ const LS_SORT = 'receivables-v2:sort';
 type Scope = 'open' | 'paid' | 'all';
 
 function ReceivablesPageInner() {
+  const router = useRouter();
   const [rows,      setRows]      = useState<ReceivableInvoice[]>([]);
   const [customers, setCustomers] = useState<ReceivableCustomerSummary[]>([]);
   const [totals,    setTotals]    = useState<ReceivablesTotals>(EMPTY_TOTALS);
@@ -627,9 +629,15 @@ function ReceivablesPageInner() {
                       : <ChevronRight size={15} style={{ color: 'var(--gc-text-3)' }} />}
 
                     <div className="min-w-0">
-                      <div className="truncate" style={{ fontSize: NAME_SIZE, fontWeight: 700, color: 'var(--gc-blue-text)' }}>
+                      {/* Name navigates to the customer view; the rest of
+                          the row still expands inline. */}
+                      <button type="button"
+                        onClick={e => { e.stopPropagation(); router.push(`/receivables/${encodeURIComponent(key)}`); }}
+                        className="truncate text-left hover:underline block max-w-full"
+                        style={{ fontSize: NAME_SIZE, fontWeight: 700, color: 'var(--gc-blue-text)' }}
+                        title="Open customer">
                         {c.customerName}
-                      </div>
+                      </button>
                       {(
                         <div className="truncate" style={{ fontSize: 11, fontWeight: 600, color: 'var(--gc-text-3)' }}>
                           {c.openCount} open · {c.overdueBalance > 0 ? `${money0(c.overdueBalance)} past due` : 'nothing past due'}

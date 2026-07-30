@@ -1511,6 +1511,45 @@ export function agingBucketFor(agingDays: number | null): AgingBucket {
   return 'd31_plus';
 }
 
+/** One week of collections, for the customer view's 12-week chart.
+ *  `weekStart` is a Monday, ISO date. */
+export interface WeeklyCollection {
+  weekStart: string;
+  amount:    number;
+  count:     number;
+}
+
+/** Everything the Receivables customer view renders.
+ *
+ *  Aging and behaviour are computed server-side here for the same reason
+ *  they are on the ledger: two implementations of "how late is this"
+ *  eventually disagree, and the number an operator chases a broker over
+ *  should not depend on which page they read it from. */
+export interface CustomerReceivables {
+  customerId:    string | null;
+  customerName:  string;
+  mcNum?:        string;
+  invoiceEmail?: string;
+  contactPhone?: string;
+  /** Distinct loads ever billed to this customer. */
+  lifetimeLoads?: number;
+
+  /** Same rollup shape the ledger row uses — byBucket, oldest, terms,
+   *  avgDaysToPay. */
+  summary:       ReceivableCustomerSummary;
+
+  /** Money collected from this customer in the trailing 90 days, and how
+   *  many separate payments that took. */
+  paid90d:       number;
+  paid90dCount:  number;
+
+  /** Trailing 12 weeks, oldest first, gaps included as zero so the chart
+   *  can render a flat week rather than skipping it. */
+  weekly:        WeeklyCollection[];
+
+  invoices:      ReceivableInvoice[];
+}
+
 /** Per-customer rollup — one row of the Receivables ledger.
  *
  *  Computed server-side, not in the client, so the aging figures on the

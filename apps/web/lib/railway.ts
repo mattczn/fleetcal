@@ -66,6 +66,7 @@ import type {
   UnmarkInvoicePaidRequest, UnmarkInvoicePaidResponse,
   VoidInvoiceRequest, VoidInvoiceResponse,
   ListReceivablesQuery, ListReceivablesResponse,
+  GetCustomerReceivablesQuery, GetCustomerReceivablesResponse,
   ListPaymentProofsQuery, ListPaymentProofsResponse,
   GetPaymentProofResponse,
   CreatePaymentProofRequest, CreatePaymentProofResponse,
@@ -1385,6 +1386,17 @@ class RailwayClient {
     if (query.limit)      qs.set('limit',      String(query.limit));
     const s = qs.toString();
     return this.req<ListReceivablesResponse>('GET', `/v1/payments/receivables${s ? `?${s}` : ''}`);
+  }
+
+  /** One broker's whole picture — identity, aging, KPIs, the 12-week
+   *  collections series, and their invoices. Pass '__none__' for
+   *  invoices with no customer set. */
+  getCustomerReceivables(customerId: string, query: GetCustomerReceivablesQuery = {}) {
+    const qs = new URLSearchParams();
+    if (query.scope) qs.set('scope', query.scope);
+    const s = qs.toString();
+    return this.req<GetCustomerReceivablesResponse>(
+      'GET', `/v1/payments/receivables/${encodeURIComponent(customerId)}${s ? `?${s}` : ''}`);
   }
 
   listPaymentProofs(query: ListPaymentProofsQuery = {}) {
