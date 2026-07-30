@@ -120,9 +120,12 @@ const NAME_SIZE = 13.5;
 const BAL_SIZE  = 15;
 const PAGE_SIZE = 15;
 
-/** Aging ramp — cool to hot, left to right. */
+/** Aging ramp. These are the same saturated tints the bucket tiles use
+ *  — green / amber / red — rather than the pale wash the prototype
+ *  drew. At bar width a 20%-saturation fill reads as "no data" next to
+ *  the empty track behind it, which is the opposite of the point. */
 const SEG_COLOR: Record<AgingBucket, string> = {
-  current: '#c6dafc', d1_30: '#fddc9a', d31_plus: '#c5221f',
+  current: '#188038', d1_30: '#e37400', d31_plus: '#c5221f',
 };
 const ORDERED: AgingBucket[] = ['current', 'd1_30', 'd31_plus'];
 

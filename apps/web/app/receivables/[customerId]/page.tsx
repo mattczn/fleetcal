@@ -22,7 +22,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
   HandCoins, Mail, Phone, Truck, ArrowRightLeft, Download, ChevronLeft,
-  ExternalLink, MapPin, StickyNote, UserRound, Check,
+  UserRound, Check,
 } from 'lucide-react';
 import RequireCap from '@/components/auth/RequireCap';
 import AppShell from '@/components/nav/AppShell';
@@ -30,6 +30,7 @@ import DataLoader from '@/components/DataLoader';
 import EventModal from '@/components/calendar/EventModal';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 import BulkPaymentPanel from '../BulkPaymentPanel';
+import BillingCard from '../BillingCard';
 import Breadcrumbs from '@/app/admin/Breadcrumbs';
 import Tooltip from '@/components/ui/Tooltip';
 import { CopyableCell, CopyableLoadNum, StatusPill } from '@/components/queue/QueueTablePrimitives';
@@ -64,12 +65,15 @@ const GROUP_STYLE: Record<AgingBucket, {
 /** Worst first — the point of grouping. */
 const GROUP_ORDER: AgingBucket[] = ['d31_plus', 'd1_30', 'current'];
 
-/** Bar ramp for the aging breakdown card. */
+/** Aging ramp. These are the same saturated tints the bucket tiles use
+ *  — green / amber / red — rather than the pale wash the prototype
+ *  drew. At bar width a 20%-saturation fill reads as "no data" next to
+ *  the empty track behind it, which is the opposite of the point. */
 const SEG_COLOR: Record<AgingBucket, string> = {
-  current: '#c6dafc', d1_30: '#fddc9a', d31_plus: '#c5221f',
+  current: '#188038', d1_30: '#e37400', d31_plus: '#c5221f',
 };
 const BUCKET_FG: Record<AgingBucket, string> = {
-  current: '#3c4043', d1_30: '#b06000', d31_plus: '#c5221f',
+  current: '#137333', d1_30: '#b06000', d31_plus: '#c5221f',
 };
 
 const GRID = '34px 78px 100px 104px 1fr 92px 92px 92px 100px 100px 100px 96px';
@@ -396,52 +400,22 @@ function CustomerViewInner() {
         )}
 
         {/* ── How to bill them ─────────────────────────────────────── */}
-        {/* Read-only mirror of the Customer record — BrokerProfileModal
-            is the edit surface, reachable from View customer above, so
-            this doesn't duplicate a form. */}
+        {/* Editable in place: the person chasing a payment is usually the
+            one who just found out the billing email is wrong. Writes go
+            through the same PATCH /v1/customers/:id the broker modal
+            uses, so there's still one writer. */}
         {!compact && (
-        <div style={{ flex: 'none', ...CARD, padding: '12px 16px' }}>
-          <div className="flex items-start flex-wrap" style={{ gap: 24 }}>
-            <BillingField
-              icon={data?.invoiceMethod === 'portal' ? <ExternalLink size={12} /> : <Mail size={12} />}
-              label="Invoice routing">
-              {data?.invoiceMethod === 'portal' ? 'Online portal'
-                : data?.invoiceMethod === 'email' ? 'Email'
-                : <Muted>not set</Muted>}
-            </BillingField>
-
-            {/* Only the destination that matches the routing is shown —
-                a stale email under a portal broker is a trap. */}
-            <BillingField icon={<Mail size={12} />}
-              label={data?.invoiceMethod === 'portal' ? 'Portal' : 'Billing email'}>
-              {data?.invoiceMethod === 'portal'
-                ? (data?.invoicePortal
-                    ? <a href={/^https?:\/\//.test(data.invoicePortal) ? data.invoicePortal : `https://${data.invoicePortal}`}
-                         target="_blank" rel="noopener noreferrer"
-                         className="hover:underline inline-flex items-center gap-1"
-                         style={{ color: 'var(--gc-blue-text)' }}>
-                        {data.invoicePortal} <ExternalLink size={11} />
-                      </a>
-                    : <Muted>no portal on file</Muted>)
-                : (data?.invoiceEmail
-                    ? <a href={`mailto:${data.invoiceEmail}`} className="hover:underline"
-                         style={{ color: 'var(--gc-blue-text)' }}>{data.invoiceEmail}</a>
-                    : <Muted>no billing email on file</Muted>)}
-            </BillingField>
-
-            <BillingField icon={<MapPin size={12} />} label="Billing address">
-              {data?.billingAddress
-                ? <span style={{ whiteSpace: 'pre-line' }}>{data.billingAddress}</span>
-                : <Muted>not set</Muted>}
-            </BillingField>
-
-            <BillingField icon={<StickyNote size={12} />} label="Billing notes" grow>
-              {data?.billingNotes
-                ? <span style={{ whiteSpace: 'pre-line' }}>{data.billingNotes}</span>
-                : <Muted>none</Muted>}
-            </BillingField>
-          </div>
-        </div>
+          <BillingCard
+            customerId={data?.customerId ?? undefined}
+            values={{
+              invoiceMethod:  data?.invoiceMethod,
+              invoiceEmail:   data?.invoiceEmail,
+              invoicePortal:  data?.invoicePortal,
+              billingAddress: data?.billingAddress,
+              billingNotes:   data?.billingNotes,
+            }}
+            onSaved={() => void load()}
+          />
         )}
 
         {/* ── Invoices ─────────────────────────────────────────────── */}
@@ -705,28 +679,6 @@ function Pill({ bg, fg, children }: { bg: string; fg: string; children: React.Re
       style={{ background: bg, color: fg }}>
       {children}
     </span>
-  );
-}
-
-function Muted({ children }: { children: React.ReactNode }) {
-  return <span style={{ color: 'var(--gc-text-3)' }}>{children}</span>;
-}
-
-function BillingField({ icon, label, children, grow }: {
-  icon: React.ReactNode; label: string; children: React.ReactNode; grow?: boolean;
-}) {
-  return (
-    <div style={{ minWidth: 0, flex: grow ? 1 : 'none', maxWidth: grow ? undefined : 320 }}>
-      <div className="inline-flex items-center gap-1.5" style={{
-        fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase',
-        letterSpacing: '.06em', color: 'var(--gc-text-3)',
-      }}>
-        {icon}{label}
-      </div>
-      <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--gc-text-2)', marginTop: 2 }}>
-        {children}
-      </div>
-    </div>
   );
 }
 
