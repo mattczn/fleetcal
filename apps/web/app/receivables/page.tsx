@@ -181,6 +181,7 @@ function ReceivablesPageInner() {
 
   const [scope,      setScope]      = useState<Scope>('open');
   const [bucket,     setBucket]     = useState<AgingBucket | null>(null);
+  const [customerPick, setCustomerPick] = useState<string>('');
   const [search,     setSearch]     = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [sortBy,     setSortBy]     = useState<SortBy>('pastDue');
@@ -278,21 +279,27 @@ function ReceivablesPageInner() {
     return m;
   }, [rows]);
 
-  /** An invoice-number search hit should surface its customer even
-   *  though the query doesn't match the customer's name. */
+  /** A hit on an invoice #, load # or load title should surface its
+   *  customer even when the query doesn't match the customer's name —
+   *  otherwise searching a load number returns nothing, because the
+   *  ledger's rows are customers. */
   const invoiceMatchCustomers = useMemo(() => {
     if (!searchTerm) return null;
     const hits = new Set<string>();
     for (const inv of rows) {
-      if (inv.invoiceNumber.toLowerCase().includes(searchTerm)) {
-        hits.add(inv.customerId ?? NO_CUSTOMER);
-      }
+      const hit =
+        inv.invoiceNumber.toLowerCase().includes(searchTerm) ||
+        (inv.loadNum ?? '').toLowerCase().includes(searchTerm) ||
+        (inv.title ?? '').toLowerCase().includes(searchTerm) ||
+        String(inv.internalLoadId ?? '').includes(searchTerm);
+      if (hit) hits.add(inv.customerId ?? NO_CUSTOMER);
     }
     return hits;
   }, [rows, searchTerm]);
 
   const filtered = useMemo(() => {
     let list = customers.filter(c => c.openCount > 0 || scope !== 'open');
+    if (customerPick) list = list.filter(c => (c.customerId ?? NO_CUSTOMER) === customerPick);
     if (bucket) list = list.filter(c => (c.byBucket?.[bucket] ?? 0) > 0.005);
     if (searchTerm) {
       list = list.filter(c =>
@@ -306,7 +313,7 @@ function ReceivablesPageInner() {
       : sortBy === 'name'   ? a.customerName.localeCompare(b.customerName)
       : b.overdueBalance - a.overdueBalance);
     return sorted;
-  }, [customers, bucket, searchTerm, invoiceMatchCustomers, sortBy, scope]);
+  }, [customers, bucket, customerPick, searchTerm, invoiceMatchCustomers, sortBy, scope]);
 
   const pageCount  = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const safePage   = Math.min(page, pageCount - 1);
@@ -517,10 +524,29 @@ function ReceivablesPageInner() {
             </span>
             <div style={{ flex: 1 }} />
 
+            {/* Customer picker — sorted by open balance so the brokers
+                worth chasing are at the top of the list, not the As. */}
+            <select value={customerPick}
+              onChange={e => { setCustomerPick(e.target.value); setPage(0); setExpandedId(null); }}
+              style={{
+                height: 30, padding: '0 8px', maxWidth: 200,
+                border: '1px solid var(--gc-border)', borderRadius: 8,
+                fontSize: 12, fontWeight: 700,
+                color: customerPick ? '#1a73e8' : 'var(--gc-text-2)',
+                background: 'var(--gc-surface)', outline: 'none',
+              }}>
+              <option value="">All customers</option>
+              {customers.map(c => (
+                <option key={c.customerId ?? NO_CUSTOMER} value={c.customerId ?? NO_CUSTOMER}>
+                  {c.customerName}
+                </option>
+              ))}
+            </select>
+
             <div className="relative">
               <Search size={13} className="absolute left-2 top-1/2 -translate-y-1/2" style={{ color: 'var(--gc-text-3)' }} />
               <input value={search} onChange={e => setSearch(e.target.value)}
-                placeholder="Customer or invoice #"
+                placeholder="Load #, invoice #, customer"
                 style={{
                   height: 30, paddingLeft: 26, paddingRight: 10, width: 190,
                   border: '1px solid var(--gc-border)', borderRadius: 8,
