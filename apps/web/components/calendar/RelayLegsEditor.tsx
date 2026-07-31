@@ -400,17 +400,17 @@ function LegCard({
           />
         </Field>
         {canViewDriverPay && (
-          <Field label="Driver Pay" labelSuffix={payLabelSuffix}>
-            {/* The leg's dollar share lives on the "% of leg" chip's
-                tooltip rather than its own line — an extra row here made
-                the pay column taller than driver/truck and broke the
-                single-row layout. */}
+          <Field label="Driver Pay">
+            {/* Badges sit BELOW the input, not beside the label, so the
+                three inputs line up across the row. The leg's dollar
+                share lives on the "% of leg" chip's tooltip. */}
             <PayInput
               value={leg.pay}
               onChange={v => onChangeLeg(leg.key, { pay: v })}
               disabled={disabled || finalized.finalized}
               disabledTitle={FINALIZED_HINT}
             />
+            <div className="mt-1.5">{payLabelSuffix}</div>
             <div className="mt-1.5">
               <FinalizedPayBanner
                 driverName={leg.driverName}
