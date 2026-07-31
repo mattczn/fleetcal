@@ -1940,8 +1940,12 @@ export const useCalendarStore = create<CalendarStore>()(
     // Persist the audit entry on the load before nuking the event so
     // the cancellation reason isn't orphaned.
     if (auditEntry) {
-      const nextLog = [...(ev.auditLog ?? []), auditEntry];
-      railway.updateLoad(ev.loadId, { auditLog: nextLog }).catch((err) =>
+      // APPEND server-side. Building the next log from `ev.auditLog` and
+      // sending it as `auditLog` is a full REPLACEMENT — and store events
+      // never carry history (EVENT_COLS omits audit_log), so that array
+      // was always exactly one entry. Cancelling a load therefore wiped
+      // every prior entry it had.
+      railway.updateLoad(ev.loadId, { auditAppend: [auditEntry] }).catch((err) =>
         console.error('cancelEventKeepLoad audit append:', err),
       );
     }
@@ -1984,10 +1988,13 @@ export const useCalendarStore = create<CalendarStore>()(
     // live on the load, never per leg, so writing them per event was
     // both wrong and left the load itself untouched.
     get().markLoadSelfWrite(loadId);
-    const nextLog = auditEntry ? [...(ev.auditLog ?? []), auditEntry] : undefined;
+    // auditAppend, not auditLog: the latter REPLACES the whole array, and
+    // store events never carry history (EVENT_COLS omits audit_log), so
+    // the "existing + new" array was always just the new entry — this
+    // erased the load's history on every cancel.
     railway.updateLoad(loadId, {
       loadPrice: 0,
-      ...(nextLog ? { auditLog: nextLog } : {}),
+      ...(auditEntry ? { auditAppend: [auditEntry] } : {}),
     }).catch((err) => console.error('cancelLoadKeepRecord: zero load failed', err));
     // Then take every leg off the calendar. The load row survives for
     // search / accounting / TONU, exactly as the single-leg flow did.

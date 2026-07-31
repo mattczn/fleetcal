@@ -35,14 +35,16 @@ export function sumLineItems(items: readonly PayrollLineItem[]): number {
   return toCents(items.reduce((s, li) => s + (li.amount ?? 0), 0));
 }
 
-/** Non-relay loads print as "Both" (one driver ran pickup→delivery),
+/** Non-relay loads print as "All" — one driver ran the whole load.
+ *  (Was "Both", which only made sense when a relay meant exactly two
+ *  legs; a load can now have any number.)
  *  matching the on-screen LegBadge and the existing pay stub. */
 export function legLabelForEvent(
   load: CalendarEvent, allEvents?: readonly CalendarEvent[],
 ): string {
   const relayLabel = eventLegLabel(load, allEvents);
   if (relayLabel) return relayLabel;
-  return 'Both';
+  return 'All';
 }
 
 export function buildPayrollLineItems(opts: {

@@ -176,6 +176,14 @@ export function joinEventLoadToApp(
     // but the LOAD alive; a full delete has both. Search-result
     // status pills use both flags to label the row.
     loadDeletedAt:  (l?.deleted_at as string | null | undefined) ?? undefined,
+    // Load-level history. Already on the wire (LOAD_COLS selects
+    // audit_log); this just stops discarding it. Kept in its own field
+    // rather than merged into `auditLog` so the existing callers that
+    // round-trip `auditLog` back as a full-array replacement are not
+    // silently handed a different array than they had before.
+    loadAuditLog:   Array.isArray(l?.audit_log)
+                      ? (l!.audit_log as LoadAuditEntry[])
+                      : undefined,
     // relayGroupId aliases loadId for relay legs. Two events with the same
     // load_id and relay_role set ARE the relay; the alias keeps existing
     // relayGroupId-reading code working. Pre-2.5c, fall back to the

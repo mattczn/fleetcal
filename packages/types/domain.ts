@@ -841,6 +841,24 @@ export interface LoadAuditEntry {
   newLoadPrice?: number;
   prevDriverPay?: number;
   newDriverPay?: number;
+  /** What DETERMINED the driver-pay figure in this entry:
+   *    'auto'   — the app computed it from the org's driverPayPct
+   *               (the load-price auto-fill effect, a rate-con parse /
+   *               batch fill, a "Set to N% of leg|load" button, or the
+   *               re-proration that runs when a solo load is split).
+   *    'manual' — a human typed the number into a pay input.
+   *
+   *  Scoped to the DRIVER-PAY pair only. An entry that also carries a
+   *  load-price change says nothing about where THAT number came from.
+   *
+   *  Additive: absent on every entry written before this field existed,
+   *  and those render exactly as they always did — no badge. It is
+   *  never INFERRED from whether the amount happens to equal
+   *  pct × base (payMatchesPct): a dispatcher can legitimately type the
+   *  exact percentage figure, and a guess in a money audit is worse
+   *  than no badge at all. Only the site that actually wrote the number
+   *  sets this. */
+  paySource?: 'auto' | 'manual';
   /** Customer name (broker) free-text — when the dispatcher edits the
    *  Customer field directly. Customer-id changes (linking a load to a
    *  saved customer) carry both name + id. */
@@ -1133,7 +1151,25 @@ export interface Load {
   partnerTrailerDropoffAddress?: string;
 
   // Audit
+  /** THIS EVENT's audit_log (per-leg driver-side entries). The list
+   *  endpoints strip it, so it is usually undefined outside
+   *  GET /v1/events/:id. */
   auditLog?: LoadAuditEntry[];
+  /**
+   * The LOAD's audit_log, read-only.
+   *
+   * `loads.audit_log` is already selected by the list queries (it is in
+   * LOAD_COLS) but was thrown away by the join converter, so no list
+   * surface could see load history — which is why the payroll page had
+   * no way to say what determined a pay figure without an extra fetch
+   * per row.
+   *
+   * READ-ONLY on purpose: it is deliberately absent from
+   * loadFieldSplit's LOAD_LEVEL_KEYS and from appLoadToLoadInsert, so
+   * it can never be round-tripped back as a full-array replacement.
+   * Append with UpdateLoadRequest.auditAppend instead.
+   */
+  loadAuditLog?: LoadAuditEntry[];
 
   /** events.deleted_at — set on soft-deleted events; populated by reads
    *  that include deleted rows (trash UI). */

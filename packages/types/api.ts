@@ -160,6 +160,21 @@ export interface UpdateLoadRequest {
   internalNotes?:  InternalNote[] | null;
   /** Full replacement of loads.audit_log. Caller fetches, appends, sends. */
   auditLog?:       LoadAuditEntry[] | null;
+  /**
+   * APPEND these entries to loads.audit_log, server-side.
+   *
+   * Prefer this over `auditLog` for anything that isn't EventModal.
+   * `auditLog` is a full-array replacement, and the list endpoints do
+   * NOT return events/loads audit_log on the joined Load — so a caller
+   * working from a list read holds `auditLog: undefined`, and
+   * "fetch, append, send" silently becomes "replace the entire history
+   * with one entry". Appending server-side also runs the existing
+   * dedup window and can't lose a concurrent writer's entry.
+   *
+   * Does not suppress the endpoint's own accessorial-diff append the
+   * way `auditLog` does — the two cover different fields.
+   */
+  auditAppend?:    LoadAuditEntry[];
 }
 
 export interface UpdateLoadResponse {

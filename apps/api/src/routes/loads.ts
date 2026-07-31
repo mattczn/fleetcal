@@ -1502,19 +1502,35 @@ loads.patch("/:id", requireCapability("loads.edit"), async (c) => {
     }
   }
 
-  if (Object.keys(update).length === 0) {
+  // `auditAppend` is history-only — a PATCH carrying nothing but audit
+  // entries is legitimate (the payroll page changes driver_pay on the
+  // EVENT and only needs the load-level history line).
+  const auditAppend = Array.isArray(body.auditAppend) ? body.auditAppend : [];
+  if (Object.keys(update).length === 0 && auditAppend.length === 0) {
     return badRequest(c, ["no allowed fields supplied; nothing to update"]);
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { error } = await supabase
-    .from("loads")
-    .update(update as any)
-    .eq("id", loadId)
-    .eq("org_id", orgId);
-  if (error) {
-    console.error("[PATCH /v1/loads/:id] update failed:", error);
-    return c.json({ error: "update_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  if (Object.keys(update).length > 0) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await supabase
+      .from("loads")
+      .update(update as any)
+      .eq("id", loadId)
+      .eq("org_id", orgId);
+    if (error) {
+      console.error("[PATCH /v1/loads/:id] update failed:", error);
+      return c.json({ error: "update_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+    }
+  }
+
+  // Server-side APPEND — read-modify-write inside appendLoadAudit, with
+  // its dedup window. The alternative (client sends the whole array) is
+  // only safe for callers that actually hold the whole array, which is
+  // EventModal and nothing else: the list endpoints strip audit_log from
+  // the event row, so every other surface would have replaced the load's
+  // entire history with a single entry.
+  for (const entry of auditAppend) {
+    await appendLoadAudit(loadId, orgId, entry);
   }
 
   // ── Audit log: accessorial change tracking ──────────────────────────

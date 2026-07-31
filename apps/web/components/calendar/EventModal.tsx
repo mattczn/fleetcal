@@ -18,7 +18,7 @@ import Tooltip from '@/components/ui/Tooltip';
 import { localDateStr, parseTimeInput } from '@/lib/time-utils';
 import { isActiveOn } from '@/lib/lifecycle';
 import { AssetSelect } from './AssetSelect';
-import type { CalendarEvent, Driver, EventStatus, Accessorial, Stop, RefNum, LoadAuditEntry, AccessorialChange, CustomerMatchResult } from '@/lib/types';
+import type { CalendarEvent, Driver, EventStatus, Accessorial, Stop, RefNum, LoadAuditEntry, CustomerMatchResult } from '@/lib/types';
 import { NON_REVENUE_TYPES } from '@/lib/types';
 import { matchCustomer } from '@/lib/customerMatch';
 import { cleanBrokerName } from '@/lib/brokerName';
@@ -33,7 +33,7 @@ import TimePicker from './TimePicker';
 import StopsSection from './StopsSection';
 import RelayLegsEditor, { RelayLegView, RelayHandoffView, RelayHandoffPhoto } from './RelayLegsEditor';
 import { legRoleFor, legLabel, byLegIndex, handoffIndexes, handoffTimesOf, isHandoffStop } from '@fleetcal/types';
-import { AuditEntryLines } from '@/lib/auditEntry';
+import { AuditEntryLines, appendAuditEntry, buildAuditEntry } from '@/lib/auditEntry';
 import { legStraightMiles } from '@/lib/legMiles';
 import {
   PAY_BASIS_LABEL, autoPayFor, fmtPct, payPctOf, proratePayAcrossLegs,
@@ -62,6 +62,10 @@ const LEG_SCOPED_AUDIT_KEYS = new Set<string>([
   'prevDriverName', 'newDriverName',
   'prevAssetId',    'newAssetId',
   'prevDriverPay',  'newDriverPay',
+  // Travels with the pay pair — it describes that pair and nothing
+  // else. Left in the load-scoped half it would be stranded on an
+  // entry with no pay line, and the badge would silently vanish.
+  'paySource',
   'prevStart',      'newStart',
   'prevEnd',        'newEnd',
   'prevStatus',     'newStatus',
@@ -2276,6 +2280,13 @@ export default function EventModal() {
   const [relayGroupId,       setRelayGroupId]       = useState<string | undefined>(undefined);
   const [relayRole,          setRelayRole]          = useState<'pickup' | 'transfer' | 'delivery' | undefined>(undefined);
   const [legPays,            setLegPays]            = useState<Record<string, number | ''>>({});
+  /** What DETERMINED each buffered leg pay, keyed exactly like legPays.
+   *  Written only by the sites that actually set a number — the leg
+   *  card's "Set to N% of leg" button ('auto'), its pay input
+   *  ('manual'), and the split re-proration ('auto'). A key with no
+   *  entry means "this leg's pay wasn't touched in this session", and
+   *  the audit entry then carries no badge rather than a guess. */
+  const [legPaySources,      setLegPaySources]      = useState<Record<string, 'auto' | 'manual'>>({});
   const [legEdits,           setLegEdits]           = useState<Record<string, { assetId?: number; driverName?: string }>>({});
   const [draftLegs,          setDraftLegs]          = useState<Array<{ key: string; assetId: number; driverName: string }>>([]);
   const [pendingSplitStopId, setPendingSplitStopId] = useState<string | null>(null);
@@ -2637,12 +2648,12 @@ export default function EventModal() {
   };
 
   useEffect(() => {
-    if (!modalOpen) { setConfirmDel(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setRateConOriginal(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setOtherLegMiles({}); setShowDriverSummary(false); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setLoadInvoices([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); setInternalNotes([]); setOriginalInternalNotes([]); setNoteComposer(''); setNoteComposerOpen(false); setPendingNewBroker(null); setLegPays({}); setLegEdits({}); setDraftLegs([]); setPendingSplitStopId(null); setPendingSplitTargetId(null); setSplitPayNotice(null); pendingSplitLockRef.current = false; setLegAnchors({}); setExplicitClears({}); setLegsFetchingLoadIds([]); setSuggestAssetSwap(null); setSuggestDriverSwap(null); return; }
+    if (!modalOpen) { setConfirmDel(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setRateConOriginal(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setOtherLegMiles({}); setShowDriverSummary(false); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setLoadInvoices([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); setInternalNotes([]); setOriginalInternalNotes([]); setNoteComposer(''); setNoteComposerOpen(false); setPendingNewBroker(null); setLegPays({}); setLegPaySources({}); setLegEdits({}); setDraftLegs([]); setPendingSplitStopId(null); setPendingSplitTargetId(null); setSplitPayNotice(null); pendingSplitLockRef.current = false; setLegAnchors({}); setExplicitClears({}); setLegsFetchingLoadIds([]); setSuggestAssetSwap(null); setSuggestDriverSwap(null); return; }
     setParseState('idle'); setParseError('');
     setRateConPdf(undefined); setRateConOriginal(undefined); setShowPdfViewer(false); setShowMapPanel(modalShowMap);
     setIsDirty(false); setShowSavePrompt(false);
     setRelayGroupId(undefined); setRelayRole(undefined);
-    setLegPays({}); setLegEdits({}); setDraftLegs([]); setPendingSplitStopId(null); setPendingSplitTargetId(null); setSplitPayNotice(null);
+    setLegPays({}); setLegPaySources({}); setLegEdits({}); setDraftLegs([]); setPendingSplitStopId(null); setPendingSplitTargetId(null); setSplitPayNotice(null);
     pendingSplitLockRef.current = false;
     reinstatingRef.current = false;
     unsplittingRef.current = false;
@@ -3155,158 +3166,28 @@ export default function EventModal() {
     return out;
   };
 
-  // Mirrors apps/api/src/routes/loads.ts::diffAccessorialsForAudit so
-  // an EventModal save and a /v1/loads PATCH from the load-detail
-  // page produce structurally identical AccessorialChange[] entries.
-  // If you extend the comparable field set here, also extend the
-  // server helper — the two have to stay in sync or audit history
-  // will look different depending on which surface edited the row.
-  function diffAccessorials(prev: Accessorial[] = [], next: Accessorial[] = []): AccessorialChange[] {
-    const changes: AccessorialChange[] = [];
-    const prevMap = new Map(prev.map(a => [a.id, a]));
-    const nextMap = new Map(next.map(a => [a.id, a]));
-    for (const [id, a] of nextMap) {
-      if (!prevMap.has(id)) {
-        changes.push({
-          action: 'added', id,
-          category: a.category, description: a.description, amount: a.amount,
-          newStatus:        a.status,
-          newBillable:      a.billable,
-          newPayToDriver:   a.payToDriver,
-          newPayDriverName: a.payDriverName,
-        });
-      } else {
-        const p = prevMap.get(id)!;
-        const amountChanged       = (p.amount ?? 0) !== (a.amount ?? 0);
-        const statusChanged       = (p.status ?? '') !== (a.status ?? '');
-        const billableChanged     = !!p.billable     !== !!a.billable;
-        const payToDriverChanged  = !!p.payToDriver  !== !!a.payToDriver;
-        const payNameChanged      = (p.payDriverName ?? '') !== (a.payDriverName ?? '');
-        const categoryChanged     = (p.category      ?? '') !== (a.category      ?? '');
-        const descriptionChanged  = (p.description   ?? '') !== (a.description   ?? '');
-        if (amountChanged || statusChanged || billableChanged || payToDriverChanged
-            || payNameChanged || categoryChanged || descriptionChanged) {
-          changes.push({
-            action: 'updated', id,
-            category: a.category, description: a.description,
-            ...(amountChanged       ? { prevAmount: p.amount, amount: a.amount } : {}),
-            ...(statusChanged       ? { prevStatus: p.status, newStatus: a.status } : {}),
-            ...(billableChanged     ? { prevBillable: !!p.billable, newBillable: !!a.billable } : {}),
-            ...(payToDriverChanged  ? { prevPayToDriver: !!p.payToDriver, newPayToDriver: !!a.payToDriver } : {}),
-            ...(payNameChanged      ? { prevPayDriverName: p.payDriverName, newPayDriverName: a.payDriverName } : {}),
-            ...(categoryChanged     ? { prevCategory: p.category } : {}),
-            ...(descriptionChanged  ? { prevDescription: p.description, newDescription: a.description } : {}),
-          });
-        }
-      }
-    }
-    for (const [id, a] of prevMap) {
-      if (!nextMap.has(id)) {
-        changes.push({
-          action: 'removed', id,
-          category: a.category, description: a.description, amount: a.amount,
-          prevStatus:        a.status,
-          prevBillable:      a.billable,
-          prevPayToDriver:   a.payToDriver,
-          prevPayDriverName: a.payDriverName,
-        });
-      }
-    }
-    return changes;
-  }
+  // The differ, diffAccessorials and appendAuditEntry used to live
+  // here as component-local closures. That is precisely why this
+  // modal was the ONLY screen that wrote load history — the payroll
+  // page's inline pay editor and the load detail page's pay/price
+  // saves had no differ they could reach. They now live in
+  // lib/auditEntry (which already owned rendering), and all three
+  // surfaces build entries with the same code.
 
-  function buildAuditEntry(
-    existing: CalendarEvent,
-    next: {
-      assetId: number;
-      driverName?: string;
-      newLoadPrice?: number;
-      newDriverPay?: number;
-      newStopCount: number;
-      newAccessorials?: Accessorial[];
-      relayCreated?: boolean;
-      newBroker?: string;
-      newCustomerId?: string;
-      newCustomerName?: string;
-      newDispatcher?: string;
-      newTrailerId?: number;
-      newTrailerNum?: string;
-      newPriority?: boolean;
-      newStart?: string;
-      newEnd?: string;
-    },
-    // Callers resolve readable display names for any ID-typed fields
-    // before invoking — the audit log is fetched later without the
-    // customers / trailers lists in scope, so storing raw IDs alone
-    // would render as opaque uuids. See the doSave caller for the
-    // lookup pattern (find by id in customers / trailers arrays).
-    prevNames: { customerName?: string; trailerNum?: string },
-    byName: string,
-  ): LoadAuditEntry | null {
-    const driverChanged    = (existing.driverName ?? '') !== (next.driverName ?? '');
-    const assetChanged     = existing.assetId !== next.assetId;
-    const loadPriceChanged = (existing.loadPrice ?? 0) !== (next.newLoadPrice ?? 0) && (existing.loadPrice != null || next.newLoadPrice != null);
-    const driverPayChanged = (existing.driverPay ?? 0) !== (next.newDriverPay ?? 0) && (existing.driverPay != null || next.newDriverPay != null);
-    const prevStopCount    = existing.stops?.length ?? 0;
-    const stopsAdded       = Math.max(0, next.newStopCount - prevStopCount);
-    const stopsRemoved     = Math.max(0, prevStopCount - next.newStopCount);
-    const accessorialsChanged = diffAccessorials(existing.accessorials, next.newAccessorials);
-
-    // New diffs added per user request. Each is gated on (a) the field
-    // actually changing AND (b) at least one side being defined — a
-    // load with no broker that gets saved as no broker shouldn't write
-    // an entry just because the empty-vs-undefined coercion differs.
-    const brokerChanged     = (existing.broker ?? '') !== (next.newBroker ?? '') && (existing.broker || next.newBroker);
-    const customerIdChanged = (existing.customerId ?? '') !== (next.newCustomerId ?? '') && (existing.customerId || next.newCustomerId);
-    const dispatcherChanged = (existing.dispatcher ?? '') !== (next.newDispatcher ?? '') && (existing.dispatcher || next.newDispatcher);
-    const trailerIdChanged  = (existing.trailerId ?? null) !== (next.newTrailerId ?? null);
-    const priorityChanged   = !!existing.priority !== !!next.newPriority;
-    const startChanged      = (existing.start ?? '') !== (next.newStart ?? '') && (existing.start || next.newStart);
-    const endChanged        = (existing.end   ?? '') !== (next.newEnd   ?? '') && (existing.end   || next.newEnd);
-
-    const hasChanges =
-      driverChanged || assetChanged || loadPriceChanged || driverPayChanged ||
-      stopsAdded > 0 || stopsRemoved > 0 || next.relayCreated ||
-      accessorialsChanged.length > 0 ||
-      brokerChanged || customerIdChanged || dispatcherChanged ||
-      trailerIdChanged || priorityChanged || startChanged || endChanged;
-    if (!hasChanges) return null;
-
-    return {
-      changedAt: new Date().toISOString(),
-      changedByName: byName,
-      ...(driverChanged          ? { prevDriverName: existing.driverName,  newDriverName: next.driverName }   : {}),
-      ...(assetChanged           ? { prevAssetId:    existing.assetId,     newAssetId:    next.assetId }       : {}),
-      ...(loadPriceChanged       ? { prevLoadPrice:  existing.loadPrice,   newLoadPrice:  next.newLoadPrice }  : {}),
-      ...(driverPayChanged       ? { prevDriverPay:  existing.driverPay,   newDriverPay:  next.newDriverPay }  : {}),
-      ...(brokerChanged          ? { prevBroker:     existing.broker,      newBroker:     next.newBroker }     : {}),
-      ...(customerIdChanged      ? {
-        prevCustomerId:   existing.customerId,
-        newCustomerId:    next.newCustomerId,
-        prevCustomerName: prevNames.customerName,
-        newCustomerName:  next.newCustomerName,
-      } : {}),
-      ...(dispatcherChanged      ? { prevDispatcher: existing.dispatcher,  newDispatcher: next.newDispatcher } : {}),
-      ...(trailerIdChanged       ? {
-        prevTrailerId:  existing.trailerId,
-        newTrailerId:   next.newTrailerId,
-        prevTrailerNum: prevNames.trailerNum,
-        newTrailerNum:  next.newTrailerNum,
-      } : {}),
-      ...(priorityChanged        ? { prevPriority: !!existing.priority, newPriority: !!next.newPriority }       : {}),
-      ...(startChanged           ? { prevStart: existing.start, newStart: next.newStart }                       : {}),
-      ...(endChanged             ? { prevEnd:   existing.end,   newEnd:   next.newEnd }                         : {}),
-      ...(stopsAdded   > 0       ? { stopsAdded }   : {}),
-      ...(stopsRemoved > 0       ? { stopsRemoved } : {}),
-      ...(next.relayCreated      ? { relayCreated: true } : {}),
-      ...(accessorialsChanged.length > 0 ? { accessorialsChanged } : {}),
-    };
-  }
-
-  function appendAuditEntry(existing: LoadAuditEntry[] | undefined, entry: LoadAuditEntry | null): LoadAuditEntry[] {
-    if (!entry) return existing ?? [];
-    return [...(existing ?? []), entry];
-  }
+  /**
+   * What determined the SOLO form's driverPay figure, for the audit
+   * entry's `paySource`. `driverPayAutoSet` is already the modal's
+   * truth for this and has been since the auto-fill was written: every
+   * percentage-derived write flips it true (the load-price effect, the
+   * batch fill, the rate-con parse + reparse, the "Set to N% of load"
+   * button) and `setField('driverPay', …)` — the only route a typed
+   * character takes — flips it false.
+   *
+   * Deliberately NOT payMatchesPct(): a dispatcher who types the exact
+   * percentage figure by hand made a manual decision, and labelling it
+   * "auto" would be a guess in a money audit.
+   */
+  const soloPaySource = (): 'auto' | 'manual' => (driverPayAutoSet.current ? 'auto' : 'manual');
 
   /** Save in flight — disables the Save button and blocks doSave
    *  re-entry. The ref is the real guard (synchronous, so two clicks in
@@ -3482,6 +3363,7 @@ export default function EventModal() {
           driverName:      driverName || undefined,
           newLoadPrice:    parseFloat(String(fieldValues['loadPrice'] ?? '')) || undefined,
           newDriverPay:    parseFloat(String(fieldValues['driverPay'] ?? '')) || undefined,
+          paySource:       soloPaySource(),
           newStopCount:    stops.length,
           newAccessorials: accessorials,
           newBroker:       typeof fieldValues['broker'] === 'string' ? (fieldValues['broker'] as string) : undefined,
@@ -3695,6 +3577,7 @@ export default function EventModal() {
               driverName:      driverName || undefined,
               newLoadPrice:    parseFloat(String(fieldValues['loadPrice'] ?? '')) || undefined,
               newDriverPay:    parseFloat(String(fieldValues['driverPay'] ?? '')) || undefined,
+              paySource:       soloPaySource(),
               newStopCount:    stops.length,
               newAccessorials: accessorials,
               relayCreated:    true,
@@ -3794,6 +3677,7 @@ export default function EventModal() {
               driverName:      newDriverName,
               newLoadPrice:    parseFloat(String(fieldValues['loadPrice'] ?? '')) || undefined,
               newDriverPay:    parseFloat(String(fieldValues['driverPay'] ?? '')) || undefined,
+              paySource:       soloPaySource(),
               newStopCount:    stops.length,
               newAccessorials: accessorials,
               newBroker:       typeof fieldValues['broker']     === 'string' ? (fieldValues['broker']     as string) : undefined,
@@ -4199,6 +4083,15 @@ export default function EventModal() {
       keys.forEach((k, i) => { next[k] = shares[i]; });
       return next;
     });
+    // The app decided these numbers, not a person — even though the
+    // TOTAL being divided was typed by one. Each leg's figure is
+    // system-derived, so each logs as 'auto'.
+    const priorSources = legPaySources;
+    setLegPaySources(prev => {
+      const next = { ...prev };
+      keys.forEach(k => { next[k] = 'auto'; });
+      return next;
+    });
     const money = (n: number) => `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     const evenly = miles.some(m => m == null);
     setSplitPayNotice({
@@ -4209,6 +4102,13 @@ export default function EventModal() {
         setLegPays(p => {
           const n = { ...p };
           keys.forEach(k => { if (k in prior) n[k] = prior[k]; else delete n[k]; });
+          return n;
+        });
+        // Undo restores the provenance too, otherwise the legs would
+        // stay flagged 'auto' while carrying the pre-split figures.
+        setLegPaySources(p => {
+          const n = { ...p };
+          keys.forEach(k => { if (k in priorSources) n[k] = priorSources[k]; else delete n[k]; });
           return n;
         });
         setSplitPayNotice(null);
@@ -4346,11 +4246,20 @@ export default function EventModal() {
    *  main form state; drafts get the driver↔truck pref auto-applied
    *  (same silent-apply rule as create mode's main row); persisted
    *  non-viewed legs buffer in legEdits until Save. */
-  const handleLegChange = (key: string, patch: { assetId?: number; driverName?: string; pay?: number | '' }) => {
+  const handleLegChange = (
+    key: string,
+    patch: { assetId?: number; driverName?: string; pay?: number | ''; paySource?: 'auto' | 'manual' },
+  ) => {
     markDirty();
     if (patch.pay !== undefined) {
       const pay = patch.pay;
       setLegPays(prev => ({ ...prev, [key]: pay }));
+      // The editor always states which it was; the fallback only covers
+      // a hypothetical caller that forgets, and 'manual' is the safe
+      // default there — claiming a human figure is system-derived is
+      // the lie this feature exists to prevent.
+      const src = patch.paySource ?? 'manual';
+      setLegPaySources(prev => ({ ...prev, [key]: src }));
     }
     const isViewedKey = key === 'leg0' || key === modalEventId;
     const draft = draftLegs.find(d => d.key === key);
@@ -4808,6 +4717,22 @@ export default function EventModal() {
     const legCountNow = relayLegViews.length;
     const labelFor = (i: number) => legLabel(i, legCountNow) || `Leg ${i + 1}`;
 
+    // The VIEWED leg's pay does not live in `fieldValues['driverPay']`
+    // on a relay — the leg cards own per-leg pay, and the form field
+    // keeps whatever the leg was loaded with. Feeding the differ the
+    // stale field meant a pay edit on the OPEN leg of a relay produced
+    // no entry at all (section 2 below deliberately skips the viewed
+    // leg, so nothing else covered it either). Override with the
+    // buffered figure and its recorded provenance.
+    const viewedView = relayLegViews.find(v => v.isViewed);
+    const nextForDiffer: typeof sharedNext = legCountNow > 1 && viewedView
+      ? {
+          ...sharedNext,
+          newDriverPay: typeof viewedView.pay === 'number' ? viewedView.pay : undefined,
+          paySource:    legPaySources[viewedView.key],
+        }
+      : sharedNext;
+
     // 1. Load-level + viewed-leg diff, through the SAME differ the
     //    single-leg path uses.
     //
@@ -4820,7 +4745,7 @@ export default function EventModal() {
     //    have said the same about a load-price change). Split by scope
     //    and chip only the leg-scoped half.
     if (currentEv) {
-      const base = buildAuditEntry(currentEv, sharedNext, prevNames, currentUserName);
+      const base = buildAuditEntry(currentEv, nextForDiffer, prevNames, currentUserName);
       if (base) {
         const vi = viewedLegIdx ?? 0;
         if (legCountNow <= 1) {
@@ -4864,7 +4789,14 @@ export default function EventModal() {
         leg: { index: v.legIndex, count: legCountNow, label: labelFor(v.legIndex), driverName: v.driverName || undefined },
         ...(driverChanged ? { prevDriverName: prevDriver || undefined, newDriverName: v.driverName || undefined } : {}),
         ...(assetChanged  ? { prevAssetId: persisted.assetId, newAssetId: v.assetId } : {}),
-        ...(payChanged    ? { prevDriverPay: persisted.driverPay, newDriverPay: payNow } : {}),
+        ...(payChanged    ? {
+          prevDriverPay: persisted.driverPay,
+          newDriverPay:  payNow,
+          // Only when THIS session set the figure. A leg whose pay
+          // changed for some other reason (a late store refresh, say)
+          // gets no badge rather than an invented one.
+          ...(legPaySources[v.key] ? { paySource: legPaySources[v.key] } : {}),
+        } : {}),
       });
     }
 

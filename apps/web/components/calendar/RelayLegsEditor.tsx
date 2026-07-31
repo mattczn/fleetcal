@@ -109,7 +109,12 @@ interface Props {
   onSelectPhoto?: (docId: string) => void;
   onPhotosUploaded?: () => void | Promise<void>;
   canonicalDriverName: (d: Driver) => string;
-  onChangeLeg: (key: string, patch: { assetId?: number; driverName?: string; pay?: number | '' }) => void;
+  /** `paySource` says what DETERMINED a pay figure, and only the site
+   *  that wrote it knows: the "Set to N%" button below sends 'auto',
+   *  the pay input sends 'manual'. It is never inferred from whether
+   *  the amount happens to equal pct × base — a dispatcher can type the
+   *  exact percentage figure on purpose. */
+  onChangeLeg: (key: string, patch: { assetId?: number; driverName?: string; pay?: number | ''; paySource?: 'auto' | 'manual' }) => void;
   onOpenLeg?: (eventId: string) => void;
   /** Header "+ Add handoff" (create mode: appends after the last leg).
    *  Absent = hidden (batch mode, or edit mode where the per-leg
@@ -270,7 +275,7 @@ function LegCard({
       {isRelay && pctOfLoad !== null && pctChip(pctOfLoad, PAY_BASIS_LABEL.load)}
       {showReset && (
         <button type="button"
-          onClick={() => onChangeLeg(leg.key, { pay: autoForLeg })}
+          onClick={() => onChangeLeg(leg.key, { pay: autoForLeg, paySource: 'auto' })}
           title={`Set this leg's pay to ${driverPayPct}% of its ${isRelay ? 'share' : 'price'} ($${autoForLeg.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`}
           className="flex items-center gap-1 rounded transition-colors normal-case tracking-normal font-semibold"
           style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--gc-text-3)', padding: '1px 4px', fontSize: 10 }}
@@ -406,7 +411,7 @@ function LegCard({
                 share lives on the "% of leg" chip's tooltip. */}
             <PayInput
               value={leg.pay}
-              onChange={v => onChangeLeg(leg.key, { pay: v })}
+              onChange={v => onChangeLeg(leg.key, { pay: v, paySource: 'manual' })}
               disabled={disabled || finalized.finalized}
               disabledTitle={FINALIZED_HINT}
             />

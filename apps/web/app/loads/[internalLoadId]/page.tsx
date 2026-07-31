@@ -26,7 +26,7 @@ import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth, useUser } from '@clerk/nextjs';
-import { AuditEntryLines } from '@/lib/auditEntry';
+import { AuditEntryLines, auditSubjectAsNext, buildAuditEntry } from '@/lib/auditEntry';
 import {
   ArrowLeft, Truck, Loader2, Receipt, MapPin,
   ExternalLink as ExternalLinkIcon, Eye,
@@ -68,7 +68,7 @@ import { displayBrokerName } from '@/lib/customerMatch';
 import {
   PAY_BASIS_LABEL, autoPayFor, fmtPct, legRevenues, payMatchesPct, payPctOf,
 } from '@/lib/legPay';
-import type { Load, Invoice, Customer, InternalNote, LoadStatus } from '@fleetcal/types';
+import type { Load, Invoice, Customer, InternalNote, LoadAuditEntry, LoadStatus } from '@fleetcal/types';
 import { byLegIndex, legLabel } from '@fleetcal/types';
 
 const moneyFmt = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
@@ -234,6 +234,12 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
   // which event each pay edit belongs to without diffing key sets.
   // null = clear the leg's pay.
   const [legPayDrafts, setLegPayDrafts] = useState<Record<string, number | null>>({});
+  /** What DETERMINED each pending pay figure, keyed by EVENT id (the
+   *  primary leg included, whose value rides in `draft.driverPay`).
+   *  Written only by the inputs and the "Set to N%" buttons — a key
+   *  with no entry means this page didn't set that leg's pay, and the
+   *  audit entry then carries no badge instead of a guess. */
+  const [paySourceDrafts, setPaySourceDrafts] = useState<Record<string, 'auto' | 'manual'>>({});
   const [saving, setSaving] = useState(false);
   // Name the dispatcher typed in the broker combobox that doesn't match
   // any existing customer. When set, NewBrokerReviewModal opens with
@@ -246,9 +252,16 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
   function discardDraft() {
     setDraft({});
     setLegPayDrafts({});
+    setPaySourceDrafts({});
   }
   function patchLegPay(eventId: string, value: number | null) {
     setLegPayDrafts(d => ({ ...d, [eventId]: value }));
+  }
+  /** Record where a pay figure came from. Called by the same handlers
+   *  that write the number — never inferred later from payMatchesPct,
+   *  which cannot tell a typed 25% from a computed one. */
+  function patchPaySource(eventId: string, source: 'auto' | 'manual') {
+    setPaySourceDrafts(d => ({ ...d, [eventId]: source }));
   }
 
   const internalIdNum = useMemo(() => {
@@ -316,7 +329,7 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
   // resets to the persisted state. Without this, refresh-after-save
   // would visibly leave the user's input on top of the saved row.
   const primaryLoadId = primaryLeg?.loadId;
-  useEffect(() => { setDraft({}); setLegPayDrafts({}); }, [primaryLoadId]);
+  useEffect(() => { setDraft({}); setLegPayDrafts({}); setPaySourceDrafts({}); }, [primaryLoadId]);
 
   // Effective load = persisted row + any pending edits on top.
   const effective: Load | undefined = useMemo(
@@ -338,6 +351,78 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
   );
   const isDirty = Object.keys(draft).length > 0 || Object.keys(legPayDrafts).length > 0;
 
+  /**
+   * Audit entries for one Save on this page — the gap-closer.
+   *
+   * Built with the SAME differ the calendar modal uses so an edit made
+   * here and the identical edit made there produce structurally
+   * identical history. `auditSubjectAsNext` supplies the no-op
+   * baseline; only what the draft actually moved comes out as a change.
+   *
+   * Relay loads split into two kinds of entry, matching the modal:
+   * load-level facts (price, customer, accessorials, stops) go on an
+   * unchipped entry, and each leg's pay gets its own entry carrying
+   * that leg's chip. A solo load has one leg, so its pay stays on the
+   * single entry and no chip is drawn.
+   */
+  function buildSaveAuditEntries(): LoadAuditEntry[] {
+    if (!primaryLeg || !effective) return [];
+    const out: LoadAuditEntry[] = [];
+    const count = sortedLegs.length;
+    const isRelay = count > 1;
+    const prevCustomerName = primaryLeg.customerId ? customerById.get(primaryLeg.customerId)?.name : undefined;
+    const newCustomerName  = effective.customerId  ? customerById.get(effective.customerId)?.name  : undefined;
+
+    const loadEntry = buildAuditEntry(
+      primaryLeg,
+      {
+        ...auditSubjectAsNext(effective),
+        // Accessorials stay pinned to the persisted array so the differ
+        // emits nothing for them: PATCH /v1/loads/:id already writes its
+        // own accessorial entry for this page, and diffing them here too
+        // would double-log every change.
+        newAccessorials: primaryLeg.accessorials,
+        newCustomerName,
+        // On a relay, leg 1's pay is leg-scoped — pinned to its
+        // persisted value here so it diffs to nothing, and re-emitted
+        // below with its leg chip. Attributing a leg's pay to the load
+        // is what made relay history ambiguous in the first place.
+        ...(isRelay
+          ? { newDriverPay: primaryLeg.driverPay }
+          : { paySource: paySourceDrafts[primaryLeg.id] }),
+      },
+      { customerName: prevCustomerName },
+      currentUserName,
+    );
+    if (loadEntry) out.push(loadEntry);
+
+    sortedLegs.forEach((leg, i) => {
+      const isPrimary = leg.id === primaryLeg.id;
+      if (isPrimary && !isRelay) return;      // covered by loadEntry
+      const touched = isPrimary ? ('driverPay' in draft) : (leg.id in legPayDrafts);
+      if (!touched) return;
+      const nextPay = isPrimary
+        ? (draft.driverPay ?? undefined)
+        : (legPayDrafts[leg.id] ?? undefined);
+      const legEntry = buildAuditEntry(
+        leg,
+        { ...auditSubjectAsNext(leg), newDriverPay: nextPay, paySource: paySourceDrafts[leg.id] },
+        {},
+        currentUserName,
+      );
+      if (!legEntry) return;
+      out.push({
+        ...legEntry,
+        leg: {
+          index: i, count,
+          label: legLabel(i, count) || `Leg ${i + 1}`,
+          driverName: leg.driverName || undefined,
+        },
+      });
+    });
+    return out;
+  }
+
   // Save flow. Routes load-level fields through PATCH /v1/loads/:id and
   // stops through replaceStops on the primary event. Stops live event-
   // side because each event owns its leg's route; we only patch them
@@ -352,8 +437,29 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
       // event PATCH instead of the load PATCH, whose whitelist doesn't
       // carry it. Everything else in the draft is load-level.
       const { stops: nextStops, driverPay: primaryPay, ...loadPatch } = draft;
-      if (Object.keys(loadPatch).length > 0) {
-        await railway.updateLoad(primaryLeg.loadId, loadPatch);
+
+      // ── History ────────────────────────────────────────────────────
+      // This page used to save money changes SILENTLY: per-leg pay and
+      // load price were written straight through with no audit entry,
+      // so the calendar modal was the only surface that recorded
+      // anything. That gap is why an "auto/manual" badge could not be
+      // trusted — an override typed here would have left the last
+      // logged entry still claiming the previous source. Same differ
+      // the modal uses (lib/auditEntry), so entries are structurally
+      // identical whichever screen made the change.
+      // APPEND, never replace. This page reads the load through
+      // getLoadByInternalId, whose select strips the event's audit_log
+      // — so the "fetch, append, send" pattern EventModal uses would
+      // have posted a one-element array and wiped the load's entire
+      // history. `auditAppend` appends server-side (and leaves the
+      // endpoint's own accessorial-diff append running, which is why
+      // buildSaveAuditEntries deliberately doesn't diff accessorials).
+      const auditEntries = buildSaveAuditEntries();
+      if (Object.keys(loadPatch).length > 0 || auditEntries.length > 0) {
+        await railway.updateLoad(primaryLeg.loadId, {
+          ...loadPatch,
+          ...(auditEntries.length > 0 ? { auditAppend: auditEntries } : {}),
+        });
       }
       if (nextStops !== undefined) {
         await railway.replaceStops(primaryLeg.id, { stops: nextStops });
@@ -370,6 +476,7 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
       }
       setDraft({});
       setLegPayDrafts({});
+      setPaySourceDrafts({});
       bumpLoadEditTick();
       await refresh({ silent: true });
     } catch (e) {
@@ -674,6 +781,7 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
                 onOpenCustomerProfile={setCustomerProfileId}
                 onCreateBroker={setPendingNewBroker}
                 onChangeLegPay={patchLegPay}
+                onPaySource={patchPaySource}
                 onViewLeg={(eventId) => {
                   useCalendarStore.getState().openEditModal(eventId);
                   router.push('/');
@@ -917,8 +1025,10 @@ function LegPayField({
   driverPayPct: number | null;
   iStyle: React.CSSProperties;
   onFocus: (e: React.FocusEvent<HTMLInputElement>) => void;
-  /** null = clear the leg's pay. */
-  onCommit: (value: number | null) => void;
+  /** null = clear the leg's pay. `source` says what DETERMINED the
+   *  number — 'auto' from the "Set to N%" button, 'manual' from the
+   *  input. Never inferred from payMatchesPct downstream. */
+  onCommit: (value: number | null, source: 'auto' | 'manual') => void;
 }) {
   const { finalized } = useLoadPayFinalized(leg.driverName, leg.start);
   const payNum = typeof leg.driverPay === 'number' ? leg.driverPay : 0;
@@ -948,7 +1058,7 @@ function LegPayField({
       {chip(pctOfLeg, basis, isRelay)}
       {isRelay && pctOfLoad !== null && chip(pctOfLoad, PAY_BASIS_LABEL.load, false)}
       {!finalized && autoForLeg != null && !isAutoPay && (
-        <button type="button" onClick={() => onCommit(autoForLeg)}
+        <button type="button" onClick={() => onCommit(autoForLeg, 'auto')}
           title={`Set this leg's pay to ${driverPayPct}% of its ${isRelay ? 'share' : 'price'}`}
           className="flex items-center gap-1 rounded transition-colors normal-case tracking-normal font-semibold"
           style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--gc-text-3)', padding: '1px 4px', fontSize: 10 }}
@@ -975,7 +1085,7 @@ function LegPayField({
           const raw = e.target.value.trim();
           const parsed = raw === '' ? null : Number(raw);
           if (raw !== '' && (parsed == null || isNaN(parsed))) return;
-          onCommit(parsed);
+          onCommit(parsed, 'manual');
         }}
         disabled={finalized}
         title={finalized ? finalizedHint : undefined}
@@ -1001,7 +1111,7 @@ function LegPayField({
 function LoadFormPane({
   primary, legs, customerById, assets, drivers, customers,
   sectionOrder, fieldSettings,
-  driverPayPct, onOpenCustomerProfile, onCreateBroker, onChangeLegPay, onViewLeg,
+  driverPayPct, onOpenCustomerProfile, onCreateBroker, onChangeLegPay, onPaySource, onViewLeg,
   onClickLocked, onPriorityToggle, onStatusChange,
   currentUserName, calendarTimezone, onChange,
 }: {
@@ -1027,6 +1137,9 @@ function LoadFormPane({
   /** Patch a leg's pending driver-pay draft (keyed by the leg's EVENT
    *  id). driverPay is the only per-leg field this page edits. */
   onChangeLegPay: (eventId: string, value: number | null) => void;
+  /** Record what determined a pay figure, keyed by the leg's EVENT id.
+   *  Called by every handler that writes pay on this page. */
+  onPaySource: (eventId: string, source: 'auto' | 'manual') => void;
   /** Open a leg in the calendar modal (per-leg "View leg" action in
    *  the Relay Legs card). */
   onViewLeg: (eventId: string) => void;
@@ -1144,6 +1257,9 @@ function LoadFormPane({
       const parsed = trimmed === '' ? null : Number(trimmed);
       if (trimmed !== '' && (parsed == null || isNaN(parsed))) return;
       onChange({ [id]: parsed } as Partial<Load>);
+      // A typed pay figure is a human decision, always — even when the
+      // number happens to land exactly on the org percentage.
+      if (id === 'driverPay') onPaySource(primary.id, 'manual');
       return;
     }
     onChange({ [id]: raw === '' ? null : raw } as Partial<Load>);
@@ -1163,6 +1279,7 @@ function LoadFormPane({
     const auto = autoPayFor(primary.loadPrice, driverPayPct);
     if (auto == null) return;
     onChange({ driverPay: auto });
+    onPaySource(primary.id, 'auto');
   }
   const driverPayLabelSuffix = driverPayPctValue !== null ? (
     <span className="flex items-center gap-1 normal-case tracking-normal font-semibold" style={{ fontSize: 10 }}>
@@ -1594,9 +1711,10 @@ function LoadFormPane({
                 driverPayPct={driverPayPct}
                 iStyle={iStyle}
                 onFocus={focusH}
-                onCommit={(value) => {
+                onCommit={(value, source) => {
                   if (i === 0) onChange({ driverPay: value as unknown as number } as Partial<Load>);
                   else onChangeLegPay(leg.id, value);
+                  onPaySource(leg.id, source);
                 }}
               />
             ))}
@@ -2061,7 +2179,14 @@ function LoadHistorySection({ load, calendarTimezone }: {
   calendarTimezone: string;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const auditLog = load.auditLog ?? [];
+  // `auditLog` is the EVENT's log, and this page reads the load through
+  // getLoadByInternalId → fetchLoadJoined, whose EVENT_COLS does not
+  // select audit_log. So this panel has been reading a field that is
+  // always undefined and rendering nothing but the "created by" line.
+  // `loadAuditLog` is loads.audit_log, which the same query already
+  // selected and the converter used to discard. Fall back to the event
+  // log for any caller that does supply it.
+  const auditLog = load.loadAuditLog ?? load.auditLog ?? [];
   const hasHistory = auditLog.length > 0;
   if (!load.createdByName && !hasHistory) return null;
 

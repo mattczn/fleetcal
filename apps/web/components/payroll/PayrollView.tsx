@@ -18,7 +18,14 @@ import {
 } from '@/lib/payrollSnapshot';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { railway } from '@/lib/railway';
-import type { LoadSummary, PayrollLineItem } from '@fleetcal/types';
+import type { LoadAuditEntry, LoadSummary, PayrollLineItem } from '@fleetcal/types';
+import { legLabel } from '@fleetcal/types';
+import {
+  PAY_BASIS_LABEL, autoPayFor, fmtPct, legRevenueOf, payMatchesPct, payPctOf,
+} from '@/lib/legPay';
+import {
+  PaySourceBadge, auditSubjectAsNext, buildAuditEntry, latestPaySource,
+} from '@/lib/auditEntry';
 import DataLoader from '@/components/DataLoader';
 import AppShell from '@/components/nav/AppShell';
 import type { CalendarEvent } from '@/lib/types';
@@ -70,7 +77,7 @@ function LegBadge({ role }: { role: CalendarEvent['relayRole'] }) {
     : role === 'delivery'
     ? { label: 'Delivery', bg: '#1e8e3e1a', color: '#1e8e3e',
         tip: <>This driver ran the <strong>delivery leg</strong> of a relay load. They took the freight from the previous driver to the consignee. Pay is split: this driver gets their leg&rsquo;s share of revenue and their own driverPay.</> }
-    : { label: 'Both',     bg: 'var(--gc-hover)', color: 'var(--gc-text-2)',
+    : { label: 'All',      bg: 'var(--gc-hover)', color: 'var(--gc-text-2)',
         tip: <>Non-relay load — one driver ran the <strong>full load from pickup to delivery</strong>. Full loadPrice and full driverPay belong to this driver.</> };
   return (
     <Tooltip content={cfg.tip}>
@@ -85,13 +92,99 @@ function LegBadge({ role }: { role: CalendarEvent['relayRole'] }) {
 }
 
 // ─── Inline-editable driver pay cell ─────────────────────────────────────────
+//
+// Carries the same affordances as the calendar modal's relay leg card,
+// because this is the screen where pay actually gets decided:
+//   • the amount, editable in place (Enter saves + jumps to the next);
+//   • "N% of leg" / "N% of load" — both labelled, because a bare "27%"
+//     with an unstated denominator is what lib/legPay exists to end;
+//   • "Set to N% of leg|load", the same one-click reset the leg card has;
+//   • an Auto / Manual marker for what determined the CURRENT figure.
+//
+// Density rule: amount on line one, every badge on ONE non-wrapping line
+// under it. This is a scannable table, not a form.
 
-function PayCell({ load }: { load: CalendarEvent }) {
-  const updateEvent = useCalendarStore(s => s.updateEvent);
+function PayCell({ load, legRevenue, legCount, locked }: {
+  load: CalendarEvent;
+  /** THIS leg's miles-prorated share of the load price (lib/legPay).
+   *  Equals the load price on a single-leg load. */
+  legRevenue: number;
+  /** Legs on this load — 1 for a normal load. Drives both the "of leg"
+   *  vs "of load" basis and the audit entry's leg chip. */
+  legCount: number;
+  /** The week is finalized. The live view stays editable (that is the
+   *  existing escape hatch, and the stub is what a finalized card shows
+   *  by default), but a one-click money-mover is not something to add
+   *  to a frozen week — the Set button hides. */
+  locked?: boolean;
+}) {
+  const updateEvent  = useCalendarStore(s => s.updateEvent);
+  const driverPayPct = useCalendarStore(s => s.driverPayPct);
+  const { user } = useUser();
+  const byName = user?.fullName?.trim() || user?.firstName?.trim() || 'Unknown';
   const [editing, setEditing] = useState(false);
   const [raw, setRaw] = useState('');
   const [saving, setSaving] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const isRelay  = legCount > 1;
+  const payNum   = typeof load.driverPay === 'number' ? load.driverPay : null;
+  const lp       = load.loadPrice ?? 0;
+  const base     = isRelay ? legRevenue : lp;
+  const basis    = isRelay ? PAY_BASIS_LABEL.leg : PAY_BASIS_LABEL.load;
+  const pctOfLeg  = payPctOf(payNum, base);
+  const pctOfLoad = payPctOf(payNum, lp);
+  const autoFor  = autoPayFor(base, driverPayPct);
+  // payMatchesPct decides only whether there is anything left to RESET
+  // to. It is never used to label provenance — a dispatcher can type the
+  // exact percentage figure, and this cell would then claim the app
+  // chose it.
+  const showReset = !locked && autoFor != null && !payMatchesPct(payNum, base, driverPayPct);
+  // What determined the number currently on screen, read from history.
+  // undefined for every row whose pay predates paySource — those render
+  // no marker at all rather than a guess.
+  const paySource = latestPaySource(load.loadAuditLog, {
+    legIndex:   isRelay ? load.legIndex : undefined,
+    currentPay: payNum ?? undefined,
+  });
+
+  /** Write a pay figure AND its provenance. The audit entry was the
+   *  missing half here: this editor called updateEvent and nothing
+   *  else, so every override typed on the payroll page was invisible in
+   *  the load's history. Appended server-side (`auditAppend`) because
+   *  the list read strips audit_log — sending a full array would have
+   *  replaced the load's history with one entry. */
+  async function applyPay(value: number, source: 'auto' | 'manual') {
+    setSaving(true);
+    try {
+      const entry = buildAuditEntry(
+        load,
+        { ...auditSubjectAsNext(load), newDriverPay: value, paySource: source },
+        {},
+        byName,
+      );
+      updateEvent(load.id, { driverPay: value });
+      if (entry && load.loadId) {
+        const chipped: LoadAuditEntry = isRelay
+          ? {
+              ...entry,
+              leg: {
+                index: load.legIndex ?? 0,
+                count: legCount,
+                label: legLabel(load.legIndex ?? 0, legCount) || `Leg ${(load.legIndex ?? 0) + 1}`,
+                driverName: load.driverName || undefined,
+              },
+            }
+          : entry;
+        useCalendarStore.getState().markLoadSelfWrite(load.loadId);
+        await railway.updateLoad(load.loadId, { auditAppend: [chipped] });
+      }
+    } catch (err) {
+      console.error('[payroll] pay audit append failed:', err);
+    } finally {
+      setSaving(false);
+    }
+  }
   // The wrapper span (below) carries data-pay-cell-id and stays
   // mounted across the editing↔display toggle. Earlier version put
   // the data attribute on the inner button — but the button unmounts
@@ -110,9 +203,8 @@ function PayCell({ load }: { load: CalendarEvent }) {
   async function commit({ advance }: { advance?: boolean } = {}) {
     const val = parseFloat(raw);
     if (!isNaN(val) && val !== load.driverPay) {
-      setSaving(true);
-      await updateEvent(load.id, { driverPay: val });
-      setSaving(false);
+      // Typed by a person — 'manual', always.
+      await applyPay(val, 'manual');
     }
     setEditing(false);
     if (advance) {
@@ -135,8 +227,54 @@ function PayCell({ load }: { load: CalendarEvent }) {
     }
   }
 
+  /** One 10px pill, same shape as the leg card's. `emphasis` marks the
+   *  primary denominator so "of leg" and "of load" can be compared at a
+   *  glance without being confused. */
+  const chip = (p: number | null, b: string, emphasis: boolean) => p === null ? null : (
+    <span key={b} className="px-1.5 py-0.5 rounded-lg font-semibold whitespace-nowrap"
+      style={{
+        fontSize: 10,
+        background: emphasis ? '#dbeafe' : '#f1f3f4',
+        color:      emphasis ? '#1d4ed8' : 'var(--gc-text-3)',
+        border:     `1px solid ${emphasis ? '#bfdbfe' : 'var(--gc-border-light)'}`,
+      }}
+      title={`Driver pay is ${fmtPct(p)}% ${b}`}>
+      {fmtPct(p)}% <span style={{ fontWeight: 500, opacity: 0.85 }}>{b}</span>
+    </span>
+  );
+
+  // ONE line, no wrapping — the row must not grow a third line when a
+  // relay leg shows both percentages plus the reset and the marker.
+  const badges = (
+    <div className="print:hidden flex items-center gap-1 overflow-hidden whitespace-nowrap"
+      style={{ lineHeight: 1.4 }}>
+      {chip(pctOfLeg, basis, isRelay)}
+      {/* A single-leg load's two denominators ARE the same number —
+          showing both would be noise. */}
+      {isRelay && chip(pctOfLoad, PAY_BASIS_LABEL.load, false)}
+      {showReset && (
+        <button type="button"
+          onClick={() => void applyPay(autoFor!, 'auto')}
+          title={`Set this leg's pay to ${driverPayPct}% of its ${isRelay ? 'share' : 'price'} ($${autoFor!.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`}
+          className="flex items-center gap-1 rounded transition-colors font-semibold shrink-0"
+          style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--gc-text-3)', padding: '1px 4px', fontSize: 10 }}
+          onMouseEnter={e => { e.currentTarget.style.color = '#1d4ed8'; e.currentTarget.style.background = '#dbeafe'; }}
+          onMouseLeave={e => { e.currentTarget.style.color = 'var(--gc-text-3)'; e.currentTarget.style.background = 'transparent'; }}>
+          <RotateCcw size={10} />
+          Set to {driverPayPct}% {basis}
+        </button>
+      )}
+      {/* Nothing at all when provenance is unknown. */}
+      {paySource && <PaySourceBadge source={paySource} />}
+    </div>
+  );
+  // A row with no pay, no configured percentage and no history has
+  // nothing to say — don't give it a second line to say it on.
+  const hasBadges = pctOfLeg !== null || (isRelay && pctOfLoad !== null) || showReset || !!paySource;
+
   return (
-    <span ref={cellRef} data-pay-cell-id={load.id} className="inline-flex">
+    <span ref={cellRef} data-pay-cell-id={load.id} className="inline-flex flex-col items-start gap-0.5 min-w-0">
+      <span className="inline-flex">
       {editing ? (
         <div className="flex items-center gap-1">
           <span style={{ color: 'var(--gc-text-3)' }} className="text-sm">$</span>
@@ -180,6 +318,8 @@ function PayCell({ load }: { load: CalendarEvent }) {
           <Pencil size={11} className="opacity-0 group-hover:opacity-60 transition-opacity shrink-0" style={{ color: 'var(--gc-text-3)' }} />
         </button>
       )}
+      </span>
+      {hasBadges && badges}
     </span>
   );
 }
@@ -590,7 +730,7 @@ function FrozenStubTable({ groups, liveLoadIds, onOpenLoad }: {
                   <td className="px-4 py-3 whitespace-nowrap">
                     <span className="px-2 py-0.5 rounded-lg text-[11px] font-semibold whitespace-nowrap"
                       style={{ background: 'var(--gc-hover)', color: 'var(--gc-text-2)' }}>
-                      {li.legLabel ?? 'Both'}
+                      {li.legLabel ?? 'All'}
                     </span>
                   </td>
                   <td className="px-4 py-3 max-w-[280px]">
@@ -741,18 +881,16 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
   // The authoritative load price is the MAX across legs — handles
   // both the common case (loadPrice duplicated on every leg) and
   // the case where it was set on only one leg.
+  // Delegates to lib/legPay — the rule described above lives there now.
+  // This function used to reimplement it inline, which is exactly how
+  // the payroll page and the calendar modal drifted to two different
+  // denominators for the same leg. Semantics are unchanged: max price
+  // across legs, miles-prorated, even 1/N whenever any leg's miles are
+  // unknown, whole price for a single-leg load.
   const legRevenue = useCallback((l: CalendarEvent): number => {
     if (!l.relayGroupId) return l.loadPrice ?? 0;
     const legs = allEvents.filter(e => e.relayGroupId === l.relayGroupId);
-    if (legs.length <= 1) return l.loadPrice ?? 0;
-    const totalPrice = Math.max(...legs.map(e => e.loadPrice ?? 0));
-    if (totalPrice <= 0) return 0;
-    const everyLegHasMiles = legs.every(e => e.loadedMiles != null && e.loadedMiles > 0);
-    if (everyLegHasMiles) {
-      const totalMiles = legs.reduce((s, e) => s + (e.loadedMiles ?? 0), 0);
-      return totalPrice * ((l.loadedMiles ?? 0) / totalMiles);
-    }
-    return totalPrice / legs.length;
+    return legRevenueOf(l, legs.length > 1 ? legs : [l]);
   }, [allEvents]);
 
   const totalRev = row.loads.reduce((s, l) => s + legRevenue(l), 0);
@@ -1265,21 +1403,17 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
                       })()}
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <PayCell load={load} />
-                        {(() => {
-                          const rev = legRevenue(load);
-                          if (load.driverPay == null || rev <= 0) return null;
-                          return (
-                            <span
-                              className="print:hidden shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded-lg whitespace-nowrap"
-                              style={{ background: 'var(--gc-hover)', color: 'var(--gc-text-3)' }}
-                            >
-                              {Math.round((load.driverPay / rev) * 100)}%
-                            </span>
-                          );
-                        })()}
-                      </div>
+                      {/* The old bare "27%" chip lived here with no
+                          statement of what it was 27% OF. PayCell now
+                          renders both denominators, each labelled. */}
+                      <PayCell
+                        load={load}
+                        legRevenue={legRevenue(load)}
+                        legCount={load.relayGroupId
+                          ? allEvents.filter(e => e.relayGroupId === load.relayGroupId).length
+                          : 1}
+                        locked={isFinalized}
+                      />
                     </td>
                     {/* Defer / Undo icon */}
                     <td className="px-2 py-3 print:hidden">
