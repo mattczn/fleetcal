@@ -34,8 +34,8 @@
 --     status=sent         2031   $1,635,928.71
 --     status=paid          529     $336,800.78
 --   allocations inserted   529     $336,800.78
---   customer_from_map      481
---   no_customer            198
+--   customer_from_map      652
+--   no_customer             27
 --   invoices  1497 -> 4057
 --   AR open   $1,149,624 -> $2,785,552.71
 --   issued_at spans 2025-12-29 .. 2026-05-26
@@ -55,16 +55,21 @@
 -- "propak" contains). Without the margin, 26 loads would have been
 -- filed under the wrong broker on iteration order alone.
 --
---   auto-assigned  481 loads  $343,417  (67 broker strings)
---   left NULL      198 loads  $133,592  (22 broker strings)
+-- One entry is a MANUAL override rather than a matcher result: "Propak"
+-- ties by score, but 68 loads already map to Propak Supply Chain
+-- Services under the broker's full name, so the short form is the same
+-- broker. That is a human call, and it is marked MANUAL in the map so
+-- it reads as one.
+--
+--   auto-assigned  652 loads  $440,242  (69 broker strings)
+--   left NULL       27 loads   $36,767  (20 broker strings)
 --
 -- What stays unassigned, and why:
---   * "10 Roads" — 145 loads, $87,700. No customer record exists. This
---     is the one worth creating by hand; it's 73% of the unassigned money.
---   * "Propak" (26) and "TCI" (3) — genuine ties, listed above.
---   * 20 one-off brokers, 24 loads, ~$33k — no customer on file.
--- All of those land under "No customer" on Receivables and can be
--- reassigned there.
+--   * "TCI" (3 loads) — a real tie between TITAN CONCEPTS INTERNATIONAL
+--     and TCI Global Logistics. Not guessable from here.
+--   * 19 one-off brokers, 24 loads — no customer record on file.
+-- Those land under "No customer" on Receivables and can be reassigned
+-- there in a couple of minutes.
 --
 -- Known imperfections, accepted deliberately:
 --   * 2 loads have a zero/absent amount and are skipped — an invoice
@@ -100,73 +105,76 @@ BEGIN;
 CREATE TEMP TABLE broker_map (broker text PRIMARY KEY, customer_id uuid) ON COMMIT DROP;
 
 INSERT INTO broker_map (broker, customer_id) VALUES
-    ('Triple T', '42f73fc4-ad32-4cb9-a50d-d9c5a5260aca')                          -- Triple T Transport (1.00, 79 loads),
-    ('ITS', 'd5d5e0a8-6d28-42db-84f0-75236b2cc89b')                               -- ITS National LLC (1.00, 73 loads),
-    ('Propak Supply Chain Services', '1969d99a-64c7-4fba-999e-117b962ca36a')      -- Propak Supply Chain Services (1.00, 68 loads),
-    ('River City', '0d629e6d-04f5-48e7-b03c-67009f2ad813')                        -- River City Logistics Inc (1.00, 45 loads),
-    ('Freight Tec', 'd072f981-a395-4506-96dc-e28c5977e394')                       -- Freight Tec (1.00, 18 loads),
-    ('Forward Air', '65e0405f-93b0-428b-8b8c-22a08a20cfe3')                       -- Forward Air (1.00, 16 loads),
-    ('NFI', '05959c86-3b81-4591-8be1-e14d6fbe0fdb')                               -- NFI Industries (0.90, 13 loads),
-    ('NFI Industries', '05959c86-3b81-4591-8be1-e14d6fbe0fdb')                    -- NFI Industries (1.00, 11 loads),
-    ('Redbone', 'dd9ccc30-2d24-4f4a-99b7-f46d8e5f2da5')                           -- Redbone Logistics LLC (1.00, 10 loads),
-    ('JTS', '10a740fc-8e27-4338-8a67-3f564fd9c542')                               -- Johanson Transportation Service (1.00, 9 loads),
-    ('Freeway', '6999483c-7b7f-4424-8df4-27f574a84c26')                           -- Freeway International Logistics (1.00, 8 loads),
-    ('RXO', '18405af3-a799-4298-a4b9-ec83c9c15d53')                               -- RXO (1.00, 8 loads),
-    ('Worldwide Express', '906a35d4-8912-4958-85e3-24ec050a6daf')                 -- Worldwide Express (1.00, 8 loads),
-    ('Ryan', '03ce63d8-9d8c-4e7d-8280-31a170da3579')                              -- Ryan Transportation Service, Inc (1.00, 6 loads),
-    ('Edge Logistics', 'cd0f86cf-f760-4319-a784-a001bf76a176')                    -- Edge Logistics (1.00, 5 loads),
-    ('Arrive', '684c16d8-a034-466b-bd2a-fb9acf217400')                            -- Arrive (1.00, 5 loads),
-    ('PRIDE TRANSPORT', 'f77c40b9-17a9-4b7a-b973-df9eb7c077ec')                   -- PRIDE TRANSPORT (1.00, 4 loads),
-    ('Lighthouse', '29cf607f-07b2-443a-9f45-a991c747fdb7')                        -- Lighthouse Recycling (0.90, 4 loads),
-    ('MegaCorp Logistics', '42a79945-b1b5-4f1e-9475-430c46a2ae15')                -- MegaCorp Logistics (1.00, 4 loads),
-    ('INTEGRITY Express Logistics', 'f221fd11-7b2e-4831-9e8c-4b3784f25c2f')       -- INTEGRITY Express Logistics (1.00, 4 loads),
-    ('Unicron', 'efb14cea-2161-490a-87d5-023b97eec56d')                           -- Unicron Logistics Solutions LLC (1.00, 4 loads),
-    ('PT', '266c3ff4-d43e-4d32-9a49-aeed1ebed305')                                -- PT Brokers (1.00, 4 loads),
-    ('Sage Freight', 'c365b8f6-0019-40a9-bb56-38a514253885')                      -- Sage Freight (1.00, 3 loads),
-    ('TROJAN LOGISTICS', '8c63eea5-1d7d-4e6e-bb56-94afe789788c')                  -- TROJAN LOGISTICS (1.00, 3 loads),
-    ('Yoke Group, LLC', 'b8b25ddc-e15a-40ba-b168-a806f06501b3')                   -- Yoke Group, LLC (1.00, 3 loads),
-    ('Echo Global Logistics', '7266a092-a71e-4abc-9ef5-468eb80d709b')             -- Echo Global Logistics (1.00, 3 loads),
-    ('Redwood', 'cced40ea-db07-449b-aebf-61dbc0118f06')                           -- Redwood Logistics (1.00, 3 loads),
-    ('NTG', '875ede9d-4953-4a20-8b11-3275df53f2e5')                               -- Nolan Transportation Group (1.00, 3 loads),
-    ('CMI', '6ad9e185-0ac9-43e9-a771-44014765cd36')                               -- CMI Insulation (1.00, 3 loads),
-    ('GlobalTranz', 'e86305b5-597c-4c1f-a424-8cf7360e4e49')                       -- GlobalTranz (1.00, 2 loads),
-    ('Molo', 'eaadf11c-3a14-4313-84cb-e1083a62c6ae')                              -- Molo (1.00, 2 loads),
-    ('Navajo Express Inc', '3e2cfada-9218-4160-8d57-993a01097845')                -- Navajo Express Inc (1.00, 2 loads),
-    ('House of Foils', '325393b3-a82a-47af-8545-d84e4e4b2ec2')                    -- House of Foils (1.00, 2 loads),
-    ('Transportation1', '02639cac-9d1f-4d4c-9ccf-a18a4b78a4d1')                   -- Transportation One (1.00, 2 loads),
-    ('Edge', 'cd0f86cf-f760-4319-a784-a001bf76a176')                              -- Edge Logistics (1.00, 2 loads),
-    ('Echo', '7266a092-a71e-4abc-9ef5-468eb80d709b')                              -- Echo Global Logistics (1.00, 2 loads),
-    ('CXS', 'b1cc5759-a269-4d09-8d91-e169210ae842')                               -- CXS Logistics (1.00, 2 loads),
-    ('Bay & Bay Transportation', 'b305d9b3-6dfe-4138-bcc3-45e7caeaa94b')          -- Bay & Bay Transportation (1.00, 2 loads),
-    ('Dreamliner', 'fd103d45-1066-4b7e-8a6d-3dd510e52be1')                        -- Dreamliner (1.00, 2 loads),
-    ('Argo', '4daaa33b-dc18-4095-89ed-e77909cf078f')                              -- Argo Logistics Group, LLC (1.00, 2 loads),
-    ('BMM LOGISTICS', 'c82b31bf-531a-40ab-a949-49d74d10ad3d')                     -- BMM LOGISTICS (1.00, 2 loads),
-    ('Giltner', 'edcec35e-7a98-4400-bb90-91874bc60506')                           -- Giltner Logistics, Inc. (1.00, 2 loads),
-    ('Navajo', '3e2cfada-9218-4160-8d57-993a01097845')                            -- Navajo Express Inc (1.00, 2 loads),
-    ('Vess', 'ea7bb3ae-d543-4d5f-84e5-5dd425b04507')                              -- VESS Logistics LLC (1.00, 2 loads),
-    ('Spot', '9a49162c-66ae-4304-8352-deba907c1626')                              -- Spot Freight (1.00, 2 loads),
-    ('Soar Transportation', 'dc06d504-f400-428d-bbbd-b52176bdb04b')               -- Soar Transportation (1.00, 1 load),
-    ('loop', '8bb1cd22-d3b5-4bcf-a4d7-b69ceeafc65d')                              -- TransLoop (0.90, 1 load),
-    ('BBI', '2ac7daf3-011a-4014-92e8-643092bf0a6b')                               -- BBI Logistics (1.00, 1 load),
-    ('England', '55b73aa9-d96e-458c-8d91-9431f357ff71')                           -- England (1.00, 1 load),
-    ('Corcoran', '19a2be36-b92e-4d04-904f-85f42568bbff')                          -- Raymond Corcoran (0.90, 1 load),
-    ('Freightvana', '5e6679d2-dc6e-4093-ba5f-faebca2a580b')                       -- FreightVana (1.00, 1 load),
-    ('PAM Transport Inc.', '8a3d079c-dc13-4a55-80b7-25ab14947c0a')                -- PAM Transport Inc. (1.00, 1 load),
-    ('Circle', 'a4f7e422-6662-4ede-a7fa-0e0f6a072633')                            -- Circle Logistics, Inc (1.00, 1 load),
-    ('Pam', '8a3d079c-dc13-4a55-80b7-25ab14947c0a')                               -- PAM Transport Inc. (1.00, 1 load),
-    ('Megacorp', '42a79945-b1b5-4f1e-9475-430c46a2ae15')                          -- MegaCorp Logistics (1.00, 1 load),
-    ('Tin Goose', 'b2f874c2-1542-4017-b7be-848bc5bc4cc3')                         -- Tin Goose Logistics (1.00, 1 load),
-    ('Blue Grace', '122662cb-0eae-426d-ad86-1ac1c7e29a6f')                        -- Capacity Express (0.90, 1 load),
-    ('Bay&Bay', 'b305d9b3-6dfe-4138-bcc3-45e7caeaa94b')                           -- Bay & Bay Transportation (1.00, 1 load),
-    ('Traffix', 'adaecc75-ce5f-4e90-a4a1-a7c0d5bf56c6')                           -- TRAFFIX (1.00, 1 load),
-    ('Axle', '187e89a5-e1a3-4f22-9a63-76e00596fd25')                              -- Axle Logistics (1.00, 1 load),
-    ('Max Trans Logistics', 'e690f0d7-e5bb-49ec-9aa8-a4f08635cdd2')               -- Max Trans Logistics (1.00, 1 load),
-    ('Addison', '2516fb97-1bb2-4195-bf78-bc194a514882')                           -- Addison Transportation (1.00, 1 load),
-    ('Sunteck', '97246a98-e190-4883-b7b6-2dff14d95c91')                           -- Sunteck Transport (1.00, 1 load),
-    ('Big G', 'e433a4c7-f1a1-4528-88f9-42dc2868dcfd')                             -- Big G Logistics (1.00, 1 load),
-    ('Circle Logistics, Inc', 'a4f7e422-6662-4ede-a7fa-0e0f6a072633')             -- Circle Logistics, Inc (1.00, 1 load),
-    ('ClaireIT Carriers', 'dbb5a71b-8fc7-4813-9725-a539800dd625')                 -- ClaireIT Carriers (1.00, 1 load),
-    ('TQL', '34c7d790-bcd8-4557-80c5-8a2b7cfb3bfc')                               -- Total Quality Logistics (1.00, 1 load);
+    ('10 Roads', '812c2380-9df3-4695-8a9f-0c36e885cbb4'), -- 10 Roads Logistics (1.00, 145 loads)
+    ('Triple T', '42f73fc4-ad32-4cb9-a50d-d9c5a5260aca'), -- Triple T Transport (1.00, 79 loads)
+    ('ITS', 'd5d5e0a8-6d28-42db-84f0-75236b2cc89b'), -- ITS National LLC (1.00, 73 loads)
+    ('Propak Supply Chain Services', '1969d99a-64c7-4fba-999e-117b962ca36a'), -- Propak Supply Chain Services (1.00, 68 loads)
+    ('River City', '0d629e6d-04f5-48e7-b03c-67009f2ad813'), -- River City Logistics Inc (1.00, 45 loads)
+    ('Propak', '1969d99a-64c7-4fba-999e-117b962ca36a'), -- Propak Supply Chain Services (MANUAL, 26 loads)
+    ('Freight Tec', 'd072f981-a395-4506-96dc-e28c5977e394'), -- Freight Tec (1.00, 18 loads)
+    ('Forward Air', '65e0405f-93b0-428b-8b8c-22a08a20cfe3'), -- Forward Air (1.00, 16 loads)
+    ('NFI', '05959c86-3b81-4591-8be1-e14d6fbe0fdb'), -- NFI Industries (0.90, 13 loads)
+    ('NFI Industries', '05959c86-3b81-4591-8be1-e14d6fbe0fdb'), -- NFI Industries (1.00, 11 loads)
+    ('Redbone', 'dd9ccc30-2d24-4f4a-99b7-f46d8e5f2da5'), -- Redbone Logistics LLC (1.00, 10 loads)
+    ('JTS', '10a740fc-8e27-4338-8a67-3f564fd9c542'), -- Johanson Transportation Service (1.00, 9 loads)
+    ('Freeway', '6999483c-7b7f-4424-8df4-27f574a84c26'), -- Freeway International Logistics (1.00, 8 loads)
+    ('RXO', '18405af3-a799-4298-a4b9-ec83c9c15d53'), -- RXO (1.00, 8 loads)
+    ('Worldwide Express', '906a35d4-8912-4958-85e3-24ec050a6daf'), -- Worldwide Express (1.00, 8 loads)
+    ('Ryan', '03ce63d8-9d8c-4e7d-8280-31a170da3579'), -- Ryan Transportation Service, Inc (1.00, 6 loads)
+    ('Edge Logistics', 'cd0f86cf-f760-4319-a784-a001bf76a176'), -- Edge Logistics (1.00, 5 loads)
+    ('Arrive', '684c16d8-a034-466b-bd2a-fb9acf217400'), -- Arrive (1.00, 5 loads)
+    ('PRIDE TRANSPORT', 'f77c40b9-17a9-4b7a-b973-df9eb7c077ec'), -- PRIDE TRANSPORT (1.00, 4 loads)
+    ('Lighthouse', '29cf607f-07b2-443a-9f45-a991c747fdb7'), -- Lighthouse Recycling (0.90, 4 loads)
+    ('MegaCorp Logistics', '42a79945-b1b5-4f1e-9475-430c46a2ae15'), -- MegaCorp Logistics (1.00, 4 loads)
+    ('INTEGRITY Express Logistics', 'f221fd11-7b2e-4831-9e8c-4b3784f25c2f'), -- INTEGRITY Express Logistics (1.00, 4 loads)
+    ('Unicron', 'efb14cea-2161-490a-87d5-023b97eec56d'), -- Unicron Logistics Solutions LLC (1.00, 4 loads)
+    ('PT', '266c3ff4-d43e-4d32-9a49-aeed1ebed305'), -- PT Brokers (1.00, 4 loads)
+    ('Sage Freight', 'c365b8f6-0019-40a9-bb56-38a514253885'), -- Sage Freight (1.00, 3 loads)
+    ('TROJAN LOGISTICS', '8c63eea5-1d7d-4e6e-bb56-94afe789788c'), -- TROJAN LOGISTICS (1.00, 3 loads)
+    ('Yoke Group, LLC', 'b8b25ddc-e15a-40ba-b168-a806f06501b3'), -- Yoke Group, LLC (1.00, 3 loads)
+    ('Echo Global Logistics', '7266a092-a71e-4abc-9ef5-468eb80d709b'), -- Echo Global Logistics (1.00, 3 loads)
+    ('Redwood', 'cced40ea-db07-449b-aebf-61dbc0118f06'), -- Redwood Logistics (1.00, 3 loads)
+    ('NTG', '875ede9d-4953-4a20-8b11-3275df53f2e5'), -- Nolan Transportation Group (1.00, 3 loads)
+    ('CMI', '6ad9e185-0ac9-43e9-a771-44014765cd36'), -- CMI Insulation (1.00, 3 loads)
+    ('GlobalTranz', 'e86305b5-597c-4c1f-a424-8cf7360e4e49'), -- GlobalTranz (1.00, 2 loads)
+    ('Molo', 'eaadf11c-3a14-4313-84cb-e1083a62c6ae'), -- Molo (1.00, 2 loads)
+    ('Navajo Express Inc', '3e2cfada-9218-4160-8d57-993a01097845'), -- Navajo Express Inc (1.00, 2 loads)
+    ('House of Foils', '325393b3-a82a-47af-8545-d84e4e4b2ec2'), -- House of Foils (1.00, 2 loads)
+    ('Transportation1', '02639cac-9d1f-4d4c-9ccf-a18a4b78a4d1'), -- Transportation One (1.00, 2 loads)
+    ('Edge', 'cd0f86cf-f760-4319-a784-a001bf76a176'), -- Edge Logistics (1.00, 2 loads)
+    ('Echo', '7266a092-a71e-4abc-9ef5-468eb80d709b'), -- Echo Global Logistics (1.00, 2 loads)
+    ('CXS', 'b1cc5759-a269-4d09-8d91-e169210ae842'), -- CXS Logistics (1.00, 2 loads)
+    ('Bay & Bay Transportation', 'b305d9b3-6dfe-4138-bcc3-45e7caeaa94b'), -- Bay & Bay Transportation (1.00, 2 loads)
+    ('Dreamliner', 'fd103d45-1066-4b7e-8a6d-3dd510e52be1'), -- Dreamliner (1.00, 2 loads)
+    ('Argo', '4daaa33b-dc18-4095-89ed-e77909cf078f'), -- Argo Logistics Group, LLC (1.00, 2 loads)
+    ('BMM LOGISTICS', 'c82b31bf-531a-40ab-a949-49d74d10ad3d'), -- BMM LOGISTICS (1.00, 2 loads)
+    ('Giltner', 'edcec35e-7a98-4400-bb90-91874bc60506'), -- Giltner Logistics, Inc. (1.00, 2 loads)
+    ('Navajo', '3e2cfada-9218-4160-8d57-993a01097845'), -- Navajo Express Inc (1.00, 2 loads)
+    ('Vess', 'ea7bb3ae-d543-4d5f-84e5-5dd425b04507'), -- VESS Logistics LLC (1.00, 2 loads)
+    ('Spot', '9a49162c-66ae-4304-8352-deba907c1626'), -- Spot Freight (1.00, 2 loads)
+    ('Soar Transportation', 'dc06d504-f400-428d-bbbd-b52176bdb04b'), -- Soar Transportation (1.00, 1 load)
+    ('loop', '8bb1cd22-d3b5-4bcf-a4d7-b69ceeafc65d'), -- TransLoop (0.90, 1 load)
+    ('BBI', '2ac7daf3-011a-4014-92e8-643092bf0a6b'), -- BBI Logistics (1.00, 1 load)
+    ('England', '55b73aa9-d96e-458c-8d91-9431f357ff71'), -- England (1.00, 1 load)
+    ('Corcoran', '19a2be36-b92e-4d04-904f-85f42568bbff'), -- Raymond Corcoran (0.90, 1 load)
+    ('Freightvana', '5e6679d2-dc6e-4093-ba5f-faebca2a580b'), -- FreightVana (1.00, 1 load)
+    ('PAM Transport Inc.', '8a3d079c-dc13-4a55-80b7-25ab14947c0a'), -- PAM Transport Inc. (1.00, 1 load)
+    ('Circle', 'a4f7e422-6662-4ede-a7fa-0e0f6a072633'), -- Circle Logistics, Inc (1.00, 1 load)
+    ('Pam', '8a3d079c-dc13-4a55-80b7-25ab14947c0a'), -- PAM Transport Inc. (1.00, 1 load)
+    ('Megacorp', '42a79945-b1b5-4f1e-9475-430c46a2ae15'), -- MegaCorp Logistics (1.00, 1 load)
+    ('Tin Goose', 'b2f874c2-1542-4017-b7be-848bc5bc4cc3'), -- Tin Goose Logistics (1.00, 1 load)
+    ('Blue Grace', '122662cb-0eae-426d-ad86-1ac1c7e29a6f'), -- Capacity Express (0.90, 1 load)
+    ('Bay&Bay', 'b305d9b3-6dfe-4138-bcc3-45e7caeaa94b'), -- Bay & Bay Transportation (1.00, 1 load)
+    ('Traffix', 'adaecc75-ce5f-4e90-a4a1-a7c0d5bf56c6'), -- TRAFFIX (1.00, 1 load)
+    ('Axle', '187e89a5-e1a3-4f22-9a63-76e00596fd25'), -- Axle Logistics (1.00, 1 load)
+    ('Max Trans Logistics', 'e690f0d7-e5bb-49ec-9aa8-a4f08635cdd2'), -- Max Trans Logistics (1.00, 1 load)
+    ('Addison', '2516fb97-1bb2-4195-bf78-bc194a514882'), -- Addison Transportation (1.00, 1 load)
+    ('Sunteck', '97246a98-e190-4883-b7b6-2dff14d95c91'), -- Sunteck Transport (1.00, 1 load)
+    ('Big G', 'e433a4c7-f1a1-4528-88f9-42dc2868dcfd'), -- Big G Logistics (1.00, 1 load)
+    ('Circle Logistics, Inc', 'a4f7e422-6662-4ede-a7fa-0e0f6a072633'), -- Circle Logistics, Inc (1.00, 1 load)
+    ('ClaireIT Carriers', 'dbb5a71b-8fc7-4813-9725-a539800dd625'), -- ClaireIT Carriers (1.00, 1 load)
+    ('TQL', '34c7d790-bcd8-4557-80c5-8a2b7cfb3bfc')  -- Total Quality Logistics (1.00, 1 load)
+;
 
 -- ── Invoices ──────────────────────────────────────────────────────
 
