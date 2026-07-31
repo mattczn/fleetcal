@@ -1818,7 +1818,13 @@ export const useCalendarStore = create<CalendarStore>()(
       if (Object.keys(evUpdate).length) {
         promises.push(railway.updateEvent(id, evUpdate));
       }
-      if ('stops' in updates && updates.stops) {
+      // Only send stops when the caller supplied a non-empty list.
+      // An empty array would be forwarded to PUT /events/:id/stops
+      // (delete-then-insert) and — pre-2026-07-31 API fix — silently
+      // wipe every existing stop on the event. Belt-and-suspenders:
+      // the server now rejects empty stops, and we no longer send
+      // them from here either.
+      if ('stops' in updates && updates.stops && updates.stops.length > 0) {
         promises.push(railway.replaceStops(id, { stops: updates.stops }));
       }
       Promise.all(promises).catch((err) => console.error('updateEvent (non-revenue):', err));

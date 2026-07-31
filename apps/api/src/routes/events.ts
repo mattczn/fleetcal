@@ -669,6 +669,22 @@ events.put("/:id/stops", requireCapability("loads.edit"), async (c) => {
 
   if (!Array.isArray(body?.stops)) return badRequest(c, ["stops must be an array"]);
 
+  // Refuse empty stops. The endpoint's delete-then-insert pattern
+  // (below) previously wiped every stop on this event when body.stops
+  // was empty, because the insert is gated on stops.length > 0 but
+  // the delete was not. On 2026-07-31 that silently destroyed the
+  // pickup + delivery on a live load (driver had already checked in).
+  // There is no legitimate reason a well-behaved client sends zero
+  // stops here — an event that should have no stops isn't a load, and
+  // isn't served by this endpoint. Failing loud so the caller sees
+  // the mistake, rather than losing the row.
+  if (body.stops.length === 0) {
+    return badRequest(c, [
+      "stops cannot be empty — a load must have at least one stop. " +
+      "If you meant to delete the load, use DELETE /v1/loads/:id instead.",
+    ]);
+  }
+
   // Verify event exists in this org
   const { data: ev } = await supabase
     .from("events")

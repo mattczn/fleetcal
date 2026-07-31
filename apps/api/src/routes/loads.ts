@@ -2183,6 +2183,17 @@ loads.put("/:id/legs", requireCapability("loads.edit"), async (c) => {
   if (Array.isArray(body?.legs) && body.legs.length > 10) {
     errors.push("'legs' cannot exceed 10 entries");
   }
+  // Empty stops with delete-then-insert (below) would silently wipe
+  // every stop on the load. Same class of bug as PUT /v1/events/:id/stops
+  // (see that route's comment for the 2026-07-31 incident) — refuse
+  // rather than write. If the caller genuinely wants the load gone,
+  // DELETE /v1/loads/:id is the right verb.
+  if (Array.isArray(body?.stops) && body.stops.length === 0) {
+    errors.push(
+      "stops cannot be empty — a load must have at least one stop. " +
+      "Use DELETE /v1/loads/:id to remove the load.",
+    );
+  }
   if (Array.isArray(body?.stops) && Array.isArray(body?.legs)) {
     // Legs are the gaps between handoff boundaries, so the counts are
     // two views of the same structure and must agree exactly.
