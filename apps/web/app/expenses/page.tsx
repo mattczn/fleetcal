@@ -213,9 +213,11 @@ function ExpensesPageInner() {
   useEffect(() => { void reload(); }, [reload]);
 
   // Period revenue — same endpoint + same reduction the dashboard uses
-  // (total_billable per load, relay-deduped + report exclusions applied
-  // server-side), so this bar and the dashboard always agree. Null while
-  // loading / on error → the bar hides rather than showing a wrong zero.
+  // (total_billable per load, relay-deduped), EXCEPT owner-op loads are
+  // kept in (includeExcluded below): this meter is whole-business, the
+  // dashboard is operations. The two intentionally differ by exactly
+  // the excluded drivers'/trucks' revenue. Null while loading / on
+  // error → the bar hides rather than showing a wrong zero.
   const [revenue, setRevenue] = useState<number | null>(null);
   const [revenueLoading, setRevenueLoading] = useState(true);
   useEffect(() => {
@@ -224,10 +226,15 @@ function ExpensesPageInner() {
     setRevenueLoading(true);
     (async () => {
       try {
+        // includeExcluded: this meter is a whole-business snapshot, so
+        // owner-op loads (excluded from operations reports) count here —
+        // their vendor cost sits in the expense buckets, so their revenue
+        // must sit in this number. The dashboard stays exclusions-on.
         const { loads } = await railway.listLoadSummaries({
-          pickupFrom: `${fromIso}T00:00`,
-          pickupTo:   `${toIso}T23:59`,
-          limit:      '10000',
+          pickupFrom:      `${fromIso}T00:00`,
+          pickupTo:        `${toIso}T23:59`,
+          limit:           '10000',
+          includeExcluded: '1',
         });
         if (cancelled) return;
         const total = (loads as LoadSummary[]).reduce((s, l) => {

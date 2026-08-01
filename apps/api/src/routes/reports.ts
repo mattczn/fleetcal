@@ -488,11 +488,15 @@ reports.get("/loads", async (c) => {
   // driver — so an owner-op truck that the owner occasionally runs a load
   // on still stays out of the rollups.
   const excludedAssets = await loadExcludedAssetIds(orgId);
+  // ?includeExcluded=1 keeps owner-op legs in — whole-business
+  // consumers (the /expenses revenue meter) bill these loads even
+  // though the operations rollups exclude them.
+  const includeExcluded = q.get("includeExcluded") === "1";
   const eventsByLoad = new Map<string, EventRow[]>();
   for (const e of eventRows) {
     if (!e.load_id) continue;
-    if (isExcludedEvent(excluded, e)) continue;
-    if (e.asset_id != null && excludedAssets.has(e.asset_id)) continue;
+    if (!includeExcluded && isExcludedEvent(excluded, e)) continue;
+    if (!includeExcluded && e.asset_id != null && excludedAssets.has(e.asset_id)) continue;
     const arr = eventsByLoad.get(e.load_id) ?? [];
     arr.push(e);
     eventsByLoad.set(e.load_id, arr);
