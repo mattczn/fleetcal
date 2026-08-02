@@ -20,6 +20,7 @@ import Link from 'next/link';
 import { Truck, ChevronDown, ChevronUp, ArrowUpDown, Users, Sparkles, Loader2 } from 'lucide-react';
 import AppShell from '@/components/nav/AppShell';
 import { PeriodSelector } from '@/components/ui/PeriodSelector';
+import Tooltip from '@/components/ui/Tooltip';
 import {
   type Period,
   getPeriodRange,
@@ -398,14 +399,22 @@ export default function AssetPerformanceView() {
                             fontSize: 10,
                             whiteSpace: 'nowrap',
                           }}
-                          title={c.help}
                         >
-                          <span className="inline-flex items-center gap-1">
-                            {c.label}
-                            {active
-                              ? (sortDir === 'desc' ? <ChevronDown size={11} /> : <ChevronUp size={11} />)
-                              : <ArrowUpDown size={10} style={{ opacity: 0.3 }} />}
-                          </span>
+                          {/* Real Tooltip rather than a native title="":
+                              these headers carry the whole definition of
+                              the column (which denominator, how relays
+                              are split), and the browser's tooltip is
+                              too slow and too easily truncated for text
+                              that long. Clicks still bubble to the th,
+                              so sorting is unaffected. */}
+                          <Tooltip content={c.help} placement="bottom">
+                            <span className="inline-flex items-center gap-1" style={{ cursor: 'help' }}>
+                              {c.label}
+                              {active
+                                ? (sortDir === 'desc' ? <ChevronDown size={11} /> : <ChevronUp size={11} />)
+                                : <ArrowUpDown size={10} style={{ opacity: 0.3 }} />}
+                            </span>
+                          </Tooltip>
                         </th>
                       );
                     })}

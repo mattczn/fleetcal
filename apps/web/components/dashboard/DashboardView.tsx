@@ -8,6 +8,7 @@ import {
   Wallet, Fuel, Route, Gauge, Info,
 } from 'lucide-react';
 import Tooltip from '@/components/ui/Tooltip';
+import InfoDot from '@/components/ui/InfoDot';
 import { CostBar } from '@/components/ui/CostBar';
 import { PieChart } from '@/components/ui/PieChart';
 import { fetchWithRetry } from '@/lib/fetchWithRetry';
@@ -121,10 +122,15 @@ function Card({ children, className = '' }: { children: React.ReactNode; classNa
   );
 }
 
-function CardTitle({ children }: { children: React.ReactNode }) {
+/** Card heading, with an optional ⓘ carrying the "how is this number
+ *  derived?" explainer. Same treatment the KPI tiles give `formula` —
+ *  the derivation is one hover away instead of a grey paragraph living
+ *  under the chart forever. */
+function CardTitle({ children, info }: { children: React.ReactNode; info?: React.ReactNode }) {
   return (
-    <h2 className="text-sm font-semibold mb-4" style={{ color: 'var(--gc-text-1)' }}>
+    <h2 className="text-sm font-semibold mb-4 flex items-center gap-1.5" style={{ color: 'var(--gc-text-1)' }}>
       {children}
+      {info && <InfoDot content={info} size={12} />}
     </h2>
   );
 }
@@ -1595,7 +1601,20 @@ export default function DashboardView() {
           <div className="grid grid-cols-2 gap-4">
             <Card>
               <div className="flex items-center justify-between mb-3">
-                <CardTitle>Revenue by Truck</CardTitle>
+                <CardTitle
+                  info={
+                    <>
+                      Relay loads are split across every leg&apos;s truck in
+                      proportion to that leg&apos;s loaded miles — routed miles
+                      once the load has been opened in the modal, straight-line
+                      distance as a fallback. On a load with N legs, each leg
+                      counts as 1/N of a load. If none of the legs has geocoded
+                      stops, the split falls back to an even 1/N each.
+                    </>
+                  }
+                >
+                  Revenue by Truck
+                </CardTitle>
                 {/* Cost overlay toggles — show fuel and payroll as
                     secondary bars beneath the revenue bar so a
                     dispatcher can eyeball margin per truck. */}
@@ -1798,14 +1817,6 @@ export default function DashboardView() {
                         </div>
                       );
                     })}
-                  </div>
-                  <div className="mt-3 pt-3 text-[11px] leading-relaxed" style={{ color: 'var(--gc-text-3)', borderTop: '1px solid var(--gc-border-light)' }}>
-                    Relay loads are split across every leg&apos;s asset in
-                    proportion to that leg&apos;s loaded miles (routed when the
-                    load has been opened in the modal, otherwise straight-line
-                    as a fallback). On a load with N legs, each leg counts as
-                    1/N of a load. When no leg has geocoded stops, the split
-                    falls back to an even 1/N each.
                   </div>
                 </>
               )}
