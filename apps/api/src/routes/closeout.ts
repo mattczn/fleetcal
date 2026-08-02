@@ -153,7 +153,7 @@ function buildDeliveryEndMap(rows: Array<{ end?: string | null; load?: { id?: st
 }
 
 /** Collapse event rows down to one row per load — the pickup leg
- *  wins when both legs are present. Standalone events without a
+ *  wins when more than one leg is present. Standalone events without a
  *  load are kept as-is (defensive; shouldn't happen for revenue
  *  events but the API contract doesn't strictly forbid it).
  *
@@ -161,8 +161,8 @@ function buildDeliveryEndMap(rows: Array<{ end?: string | null; load?: { id?: st
  *  its own driver/asset, but the dispatcher UI is per-load (POD
  *  verification, flag, release all act on the load). Doing this
  *  dedup server-side means pagination math reflects loads, not
- *  legs — a page of 50 always shows 50 loads, never 25 because half
- *  the events were paired legs of the same load. */
+ *  legs — a page of 50 always shows 50 loads, never 20 because the
+ *  rest of the events were sibling legs of the same loads. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function dedupEventsByLoad<T extends { load?: { id?: string | null } | null; relay_role?: string | null }>(rows: T[]): T[] {
   const pickupByLoadId = new Map<string, T>();
@@ -321,11 +321,11 @@ closeout.get("/queue", async (c) => {
   const wideCandidatePath = !searching && (tab === "pending" || tab === "flagged" || tab === "all" || tab === "recent");
 
   // Relay partner driver/asset info, keyed by load_id. The dedup step
-  // below collapses a relay's two legs into a single surviving row
-  // (pickup leg wins), which means the OTHER leg's driver + truck
-  // disappear from the response. The closeout table wants both
+  // below collapses all of a relay's legs into a single surviving row
+  // (pickup leg wins), which means every OTHER leg's driver + truck
+  // disappears from the response. The closeout table wants all of the
   // drivers on the row, so we walk the un-deduped data here and
-  // stash the partner's info before dedup runs.
+  // stash the partners' info before dedup runs.
   const partnerByLoadId = new Map<string, { driverName?: string; assetId?: number }>();
   const collectPartners = (rows: Array<{ id: string; load?: { id?: string | null } | null; driver_name?: string | null; asset_id?: number | null; relay_role?: string | null }>) => {
     const byLoadId = new Map<string, typeof rows>();

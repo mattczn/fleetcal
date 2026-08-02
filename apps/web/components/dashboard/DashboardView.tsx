@@ -736,19 +736,24 @@ export default function DashboardView() {
       // Delivery side reflects the load's final state — the leg whose
       // status is "delivered" is the one that physically delivered.
       const delivered = loadSummaries.filter(l => l.deliveryStatus === 'delivered').length;
-      // For relays, a load only counts as cancelled if BOTH legs are
+      // For relays, a load only counts as cancelled if EVERY leg is
       // cancelled; otherwise we treat the pickup status as the
       // active-side gate. Simplifying to pickup-side keeps behavior
       // identical to the legacy events-deduped path.
       const nonCancel    = loadSummaries.filter(l => l.pickupStatus !== 'cancelled').length;
       const delivRate    = nonCancel > 0 ? (delivered / nonCancel) * 100 : 0;
       const avgRevPerLoad = loads > 0 ? revenue / loads : 0;
-      // Assets — union of pickup + delivery so a relay surfaces both
-      // assets, not just the pickup leg's.
+      // Assets — union across EVERY leg. Reading only pickup+delivery
+      // would miss the middle trucks of a 3+ leg relay, understating
+      // "active trucks" and inflating avg revenue per truck.
       const assetIds = new Set<number>();
       for (const l of loadSummaries) {
-        assetIds.add(l.pickupAssetId);
-        if (l.deliveryAssetId !== l.pickupAssetId) assetIds.add(l.deliveryAssetId);
+        if (l.legs?.length) {
+          for (const leg of l.legs) assetIds.add(leg.assetId);
+        } else {
+          assetIds.add(l.pickupAssetId);
+          if (l.deliveryAssetId !== l.pickupAssetId) assetIds.add(l.deliveryAssetId);
+        }
       }
       const activeAssets   = assetIds.size;
       const avgRevPerAsset = activeAssets > 0 ? revenue / activeAssets : 0;
@@ -777,23 +782,33 @@ export default function DashboardView() {
   // Relay (split) loads are prorated by haversine leg miles so each
   // asset gets credit for the work it actually did. Non-relay loads
   // attribute the full price to the single asset that ran them.
-  // Falls back to a 50/50 split when one of the legs has no usable
-  // geocoded stops.
+  // Falls back to an even 1/N split across the load's legs when NONE
+  // of them has usable geocoded stops.
   // Per-asset driver pay totals — sourced from loadSummaries (one entry
-  // per load), splitting by leg. pickup_driver_pay goes to pickupAssetId,
-  // delivery_driver_pay goes to deliveryAssetId. For non-relay loads
-  // both fields point at the same asset so the totals work out the
-  // same. Mirrors how the payroll backfill computed weekly totals.
+  // per load), walking legs[] so every truck on a relay is credited with
+  // what its own driver earned. driverPay is stored per-LEG on the event,
+  // so this is a plain sum, never a prorate.
+  //
+  // Walks legs[] rather than the pickup/delivery pair on purpose: those
+  // two fields describe the load's ENDS, so a 3-leg relay's transfer
+  // driver used to contribute $0 here and his truck showed no payroll.
+  // Two legs on the SAME truck both count — that truck really did pay
+  // out twice.
   const payrollByAsset = useMemo(() => {
     const m = new Map<number, number>();
     if (!loadSummaries) return m;
+    const add = (id: number | undefined | null, pay: number | undefined | null) => {
+      if (id == null || !pay) return;
+      m.set(id, (m.get(id) ?? 0) + pay);
+    };
     for (const l of loadSummaries) {
-      if (l.pickupAssetId != null && l.pickupDriverPay != null) {
-        m.set(l.pickupAssetId, (m.get(l.pickupAssetId) ?? 0) + l.pickupDriverPay);
+      if (l.legs?.length) {
+        for (const leg of l.legs) add(leg.assetId, leg.driverPay);
+        continue;
       }
-      if (l.deliveryAssetId != null && l.deliveryDriverPay != null && l.deliveryAssetId !== l.pickupAssetId) {
-        m.set(l.deliveryAssetId, (m.get(l.deliveryAssetId) ?? 0) + l.deliveryDriverPay);
-      }
+      // Legacy fallback for a summary served without legs[].
+      add(l.pickupAssetId, l.pickupDriverPay);
+      if (l.deliveryAssetId !== l.pickupAssetId) add(l.deliveryAssetId, l.deliveryDriverPay);
     }
     return m;
   }, [loadSummaries]);
@@ -816,21 +831,31 @@ export default function DashboardView() {
     if (typeof window !== 'undefined') localStorage.setItem('dashboard.assetChart.showPayroll', showPayrollOverlay ? '1' : '0');
   }, [showPayrollOverlay]);
 
-  // Loaded miles per asset — pulled from loadSummaries so the
-  // numbers match the Total Loaded Miles tile exactly. Relays
-  // split: each leg credits its OWN asset (pickupAssetId gets
-  // pickupLoadedMiles, deliveryAssetId gets deliveryLoadedMiles).
-  // Single-leg loads attribute the load's miles once to avoid the
-  // duplicate-credit trap (delivery field mirrors pickup on single
-  // legs per the LoadSummary contract at packages/types/api.ts).
+  // Loaded miles per asset — pulled from loadSummaries so the numbers
+  // match the Total Loaded Miles tile exactly. Each leg credits its OWN
+  // asset with its OWN miles, so a relay's miles land on the trucks that
+  // actually drove them and sum back to the load total.
+  //
+  // Walks legs[] for the same reason payrollByAsset does: the
+  // pickup/delivery pair only describes the load's two ends, so on a
+  // 3-leg relay the middle truck's miles were being dropped from the
+  // fleet entirely — not just misattributed, but missing.
   const loadedMilesByAsset = useMemo(() => {
     const m = new Map<number, number>();
     if (!loadSummaries) return m;
-    const add = (id: number | undefined | null, mi: number | undefined) => {
+    const add = (id: number | undefined | null, mi: number | undefined | null) => {
       if (id == null || !mi) return;
       m.set(id, (m.get(id) ?? 0) + mi);
     };
     for (const l of loadSummaries) {
+      if (l.legs?.length) {
+        // Single-leg load with no per-leg miles cached yet: fall back to
+        // the load total so the truck isn't shown at zero miles.
+        if (l.legs.length === 1) add(l.legs[0].assetId, l.legs[0].loadedMiles ?? l.totalLoadedMiles);
+        else for (const leg of l.legs) add(leg.assetId, leg.loadedMiles);
+        continue;
+      }
+      // Legacy fallback for a summary served without legs[].
       if (l.pickupAssetId !== l.deliveryAssetId) {
         add(l.pickupAssetId,   l.pickupLoadedMiles);
         add(l.deliveryAssetId, l.deliveryLoadedMiles);
@@ -1775,11 +1800,12 @@ export default function DashboardView() {
                     })}
                   </div>
                   <div className="mt-3 pt-3 text-[11px] leading-relaxed" style={{ color: 'var(--gc-text-3)', borderTop: '1px solid var(--gc-border-light)' }}>
-                    Relay loads are split between the two assets in proportion
-                    to each leg&apos;s loaded miles (routed when the load has
-                    been opened in the modal, otherwise straight-line as a
-                    fallback). Each leg counts as half a load. When one leg
-                    has no geocoded stops, the split falls back to 50/50.
+                    Relay loads are split across every leg&apos;s asset in
+                    proportion to that leg&apos;s loaded miles (routed when the
+                    load has been opened in the modal, otherwise straight-line
+                    as a fallback). On a load with N legs, each leg counts as
+                    1/N of a load. When no leg has geocoded stops, the split
+                    falls back to an even 1/N each.
                   </div>
                 </>
               )}

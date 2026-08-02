@@ -217,6 +217,9 @@ export interface TimelineEvent {
   /** 'pickup' / 'transfer' / 'delivery' for relay legs (first / middle /
    *  last leg of an N-leg relay), null for whole loads. */
   relayRole:        'pickup' | 'transfer' | 'delivery' | null;
+  /** 0-based position of this leg within its load, null for whole
+   *  loads and for legacy relay rows written before leg_index. */
+  legIndex:         number | null;
   driverPay:        number | null;     // events.driver_pay
   loadedMiles:      number | null;     // events.loaded_miles (quoted)
   driverName:       string | null;
@@ -224,6 +227,11 @@ export interface TimelineEvent {
     id:             string;
     sequence:       number;
     type:           string | null;
+    /** True when this stop is a relay handoff boundary. Either the
+     *  legacy dedicated `type:'relay'` marker or any stop the
+     *  dispatcher flagged as a handoff — check both when slicing a
+     *  leg's stop window. */
+    isHandoff:      boolean | null;
     facilityName:   string | null;
     address:        string | null;
     city:           string | null;

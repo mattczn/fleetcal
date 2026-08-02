@@ -79,10 +79,14 @@ const COLUMNS: ColumnDef[] = [
   { key: 'name',           label: 'Truck',         help: 'Asset name + unit',
     align: 'left',  fmt: (a) => a.unit ? `${a.name} · #${a.unit}` : a.name,
     num: () => null, higherBetter: true },
-  { key: 'totalRevenue',   label: 'Revenue',       help: 'Sum of load prices for loads PICKED UP in this window',
+  { key: 'totalRevenue',   label: 'Revenue',       help: 'Sum of load prices for loads PICKED UP in this window. A relay load is split between the trucks that ran it, by each leg\'s share of the miles',
     align: 'right', fmt: (a) => fmtMoney(a.totalRevenue),
     num: (a) => a.totalRevenue, higherBetter: true },
-  { key: 'loadCount',      label: 'Loads',         help: 'Count of loads picked up in the window',
+  // Per-truck workload, so a relay counts as a whole load for EVERY
+  // truck on it — unlike Revenue, which the trucks split. That makes
+  // this column deliberately non-summable across rows; don't add a
+  // fleet-total footer off it without switching the server to shares.
+  { key: 'loadCount',      label: 'Loads',         help: 'Loads this truck worked in the window (each leg of a relay counts as a load for that truck)',
     align: 'right', fmt: (a) => String(a.loadCount),
     num: (a) => a.loadCount, higherBetter: true },
   { key: 'loadedMiles',    label: 'Loaded mi',     help: 'Sum of movement miles attributed to loaded driving',

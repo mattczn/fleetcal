@@ -18,6 +18,7 @@ import type { ApiErrorResponse } from "@fleetcal/types";
 
 import { supabase } from "../lib/supabase.js";
 import { loadExcludedDrivers, isExcludedEvent } from "../lib/reportExclusions.js";
+import { buildRelayShareMap } from "../lib/relayShare.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability } from "../middleware/require.js";
 
@@ -34,10 +35,17 @@ interface FleetAssetPerformance {
   unit:                 string | null;
   color:                string;
   motiveLinked:         boolean;
-  /** Revenue from loads whose pickup (event.start) falls in the window. */
+  /** Revenue from loads whose pickup (event.start) falls in the window.
+   *  Relay legs contribute only their miles-weighted share of the load
+   *  price, so the legs of one relay sum to the price exactly once
+   *  across all the trucks that ran it. */
   totalRevenue:         number;
   totalDriverPay:       number;
   netToTruck:           number;
+  /** Loads this truck ran a leg of. A relay counts as 1 for EACH truck
+   *  involved (unlike totalRevenue, which is split between them), so
+   *  this is a per-truck workload figure and not summable into a
+   *  fleet-wide load count. */
   loadCount:            number;
   /** Sum of loaded-miles credited to this asset's loads. */
   loadedMiles:          number;
@@ -156,20 +164,33 @@ fleet.get("/performance", async (c) => {
   const excluded = await loadExcludedDrivers(orgId);
   const { data: eventRows } = await sb
     .from("events")
-    .select("id, asset_id, start, \"end\", event_kind, driver_id, driver_name, driver_pay, load:loads(load_price, total_billable)")
+    .select("id, asset_id, load_id, relay_role, start, \"end\", event_kind, driver_id, driver_name, driver_pay, load:loads(load_price, total_billable)")
     .eq("org_id", orgId)
     .in("asset_id", assetIds)
     .is("deleted_at", null)
     .gte("start", fromNaive)
     .lt("start", toNaive);
   const eventsRaw = ((eventRows ?? []) as Array<{
-    id: string; asset_id: number; start: string; end: string;
+    id: string; asset_id: number; load_id: string | null;
+    relay_role: string | null;
+    start: string; end: string;
     event_kind: string | null;
     driver_id: number | null; driver_name: string | null;
     driver_pay: number | null;
     load: { load_price: number | null; total_billable: number | null } | null;
   }>);
   const events = eventsRaw.filter(e => !isExcludedEvent(excluded, e));
+
+  // Relay proration. A relay is ONE revenue load run by N trucks, so
+  // each truck may only claim its miles-weighted slice of the price —
+  // otherwise a 3-leg Vegas→SLC load shows its full price on all three
+  // trucks and the leaderboard is fiction. Same helper (and so the same
+  // 1/N fallback) as the timeline endpoints and the dashboard's
+  // revenue-by-truck chart, so the three agree to the cent.
+  //
+  // Partner legs are fetched by load_id with no date filter, so a leg
+  // that ran outside this window still counts in the denominator.
+  const relayShareByEventId = await buildRelayShareMap(orgId, events);
 
   // Build per-event maps used by movement attribution + per-asset rollup.
   const eventAssetId = new Map<string, number>();
@@ -296,8 +317,18 @@ fleet.get("/performance", async (c) => {
     // to load_price for any row predating the backfill, but the trigger
     // guarantees total_billable is populated for every row written
     // after 20260605_loads_total_billable.sql.
-    b.totalRevenue   += e.load?.total_billable ?? e.load?.load_price ?? 0;
+    //
+    // × the relay share so each truck books only the slice it hauled.
+    // Non-relay events aren't in the map and take the full price.
+    const share = relayShareByEventId.get(e.id) ?? 1;
+    b.totalRevenue   += (e.load?.total_billable ?? e.load?.load_price ?? 0) * share;
+    // driver_pay is already per-leg — the dispatcher sets it on the
+    // event, not the load. Prorating it again would halve real wages.
     b.totalDriverPay += e.driver_pay ?? 0;
+    // Deliberately a whole 1 per leg, NOT the share: this is a per-truck
+    // column ("how many loads did this truck work?"), and a truck that
+    // ran one leg worked one load. Don't sum loadCount ACROSS assets to
+    // get a fleet load total — that would count a relay once per truck.
     b.loadCount      += 1;
   }
 

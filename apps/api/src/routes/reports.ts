@@ -215,7 +215,16 @@ function eventToLeg(e: EventRow, stops: Stop[]): LegSummary {
 
 /** Pick which event of a load represents its pickup vs delivery side.
  *  A single-leg load returns the same event for both roles — the
- *  delivery side is just "where it ended up." */
+ *  delivery side is just "where it ended up."
+ *
+ *  WARNING: this keeps only the FIRST pickup and the LAST delivery, so
+ *  on a relay with 3+ legs every middle (transfer) leg is dropped. The
+ *  `pickupX` / `deliveryX` fields on LoadSummary are therefore the
+ *  load's two ENDS, not its legs: anything per-leg (driver pay, loaded
+ *  miles, asset attribution) must read `legs[]` instead. Rolling up
+ *  those two ends as if they covered the whole load is what silently
+ *  lost middle-leg pay and miles from the dashboard's per-asset
+ *  totals. */
 function partitionLegs(events: EventRow[]): { pickup: EventRow; delivery: EventRow } {
   if (events.length === 0) {
     throw new Error("load has no events");

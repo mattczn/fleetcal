@@ -260,10 +260,10 @@ export default function DriversView() {
   const rows: DriverScorecardRow[] = useMemo(() => {
     const driverById = new Map(drivers.map(d => [d.id, d]));
 
-    // Bucket loads by their pickup-leg driver. Relays have two legs;
-    // both drivers get credit for "loads delivered" (each handled
-    // one leg's worth of work). We also need a flat list of loads
-    // per driver for POD-on-time computation.
+    // Bucket loads by their pickup-leg driver. A relay runs 1..10 legs;
+    // every leg's driver gets credit for "loads delivered" (each
+    // handled one leg's worth of work). We also need a flat list of
+    // loads per driver for POD-on-time computation.
     const loadsByDriver = new Map<number, LoadSummary[]>();
     const milesByDriver = new Map<number, number>();
     for (const l of loads) {

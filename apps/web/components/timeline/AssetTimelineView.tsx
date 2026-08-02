@@ -1204,39 +1204,54 @@ function shortTime(hhmm: string): string {
   return m === 0 ? `${h12}${ampm}` : `${h12}:${String(m).padStart(2, '0')}${ampm}`;
 }
 
+/** Indexes of the handoff boundary stops in an event's merged stop
+ *  list. A boundary is either the legacy dedicated `type:'relay'`
+ *  marker stop or any stop the dispatcher flagged as a handoff — a load
+ *  can carry either kind, so both count. Boundary i sits between leg i
+ *  and leg i+1, which makes legCount = boundaries + 1. */
+function handoffIdxs(event: TimelineEvent): number[] {
+  return event.stops
+    .map((s, i) => (s.type === 'relay' || s.isHandoff ? i : -1))
+    .filter((i) => i >= 0);
+}
+
 /** Leg position (0-based index + total count) for a relay leg on the
- *  timeline wire. The timeline payload doesn't carry legIndex/legCount,
- *  but every leg carries the FULL merged stop list including the
- *  `type:'relay'` handoff markers — marker i sits between leg i and
- *  leg i+1, so legCount = markers + 1. The wire's relayRole is only
- *  'pickup' | 'delivery' (transfer legs arrive as null and render as
- *  whole loads), which pins the index to first or last. */
+ *  timeline wire. The payload carries legIndex but no legCount, so the
+ *  count comes from the handoff boundaries in the stop list. relayRole
+ *  ('pickup' | 'transfer' | 'delivery') only pins the FIRST and LAST
+ *  legs, so it's the fallback for legacy rows written before leg_index
+ *  — trusting it for a middle leg would label a transfer as the last
+ *  leg. */
 function timelineLegPos(event: TimelineEvent): { index: number; count: number } | null {
   if (!event.relayRole) return null;
-  const markers = event.stops.filter((s) => s.type === 'relay').length;
-  const count = Math.max(2, markers + 1);
-  return { index: event.relayRole === 'pickup' ? 0 : count - 1, count };
+  const markers = handoffIdxs(event).length;
+  const count = Math.max(2, markers + 1, (event.legIndex ?? 0) + 1);
+  const index = event.legIndex ?? (event.relayRole === 'pickup' ? 0 : count - 1);
+  return { index, count };
 }
 
 /** Filter an event's stops to the window belonging to its relay leg.
  *  Whole loads (no relayRole) show every stop. Every leg carries the
- *  full merged stop list with `type:'relay'` handoff markers; leg i's
- *  window runs from marker i-1 (or the first stop) through marker i
- *  (or the last stop), both boundary markers included. The wire only
- *  distinguishes first/last legs (see timelineLegPos), so: pickup =
- *  first stop → first marker, delivery = last marker → last stop.
- *  Legacy relay legs without markers fall back to the old type-based
- *  filter (pickups vs deliveries). */
+ *  FULL merged stop list with handoff boundaries in it; leg i's window
+ *  runs from boundary i-1 (or the first stop) through boundary i (or
+ *  the last stop), both boundaries included — the truck that drops the
+ *  trailer and the truck that picks it up both need to see the handoff
+ *  stop. Driven by legIndex so a middle (transfer) leg gets its own
+ *  window; without it a transfer used to render the DELIVERY leg's
+ *  stops. Legacy relay legs with no boundaries at all fall back to the
+ *  old type-based filter (pickups vs deliveries). */
 function stopsForLeg(event: TimelineEvent): TimelineEvent['stops'] {
   if (!event.relayRole) return event.stops;
   const stops = event.stops;
-  const markerIdxs = stops
-    .map((s, i) => (s.type === 'relay' ? i : -1))
-    .filter((i) => i >= 0);
+  const markerIdxs = handoffIdxs(event);
   if (markerIdxs.length > 0) {
-    return event.relayRole === 'pickup'
-      ? stops.slice(0, markerIdxs[0] + 1)
-      : stops.slice(markerIdxs[markerIdxs.length - 1]);
+    const pos = timelineLegPos(event);
+    // legIndex is authoritative; relayRole only distinguishes the two
+    // ends, so it's the fallback for pre-leg_index rows.
+    const i = pos?.index ?? (event.relayRole === 'pickup' ? 0 : markerIdxs.length);
+    const from = i === 0 ? 0 : markerIdxs[Math.min(i, markerIdxs.length) - 1];
+    const to   = i < markerIdxs.length ? markerIdxs[i] + 1 : stops.length;
+    return stops.slice(from, to);
   }
   // Legacy fallback — no relay markers on this load's stops.
   if (event.relayRole === 'pickup') {

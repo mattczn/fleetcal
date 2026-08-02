@@ -13,7 +13,7 @@
  *
  * loads_last_7_days counts revenue events with status in (delivered,
  * released, tonu) whose `end` falls in the past 7 days, dedup'd by
- * relay_group_id so a two-leg relay = 1 load. TONUs count because
+ * load_id so a relay = 1 load however many legs it has. TONUs count because
  * the broker paid a flat fee — that's revenue even though the load
  * never moved.
  *
@@ -142,25 +142,29 @@ capacity.get("/", async (c) => {
     const pastEndNaive   = `${today}T23:59`;
     const { data: pastRows } = await sb
       .from("events")
-      .select("id, relay_group_id, event_kind")
+      .select("id, load_id, event_kind")
       .eq("org_id", orgId)
       .is("deleted_at", null)
       .in("status", ["delivered", "released", "tonu"])
       .gte("end", pastStartNaive)
       .lte("end", pastEndNaive);
     const pastEvents = ((pastRows ?? []) as Array<{
-      id: string; relay_group_id: string | null; event_kind: string | null;
+      id: string; load_id: string | null; event_kind: string | null;
     }>);
 
-    const seenGroups = new Set<string>();
+    // Dedup by load_id — every leg of a relay shares one load_id, so a
+    // relay counts as one load at any leg count (1..10). Revenue events
+    // without a load_id shouldn't exist
+    // post-2.5c, but count them individually if they do.
+    const seenLoads = new Set<string>();
     let loadsLast7 = 0;
     for (const ev of pastEvents) {
       // Marketing stat: revenue legs only. Non-revenue events (maintenance,
       // OOS) still take a truck off capacity but aren't "loads delivered".
       if (ev.event_kind === "non_revenue") continue;
-      if (ev.relay_group_id) {
-        if (!seenGroups.has(ev.relay_group_id)) {
-          seenGroups.add(ev.relay_group_id);
+      if (ev.load_id) {
+        if (!seenLoads.has(ev.load_id)) {
+          seenLoads.add(ev.load_id);
           loadsLast7 += 1;
         }
       } else {

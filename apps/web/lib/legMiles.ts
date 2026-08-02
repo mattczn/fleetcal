@@ -2,7 +2,8 @@
  * Straight-line leg miles for revenue prorating on relay loads.
  *
  * The dashboard's revenue-by-asset chart needs to attribute a relay
- * load's price to BOTH legs in proportion to how far each one hauled.
+ * load's price across ALL of its legs (a relay runs 1..10) in
+ * proportion to how far each one hauled.
  * Calling Google Directions for every leg in a date range would be
  * slow and expensive; haversine is a 90%-accurate approximation that
  * runs synchronously off lat/lng we already have on each stop.
@@ -44,13 +45,18 @@ export function legMiles(event: Pick<CalendarEvent, 'stops' | 'loadedMiles'>): n
 }
 
 /**
- * Compute the share (0..1) of a relay leg's revenue. Pass the legs in
- * either order. Falls back to 0.5 when one leg has no usable miles —
- * better than crediting the whole load to one asset and unfair to the
- * driver who hauled the other half. Uses cached routed miles when
- * available and falls back to haversine on a per-leg basis.
+ * Compute the share (0..1) of a relay leg's revenue against a single
+ * partner leg. Pass the legs in either order. Falls back to 0.5 when
+ * neither leg has usable miles — better than crediting the whole load
+ * to one asset and unfair to the drivers who hauled the rest of it.
+ * Uses cached routed miles when available and falls back to haversine
+ * on a per-leg basis.
  *
- * Legacy pairwise form — prefer relayLegShareN for N-leg loads.
+ * LEGACY pairwise form, superseded by relayLegShareN: a relay runs
+ * 1..10 legs, and weighing this leg against one partner drops every
+ * other leg's miles out of the denominator. No callers remain — the
+ * dashboard and the server's timeline proration both use the N-leg
+ * form.
  */
 export function relayLegShare(thisLeg: CalendarEvent, partnerLeg: CalendarEvent): number {
   const a = legMiles(thisLeg);
@@ -82,8 +88,9 @@ export function relayLegShareN(
 /**
  * Total loaded miles for a load across ALL of its legs. For single-event
  * loads this is just the event's own loadedMiles. For relay loads it's
- * the sum across both legs (pickup + delivery), so RPM displays in
- * lists and on the load page use load-level miles rather than per-leg.
+ * the sum across every leg (pickup → any transfers → delivery), so RPM
+ * displays in lists and on the load page use load-level miles rather
+ * than per-leg.
  *
  * Pass the list of events visible in the current view (e.g. all events
  * the page already has loaded for the date range). The function only

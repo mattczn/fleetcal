@@ -37,6 +37,7 @@ import type { ApiErrorResponse } from "@fleetcal/types";
 
 import { supabase } from "../lib/supabase.js";
 import { env } from "../lib/env.js";
+import { buildRelayShareMap } from "../lib/relayShare.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability } from "../middleware/require.js";
 
@@ -219,6 +220,11 @@ interface TimelineEvent {
     id: string;
     sequence: number;
     type: string | null;
+    /** Relay handoff boundary. Set either by the legacy dedicated
+     *  `type:'relay'` marker stop or by the dispatcher flagging any
+     *  ordinary stop as a handoff. The client slices each leg's stop
+     *  window on these. */
+    isHandoff: boolean;
     facilityName: string | null;
     address: string | null;
     city: string | null;
@@ -331,13 +337,14 @@ timeline.get("/assets/:assetId", async (c) => {
   const { data: stops } = eventIds.length > 0
     ? await sb
         .from("stops")
-        .select("id, event_id, sequence, type, facility_name, address, city, state, appt_start, appt_end, lat, lng")
+        .select("id, event_id, sequence, type, is_handoff, facility_name, address, city, state, appt_start, appt_end, lat, lng")
         .in("event_id", eventIds)
         .order("sequence", { ascending: true })
     : { data: [] };
   const stopsByEvent = new Map<string, TimelineEvent["stops"]>();
   for (const s of (stops ?? []) as Array<{
     id: string; event_id: string; sequence: number; type: string | null;
+    is_handoff: boolean | null;
     facility_name: string | null; address: string | null; city: string | null; state: string | null;
     appt_start: string | null; appt_end: string | null; lat: number | null; lng: number | null;
   }>) {
@@ -346,6 +353,12 @@ timeline.get("/assets/:assetId", async (c) => {
       id:           s.id,
       sequence:     s.sequence,
       type:         s.type,
+      // Handoff boundaries come in two flavors: the original dedicated
+      // `type:'relay'` marker stop, and the newer "any stop can be a
+      // handoff" flag. The client needs BOTH to slice leg windows —
+      // without is_handoff a modern relay looks marker-less and every
+      // leg falls back to showing the whole load's stops.
+      isHandoff:    s.is_handoff ?? false,
       facilityName: s.facility_name,
       address:      s.address,
       city:         s.city,
@@ -359,49 +372,17 @@ timeline.get("/assets/:assetId", async (c) => {
   }
 
   // Build a relay-share map by fetching partner legs for any relay
-  // events in our window. The partner leg likely lives on a DIFFERENT
-  // asset (relays handed off mid-load), so it's not in the current
-  // events array — we have to ask the DB for it. We pull only what
-  // proration needs: loaded_miles + relay_role keyed by load_id.
+  // events in our window. Partner legs likely live on DIFFERENT assets
+  // (that's what a handoff is), so they're not in the current events
+  // array — the helper asks the DB for them by load_id.
   //
-  // Share formula matches the dashboard's revenueByAsset chart:
-  //   share = thisLeg.loaded_miles / Σ(all legs' loaded_miles)
-  // Falls back to 1/N if the load has no loaded_miles set — better
-  // than crediting the whole load to one leg.
-  const relayLoadIds = new Set<string>();
-  for (const e of ((events ?? []) as Array<{ load_id: string | null; relay_role: string | null }>)) {
-    if (e.relay_role && e.load_id) relayLoadIds.add(e.load_id);
-  }
-  const relayShareByEventId = new Map<string, number>();
-  if (relayLoadIds.size > 0) {
-    const { data: relayLegs, error: relayErr } = await sb
-      .from("events")
-      .select("id, load_id, relay_role, loaded_miles")
-      .eq("org_id", orgId)
-      .in("load_id", [...relayLoadIds])
-      .is("deleted_at", null);
-    if (relayErr) {
-      console.error("[GET /v1/timeline/assets/:id] relay legs:", relayErr);
-      // Non-fatal — fall through with empty share map. Per-leg revenue
-      // will read as full load price (current behavior), not zero.
-    } else {
-      const legsByLoad = new Map<string, Array<{ id: string; loaded_miles: number | null }>>();
-      for (const r of (relayLegs ?? []) as Array<{ id: string; load_id: string; loaded_miles: number | null }>) {
-        if (!legsByLoad.has(r.load_id)) legsByLoad.set(r.load_id, []);
-        legsByLoad.get(r.load_id)!.push({ id: r.id, loaded_miles: r.loaded_miles });
-      }
-      for (const [, legs] of legsByLoad) {
-        if (legs.length < 2) continue; // not a relay or data issue — skip
-        const total = legs.reduce((sum, l) => sum + (l.loaded_miles ?? 0), 0);
-        for (const leg of legs) {
-          relayShareByEventId.set(
-            leg.id,
-            total > 0 ? (leg.loaded_miles ?? 0) / total : 1 / legs.length,
-          );
-        }
-      }
-    }
-  }
+  // Shared with /v1/fleet/performance and mirroring the dashboard's
+  // revenueByAsset chart, so all three prorate identically (including
+  // the 1/N fallback when a load has no miles on any leg).
+  const relayShareByEventId = await buildRelayShareMap(
+    orgId,
+    ((events ?? []) as Array<{ id: string; load_id: string | null; relay_role: string | null }>),
+  );
 
   const eventsOut: TimelineEvent[] = ((events ?? []) as Array<{
     id: string; title: string | null; start: string; end: string;
@@ -577,10 +558,10 @@ function computeProfitability(
       // by the loads_compute_total_billable trigger. Falls back to
       // load_price for legacy rows.
       //
-      // Relay legs prorate revenue by per-leg loaded_miles so two legs
-      // don't both report the full load price (which would double-count
-      // when summed across legs). Matches the dashboard revenueByAsset
-      // chart's logic. Non-relay events get share=1.
+      // Relay legs prorate revenue by per-leg loaded_miles so no leg
+      // reports the full load price (which would multiply it by the leg
+      // count when summed across legs). Matches the dashboard
+      // revenueByAsset chart's logic. Non-relay events get share=1.
       const loadRevenue = e.totalBillable ?? e.loadPrice ?? 0;
       const share = relayShareByEventId.get(e.id) ?? 1;
       const revenue   = loadRevenue * share;
@@ -1634,35 +1615,7 @@ timeline.get("/assets/:assetId/week-summary", async (c) => {
   // relay leg's revenue is its proportional share of the load price,
   // not the full price. Without this, the week-summary's daily
   // totalRevenue double-counts every relay it touches.
-  const weekRelayShareByEventId = new Map<string, number>();
-  const weekRelayLoadIds = [...new Set(
-    eventList.filter(e => e.relay_role != null)
-             .map(e => e.load_id)
-             .filter((x): x is string => x != null)
-  )];
-  if (weekRelayLoadIds.length > 0) {
-    const { data: weekRelayLegs } = await sb
-      .from("events")
-      .select("id, load_id, loaded_miles")
-      .eq("org_id", orgId)
-      .in("load_id", weekRelayLoadIds)
-      .is("deleted_at", null);
-    const legsByLoad = new Map<string, Array<{ id: string; loaded_miles: number | null }>>();
-    for (const r of (weekRelayLegs ?? []) as Array<{ id: string; load_id: string; loaded_miles: number | null }>) {
-      if (!legsByLoad.has(r.load_id)) legsByLoad.set(r.load_id, []);
-      legsByLoad.get(r.load_id)!.push({ id: r.id, loaded_miles: r.loaded_miles });
-    }
-    for (const [, legs] of legsByLoad) {
-      if (legs.length < 2) continue;
-      const total = legs.reduce((sum, l) => sum + (l.loaded_miles ?? 0), 0);
-      for (const leg of legs) {
-        weekRelayShareByEventId.set(
-          leg.id,
-          total > 0 ? (leg.loaded_miles ?? 0) / total : 1 / legs.length,
-        );
-      }
-    }
-  }
+  const weekRelayShareByEventId = await buildRelayShareMap(orgId, eventList);
   /** event.id → its bucket dayKey (the load's start day). */
   const eventBucketDay = new Map<string, string>();
   const revenueEventIds = new Set<string>();
@@ -1803,6 +1756,15 @@ timeline.get("/assets/:assetId/week-summary", async (c) => {
   }
 
   // ── Load revenue + driver pay → load's start-day bucket ─────────
+  //
+  // loadCount counts LOADS, not legs. This endpoint is scoped to one
+  // asset, so the usual relay case (each truck runs one leg) already
+  // counts 1 per truck — but a truck that runs two legs of the SAME
+  // relay on the same day would otherwise book that load twice. Track
+  // the load ids already counted per day. (A truck running two legs of
+  // one load on DIFFERENT days still counts once per day, so the week
+  // total stays equal to the sum of its day bars.)
+  const countedLoadsByDay = new Map<string, Set<string>>();
   for (const e of eventList) {
     if (e.event_kind === "non_revenue") continue;
     const day = eventBucketDay.get(e.id);
@@ -1810,13 +1772,20 @@ timeline.get("/assets/:assetId/week-summary", async (c) => {
     const b = buckets.get(day);
     if (!b) continue;     // event outside the week (shouldn't happen given the query)
     // Total billable (linehaul + billable accessorials), prorated by
-    // relay-leg share so two legs of one relay don't both contribute
+    // relay-leg share so the legs of one relay don't each contribute
     // the full load price. driverPay is already per-leg, no prorate.
     const loadRev = e.load?.total_billable ?? e.load?.load_price ?? 0;
     const share = weekRelayShareByEventId.get(e.id) ?? 1;
     b.totalRevenue   += loadRev * share;
     b.totalDriverPay += e.driver_pay ?? 0;
-    b.loadCount      += 1;
+    if (e.load_id) {
+      let seen = countedLoadsByDay.get(day);
+      if (!seen) { seen = new Set<string>(); countedLoadsByDay.set(day, seen); }
+      if (!seen.has(e.load_id)) { seen.add(e.load_id); b.loadCount += 1; }
+    } else {
+      // Standalone revenue event with no load row — count it directly.
+      b.loadCount += 1;
+    }
   }
 
   // ── Movement miles → load's start-day OR movement's own start-day ─

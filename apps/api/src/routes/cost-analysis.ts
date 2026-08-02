@@ -20,6 +20,7 @@ import { Hono } from "hono";
 import Anthropic from "@anthropic-ai/sdk";
 import { supabase } from "../lib/supabase.js";
 import { env } from "../lib/env.js";
+import { buildRelayShareMap } from "../lib/relayShare.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability } from "../middleware/require.js";
 
@@ -54,7 +55,7 @@ TIME BUCKETS (mirror the mileage buckets, in HOURS):
 - Track hours separately from miles — a slow-moving 30 mi inner-city run can take longer than a 70 mi highway run, and that time has cost (driver wages, opportunity cost).
 
 REVENUE / COST:
-- **Revenue**: total_billable from the load — linehaul (the rate-con's flat rate) plus any billable accessorials (detention, lumper, layover, etc.). When total_billable is missing, fall back to linehaul.
+- **Revenue**: total_billable from the load — linehaul (the rate-con's flat rate) plus any billable accessorials (detention, lumper, layover, etc.). When total_billable is missing, fall back to linehaul. On a RELAY (one load handed off between trucks), the revenue shown against a leg is already that leg's miles-weighted share of the load, and the line says so — use the number as given, and never scale it back up to the full rate when judging that truck's RPM.
 - **Driver pay**: amount paid to the driver for this load (the dispatcher's actual payout — already known per load).
 - **Margin after driver**: revenue − driver_pay. This is gross-margin before fuel/maintenance/insurance.
 
@@ -260,6 +261,7 @@ costAnalysis.post("/run", requireCapability("loads.view"), async (c) => {
     .from("events")
     .select(`
       id, title, start, "end", loaded_miles, status, driver_pay, driver_name,
+      load_id, relay_role,
       load:loads(id, broker, load_price, total_billable, load_num, commodity)
     `)
     .eq("org_id", orgId)
@@ -303,6 +305,15 @@ costAnalysis.post("/run", requireCapability("loads.view"), async (c) => {
         return `M${m.id}: ${m.start_time} → ${m.end_time ?? "??"} | ${m.origin ?? "??"} → ${m.destination ?? "??"} | ${miles} | ${dur}`;
       }).join("\n");
 
+  // Relay proration. Each row here is one LEG this truck ran, so
+  // printing the whole load price against it would tell the model this
+  // truck earned the full rate for a third of the haul — and every
+  // cost-per-mile conclusion downstream would be inflated to match.
+  const relayShareByEventId = await buildRelayShareMap(
+    orgId,
+    (events ?? []) as Array<{ id: string; load_id: string | null; relay_role: string | null }>,
+  );
+
   const loadsBlock = (events ?? []).length === 0
     ? "(no loads in window)"
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -316,11 +327,19 @@ costAnalysis.post("/run", requireCapability("loads.view"), async (c) => {
               (s.appt_start ? ` (appt ${s.appt_start}${s.appt_end ? "→" + s.appt_end : ""})` : "")
             ).join("\n");
         const load = e.load as { broker?: string; load_price?: number; total_billable?: number; load_num?: string; commodity?: string } | null;
-        const revenue = load?.total_billable ?? load?.load_price ?? null;
+        const fullPrice = load?.total_billable ?? load?.load_price ?? null;
+        const share = relayShareByEventId.get(e.id) ?? 1;
+        const revenue = fullPrice != null ? fullPrice * share : null;
+        // Spell the split out rather than silently shrinking the number
+        // — the model is being asked to reason about profitability and
+        // needs to know it's seeing a leg, not the whole load.
+        const relayNote = share < 1
+          ? `  (relay leg — ${(share * 100).toFixed(0)}% of the load's $${fullPrice}; this truck ran one leg)`
+          : "";
         return [
           `L${e.id}: ${e.title ?? "(no title)"}`,
           `  Status: ${e.status ?? "??"}  |  Window: ${e.start} → ${e.end}`,
-          `  Loaded miles (quoted): ${e.loaded_miles ?? "??"}  |  Revenue: $${revenue ?? "??"}  |  Driver pay: $${e.driver_pay ?? "??"}  |  Driver: ${e.driver_name ?? "??"}`,
+          `  Loaded miles (quoted): ${e.loaded_miles ?? "??"}  |  Revenue: $${revenue?.toFixed(2) ?? "??"}${relayNote}  |  Driver pay: $${e.driver_pay ?? "??"}  |  Driver: ${e.driver_name ?? "??"}`,
           `  Broker: ${load?.broker ?? "??"}  |  Load #: ${load?.load_num ?? "??"}  |  Commodity: ${load?.commodity ?? "??"}`,
           stopsText,
         ].join("\n");
@@ -621,6 +640,7 @@ costAnalysis.post("/load", requireCapability("loads.view"), async (c) => {
     .from("events")
     .select(`
       id, title, start, "end", loaded_miles, status, driver_pay, driver_name, asset_id,
+      load_id, relay_role,
       load:loads(id, broker, load_price, total_billable, load_num, commodity)
     `)
     .eq("id", loadEventId)
@@ -726,11 +746,19 @@ costAnalysis.post("/load", requireCapability("loads.view"), async (c) => {
       ).join("\n");
 
   const load = event.load as { broker?: string; load_price?: number; total_billable?: number; load_num?: string; commodity?: string } | null;
-  const revenue = load?.total_billable ?? load?.load_price ?? null;
+  const fullPrice = load?.total_billable ?? load?.load_price ?? null;
+  // Same relay proration as the window endpoint: `event` is ONE leg, so
+  // it earns its miles-weighted share, not the load's whole rate.
+  const legShareMap = await buildRelayShareMap(orgId, [event as { id: string; load_id: string | null; relay_role: string | null }]);
+  const legShare = legShareMap.get(event.id) ?? 1;
+  const revenue = fullPrice != null ? fullPrice * legShare : null;
+  const legNote = legShare < 1
+    ? `  (relay leg — ${(legShare * 100).toFixed(0)}% of the load's $${fullPrice}; this truck ran one leg)`
+    : "";
   const loadBlock = [
     `LOAD ${event.id}: ${event.title ?? "(no title)"}`,
     `  Window: ${event.start} → ${event.end}`,
-    `  Loaded miles (quoted): ${event.loaded_miles ?? "??"}  |  Revenue: $${revenue ?? "??"}  |  Driver pay: $${event.driver_pay ?? "??"}`,
+    `  Loaded miles (quoted): ${event.loaded_miles ?? "??"}  |  Revenue: $${revenue?.toFixed(2) ?? "??"}${legNote}  |  Driver pay: $${event.driver_pay ?? "??"}`,
     `  Broker: ${load?.broker ?? "??"}  |  Load #: ${load?.load_num ?? "??"}  |  Commodity: ${load?.commodity ?? "??"}`,
     stopsText,
   ].join("\n");

@@ -18,7 +18,7 @@ type Tab = {
 };
 
 const TABS: ReadonlyArray<Tab> = [
-  { Icon: ArrowLeftRight, tab: 'Relay Loads', kicker: 'Relay & split', title: 'Split a load across two trucks.', desc: 'Split a load into two events across two trucks, with a yard or relay point in the middle. Each leg gets its own driver, equipment, and stops.', color: '#6941c6', light: '#f3e8fd' },
+  { Icon: ArrowLeftRight, tab: 'Relay Loads', kicker: 'Relay & split', title: 'Split a load across your trucks.', desc: 'Break a load into as many legs as the lane needs, with a yard or relay point at every handoff. Each leg gets its own driver, equipment, and stops.', color: '#6941c6', light: '#f3e8fd' },
   { Icon: Plus, tab: 'Accessorials', kicker: 'Accessorials → pay', title: 'Accessorials flow to driver pay.', desc: 'Add detention, lumper, fuel advances, and more right in the load editor. Track each one and pay the amount straight to the driver.', color: '#1e8e3e', light: '#e6f4ea' },
   { Icon: History, tab: 'Load History', kicker: 'Load history', title: 'Track every change to a load.', desc: 'Every upload, status change, and billing move is timestamped on the load. Scroll the full audit trail without leaving the event.', color: '#5f6368', light: '#eef1f4' },
   { Icon: Wrench, tab: 'Non-revenue events', kicker: 'Non-revenue events', title: 'Maintenance and non-revenue.', desc: 'Block maintenance, trailer moves, deadhead, and inspections on the board. A striped event marks a truck as busy but not revenue.', color: '#1a73e8', light: '#e8f0fe' },

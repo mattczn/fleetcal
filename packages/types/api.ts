@@ -90,8 +90,8 @@ export interface CreateLoadRequest {
 
 /**
  * Response: the joined view, one Load entry per event. Single-event load
- * returns one entry; relay load returns two with the same loadId and
- * internalLoadId.
+ * returns one entry; an N-leg relay returns N entries (in leg order) all
+ * sharing the same loadId and internalLoadId.
  */
 export interface CreateLoadResponse {
   loads: Load[];
