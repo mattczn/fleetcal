@@ -22,7 +22,7 @@
  *    invoice for the missing row just stays open.
  */
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   X, Upload, Check, AlertTriangle, Loader2, FileText, HelpCircle,
 } from 'lucide-react';
@@ -50,6 +50,34 @@ async function toBase64(file: File): Promise<string> {
   return btoa(bin);
 }
 
+/** Minimal RFC4180 reader — quoted fields, escaped quotes, embedded commas
+ *  and newlines. Enough to render a remittance CSV faithfully; this is for
+ *  DISPLAY only, so the operator can see the source. Nothing downstream
+ *  depends on it. */
+function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = '';
+  let quoted = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quoted) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') { cell += '"'; i++; }
+        else quoted = false;
+      } else cell += ch;
+      continue;
+    }
+    if (ch === '"')       { quoted = true; }
+    else if (ch === ',')  { row.push(cell); cell = ''; }
+    else if (ch === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; }
+    else if (ch !== '\r') { cell += ch; }
+  }
+  if (cell.length || row.length) { row.push(cell); rows.push(row); }
+  return rows.filter(r => r.some(c => c.trim() !== ''));
+}
+
 export default function ApplyPaymentPanel({ customers, onClose, onSaved }: ApplyPaymentPanelProps) {
   const [file,    setFile]    = useState<File | null>(null);
   const [parsed,  setParsed]  = useState<ParsePaymentResponse | null>(null);
@@ -59,6 +87,36 @@ export default function ApplyPaymentPanel({ customers, onClose, onSaved }: Apply
   const [phase,   setPhase]   = useState<'idle' | 'reading' | 'applying'>('idle');
   const [err,     setErr]     = useState<string | null>(null);
   const [done,    setDone]    = useState(0);
+
+  // The source document, shown beside the extraction. Confirming what the
+  // system read is meaningless without being able to see what it read FROM
+  // — otherwise "review" is just assent.
+  const [hoverRow, setHoverRow] = useState<number | null>(null);
+
+  // Derived, not stored: setting state synchronously inside an effect causes
+  // the cascading re-render React 19 warns about. The URL is computed from
+  // the file, and the effect exists only to revoke it.
+  const docUrl = useMemo(() => {
+    if (!file) return null;
+    const isPdf = /\.pdf$/i.test(file.name) || file.type === 'application/pdf';
+    return isPdf ? URL.createObjectURL(file) : null;
+  }, [file]);
+  useEffect(() => {
+    if (!docUrl) return;
+    return () => URL.revokeObjectURL(docUrl);
+  }, [docUrl]);
+
+  // Text has to be read asynchronously, so it must be state — but it is
+  // stored WITH the file it came from, so a slow read for a replaced file
+  // can never paint under the new one.
+  const [textFor, setTextFor] = useState<{ file: File; text: string } | null>(null);
+  useEffect(() => {
+    if (!file || docUrl) return;          // PDFs render from the object URL
+    let alive = true;
+    void file.text().then(t => { if (alive) setTextFor({ file, text: t }); });
+    return () => { alive = false; };
+  }, [file, docUrl]);
+  const docText = textFor && textFor.file === file ? textFor.text : null;
 
   const run = useCallback(async (f: File, forCustomer: string | null) => {
     setBusy(true); setPhase('reading'); setErr(null);
@@ -149,8 +207,11 @@ export default function ApplyPaymentPanel({ customers, onClose, onSaved }: Apply
     <>
       <div className="fixed inset-0" style={{ zIndex: 60, background: 'rgba(0,0,0,.35)' }}
            onClick={busy ? undefined : onClose} />
+      {/* Widens once there's a document to show. Starting wide would put a
+          large empty pane in front of someone who hasn't uploaded yet. */}
       <aside className="fixed top-0 right-0 h-full flex flex-col" style={{
-        zIndex: 61, width: 620, maxWidth: '100vw',
+        zIndex: 61, width: file ? 'min(1180px, 100vw)' : 620, maxWidth: '100vw',
+        transition: 'width .18s ease',
         background: 'var(--gc-surface)', borderLeft: '1px solid var(--gc-border)',
         boxShadow: '0 0 32px rgba(0,0,0,.18)',
       }}>
@@ -173,7 +234,24 @@ export default function ApplyPaymentPanel({ customers, onClose, onSaved }: Apply
           </button>
         </div>
 
-        <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4">
+        <div className="flex-1 min-h-0 flex">
+        {/* ── left: the source document, verbatim ── */}
+        {file && (
+          <div className="min-w-0 overflow-hidden flex flex-col"
+               style={{ flex: '1 1 52%', borderRight: '1px solid var(--gc-border)' }}>
+            <div className="shrink-0 px-4 py-2 text-[11px] font-semibold uppercase tracking-wide"
+                 style={{ color: 'var(--gc-text-3)', borderBottom: '1px solid var(--gc-border-light)' }}>
+              What the document says
+            </div>
+            <DocumentPane
+              text={docText} url={docUrl} filename={file.name}
+              hoverRow={hoverRow} onHoverRow={setHoverRow}
+            />
+          </div>
+        )}
+
+        {/* ── right: what we read out of it ── */}
+        <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4" style={{ flex: '1 1 48%' }}>
           {/* ── upload ── */}
           <SectionLabel>Document</SectionLabel>
           <label className="flex items-center gap-2.5 rounded-lg border px-3 py-2.5 mb-3 cursor-pointer"
@@ -270,6 +348,8 @@ export default function ApplyPaymentPanel({ customers, onClose, onSaved }: Apply
                   <LineRow key={l.rowIndex} line={l}
                            included={!!l.invoiceId && !skip.has(l.rowIndex)}
                            disabled={busy || !l.invoiceId}
+                           hovered={hoverRow === l.rowIndex}
+                           onHover={setHoverRow}
                            onToggle={() => setSkip(s => {
                              const n = new Set(s);
                              if (n.has(l.rowIndex)) n.delete(l.rowIndex);
@@ -293,6 +373,7 @@ export default function ApplyPaymentPanel({ customers, onClose, onSaved }: Apply
               {parsed.doc.unparsedRows.length} row(s) couldn&apos;t be read and were skipped.
             </div>
           ) : null}
+        </div>
         </div>
 
         {/* footer */}
@@ -328,15 +409,96 @@ export default function ApplyPaymentPanel({ customers, onClose, onSaved }: Apply
 
 // ── bits ──────────────────────────────────────────────────────────────
 
-function LineRow({ line, included, disabled, onToggle }: {
+/** The source document rendered as-is. PDFs go to the browser's own viewer;
+ *  CSVs become a table so rows line up with the extracted lines beside them.
+ *  Display only — nothing here feeds the matcher. */
+function DocumentPane({ text, url, filename, hoverRow, onHoverRow }: {
+  text: string | null; url: string | null; filename: string;
+  hoverRow: number | null; onHoverRow: (r: number | null) => void;
+}) {
+  const isCsv = /\.csv$/i.test(filename);
+  const rows  = useMemo(() => (text && isCsv ? parseCsv(text) : null), [text, isCsv]);
+
+  // Whether row 0 is a header, so a CSV row can be tied to an extracted
+  // line. Heuristic: a header has no cell that looks like a number.
+  // Highlighting is a convenience — if it's wrong the document is still
+  // shown correctly, which is the point of this pane.
+  const headerOffset = useMemo(() => {
+    if (!rows?.length) return 0;
+    return rows[0].some(c => /^-?[\d,]+(\.\d+)?$/.test(c.trim()) && c.trim() !== '') ? 0 : 1;
+  }, [rows]);
+
+  if (url) {
+    return <iframe src={url} title={filename} className="flex-1 min-h-0 w-full" style={{ border: 0 }} />;
+  }
+  if (!text) {
+    return (
+      <div className="flex-1 flex items-center justify-center text-xs" style={{ color: 'var(--gc-text-3)' }}>
+        <Loader2 size={13} className="animate-spin mr-1.5" /> Loading…
+      </div>
+    );
+  }
+  if (rows?.length) {
+    return (
+      <div className="flex-1 min-h-0 overflow-auto">
+        <table className="w-full" style={{ borderCollapse: 'collapse', fontSize: 11 }}>
+          <tbody>
+            {rows.map((r, i) => {
+              const dataRow  = i - headerOffset;
+              const isHeader = i < headerOffset;
+              const lit      = !isHeader && hoverRow === dataRow;
+              return (
+                <tr key={i}
+                    onMouseEnter={() => !isHeader && onHoverRow(dataRow)}
+                    onMouseLeave={() => onHoverRow(null)}
+                    style={{ background: lit ? 'var(--gc-blue-bg, #e8f0fe)' : 'transparent' }}>
+                  <td className="px-1.5 py-1 tabular-nums select-none"
+                      style={{ color: 'var(--gc-text-3)', borderBottom: '1px solid var(--gc-border-light)',
+                               width: 26, textAlign: 'right' }}>
+                    {isHeader ? '' : dataRow + 1}
+                  </td>
+                  {r.map((c, j) => (
+                    <td key={j} className="px-1.5 py-1"
+                        style={{
+                          borderBottom: '1px solid var(--gc-border-light)',
+                          color: isHeader ? 'var(--gc-text-3)' : 'var(--gc-text-1)',
+                          fontWeight: isHeader ? 700 : 400,
+                          whiteSpace: 'nowrap',
+                        }}>
+                      {c}
+                    </td>
+                  ))}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+  return (
+    <div className="flex-1 min-h-0 overflow-auto px-3 py-2">
+      <pre className="whitespace-pre-wrap" style={{ fontSize: 11, color: 'var(--gc-text-1)', margin: 0 }}>
+        {text}
+      </pre>
+    </div>
+  );
+}
+
+function LineRow({ line, included, disabled, onToggle, hovered, onHover }: {
   line: ParsedPaymentLine; included: boolean; disabled: boolean; onToggle: () => void;
+  hovered: boolean; onHover: (r: number | null) => void;
 }) {
   const matched = !!line.invoiceId;
   return (
     <div className="flex items-center gap-2 px-2.5 py-2"
+         onMouseEnter={() => onHover(line.rowIndex)}
+         onMouseLeave={() => onHover(null)}
          style={{
            borderBottom: '1px solid var(--gc-border-light)',
-           background: included ? 'var(--gc-blue-bg, #e8f0fe)' : 'transparent',
+           background: hovered ? 'var(--gc-blue-bg, #e8f0fe)'
+                     : included ? 'var(--gc-blue-bg, #e8f0fe)' : 'transparent',
+           boxShadow: hovered ? 'inset 2px 0 0 #1a73e8' : undefined,
            opacity: matched ? 1 : 0.72,
          }}>
       <input type="checkbox" checked={included} disabled={disabled} onChange={onToggle} />
