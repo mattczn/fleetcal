@@ -1574,7 +1574,16 @@ export interface ParsedPaymentLine {
   invoicePaid:        number | null;
   invoiceStatus:      string | null;
   invoiceCustomerId:  string | null;
+  customerName:       string | null;
   loadNum:            string | null;
+  internalLoadId:     string | null;
+  /** Pickup leg title + date, so a line reads like the Receivables table. */
+  title:              string | null;
+  pickupAt:           string | null;
+  issuedAt:           string | null;
+  dueAt:              string | null;
+  /** Days past due; negative or null means not yet due. */
+  agingDays:          number | null;
   matchedBy:          PaymentMatchedBy;
   confidence:         number;
   /** Every form that was looked up, so the reviewer can see what was tried. */

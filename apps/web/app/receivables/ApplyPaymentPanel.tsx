@@ -20,17 +20,46 @@
  *    missed, and applying the rows that did parse is the failure mode
  *    nobody catches later: the allocations that land look perfect and the
  *    invoice for the missing row just stays open.
+ *
+ * Visual language is deliberately the Receivables ledger's own, at close
+ * range: the same aging tints, the same tabular figures, the same chip
+ * vocabulary. A payment screen that invented its own look would make the
+ * operator re-learn what red means at the exact moment they are confirming
+ * money movement.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  X, Upload, Check, AlertTriangle, Loader2, FileText, HelpCircle, ExternalLink,
+  X, Check, AlertTriangle, Loader2, FileText, HelpCircle, ExternalLink,
+  UploadCloud, Building2, Truck, CircleAlert,
 } from 'lucide-react';
 import { railway } from '@/lib/railway';
 import type { ParsePaymentResponse, ParsedPaymentLine } from '@fleetcal/types';
 
+// ── shared vocabulary with the ledger ─────────────────────────────────
+// Same tints the bucket tiles and invoice rows use, so "amber" and "red"
+// keep meaning exactly what they mean on the page behind this modal.
+const GREEN = '#188038', GREEN_BG = '#e6f4ea';
+const AMBER = '#b06000', AMBER_BG = '#fef7e0';
+const RED   = '#c5221f', RED_BG   = '#fce8e6';
+const BLUE  = '#1a73e8', BLUE_BG  = '#e8f0fe';
+
 const money2 = (n: number) =>
   n.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 });
+const money0 = (n: number) =>
+  n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+
+/** Matches the ledger's Age column: not-yet-due is quiet, 1–30 amber, 31+ red. */
+const ageColor = (d: number | null | undefined) =>
+  d === null || d === undefined || d <= 0 ? 'var(--gc-text-3)' : d <= 30 ? AMBER : RED;
+
+const shortDate = (iso: string | null | undefined) => {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return isNaN(d.getTime())
+    ? null
+    : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+};
 
 export interface ApplyPaymentPanelProps {
   customers: { id: string; name: string }[];
@@ -87,6 +116,8 @@ export default function ApplyPaymentPanel({ customers, onClose, onSaved }: Apply
   const [phase,   setPhase]   = useState<'idle' | 'reading' | 'applying'>('idle');
   const [err,     setErr]     = useState<string | null>(null);
   const [done,    setDone]    = useState(0);
+  const [dragOver, setDragOver] = useState(false);
+  const inputRef = useRef<HTMLInputElement | null>(null);
 
   /** Links a row in the source document to its extracted line, both ways. */
   const [hoverRow, setHoverRow] = useState<number | null>(null);
@@ -100,10 +131,10 @@ export default function ApplyPaymentPanel({ customers, onClose, onSaved }: Apply
   // the file, and the effect exists only to revoke it.
   const isPdf   = !!file && (/\.pdf$/i.test(file.name) || file.type === 'application/pdf');
   const isImage = !!file && (/\.(png|jpe?g|gif|webp)$/i.test(file.name) || file.type.startsWith('image/'));
-  // Both render from an object URL rather than from text.
+  const isPage  = isPdf || isImage;          // rendered documents need room
   const docUrl = useMemo(
-    () => (file && (isPdf || isImage) ? URL.createObjectURL(file) : null),
-    [file, isPdf, isImage],
+    () => (file && isPage ? URL.createObjectURL(file) : null),
+    [file, isPage],
   );
   useEffect(() => {
     if (!docUrl) return;
@@ -154,6 +185,12 @@ export default function ApplyPaymentPanel({ customers, onClose, onSaved }: Apply
     }
   }, []);
 
+  const accept = useCallback((f: File | null) => {
+    if (!f) return;
+    setFile(f); setParsed(null); setErr(null);
+    void run(f, customerId || null);
+  }, [run, customerId]);
+
   // Memoized: `parsed?.lines ?? []` allocates a fresh array every render,
   // which would invalidate every downstream useMemo on each pass.
   const lines    = useMemo(() => parsed?.lines ?? [], [parsed]);
@@ -168,6 +205,9 @@ export default function ApplyPaymentPanel({ customers, onClose, onSaved }: Apply
 
   const totalsFailed = parsed?.totals ? !parsed.totals.ok : false;
   const canApply = !!parsed?.isRemittance && !totalsFailed && included.length > 0 && !busy;
+  const doc = parsed?.doc ?? null;
+  const chosenCustomer = customers.find(c => c.id === customerId) ?? null;
+  const inferred = !!parsed?.inferredCustomerId && parsed.inferredCustomerId === customerId;
 
   async function handleApply() {
     if (!parsed?.doc || !canApply) return;
@@ -217,39 +257,62 @@ export default function ApplyPaymentPanel({ customers, onClose, onSaved }: Apply
 
   return (
     // Centered modal, matching the review queue and load modal so the app's
-    // focused work surfaces read as one system: neutral 0.36 backdrop, 14px
-    // radius, --shadow-3, no border. Smaller than the review queue — this is
-    // one document, not a paperwork station.
+    // focused work surfaces read as one system.
     <div className="fixed inset-0 flex items-center justify-center p-4"
          style={{ background: 'rgba(0,0,0,0.36)', zIndex: 60 }}
          onMouseDown={e => { if (!busy && e.target === e.currentTarget) onClose(); }}>
-      {/* Grows once there's a document to show. Starting wide would put a
-          large empty pane in front of someone who hasn't uploaded yet. */}
-      {/* A PDF is a rendered page — it needs real width and height to stay
-          legible. A CSV is a table and reads fine in less. */}
       <div className="flex flex-col overflow-hidden" style={{
-        width:     !file ? 'min(96vw, 560px)'
-                 : (isPdf || isImage) ? 'min(97vw, 1400px)' : 'min(96vw, 1120px)',
+        width:     !file ? 'min(96vw, 520px)'
+                 : isPage ? 'min(97vw, 1400px)' : 'min(96vw, 1120px)',
         height:    !file ? undefined
-                 : (isPdf || isImage) ? 'min(94vh, 980px)'  : 'min(88vh, 800px)',
+                 : isPage ? 'min(94vh, 980px)'  : 'min(88vh, 800px)',
         maxHeight: '94vh',
         transition: 'width .18s ease',
         borderRadius: 14,
         background:   'var(--gc-surface)',
         boxShadow:    'var(--shadow-3)',
       }}>
-        {/* header */}
-        <div className="shrink-0 px-5 pt-4 pb-3 flex items-start justify-between gap-3"
+
+        {/* ── header: the payment itself, stated once, large ── */}
+        <div className="shrink-0 flex items-start justify-between gap-4 px-5 pt-4 pb-3"
              style={{ borderBottom: '1px solid var(--gc-border)' }}>
           <div className="min-w-0">
-            <div className="text-[15px] font-semibold truncate" style={{ color: 'var(--gc-text-1)' }}>
-              Apply a payment
-            </div>
-            <div className="text-xs mt-0.5 truncate" style={{ color: 'var(--gc-text-3)' }}>
-              {parsed?.doc
-                ? `${parsed.doc.payerNameAsPrinted || 'Unknown payer'} · ${parsed.doc.paymentDate} · ${money2(parsed.doc.paymentTotal)}`
-                : 'Upload a remittance and confirm what it pays'}
-            </div>
+            {doc ? (
+              <>
+                <div className="text-[11px] font-semibold uppercase tracking-wide"
+                     style={{ color: 'var(--gc-text-3)' }}>
+                  Payment received
+                </div>
+                <div className="flex items-baseline gap-2.5 mt-0.5 flex-wrap">
+                  {/* The number they came here to check. Sized like the
+                      bucket tiles on the page behind. */}
+                  <span className="tabular-nums" style={{
+                    fontSize: 26, fontWeight: 700, letterSpacing: '-0.02em',
+                    color: 'var(--gc-text-1)', lineHeight: 1.1,
+                  }}>
+                    {money2(doc.paymentTotal)}
+                  </span>
+                  <span className="text-[13px] font-semibold truncate"
+                        style={{ color: 'var(--gc-text-2)' }}>
+                    {doc.payerNameAsPrinted || 'Unknown payer'}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                  <MetaChip>{shortDate(doc.paymentDate) ?? doc.paymentDate}</MetaChip>
+                  {doc.externalId && <MetaChip mono>{doc.externalId}</MetaChip>}
+                  <MetaChip>{lines.length} row{lines.length === 1 ? '' : 's'}</MetaChip>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="text-[15px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+                  Apply a payment
+                </div>
+                <div className="text-xs mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
+                  Upload a remittance and confirm what it pays
+                </div>
+              </>
+            )}
           </div>
           <button onClick={onClose} disabled={busy} className="p-1 rounded shrink-0"
                   style={{ color: 'var(--gc-text-3)' }} aria-label="Close">
@@ -258,193 +321,304 @@ export default function ApplyPaymentPanel({ customers, onClose, onSaved }: Apply
         </div>
 
         <div className="flex-1 min-h-0 flex">
-        {/* ── left: the source document, verbatim ── */}
-        {file && (
-          <div className="min-w-0 overflow-hidden flex flex-col"
-               style={{ flex: (isPdf || isImage) ? '1 1 64%' : '1 1 52%',
-                        borderRight: '1px solid var(--gc-border)' }}>
-            <div className="shrink-0 px-4 py-2 flex items-center justify-between gap-2"
-                 style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
-              <span className="text-[11px] font-semibold uppercase tracking-wide"
-                    style={{ color: 'var(--gc-text-3)' }}>
-                What the document says
-              </span>
-              {docUrl && (
-                // Escape hatch: a dense multi-page settlement is easier to
-                // read at full window size than in half a modal.
-                <a href={docUrl} target="_blank" rel="noreferrer"
-                   className="text-[11px] font-semibold inline-flex items-center gap-1"
-                   style={{ color: '#1a73e8' }}>
-                  Open full size <ExternalLink size={11} />
-                </a>
-              )}
-            </div>
-            <DocumentPane
-              text={docText} url={docUrl} filename={file.name} isImage={isImage}
-              hoverRow={hoverRow} onHoverRow={setHoverRow}
-            />
-          </div>
-        )}
-
-        {/* ── right: what we read out of it ── */}
-        <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4" style={{ flex: '1 1 48%' }}>
-          {/* ── upload ── */}
-          <SectionLabel>Document</SectionLabel>
-          <label className="flex items-center gap-2.5 rounded-lg border px-3 py-2.5 mb-3 cursor-pointer"
-                 style={{ borderColor: 'var(--gc-border)', borderStyle: file ? 'solid' : 'dashed' }}>
-            {file ? <FileText size={15} style={{ color: '#1a73e8' }} />
-                  : <Upload size={15} style={{ color: 'var(--gc-text-3)' }} />}
-            <span className="flex-1 min-w-0 text-xs truncate"
-                  style={{ color: file ? 'var(--gc-text-1)' : 'var(--gc-text-3)' }}>
-              {file ? file.name : 'Choose a PDF, image, CSV, or text file…'}
-            </span>
-            <input type="file"
-                   accept=".pdf,.csv,.txt,.eml,.png,.jpg,.jpeg,.gif,.webp,application/pdf,text/csv,text/plain,image/*"
-                   className="hidden" disabled={busy}
-                   onChange={e => {
-                     const f = e.target.files?.[0] ?? null;
-                     setFile(f); setParsed(null); setErr(null);
-                     if (f) void run(f, customerId || null);
-                   }} />
-          </label>
-
-          <Field label="Customer">
-            <select value={customerId} disabled={busy} style={inputStyle}
-                    onChange={e => {
-                      const v = e.target.value;
-                      setCustomerId(v);
-                      // Re-read scoped to the customer: narrowing the search
-                      // resolves references that are ambiguous org-wide.
-                      if (file) void run(file, v || null);
-                    }}>
-              <option value="">Let the document decide</option>
-              {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
-          </Field>
-
-          {busy && phase === 'reading' && (
-            <div className="flex items-center gap-2 text-xs mt-3" style={{ color: 'var(--gc-text-3)' }}>
-              <Loader2 size={13} className="animate-spin" /> Reading the document…
-            </div>
-          )}
-
-          {err && (
-            <div className="rounded-lg border p-3 my-3 text-xs"
-                 style={{ borderColor: '#ef4444', background: '#fef2f2', color: '#991b1b' }}>
-              {err}
-            </div>
-          )}
-
-          {/* ── not a remittance ── */}
-          {parsed && !parsed.isRemittance && (
-            <div className="rounded-lg border p-3 mt-3 text-xs flex gap-2"
-                 style={{ borderColor: '#f59e0b', background: '#fffbeb', color: '#92400e' }}>
-              <HelpCircle size={14} className="shrink-0 mt-px" />
-              <span>
-                <strong>This doesn&apos;t look like a remittance.</strong>
-                <span className="block mt-1">{parsed.reason}</span>
-              </span>
-            </div>
-          )}
-
-          {/* ── totals invariant ── */}
-          {parsed?.totals && (
-            <div className="rounded-lg border p-3 mt-3 text-xs flex gap-2"
-                 style={parsed.totals.ok
-                   ? { borderColor: 'var(--gc-border)', color: 'var(--gc-text-2)' }
-                   : { borderColor: '#ef4444', background: '#fef2f2', color: '#991b1b' }}>
-              {parsed.totals.ok
-                ? <Check size={14} className="shrink-0 mt-px" style={{ color: '#188038' }} />
-                : <AlertTriangle size={14} className="shrink-0 mt-px" />}
-              <span>
-                {parsed.totals.ok ? (
-                  <>The {lines.length} rows add up to the {money2(parsed.totals.declared)} printed on the document.</>
-                ) : (
-                  <>
-                    <strong>Rows don&apos;t match the document total.</strong>
-                    <span className="block mt-1">
-                      Rows add to {money2(parsed.totals.lineSum)} but the document says{' '}
-                      {money2(parsed.totals.declared)} — a difference of {money2(Math.abs(parsed.totals.drift))}.
-                      A row was probably misread, so this can&apos;t be applied as-is.
-                    </span>
-                  </>
+          {/* ── left: the source document, verbatim ── */}
+          {file && (
+            <div className="min-w-0 overflow-hidden flex flex-col"
+                 style={{ flex: isPage ? '1 1 62%' : '1 1 50%',
+                          borderRight: '1px solid var(--gc-border)',
+                          background: 'var(--gc-bg)' }}>
+              <div className="shrink-0 px-4 py-2 flex items-center justify-between gap-2"
+                   style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
+                <span className="text-[11px] font-semibold uppercase tracking-wide truncate"
+                      style={{ color: 'var(--gc-text-3)' }}>
+                  {file.name}
+                </span>
+                {docUrl && (
+                  // Escape hatch: a dense multi-page settlement is easier to
+                  // read at full window size than in half a modal.
+                  <a href={docUrl} target="_blank" rel="noreferrer"
+                     className="text-[11px] font-semibold inline-flex items-center gap-1 shrink-0"
+                     style={{ color: BLUE }}>
+                    Open full size <ExternalLink size={11} />
+                  </a>
                 )}
-              </span>
+              </div>
+              <DocumentPane
+                text={docText} url={docUrl} filename={file.name} isImage={isImage}
+                hoverRow={hoverRow} onHoverRow={setHoverRow}
+              />
             </div>
           )}
 
-          {/* ── matched lines ── */}
-          {parsed?.isRemittance && lines.length > 0 && (
-            <>
-              <div style={{ height: 14 }} />
-              <SectionLabel>
-                What this pays · {parsed.summary?.matched ?? 0} of {lines.length} matched
-              </SectionLabel>
-              <div className="rounded-lg border overflow-hidden mb-2" style={{ borderColor: 'var(--gc-border)' }}>
-                {lines.map(l => (
-                  <LineRow key={l.rowIndex} line={l}
-                           included={!!l.invoiceId && !skip.has(l.rowIndex)}
-                           disabled={busy || !l.invoiceId}
-                           hovered={hoverRow === l.rowIndex}
-                           onHover={setHoverRow}
-                           onToggle={() => setSkip(s => {
-                             const n = new Set(s);
-                             if (n.has(l.rowIndex)) n.delete(l.rowIndex);
-                             else n.add(l.rowIndex);
-                             return n;
-                           })} />
-                ))}
-              </div>
-              {(parsed.summary?.unmatched ?? 0) > 0 && (
-                <div className="text-[11px] mb-2" style={{ color: 'var(--gc-text-3)' }}>
-                  Unmatched rows aren&apos;t applied. The payment is still recorded in full,
-                  so the remainder stays visible as unapplied evidence.
+          {/* ── right: what we read out of it ── */}
+          <div className="flex-1 min-h-0 overflow-y-auto" style={{ flex: '1 1 auto' }}>
+            <div className="px-5 py-4">
+
+              {/* ── upload ── */}
+              {!file ? (
+                <div
+                  onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+                  onDragLeave={() => setDragOver(false)}
+                  onDrop={e => {
+                    e.preventDefault(); setDragOver(false);
+                    accept(e.dataTransfer.files?.[0] ?? null);
+                  }}
+                  onClick={() => inputRef.current?.click()}
+                  className="flex flex-col items-center justify-center text-center cursor-pointer"
+                  style={{
+                    padding: '34px 20px',
+                    borderRadius: 12,
+                    border: `1.5px dashed ${dragOver ? BLUE : 'var(--gc-border)'}`,
+                    background: dragOver ? BLUE_BG : 'var(--gc-bg)',
+                    transition: 'background .12s ease, border-color .12s ease',
+                  }}>
+                  <div className="flex items-center justify-center rounded-full mb-3"
+                       style={{ width: 44, height: 44, background: dragOver ? '#fff' : BLUE_BG }}>
+                    <UploadCloud size={21} style={{ color: BLUE }} />
+                  </div>
+                  <div className="text-[13.5px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+                    Drop a remittance here
+                  </div>
+                  <div className="text-xs mt-1" style={{ color: 'var(--gc-text-3)' }}>
+                    or <span style={{ color: BLUE, fontWeight: 600 }}>browse your files</span>
+                  </div>
+                  <div className="flex items-center gap-1 mt-3 flex-wrap justify-center">
+                    {['PDF', 'Screenshot', 'CSV', 'Email'].map(t => (
+                      <span key={t} className="text-[10px] font-semibold px-1.5 py-0.5 rounded"
+                            style={{ background: 'var(--gc-surface)', color: 'var(--gc-text-3)',
+                                     border: '1px solid var(--gc-border)' }}>
+                        {t}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <button onClick={() => inputRef.current?.click()} disabled={busy}
+                        className="w-full flex items-center gap-2.5 rounded-lg border px-3 py-2 mb-3 text-left"
+                        style={{ borderColor: 'var(--gc-border)', background: 'var(--gc-surface)' }}>
+                  <FileText size={14} style={{ color: BLUE }} className="shrink-0" />
+                  <span className="flex-1 min-w-0 text-xs truncate" style={{ color: 'var(--gc-text-1)' }}>
+                    {file.name}
+                  </span>
+                  <span className="text-[11px] font-semibold shrink-0" style={{ color: BLUE }}>
+                    Replace
+                  </span>
+                </button>
+              )}
+              <input ref={inputRef} type="file" className="hidden" disabled={busy}
+                     accept=".pdf,.csv,.txt,.eml,.png,.jpg,.jpeg,.gif,.webp,application/pdf,text/csv,text/plain,image/*"
+                     onChange={e => accept(e.target.files?.[0] ?? null)} />
+
+              {busy && phase === 'reading' && (
+                <div className="flex items-center gap-2 text-xs mt-3" style={{ color: 'var(--gc-text-3)' }}>
+                  <Loader2 size={13} className="animate-spin" /> Reading the document…
                 </div>
               )}
-            </>
-          )}
 
-          {parsed?.doc?.unparsedRows?.length ? (
-            <div className="rounded-lg border p-3 text-xs mt-2"
-                 style={{ borderColor: '#f59e0b', background: '#fffbeb', color: '#92400e' }}>
-              {parsed.doc.unparsedRows.length} row(s) couldn&apos;t be read and were skipped.
+              {err && (
+                <div className="rounded-lg border p-3 my-3 text-xs flex gap-2"
+                     style={{ borderColor: RED, background: RED_BG, color: '#991b1b' }}>
+                  <CircleAlert size={14} className="shrink-0 mt-px" />
+                  <span>{err}</span>
+                </div>
+              )}
+
+              {/* ── who this is being applied to ── */}
+              {(file || customerId) && (
+                <div className="rounded-lg border mt-3" style={{
+                  borderColor: chosenCustomer ? (inferred ? GREEN : BLUE) : 'var(--gc-border)',
+                  background:  chosenCustomer ? (inferred ? GREEN_BG : BLUE_BG) : 'var(--gc-surface)',
+                }}>
+                  <div className="px-3 pt-2.5 pb-1 flex items-center gap-1.5">
+                    <Building2 size={12} style={{ color: chosenCustomer ? (inferred ? GREEN : BLUE) : 'var(--gc-text-3)' }} />
+                    <span className="text-[11px] font-semibold uppercase tracking-wide"
+                          style={{ color: chosenCustomer ? (inferred ? GREEN : BLUE) : 'var(--gc-text-3)' }}>
+                      {chosenCustomer ? 'Applying to' : 'Which customer?'}
+                    </span>
+                    {inferred && (
+                      <span className="text-[10px] font-semibold inline-flex items-center gap-0.5 ml-auto"
+                            style={{ color: GREEN }}>
+                        <Check size={10} /> matched from the document
+                      </span>
+                    )}
+                  </div>
+                  {/* Deliberately loud: applying a payment to the wrong
+                      customer is the one mistake here that is tedious to
+                      unwind, so the name is stated at size before the
+                      dropdown that can change it. */}
+                  {chosenCustomer && (
+                    <div className="px-3 text-[15px] font-bold truncate"
+                         style={{ color: 'var(--gc-text-1)' }}>
+                      {chosenCustomer.name}
+                    </div>
+                  )}
+                  <div className="px-3 pb-2.5 pt-1.5">
+                    <select value={customerId} disabled={busy} style={inputStyle}
+                            onChange={e => {
+                              const v = e.target.value;
+                              setCustomerId(v);
+                              // Re-read scoped to the customer: narrowing the
+                              // search resolves references ambiguous org-wide.
+                              if (file) void run(file, v || null);
+                            }}>
+                      <option value="">Let the document decide</option>
+                      {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </select>
+                  </div>
+                </div>
+              )}
+
+              {/* ── not a remittance ── */}
+              {parsed && !parsed.isRemittance && (
+                <div className="rounded-lg border p-3 mt-3 text-xs flex gap-2"
+                     style={{ borderColor: AMBER, background: AMBER_BG, color: '#92400e' }}>
+                  <HelpCircle size={14} className="shrink-0 mt-px" />
+                  <span>
+                    <strong>This doesn&apos;t look like a remittance.</strong>
+                    <span className="block mt-1">{parsed.reason}</span>
+                  </span>
+                </div>
+              )}
+
+              {/* ── totals invariant ── */}
+              {parsed?.totals && (
+                <div className="rounded-lg border p-3 mt-3 text-xs flex gap-2"
+                     style={parsed.totals.ok
+                       ? { borderColor: 'var(--gc-border)', color: 'var(--gc-text-2)' }
+                       : { borderColor: RED, background: RED_BG, color: '#991b1b' }}>
+                  {parsed.totals.ok
+                    ? <Check size={14} className="shrink-0 mt-px" style={{ color: GREEN }} />
+                    : <AlertTriangle size={14} className="shrink-0 mt-px" />}
+                  <span>
+                    {parsed.totals.ok ? (
+                      <>Every row adds up to the {money2(parsed.totals.declared)} printed on the document.</>
+                    ) : (
+                      <>
+                        <strong>Rows don&apos;t match the document total.</strong>
+                        <span className="block mt-1">
+                          Rows add to {money2(parsed.totals.lineSum)} but the document says{' '}
+                          {money2(parsed.totals.declared)} — a difference of{' '}
+                          {money2(Math.abs(parsed.totals.drift))}. A row was probably misread,
+                          so this can&apos;t be applied as-is.
+                        </span>
+                      </>
+                    )}
+                  </span>
+                </div>
+              )}
+
+              {/* ── matched lines ── */}
+              {parsed?.isRemittance && lines.length > 0 && (
+                <>
+                  <div className="flex items-baseline justify-between mt-4 mb-1.5">
+                    <span className="text-[11px] font-semibold uppercase tracking-wide"
+                          style={{ color: 'var(--gc-text-3)' }}>
+                      What this pays
+                    </span>
+                    <span className="text-[11px] font-semibold"
+                          style={{ color: (parsed.summary?.unmatched ?? 0) > 0 ? AMBER : GREEN }}>
+                      {parsed.summary?.matched ?? 0} of {lines.length} matched
+                    </span>
+                  </div>
+                  <div className="rounded-lg border overflow-hidden mb-2"
+                       style={{ borderColor: 'var(--gc-border)' }}>
+                    {lines.map(l => (
+                      <LineRow key={l.rowIndex} line={l}
+                               included={!!l.invoiceId && !skip.has(l.rowIndex)}
+                               disabled={busy || !l.invoiceId}
+                               hovered={hoverRow === l.rowIndex}
+                               onHover={setHoverRow}
+                               onToggle={() => setSkip(s => {
+                                 const n = new Set(s);
+                                 if (n.has(l.rowIndex)) n.delete(l.rowIndex);
+                                 else n.add(l.rowIndex);
+                                 return n;
+                               })} />
+                    ))}
+                  </div>
+                  {(parsed.summary?.unmatched ?? 0) > 0 && (
+                    <div className="text-[11px] mb-2" style={{ color: 'var(--gc-text-3)' }}>
+                      Unmatched rows aren&apos;t applied. The payment is still recorded in full,
+                      so the remainder stays visible as unapplied evidence.
+                    </div>
+                  )}
+                </>
+              )}
+
+              {parsed?.doc?.unparsedRows?.length ? (
+                <div className="rounded-lg border p-3 text-xs mt-2"
+                     style={{ borderColor: AMBER, background: AMBER_BG, color: '#92400e' }}>
+                  {parsed.doc.unparsedRows.length} row(s) couldn&apos;t be read and were skipped.
+                </div>
+              ) : null}
             </div>
-          ) : null}
-        </div>
+          </div>
         </div>
 
-        {/* footer */}
-        <div className="shrink-0 px-5 py-3 flex items-center justify-end gap-2"
-             style={{ borderTop: '1px solid var(--gc-border)' }}>
-          {busy && phase === 'applying' && (
-            <span className="text-[11px] mr-auto" style={{ color: 'var(--gc-text-3)' }}>
-              {done} of {included.length} recorded…
-            </span>
-          )}
-          <button onClick={onClose} disabled={busy}
-                  className="text-xs font-semibold px-3 py-1.5 rounded border"
-                  style={{ borderColor: 'var(--gc-border)', color: 'var(--gc-text-2)' }}>
-            Cancel
-          </button>
-          <button onClick={() => { void handleApply(); }} disabled={!canApply}
-                  className="text-xs font-semibold px-3 py-1.5 rounded inline-flex items-center gap-1.5"
-                  style={{
-                    background: canApply ? '#1a73e8' : 'var(--gc-border)',
-                    color: canApply ? '#fff' : 'var(--gc-text-3)',
-                    cursor: canApply ? 'pointer' : 'default',
-                  }}>
-            {busy && phase === 'applying' && <Loader2 size={12} className="animate-spin" />}
-            {included.length
-              ? <>Apply to {included.length} invoice{included.length === 1 ? '' : 's'} · {money2(includedTotal)}</>
-              : 'Apply'}
-          </button>
-        </div>
+        {/* ── footer ── */}
+        {(file || parsed) && (
+          <div className="shrink-0 px-5 py-3 flex items-center gap-3"
+               style={{ borderTop: '1px solid var(--gc-border)' }}>
+            <div className="min-w-0 mr-auto">
+              {busy && phase === 'applying' ? (
+                <span className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
+                  {done} of {included.length} recorded…
+                </span>
+              ) : doc && included.length > 0 ? (
+                <>
+                  <div className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>Applying</div>
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="tabular-nums" style={{
+                      fontSize: 16, fontWeight: 700, color: 'var(--gc-text-1)', lineHeight: 1.2,
+                    }}>
+                      {money2(includedTotal)}
+                    </span>
+                    {Math.abs(includedTotal - doc.paymentTotal) > 0.005 && (
+                      <span className="text-[11px]" style={{ color: AMBER }}>
+                        of {money0(doc.paymentTotal)} · {money0(doc.paymentTotal - includedTotal)} left over
+                      </span>
+                    )}
+                  </div>
+                </>
+              ) : null}
+            </div>
+            <button onClick={onClose} disabled={busy}
+                    className="text-xs font-semibold px-3 py-1.5 rounded border shrink-0"
+                    style={{ borderColor: 'var(--gc-border)', color: 'var(--gc-text-2)' }}>
+              Cancel
+            </button>
+            <button onClick={() => { void handleApply(); }} disabled={!canApply}
+                    className="text-xs font-semibold px-3.5 py-2 rounded inline-flex items-center gap-1.5 shrink-0"
+                    style={{
+                      background: canApply ? BLUE : 'var(--gc-border)',
+                      color: canApply ? '#fff' : 'var(--gc-text-3)',
+                      cursor: canApply ? 'pointer' : 'default',
+                    }}>
+              {busy && phase === 'applying' && <Loader2 size={12} className="animate-spin" />}
+              {included.length
+                ? <>Apply to {included.length} invoice{included.length === 1 ? '' : 's'}</>
+                : 'Apply'}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
 // ── bits ──────────────────────────────────────────────────────────────
+
+function MetaChip({ children, mono }: { children: React.ReactNode; mono?: boolean }) {
+  return (
+    <span className="text-[10.5px] px-1.5 py-0.5 rounded" style={{
+      background: 'var(--gc-bg)', color: 'var(--gc-text-3)',
+      border: '1px solid var(--gc-border-light)',
+      fontFamily: mono ? 'ui-monospace, SFMono-Regular, Menlo, monospace' : undefined,
+    }}>
+      {children}
+    </span>
+  );
+}
 
 /** The source document rendered as-is. PDFs go to the browser's own viewer;
  *  CSVs become a table so rows line up with the extracted lines beside them.
@@ -470,7 +644,7 @@ function DocumentPane({ text, url, filename, isImage, hoverRow, onHoverRow }: {
     // a payment screen is often tall and narrow, and shrinking it to the pane
     // is exactly what makes the amounts unreadable.
     return (
-      <div className="flex-1 min-h-0 overflow-auto" style={{ background: 'var(--gc-bg)' }}>
+      <div className="flex-1 min-h-0 overflow-auto">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={url} alt={filename} style={{ display: 'block', width: '100%', height: 'auto' }} />
       </div>
@@ -506,7 +680,7 @@ function DocumentPane({ text, url, filename, isImage, hoverRow, onHoverRow }: {
                 <tr key={i}
                     onMouseEnter={() => !isHeader && onHoverRow(dataRow)}
                     onMouseLeave={() => onHoverRow(null)}
-                    style={{ background: lit ? 'var(--gc-blue-bg, #e8f0fe)' : 'transparent' }}>
+                    style={{ background: lit ? BLUE_BG : isHeader ? 'var(--gc-surface)' : 'transparent' }}>
                   <td className="px-1.5 py-1 tabular-nums select-none"
                       style={{ color: 'var(--gc-text-3)', borderBottom: '1px solid var(--gc-border-light)',
                                width: 26, textAlign: 'right' }}>
@@ -540,52 +714,94 @@ function DocumentPane({ text, url, filename, isImage, hoverRow, onHoverRow }: {
   );
 }
 
+/**
+ * Two lines per row, mirroring the ledger's own invoice rows: the money
+ * facts on top, the freight underneath. The load context matters because an
+ * invoice number alone is not recognisable — "Load 61934, Salt Lake → Reno,
+ * picked up Jul 1" is what tells the operator this is the right load.
+ */
 function LineRow({ line, included, disabled, onToggle, hovered, onHover }: {
   line: ParsedPaymentLine; included: boolean; disabled: boolean; onToggle: () => void;
   hovered: boolean; onHover: (r: number | null) => void;
 }) {
   const matched = !!line.invoiceId;
+  const age     = line.agingDays;
+  const short   = matched && line.invoiceTotal != null
+    && Math.abs(line.invoiceTotal - line.amount) > 0.005;
+
   return (
-    <div className="flex items-center gap-2 px-2.5 py-2"
+    <div className="flex items-start gap-2.5 px-2.5 py-2"
          onMouseEnter={() => onHover(line.rowIndex)}
          onMouseLeave={() => onHover(null)}
          style={{
            borderBottom: '1px solid var(--gc-border-light)',
-           background: hovered ? 'var(--gc-blue-bg, #e8f0fe)'
-                     : included ? 'var(--gc-blue-bg, #e8f0fe)' : 'transparent',
-           boxShadow: hovered ? 'inset 2px 0 0 #1a73e8' : undefined,
-           opacity: matched ? 1 : 0.72,
+           background: hovered ? BLUE_BG : included ? 'rgba(26,115,232,.055)' : 'transparent',
+           boxShadow: hovered ? `inset 2px 0 0 ${BLUE}` : undefined,
          }}>
-      <input type="checkbox" checked={included} disabled={disabled} onChange={onToggle} />
+      <input type="checkbox" checked={included} disabled={disabled} onChange={onToggle}
+             className="mt-0.5 shrink-0" />
 
       <span className="flex-1 min-w-0">
-        <span className="block text-xs font-semibold truncate" style={{ color: 'var(--gc-text-1)' }}>
+        {/* money line */}
+        <span className="flex items-baseline gap-1.5">
+          {matched ? (
+            <span className="text-[13px] font-bold" style={{ color: BLUE }}>
+              #{line.invoiceNumber}
+            </span>
+          ) : (
+            <span className="text-[12.5px] font-bold" style={{ color: AMBER }}>
+              No match
+            </span>
+          )}
+          {age !== null && age !== undefined && age > 0 && (
+            <span className="text-[10.5px] font-bold tabular-nums" style={{ color: ageColor(age) }}>
+              {age}d
+            </span>
+          )}
+          <span className="flex-1" />
+          <span className="text-[13px] font-bold tabular-nums shrink-0"
+                style={{ color: 'var(--gc-text-1)' }}>
+            {money2(line.amount)}
+          </span>
+        </span>
+
+        {/* freight line — what makes an invoice number recognisable */}
+        <span className="block text-[11px] truncate mt-0.5" style={{ color: 'var(--gc-text-2)' }}>
           {matched ? (
             <>
-              <span style={{ color: '#1967d2' }}>#{line.invoiceNumber}</span>
-              {line.loadNum ? <span style={{ color: 'var(--gc-text-3)' }}> · Load {line.loadNum}</span> : null}
+              {line.loadNum && (
+                <span className="inline-flex items-center gap-1 mr-1.5" style={{ color: 'var(--gc-text-3)' }}>
+                  <Truck size={10} /> {line.loadNum}
+                </span>
+              )}
+              {line.title ?? <span style={{ color: 'var(--gc-text-3)' }}>No load title</span>}
+              {shortDate(line.pickupAt) && (
+                <span style={{ color: 'var(--gc-text-3)' }}> · picked up {shortDate(line.pickupAt)}</span>
+              )}
             </>
+          ) : line.ambiguous?.length ? (
+            <span style={{ color: AMBER }}>{line.ambiguous.length} possible invoices — pick one manually</span>
           ) : (
-            <span style={{ color: '#b45309' }}>No match</span>
+            <span style={{ color: 'var(--gc-text-3)' }}>Nothing in the ledger matches this reference</span>
           )}
         </span>
-        {/* The printed reference, verbatim — so the reviewer can eyeball it
-            against the document rather than trusting a normalized form. */}
-        <span className="block text-[11px] truncate" style={{ color: 'var(--gc-text-3)' }}>
-          {line.referenceAsPrinted
-            ? <>ref <code>{line.referenceAsPrinted}</code></>
-            : 'no reference printed'}
-          {matched && line.invoiceTotal != null && Math.abs(line.invoiceTotal - line.amount) > 0.005
-            ? <> · invoice {money2(line.invoiceTotal)}
-                {line.deductionLabel ? ` · ${line.deductionLabel}` : ' · short-paid'}</>
-            : null}
-          {!matched && line.ambiguous?.length ? ` · ${line.ambiguous.length} possible invoices` : null}
+
+        {/* provenance — the printed reference, verbatim, plus any variance */}
+        <span className="block text-[10.5px] mt-1 truncate" style={{ color: 'var(--gc-text-3)' }}>
+          {line.referenceAsPrinted ? (
+            <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
+              {line.referenceAsPrinted}
+            </span>
+          ) : 'no reference printed'}
+          {short && (
+            <span style={{ color: AMBER }}>
+              {' · '}invoice {money2(line.invoiceTotal!)}
+              {line.deductionLabel ? ` · ${line.deductionLabel}` : ' · short-paid'}
+            </span>
+          )}
         </span>
       </span>
 
-      <span className="text-xs tabular-nums shrink-0" style={{ color: 'var(--gc-text-1)', fontWeight: 600 }}>
-        {money2(line.amount)}
-      </span>
       <ConfidenceChip line={line} />
     </div>
   );
@@ -603,9 +819,9 @@ function ConfidenceChip({ line }: { line: ParsedPaymentLine }) {
     line.matchedBy === 'processor_ref'    ? 'processor' : '—';
   const strong = line.confidence >= 90;
   return (
-    <span className="text-[10px] px-1.5 py-0.5 rounded shrink-0" style={{
-      background: !line.invoiceId ? 'transparent' : strong ? '#e6f4ea' : '#fef7e0',
-      color:      !line.invoiceId ? 'var(--gc-text-3)' : strong ? '#188038' : '#b45309',
+    <span className="text-[10px] px-1.5 py-0.5 rounded shrink-0 mt-0.5" style={{
+      background: !line.invoiceId ? 'transparent' : strong ? GREEN_BG : AMBER_BG,
+      color:      !line.invoiceId ? 'var(--gc-text-3)' : strong ? GREEN : AMBER,
       border:     `1px solid ${!line.invoiceId ? 'var(--gc-border)' : 'transparent'}`,
       whiteSpace: 'nowrap',
     }} title={line.note ?? `matched by ${line.matchedBy}, confidence ${line.confidence}`}>
@@ -619,21 +835,3 @@ const inputStyle: React.CSSProperties = {
   border: '1px solid var(--gc-border)', background: 'var(--gc-surface)',
   color: 'var(--gc-text-1)',
 };
-
-function SectionLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="text-[11px] font-semibold uppercase tracking-wide mb-1.5"
-         style={{ color: 'var(--gc-text-3)' }}>
-      {children}
-    </div>
-  );
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="block mb-2">
-      <span className="block text-[11px] mb-1" style={{ color: 'var(--gc-text-3)' }}>{label}</span>
-      {children}
-    </label>
-  );
-}

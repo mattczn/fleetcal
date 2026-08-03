@@ -1203,17 +1203,24 @@ payments.post("/parse", async (c) => {
   const invIds = [...new Set(lines.map((l) => l.invoiceId).filter(Boolean))] as string[];
   const invById = new Map<string, Record<string, unknown>>();
   if (invIds.length) {
+    // Same columns the Receivables table reads, so a matched line can show
+    // the load and its age exactly as the operator already sees them there.
     const { data: rows } = await supabase
       .from("invoices")
-      .select("id,invoice_number,total,status,customer_id,paid_amount,loads(load_num,internal_load_id)")
+      .select(RECEIVABLE_INVOICE_COLS + ",paid_amount")
       .eq("org_id", orgId)
       .in("id", invIds);
     for (const r of (rows ?? []) as Array<{ id: string }>) invById.set(r.id, r);
   }
 
+  const today = Date.now();
   const out = lines.map((l) => {
     const inv = l.invoiceId ? invById.get(l.invoiceId) : null;
-    const load = (inv?.loads ?? null) as { load_num?: string | number | null } | null;
+    const load = (inv?.loads ?? null) as {
+      load_num?: string | number | null; internal_load_id?: string | number | null;
+    } | null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const leg = inv ? pickupLeg(inv as any) : null;
     return {
       rowIndex:           l.line.rowIndex,
       referenceAsPrinted: l.line.referenceAsPrinted,
@@ -1226,7 +1233,14 @@ payments.post("/parse", async (c) => {
       invoicePaid:        inv ? Number(inv.paid_amount ?? 0) : null,
       invoiceStatus:      inv ? String(inv.status ?? "") : null,
       invoiceCustomerId:  inv ? (inv.customer_id as string | null) : null,
+      customerName:       inv ? ((inv.customers as { name?: string } | null)?.name ?? null) : null,
       loadNum:            load?.load_num != null ? String(load.load_num) : null,
+      internalLoadId:     load?.internal_load_id != null ? String(load.internal_load_id) : null,
+      title:              leg?.title ?? null,
+      pickupAt:           leg?.start ?? null,
+      issuedAt:           inv ? (inv.issued_at as string | null) : null,
+      dueAt:              inv ? ((inv.due_at as string | null) ?? null) : null,
+      agingDays:          inv ? daysPastDue((inv.due_at as string | null) ?? null, today) : null,
       matchedBy:          l.matchedBy,
       confidence:         l.confidence,
       candidates:         l.candidates,
