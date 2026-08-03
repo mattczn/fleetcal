@@ -24,7 +24,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  X, Upload, Check, AlertTriangle, Loader2, FileText, HelpCircle,
+  X, Upload, Check, AlertTriangle, Loader2, FileText, HelpCircle, ExternalLink,
 } from 'lucide-react';
 import { railway } from '@/lib/railway';
 import type { ParsePaymentResponse, ParsedPaymentLine } from '@fleetcal/types';
@@ -88,19 +88,21 @@ export default function ApplyPaymentPanel({ customers, onClose, onSaved }: Apply
   const [err,     setErr]     = useState<string | null>(null);
   const [done,    setDone]    = useState(0);
 
-  // The source document, shown beside the extraction. Confirming what the
-  // system read is meaningless without being able to see what it read FROM
-  // — otherwise "review" is just assent.
+  /** Links a row in the source document to its extracted line, both ways. */
   const [hoverRow, setHoverRow] = useState<number | null>(null);
 
+  // The source document is shown beside the extraction because confirming
+  // what the system read is meaningless without seeing what it read FROM —
+  // otherwise "review" is just assent.
+  //
   // Derived, not stored: setting state synchronously inside an effect causes
   // the cascading re-render React 19 warns about. The URL is computed from
   // the file, and the effect exists only to revoke it.
-  const docUrl = useMemo(() => {
-    if (!file) return null;
-    const isPdf = /\.pdf$/i.test(file.name) || file.type === 'application/pdf';
-    return isPdf ? URL.createObjectURL(file) : null;
-  }, [file]);
+  const isPdf = !!file && (/\.pdf$/i.test(file.name) || file.type === 'application/pdf');
+  const docUrl = useMemo(
+    () => (file && isPdf ? URL.createObjectURL(file) : null),
+    [file, isPdf],
+  );
   useEffect(() => {
     if (!docUrl) return;
     return () => URL.revokeObjectURL(docUrl);
@@ -221,10 +223,14 @@ export default function ApplyPaymentPanel({ customers, onClose, onSaved }: Apply
          onMouseDown={e => { if (!busy && e.target === e.currentTarget) onClose(); }}>
       {/* Grows once there's a document to show. Starting wide would put a
           large empty pane in front of someone who hasn't uploaded yet. */}
+      {/* A PDF is a rendered page — it needs real width and height to stay
+          legible. A CSV is a table and reads fine in less. */}
       <div className="flex flex-col overflow-hidden" style={{
-        width:     file ? 'min(96vw, 1120px)' : 'min(96vw, 560px)',
-        height:    file ? 'min(88vh, 800px)'  : undefined,
-        maxHeight: '88vh',
+        width:     !file ? 'min(96vw, 560px)'
+                 : isPdf ? 'min(97vw, 1400px)' : 'min(96vw, 1120px)',
+        height:    !file ? undefined
+                 : isPdf ? 'min(94vh, 980px)'  : 'min(88vh, 800px)',
+        maxHeight: '94vh',
         transition: 'width .18s ease',
         borderRadius: 14,
         background:   'var(--gc-surface)',
@@ -253,10 +259,23 @@ export default function ApplyPaymentPanel({ customers, onClose, onSaved }: Apply
         {/* ── left: the source document, verbatim ── */}
         {file && (
           <div className="min-w-0 overflow-hidden flex flex-col"
-               style={{ flex: '1 1 52%', borderRight: '1px solid var(--gc-border)' }}>
-            <div className="shrink-0 px-4 py-2 text-[11px] font-semibold uppercase tracking-wide"
-                 style={{ color: 'var(--gc-text-3)', borderBottom: '1px solid var(--gc-border-light)' }}>
-              What the document says
+               style={{ flex: isPdf ? '1 1 64%' : '1 1 52%',
+                        borderRight: '1px solid var(--gc-border)' }}>
+            <div className="shrink-0 px-4 py-2 flex items-center justify-between gap-2"
+                 style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
+              <span className="text-[11px] font-semibold uppercase tracking-wide"
+                    style={{ color: 'var(--gc-text-3)' }}>
+                What the document says
+              </span>
+              {docUrl && (
+                // Escape hatch: a dense multi-page settlement is easier to
+                // read at full window size than in half a modal.
+                <a href={docUrl} target="_blank" rel="noreferrer"
+                   className="text-[11px] font-semibold inline-flex items-center gap-1"
+                   style={{ color: '#1a73e8' }}>
+                  Open full size <ExternalLink size={11} />
+                </a>
+              )}
             </div>
             <DocumentPane
               text={docText} url={docUrl} filename={file.name}
@@ -444,7 +463,14 @@ function DocumentPane({ text, url, filename, hoverRow, onHoverRow }: {
   }, [rows]);
 
   if (url) {
-    return <iframe src={url} title={filename} className="flex-1 min-h-0 w-full" style={{ border: 0 }} />;
+    // navpanes=0 drops the thumbnail rail (~210px of the pane), toolbar=0
+    // drops the zoom/print bar, and view=FitH makes the page fill the width
+    // it just reclaimed. Without these the browser opens at ~39% zoom with
+    // half the pane spent on chrome, which is unreadable.
+    return (
+      <iframe src={`${url}#toolbar=0&navpanes=0&statusbar=0&view=FitH`}
+              title={filename} className="flex-1 min-h-0 w-full" style={{ border: 0 }} />
+    );
   }
   if (!text) {
     return (
