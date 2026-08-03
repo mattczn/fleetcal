@@ -118,6 +118,14 @@ export default function ApplyPaymentPanel({ customers, onClose, onSaved }: Apply
   }, [file, docUrl]);
   const docText = textFor && textFor.file === file ? textFor.text : null;
 
+  // Esc closes, except mid-write — losing the modal while allocations are
+  // being posted would hide which ones landed.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !busy) onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [busy, onClose]);
+
   const run = useCallback(async (f: File, forCustomer: string | null) => {
     setBusy(true); setPhase('reading'); setErr(null);
     try {
@@ -204,16 +212,23 @@ export default function ApplyPaymentPanel({ customers, onClose, onSaved }: Apply
   }
 
   return (
-    <>
-      <div className="fixed inset-0" style={{ zIndex: 60, background: 'rgba(0,0,0,.35)' }}
-           onClick={busy ? undefined : onClose} />
-      {/* Widens once there's a document to show. Starting wide would put a
+    // Centered modal, matching the review queue and load modal so the app's
+    // focused work surfaces read as one system: neutral 0.36 backdrop, 14px
+    // radius, --shadow-3, no border. Smaller than the review queue — this is
+    // one document, not a paperwork station.
+    <div className="fixed inset-0 flex items-center justify-center p-4"
+         style={{ background: 'rgba(0,0,0,0.36)', zIndex: 60 }}
+         onMouseDown={e => { if (!busy && e.target === e.currentTarget) onClose(); }}>
+      {/* Grows once there's a document to show. Starting wide would put a
           large empty pane in front of someone who hasn't uploaded yet. */}
-      <aside className="fixed top-0 right-0 h-full flex flex-col" style={{
-        zIndex: 61, width: file ? 'min(1180px, 100vw)' : 620, maxWidth: '100vw',
+      <div className="flex flex-col overflow-hidden" style={{
+        width:     file ? 'min(96vw, 1120px)' : 'min(96vw, 560px)',
+        height:    file ? 'min(88vh, 800px)'  : undefined,
+        maxHeight: '88vh',
         transition: 'width .18s ease',
-        background: 'var(--gc-surface)', borderLeft: '1px solid var(--gc-border)',
-        boxShadow: '0 0 32px rgba(0,0,0,.18)',
+        borderRadius: 14,
+        background:   'var(--gc-surface)',
+        boxShadow:    'var(--shadow-3)',
       }}>
         {/* header */}
         <div className="shrink-0 px-5 pt-4 pb-3 flex items-start justify-between gap-3"
@@ -389,7 +404,7 @@ export default function ApplyPaymentPanel({ customers, onClose, onSaved }: Apply
                   style={{ borderColor: 'var(--gc-border)', color: 'var(--gc-text-2)' }}>
             Cancel
           </button>
-          <button onClick={() => void handleApply()} disabled={!canApply}
+          <button onClick={() => { void handleApply(); }} disabled={!canApply}
                   className="text-xs font-semibold px-3 py-1.5 rounded inline-flex items-center gap-1.5"
                   style={{
                     background: canApply ? '#1a73e8' : 'var(--gc-border)',
@@ -402,8 +417,8 @@ export default function ApplyPaymentPanel({ customers, onClose, onSaved }: Apply
               : 'Apply'}
           </button>
         </div>
-      </aside>
-    </>
+      </div>
+    </div>
   );
 }
 
