@@ -38,6 +38,7 @@ import payrollRoute from "./routes/payroll.js";
 import driverScoringRoute from "./routes/driver-scoring.js";
 import driverSafetyScoringRoute from "./routes/driver-safety-scoring.js";
 import performanceEventsRoute from "./routes/performance-events.js";
+import motiveLocationsRoute   from "./routes/motive-locations.js";
 import orgSettingsRoute from "./routes/org-settings.js";
 import invoicesRoute from "./routes/invoices.js";
 import paymentsRoute from "./routes/payments.js";
@@ -235,6 +236,7 @@ authed.route("/payroll", payrollRoute);
 authed.route("/driver-scoring", driverScoringRoute);
 authed.route("/driver-safety-scoring", driverSafetyScoringRoute);
 authed.route("/performance-events", performanceEventsRoute);
+authed.route("/motive/locations",   motiveLocationsRoute);
 authed.route("/org-settings", orgSettingsRoute);
 authed.route("/invoices", invoicesRoute);
 // Receivables: payment evidence + the AR read model. Allocation writes
