@@ -30,6 +30,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import type {
   ContentBlockParam,
   DocumentBlockParam,
+  ImageBlockParam,
   TextBlockParam,
 } from "@anthropic-ai/sdk/resources/messages";
 import { env } from "./env.js";
@@ -48,8 +49,10 @@ const EXTRACT_MODEL = "claude-opus-5";
 export interface ExtractInput {
   /** How the document arrived. Drives block type only, not prompt content. */
   kind:      RemittanceSource;
-  /** Base64 for `pdf`; UTF-8 text for `csv` / `spreadsheet` / `email_body`. */
+  /** Base64 for `pdf` and `image`; UTF-8 text for the rest. */
   data:      string;
+  /** Required for `image` — the model needs the real media type. */
+  mediaType?: string | null;
   filename?: string | null;
   /** Email sender / subject, when there is one. Context for the payer name,
    *  never used to select a code path. */
@@ -182,7 +185,15 @@ If it IS a remittance, transcribe it. Follow these rules exactly:
    handled by a human; a guessed row corrupts the books.
 
 8. Dates are YYYY-MM-DD. Amounts are plain numbers — no currency symbols,
-   no thousands separators.`;
+   no thousands separators.
+
+9. If the document is a screenshot or photo, read the table exactly as laid
+   out on screen. Keep each visual row intact — the column a number sits in
+   is what gives it meaning, so never pair an amount with a reference from a
+   different row. If the image is cut off, blurred, or a row is partly
+   obscured, put that row in unparsedRows instead of inferring it. A payment
+   total that is visible but whose rows are not fully readable should still
+   be reported, with the unreadable rows listed.`;
 
 function buildPrompt(input: ExtractInput, ctx: ExtractContext): string {
   const parts = [BASE_PROMPT];
@@ -256,6 +267,23 @@ export async function extractRemittance(
       source: { type: "base64", media_type: "application/pdf", data: input.data },
     };
     content.push(doc);
+  } else if (input.kind === "image") {
+    // Screenshots of a payment screen are common — some payers send nothing
+    // else. Read natively rather than through an OCR service: OCR would
+    // return a flat character soup and lose the table structure that tells
+    // us which amount belongs to which reference, which is the entire point.
+    const media = (input.mediaType ?? "").toLowerCase();
+    const supported = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+    const image: ImageBlockParam = {
+      type:   "image",
+      source: {
+        type: "base64",
+        media_type: (supported.includes(media) ? media : "image/png") as
+          "image/jpeg" | "image/png" | "image/gif" | "image/webp",
+        data: input.data,
+      },
+    };
+    content.push(image);
   } else {
     // CSV / spreadsheet text / email body all read the same way: as text.
     // Fenced so the model can see exactly where the document begins and ends.

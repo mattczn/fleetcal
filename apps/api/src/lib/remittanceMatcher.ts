@@ -77,6 +77,7 @@ const supabase = supabaseTyped as any;
  */
 export type RemittanceSource =
   | "pdf"
+  | "image"          // a screenshot or photo of a payment screen
   | "csv"
   | "spreadsheet"
   | "email_body"
@@ -227,13 +228,32 @@ export function referenceCandidates(raw: string | null, rules: RefRule[] = []): 
     }
   }
 
-  // Generic fallbacks that are safe for every vendor: the numeric core, and
-  // the zero-stripped form. Both are additive, so they can only add hits.
+  // Generic fallbacks, safe for every vendor because candidates only ever
+  // ADD: a useless one simply matches nothing, and one that collides with a
+  // real invoice produces `ambiguous` (a review item) rather than a wrong
+  // allocation. See resolveLines.
   const digits = cur.replace(/\D/g, "");
   if (digits.length >= 4) {
     push(digits);
     push(digits.replace(/^0+(?=\d)/, ""));
   }
+
+  // Compound references are common: payers routinely concatenate their own
+  // identifier with ours, e.g. "A-92641B-13541" where 13541 is our invoice
+  // number. Offer each delimited segment, and the numeric run at either end.
+  for (const seg of cur.split(/[-_/|\s]+/)) {
+    const t = seg.trim();
+    if (t.length >= 3) {
+      push(t);
+      const d = t.replace(/\D/g, "");
+      if (d.length >= 3) push(d);
+    }
+  }
+  const tail = /(\d{3,})\s*$/.exec(cur);
+  if (tail) push(tail[1]);
+  const head = /^\s*(\d{3,})/.exec(cur);
+  if (head) push(head[1]);
+
   return out;
 }
 

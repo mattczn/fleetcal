@@ -1112,10 +1112,23 @@ function mondayOf(d: Date): string {
 function mediumFor(filename: string, mimeType: string): RemittanceSource | null {
   const ext = (filename.split(".").pop() ?? "").toLowerCase();
   if (ext === "pdf"  || mimeType === "application/pdf")  return "pdf";
+  if (["png", "jpg", "jpeg", "gif", "webp"].includes(ext) || mimeType.startsWith("image/")) {
+    return "image";
+  }
   if (ext === "csv"  || mimeType === "text/csv")         return "csv";
   if (ext === "txt"  || ext === "eml" || mimeType.startsWith("text/")) return "email_body";
   if (ext === "xlsx" || ext === "xls") return "spreadsheet";
   return null;
+}
+
+/** Claude accepts these four; anything else has to be converted first. */
+function imageMediaType(filename: string, mimeType: string): string {
+  const ext = (filename.split(".").pop() ?? "").toLowerCase();
+  if (mimeType.startsWith("image/") && mimeType !== "image/*") return mimeType;
+  if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
+  if (ext === "gif")  return "image/gif";
+  if (ext === "webp") return "image/webp";
+  return "image/png";
 }
 
 payments.post("/parse", async (c) => {
@@ -1137,7 +1150,7 @@ payments.post("/parse", async (c) => {
   if (!medium) {
     return c.json({
       error: "validation_failed",
-      errors: [`unsupported file type "${filename}" — upload a PDF, CSV, or text file`],
+      errors: [`unsupported file type "${filename}" — upload a PDF, image, CSV, or text file`],
     } satisfies ApiErrorResponse, 400);
   }
   if (medium === "spreadsheet") {
@@ -1149,13 +1162,19 @@ payments.post("/parse", async (c) => {
     } satisfies ApiErrorResponse, 400);
   }
 
-  // PDFs go to the model as base64; everything else is decoded to text.
-  const data = medium === "pdf" ? b64 : Buffer.from(b64, "base64").toString("utf8");
+  // PDFs and images go to the model as base64; the rest is decoded to text.
+  const binary = medium === "pdf" || medium === "image";
+  const data = binary ? b64 : Buffer.from(b64, "base64").toString("utf8");
 
   let extracted;
   try {
     extracted = await extractRemittance({
-      kind: medium, data, filename: filename || null,
+      kind: medium,
+      data,
+      filename: filename || null,
+      ...(medium === "image"
+        ? { mediaType: imageMediaType(filename, body.mimeType ?? "") }
+        : {}),
     });
   } catch (e) {
     return c.json({

@@ -98,10 +98,12 @@ export default function ApplyPaymentPanel({ customers, onClose, onSaved }: Apply
   // Derived, not stored: setting state synchronously inside an effect causes
   // the cascading re-render React 19 warns about. The URL is computed from
   // the file, and the effect exists only to revoke it.
-  const isPdf = !!file && (/\.pdf$/i.test(file.name) || file.type === 'application/pdf');
+  const isPdf   = !!file && (/\.pdf$/i.test(file.name) || file.type === 'application/pdf');
+  const isImage = !!file && (/\.(png|jpe?g|gif|webp)$/i.test(file.name) || file.type.startsWith('image/'));
+  // Both render from an object URL rather than from text.
   const docUrl = useMemo(
-    () => (file && isPdf ? URL.createObjectURL(file) : null),
-    [file, isPdf],
+    () => (file && (isPdf || isImage) ? URL.createObjectURL(file) : null),
+    [file, isPdf, isImage],
   );
   useEffect(() => {
     if (!docUrl) return;
@@ -113,7 +115,7 @@ export default function ApplyPaymentPanel({ customers, onClose, onSaved }: Apply
   // can never paint under the new one.
   const [textFor, setTextFor] = useState<{ file: File; text: string } | null>(null);
   useEffect(() => {
-    if (!file || docUrl) return;          // PDFs render from the object URL
+    if (!file || docUrl) return;          // PDFs/images render from the URL
     let alive = true;
     void file.text().then(t => { if (alive) setTextFor({ file, text: t }); });
     return () => { alive = false; };
@@ -227,9 +229,9 @@ export default function ApplyPaymentPanel({ customers, onClose, onSaved }: Apply
           legible. A CSV is a table and reads fine in less. */}
       <div className="flex flex-col overflow-hidden" style={{
         width:     !file ? 'min(96vw, 560px)'
-                 : isPdf ? 'min(97vw, 1400px)' : 'min(96vw, 1120px)',
+                 : (isPdf || isImage) ? 'min(97vw, 1400px)' : 'min(96vw, 1120px)',
         height:    !file ? undefined
-                 : isPdf ? 'min(94vh, 980px)'  : 'min(88vh, 800px)',
+                 : (isPdf || isImage) ? 'min(94vh, 980px)'  : 'min(88vh, 800px)',
         maxHeight: '94vh',
         transition: 'width .18s ease',
         borderRadius: 14,
@@ -259,7 +261,7 @@ export default function ApplyPaymentPanel({ customers, onClose, onSaved }: Apply
         {/* ── left: the source document, verbatim ── */}
         {file && (
           <div className="min-w-0 overflow-hidden flex flex-col"
-               style={{ flex: isPdf ? '1 1 64%' : '1 1 52%',
+               style={{ flex: (isPdf || isImage) ? '1 1 64%' : '1 1 52%',
                         borderRight: '1px solid var(--gc-border)' }}>
             <div className="shrink-0 px-4 py-2 flex items-center justify-between gap-2"
                  style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
@@ -278,7 +280,7 @@ export default function ApplyPaymentPanel({ customers, onClose, onSaved }: Apply
               )}
             </div>
             <DocumentPane
-              text={docText} url={docUrl} filename={file.name}
+              text={docText} url={docUrl} filename={file.name} isImage={isImage}
               hoverRow={hoverRow} onHoverRow={setHoverRow}
             />
           </div>
@@ -294,9 +296,10 @@ export default function ApplyPaymentPanel({ customers, onClose, onSaved }: Apply
                   : <Upload size={15} style={{ color: 'var(--gc-text-3)' }} />}
             <span className="flex-1 min-w-0 text-xs truncate"
                   style={{ color: file ? 'var(--gc-text-1)' : 'var(--gc-text-3)' }}>
-              {file ? file.name : 'Choose a PDF, CSV, or text file…'}
+              {file ? file.name : 'Choose a PDF, image, CSV, or text file…'}
             </span>
-            <input type="file" accept=".pdf,.csv,.txt,.eml,application/pdf,text/csv,text/plain"
+            <input type="file"
+                   accept=".pdf,.csv,.txt,.eml,.png,.jpg,.jpeg,.gif,.webp,application/pdf,text/csv,text/plain,image/*"
                    className="hidden" disabled={busy}
                    onChange={e => {
                      const f = e.target.files?.[0] ?? null;
@@ -446,8 +449,8 @@ export default function ApplyPaymentPanel({ customers, onClose, onSaved }: Apply
 /** The source document rendered as-is. PDFs go to the browser's own viewer;
  *  CSVs become a table so rows line up with the extracted lines beside them.
  *  Display only — nothing here feeds the matcher. */
-function DocumentPane({ text, url, filename, hoverRow, onHoverRow }: {
-  text: string | null; url: string | null; filename: string;
+function DocumentPane({ text, url, filename, isImage, hoverRow, onHoverRow }: {
+  text: string | null; url: string | null; filename: string; isImage: boolean;
   hoverRow: number | null; onHoverRow: (r: number | null) => void;
 }) {
   const isCsv = /\.csv$/i.test(filename);
@@ -462,6 +465,17 @@ function DocumentPane({ text, url, filename, hoverRow, onHoverRow }: {
     return rows[0].some(c => /^-?[\d,]+(\.\d+)?$/.test(c.trim()) && c.trim() !== '') ? 0 : 1;
   }, [rows]);
 
+  if (url && isImage) {
+    // Scrollable at natural width rather than scaled to fit: a screenshot of
+    // a payment screen is often tall and narrow, and shrinking it to the pane
+    // is exactly what makes the amounts unreadable.
+    return (
+      <div className="flex-1 min-h-0 overflow-auto" style={{ background: 'var(--gc-bg)' }}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={url} alt={filename} style={{ display: 'block', width: '100%', height: 'auto' }} />
+      </div>
+    );
+  }
   if (url) {
     // navpanes=0 drops the thumbnail rail (~210px of the pane), toolbar=0
     // drops the zoom/print bar, and view=FitH makes the page fill the width
