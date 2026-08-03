@@ -43,6 +43,7 @@ import { useCalendarStore } from '@/store/useCalendarStore';
 import { railway } from '@/lib/railway';
 import RecordPaymentPanel from './RecordPaymentPanel';
 import BulkPaymentPanel from './BulkPaymentPanel';
+import ApplyPaymentPanel from './ApplyPaymentPanel';
 import type {
   ReceivableInvoice, ReceivableCustomerSummary, ReceivablesTotals, AgingBucket,
 } from '@fleetcal/types';
@@ -192,6 +193,7 @@ function ReceivablesPageInner() {
   const [sortOpen,   setSortOpen]   = useState(false);
   const [active,     setActive]     = useState<ReceivableInvoice | null>(null);
   const [selected,   setSelected]   = useState<Set<string>>(new Set());
+  const [applyOpen,  setApplyOpen]  = useState(false);
   const [bulkOpen,   setBulkOpen]   = useState(false);
 
   // EventModal keys on calendar events, so opening a load means making
@@ -361,18 +363,15 @@ function ReceivablesPageInner() {
         }}>
         <Download size={13} /> Export aging
       </button>
-      {/* Inert this pass — the remittance-matching workspace it opens
-          isn't built yet. Rendered so the affordance is in place. */}
-      <Tooltip content="Remittance matching isn't wired up yet — record payments from an invoice row for now." placement="bottom">
-        <span className="inline-flex items-center gap-1.5"
-          style={{
-            height: 32, padding: '0 12px', borderRadius: 8,
-            background: '#1a73e8', color: '#fff',
-            fontSize: 12, fontWeight: 700, opacity: 0.55, cursor: 'default',
-          }}>
-          <ArrowRightLeft size={13} /> Apply a payment
-        </span>
-      </Tooltip>
+      <button onClick={() => setApplyOpen(true)}
+        className="inline-flex items-center gap-1.5"
+        style={{
+          height: 32, padding: '0 12px', borderRadius: 8,
+          background: '#1a73e8', color: '#fff',
+          fontSize: 12, fontWeight: 700, cursor: 'pointer',
+        }}>
+        <ArrowRightLeft size={13} /> Apply a payment
+      </button>
     </div>
   );
 
@@ -928,6 +927,16 @@ function ReceivablesPageInner() {
           row={active}
           onSaved={() => void load()}
           onClose={() => setActive(null)}
+        />
+      )}
+
+      {applyOpen && (
+        <ApplyPaymentPanel
+          customers={customers
+            .filter(c => c.customerId)
+            .map(c => ({ id: c.customerId as string, name: c.customerName }))}
+          onSaved={() => void load()}
+          onClose={() => setApplyOpen(false)}
         />
       )}
     </AppShell>

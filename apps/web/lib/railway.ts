@@ -70,6 +70,7 @@ import type {
   ListPaymentProofsQuery, ListPaymentProofsResponse,
   GetPaymentProofResponse,
   CreatePaymentProofRequest, CreatePaymentProofResponse,
+  ParsePaymentResponse,
   UpdatePaymentProofRequest, UpdatePaymentProofResponse,
   DeletePaymentProofResponse, UploadProofAttachmentResponse,
   ListInvoicePaymentsResponse,
@@ -1423,6 +1424,15 @@ class RailwayClient {
   }
   createPaymentProof(body: CreatePaymentProofRequest) {
     return this.req<CreatePaymentProofResponse>('POST', '/v1/payments/proofs', body);
+  }
+  /** Read an uploaded remittance and propose which invoices it pays.
+   *  Writes nothing — the operator confirms, then the normal proof +
+   *  allocation calls do the writing. Pass `customerId` to narrow the
+   *  search once the customer is known. */
+  parsePaymentDocument(body: {
+    filename: string; mimeType: string; dataBase64: string; customerId?: string | null;
+  }) {
+    return this.req<ParsePaymentResponse>('POST', '/v1/payments/parse', body);
   }
   updatePaymentProof(id: string, body: UpdatePaymentProofRequest) {
     return this.req<UpdatePaymentProofResponse>('PATCH', `/v1/payments/proofs/${id}`, body);

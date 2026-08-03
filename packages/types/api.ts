@@ -1550,6 +1550,66 @@ export interface CreatePaymentProofRequest {
 }
 export interface CreatePaymentProofResponse { proof: PaymentProof; }
 
+// ── Parse an uploaded payment document ────────────────────────────────
+// Proposal returned by POST /v1/payments/parse. Nothing is written; the
+// operator reviews this and confirms, and the confirm path reuses the
+// ordinary proof + allocation endpoints.
+
+/** How confidently a line was tied to an invoice, and by which identifier.
+ *  `ambiguous` means more than one invoice matched — never auto-applied. */
+export type PaymentMatchedBy =
+  | 'invoice_number' | 'load_num' | 'internal_load_id'
+  | 'processor_ref'  | 'ambiguous' | 'none';
+
+export interface ParsedPaymentLine {
+  rowIndex:           number;
+  /** Verbatim from the document — not normalized. */
+  referenceAsPrinted: string | null;
+  amount:             number;
+  deduction:          number | null;
+  deductionLabel:     string | null;
+  invoiceId:          string | null;
+  invoiceNumber:      string | null;
+  invoiceTotal:       number | null;
+  invoicePaid:        number | null;
+  invoiceStatus:      string | null;
+  invoiceCustomerId:  string | null;
+  loadNum:            string | null;
+  matchedBy:          PaymentMatchedBy;
+  confidence:         number;
+  /** Every form that was looked up, so the reviewer can see what was tried. */
+  candidates:         string[];
+  ambiguous:          string[] | null;
+  note:               string | null;
+}
+
+export interface ParsePaymentResponse {
+  isRemittance: boolean;
+  /** Why it was rejected, when isRemittance is false. */
+  reason: string | null;
+  doc: {
+    source:             string;
+    payerNameAsPrinted: string;
+    paymentDate:        string;
+    paymentTotal:       number;
+    externalId:         string | null;
+    unparsedRows:       string[];
+  } | null;
+  /** sum(lines) vs the total printed on the document. `ok: false` means a
+   *  row was probably missed — the document must not be applied as-is. */
+  totals: {
+    ok: boolean; lineSum: number; declared: number; drift: number; reason?: string;
+  } | null;
+  /** Derived from the matched invoices, not the printed payer name — which
+   *  is often a factoring company or a legal entity held under another name. */
+  inferredCustomerId: string | null;
+  lines: ParsedPaymentLine[];
+  summary: {
+    lineCount: number; matched: number; unmatched: number; autoApply: number;
+    matchedAmount: number; totalAmount: number;
+  } | null;
+}
+
 export interface UpdatePaymentProofRequest {
   kind?:       PaymentProofKind;
   customerId?: string | null;

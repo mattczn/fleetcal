@@ -52,6 +52,11 @@ import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability, requireModule } from "../middleware/require.js";
 import { appliedByProof, round2 } from "../lib/invoicePayments.js";
 import { fetchAllRows } from "../lib/fetchAllRows.js";
+import { extractRemittance } from "../lib/remittanceExtractor.js";
+import {
+  checkTotals, resolveLines, AUTO_APPLY_THRESHOLD,
+  type RemittanceSource,
+} from "../lib/remittanceMatcher.js";
 
 // payment_proofs / invoice_payments aren't in the generated Database
 // types until the schema is regenerated post-migration.
@@ -1090,5 +1095,157 @@ function mondayOf(d: Date): string {
   t.setUTCDate(t.getUTCDate() - dow);
   return t.toISOString().slice(0, 10);
 }
+
+// ── Parse an uploaded payment document ────────────────────────────────
+//
+// Drives the "Apply a payment" workflow: the operator uploads whatever the
+// payer sent, and this returns a PROPOSAL — who paid, how much, and which
+// open invoices the document points at — for them to confirm.
+//
+// Writes nothing. The confirm step reuses the existing proof + allocation
+// endpoints, so there is exactly one code path that moves money and it is
+// the one already in production behind Mark Paid.
+
+/** Map an upload to the medium the extractor reads. Content type is a hint;
+ *  the extension wins because browsers routinely send text/csv as
+ *  application/octet-stream (and vice versa). */
+function mediumFor(filename: string, mimeType: string): RemittanceSource | null {
+  const ext = (filename.split(".").pop() ?? "").toLowerCase();
+  if (ext === "pdf"  || mimeType === "application/pdf")  return "pdf";
+  if (ext === "csv"  || mimeType === "text/csv")         return "csv";
+  if (ext === "txt"  || ext === "eml" || mimeType.startsWith("text/")) return "email_body";
+  if (ext === "xlsx" || ext === "xls") return "spreadsheet";
+  return null;
+}
+
+payments.post("/parse", async (c) => {
+  const orgId = c.get("orgId");
+
+  let body: {
+    filename?: string; mimeType?: string; dataBase64?: string; customerId?: string | null;
+  };
+  try { body = await c.req.json(); }
+  catch { return c.json({ error: "validation_failed", errors: ["body must be JSON"] } satisfies ApiErrorResponse, 400); }
+
+  const filename = (body.filename ?? "").trim();
+  const b64      = (body.dataBase64 ?? "").trim();
+  if (!b64) {
+    return c.json({ error: "validation_failed", errors: ["dataBase64 is required"] } satisfies ApiErrorResponse, 400);
+  }
+
+  const medium = mediumFor(filename, body.mimeType ?? "");
+  if (!medium) {
+    return c.json({
+      error: "validation_failed",
+      errors: [`unsupported file type "${filename}" — upload a PDF, CSV, or text file`],
+    } satisfies ApiErrorResponse, 400);
+  }
+  if (medium === "spreadsheet") {
+    // .xlsx is a zip archive; neither the model nor this route can read it as
+    // a document. Say so plainly rather than failing in a confusing way.
+    return c.json({
+      error: "validation_failed",
+      errors: ["Excel files can't be read directly yet — export the sheet as CSV and upload that"],
+    } satisfies ApiErrorResponse, 400);
+  }
+
+  // PDFs go to the model as base64; everything else is decoded to text.
+  const data = medium === "pdf" ? b64 : Buffer.from(b64, "base64").toString("utf8");
+
+  let extracted;
+  try {
+    extracted = await extractRemittance({
+      kind: medium, data, filename: filename || null,
+    });
+  } catch (e) {
+    return c.json({
+      error: "parse_failed",
+      errors: [e instanceof Error ? e.message : "could not read the document"],
+    } satisfies ApiErrorResponse, 502);
+  }
+
+  if (!extracted.isRemittance || !extracted.doc) {
+    return c.json({
+      isRemittance: extracted.isRemittance,
+      reason: extracted.reason ?? "this document does not look like a remittance",
+      doc: null, totals: null, lines: [], summary: null,
+    });
+  }
+
+  const doc     = extracted.doc;
+  const totals  = checkTotals(doc);
+  const scoped  = body.customerId?.trim() || null;
+  const lines   = totals.ok
+    ? await resolveLines(orgId, doc, { customerId: scoped })
+    : [];
+
+  // Enrich matched lines so the panel can show what it's about to apply
+  // without a second round trip.
+  const invIds = [...new Set(lines.map((l) => l.invoiceId).filter(Boolean))] as string[];
+  const invById = new Map<string, Record<string, unknown>>();
+  if (invIds.length) {
+    const { data: rows } = await supabase
+      .from("invoices")
+      .select("id,invoice_number,total,status,customer_id,paid_amount,loads(load_num,internal_load_id)")
+      .eq("org_id", orgId)
+      .in("id", invIds);
+    for (const r of (rows ?? []) as Array<{ id: string }>) invById.set(r.id, r);
+  }
+
+  const out = lines.map((l) => {
+    const inv = l.invoiceId ? invById.get(l.invoiceId) : null;
+    const load = (inv?.loads ?? null) as { load_num?: string | number | null } | null;
+    return {
+      rowIndex:           l.line.rowIndex,
+      referenceAsPrinted: l.line.referenceAsPrinted,
+      amount:             l.line.amount,
+      deduction:          l.line.deduction ?? null,
+      deductionLabel:     l.line.deductionLabel ?? null,
+      invoiceId:          l.invoiceId,
+      invoiceNumber:      inv ? String(inv.invoice_number ?? "") : null,
+      invoiceTotal:       inv ? Number(inv.total ?? 0) : null,
+      invoicePaid:        inv ? Number(inv.paid_amount ?? 0) : null,
+      invoiceStatus:      inv ? String(inv.status ?? "") : null,
+      invoiceCustomerId:  inv ? (inv.customer_id as string | null) : null,
+      loadNum:            load?.load_num != null ? String(load.load_num) : null,
+      matchedBy:          l.matchedBy,
+      confidence:         l.confidence,
+      candidates:         l.candidates,
+      ambiguous:          l.ambiguous ?? null,
+      note:               l.note ?? null,
+    };
+  });
+
+  const matched = out.filter((l) => l.invoiceId);
+  return c.json({
+    isRemittance: true,
+    reason:       null,
+    doc: {
+      source:             doc.source,
+      payerNameAsPrinted: doc.payerNameAsPrinted,
+      paymentDate:        doc.paymentDate,
+      paymentTotal:       doc.paymentTotal,
+      externalId:         doc.externalId,
+      unparsedRows:       doc.unparsedRows ?? [],
+    },
+    totals,
+    // The customer the document itself points at, inferred from the invoices
+    // it matched — more reliable than the printed payer name, which is often
+    // a factoring company or a legal entity we don't hold under that name.
+    inferredCustomerId:
+      [...new Set(matched.map((l) => l.invoiceCustomerId).filter(Boolean))].length === 1
+        ? (matched[0]?.invoiceCustomerId ?? null)
+        : null,
+    lines: out,
+    summary: {
+      lineCount:     out.length,
+      matched:       matched.length,
+      unmatched:     out.length - matched.length,
+      autoApply:     out.filter((l) => l.confidence >= AUTO_APPLY_THRESHOLD && l.invoiceId).length,
+      matchedAmount: round2(matched.reduce((s, l) => s + l.amount, 0)),
+      totalAmount:   doc.paymentTotal,
+    },
+  });
+});
 
 export default payments;
