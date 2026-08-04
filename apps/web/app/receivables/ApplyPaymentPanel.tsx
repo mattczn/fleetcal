@@ -31,7 +31,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   X, Check, AlertTriangle, Loader2, FileText, HelpCircle, ExternalLink,
-  UploadCloud, Building2, Truck, CircleAlert,
+  UploadCloud, Building2, Truck, CircleAlert, Copy,
 } from 'lucide-react';
 import { railway } from '@/lib/railway';
 import type { ParsePaymentResponse, ParsedPaymentLine } from '@fleetcal/types';
@@ -175,8 +175,12 @@ export default function ApplyPaymentPanel({ customers, onClose, onSaved }: Apply
       // payer name — remittances are routinely sent by a factoring company
       // or under a legal entity we hold under a different name.
       if (!forCustomer && res.inferredCustomerId) setCustomerId(res.inferredCustomerId);
-      // Default to applying everything that matched; unmatched rows can't be.
-      setSkip(new Set(res.lines.filter(l => !l.invoiceId).map(l => l.rowIndex)));
+      // Default to applying everything that matched — EXCEPT invoices that
+      // are already settled. Those are the signature of a re-uploaded
+      // remittance, and re-applying would push them overpaid.
+      setSkip(new Set(
+        res.lines.filter(l => !l.invoiceId || l.alreadyPaid).map(l => l.rowIndex),
+      ));
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Could not read that document');
       setParsed(null);
@@ -480,6 +484,45 @@ export default function ApplyPaymentPanel({ customers, onClose, onSaved }: Apply
                 </div>
               )}
 
+              {/* ── duplicate guard ── */}
+              {parsed?.duplicate && (
+                <div className="rounded-lg border p-3 mt-3 text-xs flex gap-2"
+                     style={{ borderColor: AMBER, background: AMBER_BG, color: '#92400e' }}>
+                  <Copy size={14} className="shrink-0 mt-px" />
+                  <span>
+                    <strong>This looks like it was already recorded.</strong>
+                    <span className="block mt-1">
+                      A payment referencing{' '}
+                      <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
+                        {parsed.duplicate.reference}
+                      </span>{' '}
+                      for {money2(parsed.duplicate.amount)} was recorded on{' '}
+                      {shortDate(parsed.duplicate.createdAt) ?? parsed.duplicate.createdAt}
+                      {parsed.duplicate.appliedCount > 0
+                        ? `, applied to ${parsed.duplicate.appliedCount} invoice${parsed.duplicate.appliedCount === 1 ? '' : 's'}.`
+                        : ', but not applied to anything yet.'}
+                      {' '}Applying it again would double-credit those invoices.
+                    </span>
+                  </span>
+                </div>
+              )}
+              {!parsed?.duplicate && (parsed?.summary?.alreadyPaid ?? 0) > 0 && (
+                <div className="rounded-lg border p-3 mt-3 text-xs flex gap-2"
+                     style={{ borderColor: AMBER, background: AMBER_BG, color: '#92400e' }}>
+                  <Copy size={14} className="shrink-0 mt-px" />
+                  <span>
+                    <strong>
+                      {parsed!.summary!.alreadyPaid} of these invoice
+                      {parsed!.summary!.alreadyPaid === 1 ? ' is' : 's are'} already paid.
+                    </strong>
+                    <span className="block mt-1">
+                      Unticked below so they aren&apos;t double-credited. If this is a
+                      genuinely separate payment, tick them back on.
+                    </span>
+                  </span>
+                </div>
+              )}
+
               {/* ── totals invariant ── */}
               {parsed?.totals && (
                 <div className="rounded-lg border p-3 mt-3 text-xs flex gap-2"
@@ -745,7 +788,8 @@ function LineRow({ line, included, disabled, onToggle, hovered, onHover }: {
         {/* money line */}
         <span className="flex items-baseline gap-1.5">
           {matched ? (
-            <span className="text-[13px] font-bold" style={{ color: BLUE }}>
+            <span className="text-[13px] font-bold"
+                  style={{ color: line.alreadyPaid ? 'var(--gc-text-3)' : BLUE }}>
               #{line.invoiceNumber}
             </span>
           ) : (
@@ -753,7 +797,13 @@ function LineRow({ line, included, disabled, onToggle, hovered, onHover }: {
               No match
             </span>
           )}
-          {age !== null && age !== undefined && age > 0 && (
+          {line.alreadyPaid && (
+            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded"
+                  style={{ background: AMBER_BG, color: AMBER }}>
+              already paid
+            </span>
+          )}
+          {!line.alreadyPaid && age !== null && age !== undefined && age > 0 && (
             <span className="text-[10.5px] font-bold tabular-nums" style={{ color: ageColor(age) }}>
               {age}d
             </span>

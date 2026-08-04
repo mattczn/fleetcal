@@ -22,7 +22,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
   HandCoins, Mail, Phone, Truck, ArrowRightLeft, Download, ChevronLeft,
-  UserRound, Check,
+  UserRound, Check, Paperclip,
 } from 'lucide-react';
 import RequireCap from '@/components/auth/RequireCap';
 import AppShell from '@/components/nav/AppShell';
@@ -30,6 +30,7 @@ import DataLoader from '@/components/DataLoader';
 import EventModal from '@/components/calendar/EventModal';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 import BulkPaymentPanel from '../BulkPaymentPanel';
+import RecordPaymentPanel from '../RecordPaymentPanel';
 import BillingCard from '../BillingCard';
 import Breadcrumbs from '@/app/admin/Breadcrumbs';
 import Tooltip from '@/components/ui/Tooltip';
@@ -92,6 +93,8 @@ function CustomerViewInner() {
   const [search,  setSearch]  = useState('');
   const [term,    setTerm]    = useState('');
   const [openInvoiceId, setOpenInvoiceId] = useState<string | null>(null);
+  /** Invoice whose payment record + proof is being inspected. */
+  const [proofFor, setProofFor] = useState<ReceivableInvoice | null>(null);
   const [profileOpen,   setProfileOpen]   = useState(false);
   const [selected,      setSelected]      = useState<Set<string>>(new Set());
   const [bulkOpen,      setBulkOpen]      = useState(false);
@@ -517,7 +520,7 @@ function CustomerViewInner() {
                     </span>
                   </div>
                   {g.rows.map(inv => (
-                    <InvoiceRow key={inv.id} inv={inv} onOpen={setOpenInvoiceId}
+                    <InvoiceRow key={inv.id} inv={inv} onOpen={setOpenInvoiceId} onOpenPayments={setProofFor}
                       onOpenLoad={openLoadInModal}
                       selected={selected.has(inv.id)} onToggle={toggleOne} />
                   ))}
@@ -525,7 +528,7 @@ function CustomerViewInner() {
               ))
             ) : (
               invoices.map(inv => (
-                <InvoiceRow key={inv.id} inv={inv} onOpen={setOpenInvoiceId}
+                <InvoiceRow key={inv.id} inv={inv} onOpen={setOpenInvoiceId} onOpenPayments={setProofFor}
                   onOpenLoad={openLoadInModal}
                   selected={selected.has(inv.id)} onToggle={toggleOne} />
               ))
@@ -568,6 +571,14 @@ function CustomerViewInner() {
           sets store state. */}
       <DataLoader />
       <EventModal />
+      {proofFor && (
+        <RecordPaymentPanel
+          row={proofFor}
+          onSaved={() => void load()}
+          onClose={() => setProofFor(null)}
+        />
+      )}
+
       {openInvoiceId && (
         <InvoiceDetailModal invoiceId={openInvoiceId} onClose={() => setOpenInvoiceId(null)} />
       )}
@@ -597,9 +608,10 @@ const CARD: React.CSSProperties = {
   boxShadow: '0 1px 2px rgba(60,64,67,.1)',
 };
 
-function InvoiceRow({ inv, onOpen, onOpenLoad, selected, onToggle }: {
+function InvoiceRow({ inv, onOpen, onOpenPayments, onOpenLoad, selected, onToggle }: {
   inv: ReceivableInvoice;
   onOpen: (id: string) => void;
+  onOpenPayments: (inv: ReceivableInvoice) => void;
   onOpenLoad: (inv: ReceivableInvoice) => void;
   selected: boolean;
   onToggle: (id: string) => void;
@@ -652,9 +664,22 @@ function InvoiceRow({ inv, onOpen, onOpenLoad, selected, onToggle }: {
       <span style={{ color: 'var(--gc-text-3)' }}>{shortDate(inv.issuedAt)}</span>
       <span style={{ color: 'var(--gc-text-3)' }}>{inv.dueAt ? shortDate(inv.dueAt) : '—'}</span>
       <span className="tabular-nums" style={{ textAlign: 'right' }}>{money2(inv.total)}</span>
-      <span className="tabular-nums" style={{
-        textAlign: 'right', color: inv.paidAmount > 0.005 ? '#137333' : 'var(--gc-text-3)',
-      }}>{inv.paidAmount > 0.005 ? money2(inv.paidAmount) : '—'}</span>
+      {/* The paid figure IS the payment, so it is the way in to the
+          evidence behind it — remittance, bank line, or a manual mark with
+          no document. A paperclip means there is a file to open. */}
+      {inv.paidAmount > 0.005 ? (
+        <button type="button"
+          onClick={e => { e.stopPropagation(); onOpenPayments(inv); }}
+          title={inv.hasProof ? 'View the proof of payment' : 'Recorded manually — no document on file'}
+          className="tabular-nums hover:underline inline-flex items-center justify-end gap-1"
+          style={{ textAlign: 'right', color: '#137333', fontWeight: 700, width: '100%' }}>
+          {inv.hasProof && <Paperclip size={10} style={{ flex: 'none' }} />}
+          {money2(inv.paidAmount)}
+        </button>
+      ) : (
+        <span className="tabular-nums"
+              style={{ textAlign: 'right', color: 'var(--gc-text-3)' }}>—</span>
+      )}
       <span className="tabular-nums" style={{ textAlign: 'right', fontWeight: 800 }}>{money2(inv.balance)}</span>
       <span style={{ textAlign: 'center' }}>
         {/* Part-paid and overdue are receivables states the invoice

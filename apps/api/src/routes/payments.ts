@@ -1232,6 +1232,9 @@ payments.post("/parse", async (c) => {
       invoiceTotal:       inv ? Number(inv.total ?? 0) : null,
       invoicePaid:        inv ? Number(inv.paid_amount ?? 0) : null,
       invoiceStatus:      inv ? String(inv.status ?? "") : null,
+      // Already settled — re-applying would push it overpaid. The panel
+      // unchecks these by default.
+      alreadyPaid:        inv ? String(inv.status ?? "") === "paid" : false,
       invoiceCustomerId:  inv ? (inv.customer_id as string | null) : null,
       customerName:       inv ? ((inv.customers as { name?: string } | null)?.name ?? null) : null,
       loadNum:            load?.load_num != null ? String(load.load_num) : null,
@@ -1250,9 +1253,52 @@ payments.post("/parse", async (c) => {
   });
 
   const matched = out.filter((l) => l.invoiceId);
+
+  // ── duplicate guard ──────────────────────────────────────────────────
+  // The same remittance gets uploaded twice more often than anyone expects:
+  // forwarded again by the broker, or re-run after a half-finished pass.
+  // Applying it twice double-credits every invoice on it, and nothing
+  // downstream would flag that — the invoices simply go overpaid.
+  //
+  // Checked rather than enforced. A hard unique index on the reference
+  // would also block the legitimate case of applying half a remittance now
+  // and the rest once the missing loads are invoiced, so this warns and
+  // lets the operator decide.
+  let duplicate: {
+    proofId: string; occurredOn: string; amount: number;
+    reference: string | null; createdAt: string; appliedCount: number;
+  } | null = null;
+
+  if (doc.externalId) {
+    const { data: dupRows } = await supabase
+      .from("payment_proofs")
+      .select(PROOF_COLS)
+      .eq("org_id", orgId)
+      .eq("reference", doc.externalId)
+      .order("created_at", { ascending: false })
+      .limit(1);
+    const hit = (dupRows ?? [])[0] as ProofRow | undefined;
+    if (hit) {
+      const { data: allocRows } = await supabase
+        .from("invoice_payments")
+        .select("id")
+        .eq("org_id", orgId)
+        .eq("proof_id", hit.id);
+      duplicate = {
+        proofId:      hit.id,
+        occurredOn:   hit.occurred_on,
+        amount:       Number(hit.amount),
+        reference:    hit.reference,
+        createdAt:    hit.created_at,
+        appliedCount: (allocRows ?? []).length,
+      };
+    }
+  }
+
   return c.json({
     isRemittance: true,
     reason:       null,
+    duplicate,
     doc: {
       source:             doc.source,
       payerNameAsPrinted: doc.payerNameAsPrinted,
@@ -1277,6 +1323,7 @@ payments.post("/parse", async (c) => {
       autoApply:     out.filter((l) => l.confidence >= AUTO_APPLY_THRESHOLD && l.invoiceId).length,
       matchedAmount: round2(matched.reduce((s, l) => s + l.amount, 0)),
       totalAmount:   doc.paymentTotal,
+      alreadyPaid:   out.filter((l) => l.alreadyPaid).length,
     },
   });
 });
