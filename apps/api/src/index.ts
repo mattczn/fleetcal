@@ -67,6 +67,7 @@ import timelineRoute from "./routes/timeline.js";
 import fleetRoute from "./routes/fleet.js";
 import costAnalysisRoute from "./routes/cost-analysis.js";
 import capacityRoute from "./routes/capacity.js";
+import trackingRoute from "./routes/tracking-public.js";
 import contactSalesRoute from "./routes/contact-sales.js";
 import supportRoute from "./routes/support.js";
 import { syncIncrementalAllOrgs, snapshotOdometersAllOrgs } from "./lib/motiveIngest.js";
@@ -175,8 +176,14 @@ app.use(
       if (/^http:\/\/localhost:\d+$/.test(origin)) return origin;
       // Any Vercel preview/prod URL
       if (/^https:\/\/[a-z0-9-]+\.vercel\.app$/.test(origin)) return origin;
-      // Production custom domain — both apex and www
+      // Production custom domains — both apex and www, both the
+      // main product domain (fleetcal.app) AND the secondary domain
+      // Vercel also serves the same project from (fleetcalendar.app).
+      // Driver-facing paystub links can land on either depending on
+      // which domain the SMS URL was minted from, and both fetch
+      // this API cross-origin.
       if (/^https:\/\/(www\.)?fleetcal\.app$/.test(origin)) return origin;
+      if (/^https:\/\/(www\.)?fleetcalendar\.app$/.test(origin)) return origin;
       return null;
     },
     credentials: true,
@@ -198,6 +205,11 @@ app.get("/v1/health", (c) => {
 // Public broker capacity endpoint — fed to curzontrucking.com /capacity.
 // Aggregate counts only, no PII. Optional CAPACITY_API_KEY gate.
 app.route("/v1/capacity", capacityRoute);
+
+// Public load tracking — fed to curzontrucking.com/track. Strict column
+// whitelist, org pinned server-side, ZIP-gated search. See the security
+// notes at the top of routes/tracking-public.ts before changing anything.
+app.route("/v1/tracking", trackingRoute);
 
 // Public lead intake — fleetcal.app/contact-sales wizard POSTs here,
 // the route emails CONTACT_SALES_TO (defaults to hello@fleetcal.app)
