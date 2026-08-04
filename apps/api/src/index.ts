@@ -67,7 +67,6 @@ import timelineRoute from "./routes/timeline.js";
 import fleetRoute from "./routes/fleet.js";
 import costAnalysisRoute from "./routes/cost-analysis.js";
 import capacityRoute from "./routes/capacity.js";
-import trackingRoute from "./routes/tracking-public.js";
 import contactSalesRoute from "./routes/contact-sales.js";
 import supportRoute from "./routes/support.js";
 import { syncIncrementalAllOrgs, snapshotOdometersAllOrgs } from "./lib/motiveIngest.js";
@@ -199,11 +198,6 @@ app.get("/v1/health", (c) => {
 // Public broker capacity endpoint — fed to curzontrucking.com /capacity.
 // Aggregate counts only, no PII. Optional CAPACITY_API_KEY gate.
 app.route("/v1/capacity", capacityRoute);
-
-// Public load tracking — fed to curzontrucking.com/track. Strict column
-// whitelist, org pinned server-side, ZIP-gated search. See the security
-// notes at the top of routes/tracking-public.ts before changing anything.
-app.route("/v1/tracking", trackingRoute);
 
 // Public lead intake — fleetcal.app/contact-sales wizard POSTs here,
 // the route emails CONTACT_SALES_TO (defaults to hello@fleetcal.app)
