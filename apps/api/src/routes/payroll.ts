@@ -604,6 +604,21 @@ payroll.post("/records/:id/send", requireCapability("payroll.finalize"), async (
   const weekLabel = fmtWeekLabel(rec.week_start);
   const netStr    = fmtMoney(Number(rec.total_pay));
 
+  // Org display name for the SMS prefix. Drivers don't know "FleetCal"
+  // (it's the platform); they know their carrier. Pulled from the same
+  // invoice_settings.companyName every other outbound-to-broker/driver
+  // surface uses. Falls back to "Your carrier" if the org somehow
+  // hasn't set it — better than a bare colon.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: settingsRow } = await (supabase as any)
+    .from("org_settings")
+    .select("invoice_settings")
+    .eq("org_id", orgId)
+    .maybeSingle();
+  const orgLabel =
+    (settingsRow as { invoice_settings: { companyName?: string } | null } | null)
+      ?.invoice_settings?.companyName?.trim() || "Your carrier";
+
   // (4) Fire push (independent of SMS — some drivers have the app but
   //     no valid phone). sendPushToDriver silently no-ops when there
   //     are no registered tokens; we treat "no tokens" as ok so an
@@ -631,7 +646,7 @@ payroll.post("/records/:id/send", requireCapability("payroll.finalize"), async (
         : "Driver has no phone number on file." };
   } else {
     const smsBody =
-      `FleetCal: your paystub for ${weekLabel} is ready. ` +
+      `${orgLabel}: your paystub for ${weekLabel} is ready. ` +
       `Net ${netStr}. View: ${publicUrl}`;
     const r = await sendSms({ to: e164, body: smsBody });
     smsResult = r.ok

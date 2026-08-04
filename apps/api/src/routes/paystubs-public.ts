@@ -129,6 +129,20 @@ paystubsPublic.get("/:token", async (c) => {
       .is("viewed_at", null);
   }
 
+  // Pull the org's display name from invoice_settings so the paystub
+  // page + header say "Curzon Trucking LLC · Paystub" instead of a
+  // generic "FleetCal." Falls back to "FleetCal" only when the org
+  // hasn't set companyName in their invoice settings — matches the
+  // convention every other driver/broker-facing surface uses.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: settingsRow } = await (supabase as any)
+    .from("org_settings")
+    .select("invoice_settings")
+    .eq("org_id", row.org_id)
+    .maybeSingle();
+  const invoiceSettings = (settingsRow as { invoice_settings: { companyName?: string } | null } | null)?.invoice_settings;
+  const orgLabel = invoiceSettings?.companyName?.trim() || "FleetCal";
+
   const start = new Date(`${row.week_start}T00:00:00Z`);
   const end   = new Date(start.getTime() + 6 * 24 * 60 * 60 * 1000);
   const weekEndInclusive = end.toISOString().slice(0, 10);
@@ -144,7 +158,7 @@ paystubsPublic.get("/:token", async (c) => {
       finalizedByName: row.finalized_by_name,
       notes:           row.notes,
       lineItems:       parseLineItems(row.line_items),
-      orgLabel:        "FleetCal",
+      orgLabel,
       supersededAt:    row.superseded_at,
     },
   };

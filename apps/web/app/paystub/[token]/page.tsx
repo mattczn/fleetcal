@@ -188,11 +188,19 @@ export default function PaystubPage() {
                       <div className="text-neutral-900">
                         {li.label ?? (li.kind === 'load' ? `Load ${li.loadNum ?? ''}` : li.kind)}
                       </div>
-                      {(li.legLabel || li.category) && (
+                      {/* Loads always show a Legs sub-line ("Legs: All" for
+                          single-leg, "Legs: Pickup" / "Legs: Transfer" etc.
+                          for relay legs). Adjustments + accessorials use
+                          the category label. */}
+                      {li.kind === 'load' ? (
                         <div className="text-xs text-neutral-500 mt-0.5">
-                          {li.legLabel ?? li.category}
+                          Legs: {li.legLabel ?? 'All'}
                         </div>
-                      )}
+                      ) : li.category ? (
+                        <div className="text-xs text-neutral-500 mt-0.5">
+                          {li.category}
+                        </div>
+                      ) : null}
                     </td>
                     <td className="px-6 py-3 text-neutral-600 hidden sm:table-cell">
                       {li.date ? fmtDate(li.date) : ''}
@@ -228,7 +236,7 @@ export default function PaystubPage() {
         </div>
 
         <div className="text-center text-xs text-neutral-400 mt-6 print:hidden">
-          Questions about your pay? Reply to the text or contact dispatch.
+          Questions about your pay? Contact dispatch.
         </div>
       </div>
     </main>
