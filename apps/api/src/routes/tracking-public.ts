@@ -67,7 +67,7 @@ const EXCEPTION_STATUSES = new Set(["cancelled", "tonu", "problem"]);
 const LOAD_COLS =
   "id, load_num, ref_nums, customer_id, commodity, weight, public_token, tracking_revoked_at, deleted_at";
 const EVENT_COLS =
-  "id, leg_index, status, start, driver_id, asset_id, trailer_type, route_polyline, audit_log, deleted_at";
+  'id, leg_index, status, start, "end", driver_id, asset_id, trailer_type, route_polyline, audit_log, deleted_at';
 const STOP_COLS =
   "id, event_id, sequence, type, facility_name, address, city, state, lat, lng, " +
   "appt_start, appt_end, arrived_at, is_handoff, timezone";
@@ -165,6 +165,44 @@ function geofenceStep(
   }
 
   return { step: "en_route", atSequence: null, nearestMiles };
+}
+
+/** Which leg is holding the freight right now.
+ *
+ *  Not "the first leg with a truck" — on a relay that is the leg that already
+ *  handed off, whose tractor has since driven away on someone else's load, and
+ *  showing its position puts the customer's freight in the wrong state.
+ *
+ *  Status can't answer this either: legs routinely sit on a stale 'assigned'
+ *  long after their window closes. Legs tile the load window, so time does.
+ *  Compared as naive Mountain-time strings because that is how start/end are
+ *  stored, and the format sorts lexicographically. */
+interface LegLike {
+  start?: string | null;
+  end?: string | null;
+  asset_id?: number | null;
+  driver_id?: number | null;
+}
+
+function activeLeg<T extends LegLike>(legs: T[]): T | undefined {
+  if (!legs.length) return undefined;
+
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Denver",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(new Date());
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "00";
+  const now = `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}`;
+
+  const running = legs.find((l) => l.start && l.end && l.start <= now && now <= l.end);
+  if (running) return running;
+
+  // Between legs, or not started: the next one up is the one to watch.
+  const upcoming = legs.find((l) => l.start && l.start > now);
+  if (upcoming) return upcoming;
+
+  return legs[legs.length - 1];
 }
 
 interface AuditLike {
@@ -289,8 +327,21 @@ async function buildPayload(loadId: string) {
   let truckPosition = null;
   let geo: ReturnType<typeof geofenceStep> | null = null;
 
+  const currentLeg = activeLeg<LegLike>(events);
+
+  let truckNumber: string | null = null;
+  if (currentLeg?.asset_id) {
+    const { data: asset } = await sb
+      .from("assets")
+      .select("name")
+      .eq("id", currentLeg.asset_id)
+      .eq("org_id", ORG_ID)
+      .maybeSingle();
+    truckNumber = asset?.name ?? null;
+  }
+
   if (!isClosed) {
-    const assetId = events.find((e: { asset_id: number | null }) => e.asset_id)?.asset_id;
+    const assetId = currentLeg?.asset_id;
     if (assetId) {
       const pos = await positionForAsset(ORG_ID, assetId);
       if (pos) {
@@ -327,7 +378,7 @@ async function buildPayload(loadId: string) {
   // Driver contact is scoped to the active window — once a load is delivered
   // there is no reason for a forwarded link to keep exposing a cell number.
   let driver = null;
-  const driverId = events.find((e: { driver_id: number | null }) => e.driver_id)?.driver_id;
+  const driverId = currentLeg?.driver_id ?? events.find((e: { driver_id: number | null }) => e.driver_id)?.driver_id;
   if (driverId && !isException && status !== "delivered") {
     const { data: d } = await sb
       .from("drivers")
@@ -386,6 +437,7 @@ async function buildPayload(loadId: string) {
     commodity: load.commodity ?? null,
     weight: load.weight ?? null,
     trailerType: events[0]?.trailer_type ?? null,
+    truckNumber,
     // Cached Mapbox geometry per leg — the map draws these instead of
     // re-routing on every page view.
     routePolylines: events
