@@ -52,6 +52,7 @@ import type {
   DeletePayrollAdjustmentResponse,
   ListPayrollRecordsResponse, UpsertPayrollRecordRequest, UpsertPayrollRecordResponse,
   DeletePayrollRecordResponse,
+  SendPaystubResponse,
   ListDriverScoresResponse, ListDriverSafetyScoresResponse,
   GetOrgSettingsResponse, UpdateOrgSettingsRequest, UpdateOrgSettingsResponse,
   CreateInvoiceRequest, CreateInvoiceResponse,
@@ -1062,6 +1063,12 @@ class RailwayClient {
     return this.req<DeletePayrollRecordResponse>(
       'DELETE', `/v1/payroll/records/${id}`, { reopenedByName: reopenedByName ?? null },
     );
+  }
+  /** Send the frozen paystub to the driver by SMS + push. Idempotent —
+   *  can be called again to resend (view_token stays the same). Rejects
+   *  superseded records — reopen + re-finalize forces a fresh send. */
+  sendPaystub(id: string) {
+    return this.req<SendPaystubResponse>('POST', `/v1/payroll/records/${id}/send`);
   }
 
   // ── Org settings ──────────────────────────────────────────────────────

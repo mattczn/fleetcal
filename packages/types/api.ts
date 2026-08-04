@@ -1126,6 +1126,22 @@ export interface UpsertPayrollRecordResponse {
  *  signed off on, and who signed it, stay queryable forever. */
 export interface DeletePayrollRecordResponse { record: PayrollRecord; }
 
+/** POST /v1/payroll/records/:id/send — sends the paystub link to the
+ *  driver via SMS + push. No body required (the frozen record IS the
+ *  payload). The record must be active (not superseded); the driver
+ *  must exist in `drivers` and have a phone number for SMS to fire.
+ *  Push fires whenever a device token is registered for the driver
+ *  regardless of SMS state. */
+export interface SendPaystubResponse {
+  record: PayrollRecord;
+  /** Per-channel outcome for THIS send attempt. Absent fields ran
+   *  and succeeded silently; a present `error` means the channel
+   *  didn't deliver (but the send itself is still considered
+   *  successful as long as at least one channel worked). */
+  smsResult:  { ok: true; sid: string } | { ok: false; error: string };
+  pushResult: { ok: true } | { ok: false; error: string };
+}
+
 // ── /v1/org-settings ────────────────────────────────────────────────────
 
 export interface GetOrgSettingsResponse { settings: OrgSettings; }
@@ -1573,6 +1589,8 @@ export interface ParsedPaymentLine {
   invoiceTotal:       number | null;
   invoicePaid:        number | null;
   invoiceStatus:      string | null;
+  /** Invoice is already settled — re-applying would push it overpaid. */
+  alreadyPaid:        boolean;
   invoiceCustomerId:  string | null;
   customerName:       string | null;
   loadNum:            string | null;
@@ -1592,10 +1610,24 @@ export interface ParsedPaymentLine {
   note:               string | null;
 }
 
+/** An earlier proof carrying the same reference. Warned about, not blocked:
+ *  applying half a remittance now and the rest once the missing loads are
+ *  invoiced is legitimate, so the operator decides. */
+export interface ParsePaymentDuplicate {
+  proofId:      string;
+  occurredOn:   string;
+  amount:       number;
+  reference:    string | null;
+  createdAt:    string;
+  /** Allocations already citing that proof. */
+  appliedCount: number;
+}
+
 export interface ParsePaymentResponse {
   isRemittance: boolean;
   /** Why it was rejected, when isRemittance is false. */
   reason: string | null;
+  duplicate: ParsePaymentDuplicate | null;
   doc: {
     source:             string;
     payerNameAsPrinted: string;
@@ -1615,7 +1647,7 @@ export interface ParsePaymentResponse {
   lines: ParsedPaymentLine[];
   summary: {
     lineCount: number; matched: number; unmatched: number; autoApply: number;
-    matchedAmount: number; totalAmount: number;
+    matchedAmount: number; totalAmount: number; alreadyPaid: number;
   } | null;
 }
 

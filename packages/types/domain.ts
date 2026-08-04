@@ -450,6 +450,25 @@ export interface PayrollRecord {
   /** 'reopen'     — a human unlocked the week.
    *  'refinalize' — replaced by a fresh snapshot after the numbers changed. */
   supersededReason?: "reopen" | "refinalize";
+  /** ── Paystub delivery state ─────────────────────────────────────────
+   *  Populated by POST /v1/payroll/records/:id/send once the
+   *  dispatcher clicks "Send paystub." Only mutates on the ACTIVE row —
+   *  a superseded record keeps whatever delivery state it had at the
+   *  moment it was superseded (historical evidence of what was actually
+   *  sent to the driver). */
+  viewToken?: string;
+  sentAt?: string;
+  /** Channels that succeeded on the MOST RECENT send. Values today:
+   *  'sms' | 'push'. Resend overwrites; the array always describes the
+   *  latest attempt's outcome, not the cumulative history. */
+  sentVia?: ("sms" | "push")[];
+  smsMessageSid?: string;
+  /** One-line reason the send didn't fully succeed. Null after a fully
+   *  successful send. Surface in the payroll UI so the dispatcher sees
+   *  why a click didn't land without opening logs. */
+  sendError?: string;
+  /** First time the driver's browser or app opened the paystub link. */
+  viewedAt?: string;
 }
 
 // ── Org settings ────────────────────────────────────────────────────────

@@ -62,6 +62,10 @@ const isPublicRoute = createRouteMatcher([
   // sending list. Route handler at apps/web/app/unsubscribe/[token]
   // proxies to the Railway API's crm-public endpoint.
   '/unsubscribe(.*)',
+  // Paystub view links texted to drivers. Token in URL = auth
+  // (drivers don't have Clerk accounts). Page fetches
+  // /v1/public/paystubs/<token> on the Railway API.
+  '/paystub(.*)',
 ])
 
 const protectedMiddleware = clerkMiddleware(async (auth, request) => {

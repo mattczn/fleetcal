@@ -37,6 +37,12 @@ import { supabase } from "../lib/supabase.js";
 import { loadExcludedDrivers } from "../lib/reportExclusions.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability, requireModule } from "../middleware/require.js";
+import { sendPushToDriver } from "../lib/push.js";
+import { sendSms, toE164US } from "../lib/twilio.js";
+import { env } from "../lib/env.js";
+import { randomBytes } from "node:crypto";
+
+import type { SendPaystubResponse } from "@fleetcal/types";
 
 const payroll = new Hono<{ Variables: AuthVariables }>();
 
@@ -84,6 +90,12 @@ interface RecRow {
   superseded_by: string | null;
   superseded_by_name: string | null;
   superseded_reason: string | null;
+  view_token:       string | null;
+  sent_at:          string | null;
+  sent_via:         string[] | null;
+  sms_message_sid:  string | null;
+  send_error:       string | null;
+  viewed_at:        string | null;
 }
 
 /** Defensive read of the jsonb snapshot.
@@ -119,6 +131,14 @@ function rowToRec(r: RecRow): PayrollRecord {
       r.superseded_reason === "reopen" || r.superseded_reason === "refinalize"
         ? r.superseded_reason
         : undefined,
+    viewToken:     r.view_token      ?? undefined,
+    sentAt:        r.sent_at         ?? undefined,
+    sentVia:       (r.sent_via ?? []).filter(
+                     (v): v is "sms" | "push" => v === "sms" || v === "push",
+                   ),
+    smsMessageSid: r.sms_message_sid ?? undefined,
+    sendError:     r.send_error      ?? undefined,
+    viewedAt:      r.viewed_at       ?? undefined,
   };
 }
 
@@ -126,7 +146,7 @@ const ADJ_COLS = "id,driver_name,week_start,category,description,amount,created_
 // Must stay a single string LITERAL — supabase-js parses it at the type
 // level to shape the row, and a concatenated expression degrades to
 // `string`, which turns every select into GenericStringError.
-const REC_COLS = "id,driver_name,week_start,total_pay,finalized_at,notes,line_items,finalized_by,finalized_by_name,superseded_at,superseded_by,superseded_by_name,superseded_reason";
+const REC_COLS = "id,driver_name,week_start,total_pay,finalized_at,notes,line_items,finalized_by,finalized_by_name,superseded_at,superseded_by,superseded_by_name,superseded_reason,view_token,sent_at,sent_via,sms_message_sid,send_error,viewed_at";
 
 /** The record currently in force for a driver-week, or null.
  *
@@ -150,7 +170,9 @@ async function activeRecordFor(
     console.error("[payroll] activeRecordFor failed:", error);
     return null;
   }
-  return (data as RecRow | null) ?? null;
+  // Generated Supabase types lag the 20260803 delivery-columns
+  // migration; cast through unknown until the types are regenerated.
+  return (data as unknown as RecRow | null) ?? null;
 }
 
 // ── Adjustments ─────────────────────────────────────────────────────────
@@ -330,7 +352,7 @@ payroll.get("/records", async (c) => {
     console.error("[GET /v1/payroll/records] failed:", error);
     return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
   }
-  const records = ((data ?? []) as RecRow[]).map(rowToRec);
+  const records = ((data ?? []) as unknown as RecRow[]).map(rowToRec);
   const filtered = driverName
     ? records // explicit name query — caller asked for this driver
     : records.filter(r => !excluded.nameSet.has((r.driverName ?? "").trim()));
@@ -426,7 +448,7 @@ payroll.post("/records", requireCapability("payroll.finalize"), async (c) => {
     return c.json({ error: "upsert_failed", detail: error?.message } satisfies ApiErrorResponse, 500);
   }
   const res: UpsertPayrollRecordResponse = {
-    record: rowToRec(data as RecRow),
+    record: rowToRec(data as unknown as RecRow),
     ...(previous ? { supersededRecord: rowToRec(previous) } : {}),
   };
   return c.json(res);
@@ -469,7 +491,209 @@ payroll.delete("/records/:id", requireCapability("payroll.finalize"), async (c) 
     // someone else. Idempotent from the caller's point of view.
     return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
   }
-  const res: DeletePayrollRecordResponse = { record: rowToRec(data as RecRow) };
+  const res: DeletePayrollRecordResponse = { record: rowToRec(data as unknown as RecRow) };
+  return c.json(res);
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// POST /v1/payroll/records/:id/send — send the paystub link to the driver
+//
+// Fires SMS (if the driver has a phone AND Twilio is configured) and a
+// push notification (if the driver has any registered devices). Marks
+// the record with delivery state so the payroll UI can show a "Sent"
+// chip and the recipient can be re-nudged if the link goes stale.
+//
+// The record MUST be active — the frozen numbers behind the link are
+// exactly what the driver will see, and there's no point sending them
+// something that's since been superseded. Reopening a week clears the
+// live row's send state (a new row inserted on re-finalize), so a
+// corrected paystub needs its own explicit send.
+//
+// Idempotency: re-sending is allowed and overwrites the delivery state
+// with the latest attempt. `view_token` is minted once and reused so
+// the link doesn't rotate under a driver who bookmarked it.
+// ─────────────────────────────────────────────────────────────────────────
+
+/** ~110 bits of entropy in ~22 base32 chars — collision-free for our
+ *  volume and short enough to fit in an SMS with room to spare. */
+function mintViewToken(): string {
+  // 14 bytes = 112 bits; base32 (no padding) is 5 bits/char → 23 chars.
+  const bytes = randomBytes(14);
+  const alphabet = "abcdefghijkmnopqrstuvwxyz23456789"; // no 0/1/l/o
+  let bits = 0, value = 0, out = "";
+  for (let i = 0; i < bytes.length; i++) {
+    value = (value << 8) | bytes[i];
+    bits += 8;
+    while (bits >= 5) {
+      out += alphabet[(value >>> (bits - 5)) & 0x1f];
+      bits -= 5;
+    }
+  }
+  if (bits > 0) out += alphabet[(value << (5 - bits)) & 0x1f];
+  return out;
+}
+
+function fmtWeekLabel(weekStart: string): string {
+  // weekStart is a YYYY-MM-DD; label as MM/DD–MM/DD (7-day window).
+  const start = new Date(`${weekStart}T00:00:00Z`);
+  const end   = new Date(start.getTime() + 6 * 24 * 60 * 60 * 1000);
+  const mmdd = (d: Date) => `${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
+  return `${mmdd(start)}–${mmdd(end)}`;
+}
+
+function fmtMoney(n: number): string {
+  return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+payroll.post("/records/:id/send", requireCapability("payroll.finalize"), async (c) => {
+  const orgId = c.get("orgId");
+  const id    = c.req.param("id");
+
+  // (1) Load record + verify it's active + in this org.
+  const { data: recRaw, error: recErr } = await supabase
+    .from("payroll_records")
+    .select(REC_COLS)
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (recErr) {
+    console.error("[POST /v1/payroll/records/:id/send] fetch failed:", recErr);
+    return c.json({ error: "fetch_failed", detail: recErr.message } satisfies ApiErrorResponse, 500);
+  }
+  if (!recRaw) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+  const rec = recRaw as unknown as RecRow;
+  if (rec.superseded_at) {
+    return c.json({
+      error:  "record_superseded",
+      detail: "This paystub has been reopened or replaced. Re-finalize the week and send the new record.",
+    } satisfies ApiErrorResponse, 409);
+  }
+
+  // (2) Resolve the driver by exact-name match — same convention every
+  //     payroll query uses (records store driver_name as a string). We
+  //     need the driver row for phone (SMS) and id (push). Ambiguous
+  //     name matches are rare on Curzon-scale fleets and would fail
+  //     silently by picking the first row; explicit .limit(2) then
+  //     branch keeps that failure visible.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: drvRows } = await (supabase as any)
+    .from("drivers")
+    .select("id, name, phone")
+    .eq("org_id", orgId)
+    .eq("name", rec.driver_name)
+    .limit(2);
+  const drivers = (drvRows ?? []) as Array<{ id: number; name: string; phone: string | null }>;
+  if (drivers.length === 0) {
+    return c.json({
+      error:  "driver_not_found",
+      detail: `No driver named "${rec.driver_name}" in this org. Rename the record or add the driver first.`,
+    } satisfies ApiErrorResponse, 404);
+  }
+  if (drivers.length > 1) {
+    return c.json({
+      error:  "driver_ambiguous",
+      detail: `Multiple drivers named "${rec.driver_name}" — deduplicate before sending so the paystub goes to the right person.`,
+    } satisfies ApiErrorResponse, 409);
+  }
+  const driver = drivers[0];
+
+  // (3) Mint the view token on first send. Reuse on resend so a driver
+  //     who bookmarked the link doesn't 404.
+  const viewToken = rec.view_token ?? mintViewToken();
+  const publicUrl = `${env.publicWebUrl.replace(/\/$/, "")}/paystub/${viewToken}`;
+  const weekLabel = fmtWeekLabel(rec.week_start);
+  const netStr    = fmtMoney(Number(rec.total_pay));
+
+  // (4) Fire push (independent of SMS — some drivers have the app but
+  //     no valid phone). sendPushToDriver silently no-ops when there
+  //     are no registered tokens; we treat "no tokens" as ok so an
+  //     app-less driver doesn't fail the whole send.
+  let pushResult: SendPaystubResponse["pushResult"];
+  try {
+    await sendPushToDriver(orgId, driver.id, {
+      title: "Paystub ready",
+      body:  `${weekLabel} — Net ${netStr}. Tap to view.`,
+      data:  { url: `/paystub/${viewToken}`, kind: "paystub" },
+    });
+    pushResult = { ok: true };
+  } catch (err) {
+    pushResult = { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+
+  // (5) Fire SMS if the driver has a valid phone AND Twilio is set up.
+  //     A bad phone or unconfigured Twilio isn't a send-endpoint
+  //     failure — it's a per-channel outcome, surfaced back to the UI.
+  let smsResult: SendPaystubResponse["smsResult"];
+  const e164 = toE164US(driver.phone);
+  if (!e164) {
+    smsResult = { ok: false, error: driver.phone
+        ? `Invalid phone: "${driver.phone}" — expected +1XXXXXXXXXX or 10 digits.`
+        : "Driver has no phone number on file." };
+  } else {
+    const smsBody =
+      `FleetCal: your paystub for ${weekLabel} is ready. ` +
+      `Net ${netStr}. View: ${publicUrl}`;
+    const r = await sendSms({ to: e164, body: smsBody });
+    smsResult = r.ok
+      ? { ok: true, sid: r.sid }
+      : { ok: false, error: `${r.kind}: ${r.detail}` };
+  }
+
+  // (6) Record delivery state. sent_at is stamped on ANY successful
+  //     channel — a driver got the message somehow. If both channels
+  //     failed we still update the token + send_error so the UI can
+  //     show why the click didn't land.
+  const nowIso = new Date().toISOString();
+  const anySuccess = smsResult.ok || pushResult.ok;
+  const sentVia: string[] = [];
+  if (smsResult.ok)  sentVia.push("sms");
+  if (pushResult.ok) sentVia.push("push");
+  const errorSummary = anySuccess
+    ? null
+    // Both failed → concatenate for the UI. Truncated so a long Twilio
+    // error doesn't blow the varchar (the column is text so it's fine
+    // schema-wise, but a 5-line toast is worse than a 1-line one).
+    : [
+        smsResult.ok  ? null : `sms: ${(smsResult as { error: string }).error}`,
+        pushResult.ok ? null : `push: ${(pushResult as { error: string }).error}`,
+      ].filter(Boolean).join(" · ").slice(0, 500);
+
+  const updates: Record<string, unknown> = {
+    view_token:      viewToken,
+    sent_via:        sentVia,
+    send_error:      errorSummary,
+    sms_message_sid: smsResult.ok ? smsResult.sid : rec.sms_message_sid,
+  };
+  if (anySuccess) updates.sent_at = nowIso;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: updated, error: upErr } = await (supabase as any)
+    .from("payroll_records")
+    .update(updates)
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .is("superseded_at", null)  // race: don't stamp send state onto a row that just got superseded
+    .select(REC_COLS)
+    .maybeSingle();
+  if (upErr) {
+    console.error("[POST /v1/payroll/records/:id/send] update failed:", upErr);
+    return c.json({ error: "update_failed", detail: upErr.message } satisfies ApiErrorResponse, 500);
+  }
+  if (!updated) {
+    // Rare: someone reopened the week between our fetch and our update.
+    // The send already happened (SMS was already at Twilio), so we
+    // don't retry — just tell the caller the record vanished.
+    return c.json({
+      error:  "record_superseded",
+      detail: "The record was reopened while sending. The message may still have been delivered; re-finalize + resend to be sure.",
+    } satisfies ApiErrorResponse, 409);
+  }
+
+  const res: SendPaystubResponse = {
+    record:     rowToRec(updated as unknown as RecRow),
+    smsResult,
+    pushResult,
+  };
   return c.json(res);
 });
 

@@ -103,6 +103,16 @@ export const env = {
   /** NeverBounce API key (secret_XXXX). Unset = the verify endpoints
    *  fail loudly and enrollment falls back to require manual verify. */
   neverBounceApiKey:       process.env.NEVERBOUNCE_API_KEY || undefined,
+  /** Twilio SMS creds for outbound driver-facing messages
+   *  (paystub links; other transactional flows later). Any missing
+   *  value disables SMS sending — the paystub send endpoint still
+   *  fires push and stamps a send_error so the UI can surface why
+   *  SMS didn't go. Driver-app OTP is done via Supabase phone auth
+   *  and uses its OWN Twilio config in the Supabase dashboard —
+   *  these vars are only for our direct-from-Railway sends. */
+  twilioAccountSid:        process.env.TWILIO_ACCOUNT_SID || undefined,
+  twilioAuthToken:         process.env.TWILIO_AUTH_TOKEN  || undefined,
+  twilioFromNumber:        process.env.TWILIO_FROM_NUMBER || undefined,
 } as const;
 
 export const isProd = env.nodeEnv === "production";

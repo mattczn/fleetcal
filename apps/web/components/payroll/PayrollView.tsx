@@ -811,6 +811,11 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
   const [showLive,      setShowLive]      = useState(false);
   const [reopening,     setReopening]     = useState(false);
   const [confirmReopen, setConfirmReopen] = useState(false);
+  const [sending,       setSending]       = useState(false);
+  /** null = idle, string = last outcome text to flash for a few seconds
+   *  under the button (green when everything sent, amber when partial,
+   *  red when nothing landed). */
+  const [sendFlash,     setSendFlash]     = useState<{ tone: 'ok' | 'warn' | 'err'; msg: string } | null>(null);
   const [showProfile,   setShowProfile]   = useState(false);
   const [printing,      setPrinting]      = useState(false);
   const [trashConfirm,  setTrashConfirm]  = useState<string | null>(null); // adj.id pending confirm
@@ -1065,6 +1070,40 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
     setShowLive(false);
     setReopening(false);
     setConfirmReopen(false);
+  }
+
+  async function handleSend() {
+    if (!record) return;
+    setSending(true);
+    setSendFlash(null);
+    try {
+      const res = await railway.sendPaystub(record.id);
+      // Merge the returned record so the header + footer picks up
+      // sent_at / sent_via without a full page refetch.
+      setRecord(res.record);
+      const okChannels: string[] = [];
+      if (res.smsResult.ok)  okChannels.push('SMS');
+      if (res.pushResult.ok) okChannels.push('push');
+      if (okChannels.length === 2) {
+        setSendFlash({ tone: 'ok', msg: 'Sent by SMS + push.' });
+      } else if (okChannels.length === 1) {
+        // Partial — surface the failed channel so dispatch knows why
+        // (bad phone, no device, Twilio config missing, etc.).
+        const failed = res.smsResult.ok
+          ? `push failed: ${(res.pushResult as { error: string }).error}`
+          : `SMS failed: ${(res.smsResult as { error: string }).error}`;
+        setSendFlash({ tone: 'warn', msg: `Sent by ${okChannels[0]}. ${failed}` });
+      } else {
+        setSendFlash({
+          tone: 'err',
+          msg: `Nothing sent. SMS: ${(res.smsResult as { error: string }).error}. Push: ${(res.pushResult as { error: string }).error}.`,
+        });
+      }
+    } catch (err) {
+      setSendFlash({ tone: 'err', msg: err instanceof Error ? err.message : 'Send failed.' });
+    } finally {
+      setSending(false);
+    }
   }
 
   return (
@@ -1642,12 +1681,30 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
       {/* Finalize footer */}
       <div className="flex items-center justify-between px-5 py-3"
         style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
-        <div className="text-sm" style={{ color: 'var(--gc-text-3)' }}>
-          {isFinalized
-            ? `Recorded ${fmtMoney(record!.totalPay)} on ${new Date(record!.finalizedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
-              + (record!.finalizedByName ? ` by ${record!.finalizedByName}` : '')
-              + (snapshot ? ` · ${snapshot.length} line${snapshot.length !== 1 ? 's' : ''} frozen` : ' · total only (no frozen detail)')
-            : 'Review loads and adjustments before finalizing.'}
+        <div className="text-sm flex flex-col gap-1" style={{ color: 'var(--gc-text-3)' }}>
+          <div>
+            {isFinalized
+              ? `Recorded ${fmtMoney(record!.totalPay)} on ${new Date(record!.finalizedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+                + (record!.finalizedByName ? ` by ${record!.finalizedByName}` : '')
+                + (snapshot ? ` · ${snapshot.length} line${snapshot.length !== 1 ? 's' : ''} frozen` : ' · total only (no frozen detail)')
+              : 'Review loads and adjustments before finalizing.'}
+          </div>
+          {isFinalized && record?.sentAt && (
+            <div className="text-xs">
+              Sent {new Date(record.sentAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+              {record.sentVia && record.sentVia.length > 0 ? ` via ${record.sentVia.join(' + ')}` : ''}
+              {record.viewedAt ? ` · Viewed ${new Date(record.viewedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` : ''}
+            </div>
+          )}
+          {sendFlash && (
+            <div className="text-xs font-medium" style={{
+              color: sendFlash.tone === 'ok'   ? '#137333'
+                   : sendFlash.tone === 'warn' ? '#b45309'
+                                                : '#c5221f',
+            }}>
+              {sendFlash.msg}
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2">
           {isFinalized ? (
@@ -1671,20 +1728,45 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
                 </button>
               </>
             ) : (
-              <Tooltip
-                content={
-                  <>
-                    <strong>Reopen</strong> this driver&rsquo;s pay for the week so it can be finalized again at a new amount. The existing record is <strong>kept</strong> — superseded, not deleted — along with the amount, who finalized it, and who reopened it.
-                  </>
-                }>
-                <button onClick={() => setConfirmReopen(true)}
-                  className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
-                  style={{ color: 'var(--gc-text-3)', border: '1px solid var(--gc-border)' }}
-                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
-                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                  <Unlock size={11} /> Reopen
-                </button>
-              </Tooltip>
+              <>
+                {/* Send / Resend paystub. Only meaningful once finalized;
+                    disabled while another action on this row is in flight. */}
+                <Tooltip
+                  content={
+                    record?.sentAt
+                      ? <>Resend the paystub link (SMS + push) to the driver. The link and numbers stay the same — this just texts the driver again.</>
+                      : <>Text the driver a link to this paystub. Push notification also fires if they have the driver app installed. The numbers in the link are the frozen totals above.</>
+                  }>
+                  <button onClick={handleSend} disabled={sending || reopening}
+                    className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
+                    style={{
+                      color:       record?.sentAt ? 'var(--gc-text-3)' : '#fff',
+                      background:  record?.sentAt ? 'transparent'      : '#1a73e8',
+                      border:      record?.sentAt ? '1px solid var(--gc-border)' : '1px solid #1a73e8',
+                      opacity:     sending ? 0.7 : 1,
+                    }}
+                    onMouseEnter={e => { if (!record?.sentAt) e.currentTarget.style.background = '#1558d6'; }}
+                    onMouseLeave={e => { if (!record?.sentAt) e.currentTarget.style.background = '#1a73e8'; }}>
+                    {sending
+                      ? <Loader2 size={11} className="animate-spin" />
+                      : <>{record?.sentAt ? 'Resend' : 'Send paystub'}</>}
+                  </button>
+                </Tooltip>
+                <Tooltip
+                  content={
+                    <>
+                      <strong>Reopen</strong> this driver&rsquo;s pay for the week so it can be finalized again at a new amount. The existing record is <strong>kept</strong> — superseded, not deleted — along with the amount, who finalized it, and who reopened it.
+                    </>
+                  }>
+                  <button onClick={() => setConfirmReopen(true)}
+                    className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
+                    style={{ color: 'var(--gc-text-3)', border: '1px solid var(--gc-border)' }}
+                    onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                    <Unlock size={11} /> Reopen
+                  </button>
+                </Tooltip>
+              </>
             )
           ) : confirmFin ? (
             <>

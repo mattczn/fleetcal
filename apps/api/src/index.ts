@@ -67,6 +67,7 @@ import timelineRoute from "./routes/timeline.js";
 import fleetRoute from "./routes/fleet.js";
 import costAnalysisRoute from "./routes/cost-analysis.js";
 import capacityRoute from "./routes/capacity.js";
+import trackingRoute from "./routes/tracking-public.js";
 import contactSalesRoute from "./routes/contact-sales.js";
 import supportRoute from "./routes/support.js";
 import { syncIncrementalAllOrgs, snapshotOdometersAllOrgs } from "./lib/motiveIngest.js";
@@ -83,6 +84,7 @@ import { runCrmFmcsaSyncSweep } from "./jobs/crmFmcsaSyncSweep.js";
 import { runCrmSendSweep } from "./jobs/crmSendSweep.js";
 import { crmRoute } from "./routes/crm.js";
 import { crmPublicRoute } from "./routes/crm-public.js";
+import paystubsPublicRoute from "./routes/paystubs-public.js";
 import pkg from "../package.json" with { type: "json" };
 
 import type { HealthResponse } from "@fleetcal/types";
@@ -198,6 +200,11 @@ app.get("/v1/health", (c) => {
 // Aggregate counts only, no PII. Optional CAPACITY_API_KEY gate.
 app.route("/v1/capacity", capacityRoute);
 
+// Public load tracking — fed to curzontrucking.com/track. Strict column
+// whitelist, org pinned server-side, ZIP-gated search. See the security
+// notes at the top of routes/tracking-public.ts before changing anything.
+app.route("/v1/tracking", trackingRoute);
+
 // Public lead intake — fleetcal.app/contact-sales wizard POSTs here,
 // the route emails CONTACT_SALES_TO (defaults to hello@fleetcal.app)
 // via Resend. Honeypot + time-gate stops drive-by spam.
@@ -295,6 +302,10 @@ app.route("/v1/internal", internalRoute);
 // here (token IS the auth) plus the svix-signed Resend webhook. Same
 // mount-before-Clerk precedence trick.
 app.route("/v1/crm-public", crmPublicRoute);
+
+// Paystub view links (token in URL = auth; drivers don't have Clerk
+// accounts). MUST mount before the /v1 authed branch below.
+app.route("/v1/public/paystubs", paystubsPublicRoute);
 
 // Fuel transactions inbound-email — API key auth, NOT Clerk. Must
 // mount before /v1 so /v1/fuel-transactions/inbound-email resolves
