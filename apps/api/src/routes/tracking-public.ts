@@ -247,10 +247,38 @@ async function buildPayload(loadId: string) {
   const legOrder = new Map<string, number>(
     events.map((e: { id: string; leg_index: number }) => [e.id, e.leg_index] as [string, number])
   );
-  const stops = (rawStops ?? []).sort(
+  const ordered = (rawStops ?? []).sort(
     (a: { event_id: string; sequence: number }, b: { event_id: string; sequence: number }) =>
       (legOrder.get(a.event_id)! - legOrder.get(b.event_id)!) || (a.sequence - b.sequence)
   );
+
+  // Every leg of a relay carries the FULL stop list, not just its own segment,
+  // so concatenating across legs shows the customer each stop once per leg.
+  // A relay is one journey to them: collapse to the distinct physical stops,
+  // keeping the first occurrence (and therefore the earliest leg's ordering).
+  // Sequence is part of the key so a genuine second visit to the same facility
+  // still shows twice.
+  const seen = new Set<string>();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const stops: any[] = [];
+  for (const stop of ordered) {
+    const key = [stop.sequence, stop.type, stop.lat, stop.lng, stop.appt_start].join("|");
+    if (seen.has(key)) {
+      // Keep the arrival if any leg recorded one.
+      const prior = stops.find(
+        (s) => s.sequence === stop.sequence && s.type === stop.type
+      );
+      if (prior && !prior.arrived_at && stop.arrived_at) prior.arrived_at = stop.arrived_at;
+      continue;
+    }
+    seen.add(key);
+    stops.push(stop);
+  }
+
+  // Relay points are an internal handoff between our own drivers — a yard swap
+  // is not a stop on the customer's freight. Real stops that happen to carry a
+  // handoff still show; only the pure relay points are dropped.
+  const stopsForCustomer = stops.filter((s) => s.type !== "relay");
 
   const dbStatus = deriveStatus(events.map((e: { status: string }) => e.status));
   const isException = EXCEPTION_STATUSES.has(dbStatus);
@@ -267,7 +295,7 @@ async function buildPayload(loadId: string) {
       const pos = await positionForAsset(ORG_ID, assetId);
       if (pos) {
         truckPosition = { lat: pos.lat, lon: pos.lon, locatedAt: pos.locatedAt, place: pos.description };
-        geo = geofenceStep(pos, stops as GeoStop[]);
+        geo = geofenceStep(pos, stopsForCustomer as GeoStop[]);
       }
     }
   }
@@ -326,8 +354,8 @@ async function buildPayload(loadId: string) {
     customerName = customer?.name ?? null;
   }
 
-  const deliveryStop = [...stops].reverse().find((s: { type: string }) => s.type === "delivery");
-  const lastArrival = [...stops].reverse().find((s: { arrived_at?: string | null }) => s.arrived_at);
+  const deliveryStop = [...stopsForCustomer].reverse().find((s: { type: string }) => s.type === "delivery");
+  const lastArrival = [...stopsForCustomer].reverse().find((s: { arrived_at?: string | null }) => s.arrived_at);
 
   let refNums: { label?: string; value?: string }[] = [];
   try {
@@ -337,7 +365,7 @@ async function buildPayload(loadId: string) {
     if (load.ref_nums) refNums = [{ label: "Ref", value: String(load.ref_nums) }];
   }
 
-  const deliveryStopGeo = [...stops].reverse().find(
+  const deliveryStopGeo = [...stopsForCustomer].reverse().find(
     (s: { type: string; lat?: number | null }) => s.type === "delivery" && s.lat != null
   );
   let milesToDelivery: number | null = null;
@@ -377,7 +405,7 @@ async function buildPayload(loadId: string) {
       current: i === reachedIndex,
     })),
 
-    stops: stops.map((s: Record<string, unknown>) => ({
+    stops: stopsForCustomer.map((s: Record<string, unknown>) => ({
       sequence:     s.sequence,
       type:         s.type,
       facilityName: s.facility_name ?? null,
@@ -388,7 +416,6 @@ async function buildPayload(loadId: string) {
       apptStart:    s.appt_start ?? null,
       apptEnd:      s.appt_end ?? null,
       arrivedAt:    s.arrived_at ?? null,
-      isHandoff:    s.is_handoff ?? false,
     })),
 
     driver,
@@ -408,7 +435,7 @@ async function buildPayload(loadId: string) {
       : null,
 
     documents,
-    history: buildHistory(events, stops, documents[0]?.uploadedAt ?? null),
+    history: buildHistory(events, stopsForCustomer, documents[0]?.uploadedAt ?? null),
   };
 }
 
