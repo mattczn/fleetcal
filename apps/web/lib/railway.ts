@@ -118,6 +118,32 @@ import type {
   PerformanceEventRow, MotivePerfRaw, PerformanceEventMovement,
 } from '@fleetcal/types';
 
+export interface HiringApplicant {
+  id: string;
+  first_name: string;
+  last_name: string;
+  phone: string | null;
+  email: string | null;
+  address: string | null;
+  cdl_class: string | null;
+  position: string | null;
+  start_date: string | null;
+  status: 'new' | 'screening' | 'offered' | 'hired' | 'rejected';
+  source: string;
+  notes: string | null;
+  driver_id: number | null;
+  hired_at: string | null;
+  created_at: string;
+  contract: {
+    id: string;
+    public_token: string;
+    status: 'sent' | 'signed' | 'voided';
+    signed_at: string | null;
+    document_path: string | null;
+    signingUrl: string;
+  } | null;
+}
+
 const BASE_URL =
   process.env.NEXT_PUBLIC_RAILWAY_URL ?? 'https://fleetcalapi-production.up.railway.app';
 
@@ -543,6 +569,27 @@ class RailwayClient {
   }
 
   // ── Loads ────────────────────────────────────────────────────────────
+  // ── Hiring (module: hiring, default-off) ─────────────────────────────
+  // Applicant pipeline + contractor-agreement issuing. Typed loosely on
+  // purpose: the shapes live behind a default-off module and aren't worth
+  // freezing into @fleetcal/types until the module ships to a second org.
+  listApplicants() {
+    return this.req<{ applicants: HiringApplicant[] }>('GET', '/v1/applicants');
+  }
+  createApplicant(body: Record<string, unknown>) {
+    return this.req<{ applicant: HiringApplicant }>('POST', '/v1/applicants', body);
+  }
+  updateApplicant(id: string, body: Record<string, unknown>) {
+    return this.req<{ applicant: HiringApplicant }>('PATCH', `/v1/applicants/${id}`, body);
+  }
+  hireApplicant(id: string, body: Record<string, unknown> = {}) {
+    return this.req<{ driverId: number; signingUrl: string }>('POST', `/v1/applicants/${id}/hire`, body);
+  }
+  sendApplicantContract(id: string) {
+    return this.req<{ sent: boolean; to: string; signingUrl: string }>(
+      'POST', `/v1/applicants/${id}/send-contract`);
+  }
+
   createLoad(req: CreateLoadRequest)  { return this.req<CreateLoadResponse>('POST',   '/v1/loads', req); }
   listLoads(query: Record<string, string>) {
     const qs = new URLSearchParams(query).toString();

@@ -70,6 +70,7 @@ import capacityRoute from "./routes/capacity.js";
 import trackingRoute from "./routes/tracking-public.js";
 import contractsPublicRoute from "./routes/contracts-public.js";
 import contractsRoute from "./routes/contracts.js";
+import applicantsRoute from "./routes/applicants.js";
 import contactSalesRoute from "./routes/contact-sales.js";
 import supportRoute from "./routes/support.js";
 import { syncIncrementalAllOrgs, snapshotOdometersAllOrgs } from "./lib/motiveIngest.js";
@@ -240,6 +241,7 @@ authed.get("/whoami", (c) =>
 );
 
 authed.route("/contracts", contractsRoute);
+authed.route("/applicants", applicantsRoute);
 authed.route("/loads", loadsRoute);
 authed.route("/closeout", closeoutRoute);
 authed.route("/events", eventsRoute);

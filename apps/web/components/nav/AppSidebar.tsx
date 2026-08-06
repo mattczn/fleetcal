@@ -34,6 +34,7 @@ import Image from 'next/image';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import {
+  UserPlus,
   Calendar, BarChart2, LayoutDashboard, FileCheck2, Receipt, Package,
   Gauge, Users, Settings, ChevronDown, ChevronRight, ChevronsLeft, ChevronsRight,
   Wrench, ClipboardCheck, Fuel as FuelIcon, Target, DollarSign, HandCoins,
@@ -82,6 +83,10 @@ export const PRIMARY_NAV: NavItem[] = [
   // capability: Billing asks "did we invoice it", Receivables asks "did
   // they pay, and how do we know". Off by default for new orgs.
   { kind: 'leaf', href: '/receivables', label: 'Receivables',    icon: HandCoins,       cap: 'receivables.access', module: 'receivables' },
+  // Hiring: applicant pipeline + the contractor agreement they sign. Its
+  // module is in DEFAULT_OFF_MODULES, so this leaf stays hidden for every
+  // org until it's switched on in /admin/orgs.
+  { kind: 'leaf', href: '/hiring',      label: 'Hiring',         icon: UserPlus,        cap: 'drivers.view',       module: 'hiring' },
   {
     kind: 'group',
     href: '/equipment?tab=maintenance',
