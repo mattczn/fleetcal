@@ -69,6 +69,7 @@ import costAnalysisRoute from "./routes/cost-analysis.js";
 import capacityRoute from "./routes/capacity.js";
 import trackingRoute from "./routes/tracking-public.js";
 import contractsPublicRoute from "./routes/contracts-public.js";
+import applicationsPublicRoute from "./routes/applications-public.js";
 import contractsRoute from "./routes/contracts.js";
 import applicantsRoute from "./routes/applicants.js";
 import contactSalesRoute from "./routes/contact-sales.js";
@@ -321,6 +322,11 @@ app.route("/v1/crm-public", crmPublicRoute);
 // Paystub view links (token in URL = auth; drivers don't have Clerk
 // accounts). MUST mount before the /v1 authed branch below.
 app.route("/v1/public/paystubs", paystubsPublicRoute);
+
+// Driver applications posted by a carrier's public website. Shared-secret
+// auth (APPLICATION_INTAKE_KEY), org derived from the key — see the security
+// notes in routes/applications-public.ts. Mounts before the Clerk branch.
+app.route("/v1/public/applications", applicationsPublicRoute);
 
 // Fuel transactions inbound-email — API key auth, NOT Clerk. Must
 // mount before /v1 so /v1/fuel-transactions/inbound-email resolves

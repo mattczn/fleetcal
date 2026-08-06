@@ -12,14 +12,15 @@
  * screening has no business appearing in dispatch's assignment dropdowns.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useState } from 'react';
 import {
   UserPlus, Link2, MessageSquare, FileCheck2, Loader2, Check, X, Inbox,
-  Pencil, FileDown,
+  Pencil, FileDown, ChevronRight, ChevronDown, Paperclip,
 } from 'lucide-react';
 import RequireCap from '@/components/auth/RequireCap';
 import AppShell from '@/components/nav/AppShell';
 import { railway, type HiringApplicant } from '@/lib/railway';
+import ApplicantPanel from './ApplicantPanel';
 
 const STATUS_STYLE: Record<string, { label: string; className: string }> = {
   new:       { label: 'New',       className: 'bg-slate-100 text-slate-700' },
@@ -32,7 +33,8 @@ const STATUS_STYLE: Record<string, { label: string; className: string }> = {
 const EMPTY_FORM = {
   firstName: '', lastName: '', phone: '', email: '',
   addressLine1: '', addressLine2: '', city: '', state: '', postalCode: '',
-  cdlClass: '', position: '', startDate: '', notes: '',
+  cdlClass: '', licenseNumber: '', licenseState: '', dob: '',
+  position: '', startDate: '', experience: '', notes: '',
 };
 
 /** Applicant row → form shape. Nulls become '' so inputs stay controlled. */
@@ -42,8 +44,10 @@ function toForm(a: HiringApplicant) {
     phone: a.phone ?? '', email: a.email ?? '',
     addressLine1: a.address_line1 ?? '', addressLine2: a.address_line2 ?? '',
     city: a.city ?? '', state: a.state ?? '', postalCode: a.postal_code ?? '',
-    cdlClass: a.cdl_class ?? '', position: a.position ?? '',
-    startDate: a.start_date ?? '', notes: a.notes ?? '',
+    cdlClass: a.cdl_class ?? '', licenseNumber: a.license_number ?? '',
+    licenseState: a.license_state ?? '', dob: a.dob ?? '',
+    position: a.position ?? '', startDate: a.start_date ?? '',
+    experience: a.experience ?? '', notes: a.notes ?? '',
   };
 }
 
@@ -57,6 +61,7 @@ function HiringPage() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
 
+  const [openId, setOpenId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [toast, setToast] = useState('');
@@ -208,6 +213,11 @@ function HiringPage() {
               ['city', 'City', 'text'],
               ['state', 'State', 'text'],
               ['postalCode', 'ZIP', 'text'],
+              ['cdlClass', 'License class', 'text'],
+              ['licenseNumber', 'License number', 'text'],
+              ['licenseState', 'Issuing state', 'text'],
+              ['dob', 'Date of birth', 'date'],
+              ['position', 'Position', 'text'],
               ['startDate', 'Start date (agreement effective date)', 'date'],
             ] as const).map(([key, label, type]) => (
               <label key={key} className="block">
@@ -216,6 +226,25 @@ function HiringPage() {
                 </span>
                 <input
                   type={type}
+                  value={form[key]}
+                  onChange={(e) => setForm((p) => ({ ...p, [key]: e.target.value }))}
+                  className="w-full rounded-lg border px-3 py-2 text-sm"
+                  style={{ borderColor: 'var(--gc-border)', background: 'var(--gc-bg)', color: 'var(--gc-text)' }}
+                />
+              </label>
+            ))}
+          </div>
+          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+            {([
+              ['experience', 'Previous employers & experience'],
+              ['notes', 'Internal notes'],
+            ] as const).map(([key, label]) => (
+              <label key={key} className="block">
+                <span className="mb-1 block text-xs font-medium" style={{ color: 'var(--gc-text-muted)' }}>
+                  {label}
+                </span>
+                <textarea
+                  rows={3}
                   value={form[key]}
                   onChange={(e) => setForm((p) => ({ ...p, [key]: e.target.value }))}
                   className="w-full rounded-lg border px-3 py-2 text-sm"
@@ -240,7 +269,7 @@ function HiringPage() {
         <table className="w-full text-sm">
           <thead>
             <tr style={{ background: 'var(--gc-surface-2, #f8fafc)' }}>
-              {['Applicant', 'Contact', 'Start date', 'Status', 'Agreement', ''].map((h) => (
+              {['Applicant', 'Contact', 'Start date', 'Status', 'Docs', 'Agreement', ''].map((h) => (
                 <th key={h} className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide"
                     style={{ color: 'var(--gc-text-muted)' }}>
                   {h}
@@ -250,13 +279,13 @@ function HiringPage() {
           </thead>
           <tbody>
             {loading && (
-              <tr><td colSpan={6} className="px-4 py-10 text-center" style={{ color: 'var(--gc-text-muted)' }}>
+              <tr><td colSpan={7} className="px-4 py-10 text-center" style={{ color: 'var(--gc-text-muted)' }}>
                 <Loader2 className="mx-auto h-5 w-5 animate-spin" />
               </td></tr>
             )}
 
             {!loading && !applicants.length && (
-              <tr><td colSpan={6} className="px-4 py-12 text-center" style={{ color: 'var(--gc-text-muted)' }}>
+              <tr><td colSpan={7} className="px-4 py-12 text-center" style={{ color: 'var(--gc-text-muted)' }}>
                 <Inbox className="mx-auto mb-2 h-6 w-6 opacity-50" />
                 No applicants yet. Add one to start onboarding.
               </td></tr>
@@ -266,16 +295,29 @@ function HiringPage() {
               const status = STATUS_STYLE[a.status] ?? STATUS_STYLE.new;
               const contract = a.contract;
               const busy = busyId === a.id;
+              const open = openId === a.id;
 
               return (
-                <tr key={a.id} className="border-t" style={{ borderColor: 'var(--gc-border)' }}>
+                <Fragment key={a.id}>
+                <tr className="border-t" style={{ borderColor: 'var(--gc-border)' }}>
                   <td className="px-4 py-3">
-                    <div className="font-semibold" style={{ color: 'var(--gc-text)' }}>
-                      {a.first_name} {a.last_name}
-                    </div>
-                    {a.position && (
-                      <div className="text-xs" style={{ color: 'var(--gc-text-muted)' }}>{a.position}</div>
-                    )}
+                    <button
+                      onClick={() => setOpenId(open ? null : a.id)}
+                      className="flex items-start gap-1.5 text-left"
+                      title={open ? 'Collapse' : 'Application and documents'}
+                    >
+                      {open
+                        ? <ChevronDown className="mt-0.5 h-4 w-4 shrink-0" style={{ color: 'var(--gc-text-muted)' }} />
+                        : <ChevronRight className="mt-0.5 h-4 w-4 shrink-0" style={{ color: 'var(--gc-text-muted)' }} />}
+                      <span>
+                        <span className="block font-semibold" style={{ color: 'var(--gc-text)' }}>
+                          {a.first_name} {a.last_name}
+                        </span>
+                        {a.position && (
+                          <span className="block text-xs" style={{ color: 'var(--gc-text-muted)' }}>{a.position}</span>
+                        )}
+                      </span>
+                    </button>
                   </td>
                   <td className="px-4 py-3" style={{ color: 'var(--gc-text-muted)' }}>
                     <div>{a.phone || '—'}</div>
@@ -288,6 +330,23 @@ function HiringPage() {
                     <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${status.className}`}>
                       {status.label}
                     </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    {a.documentCount > 0 ? (
+                      <button
+                        onClick={() => setOpenId(open ? null : a.id)}
+                        className="inline-flex items-center gap-1.5 text-xs font-semibold"
+                        style={{ color: 'var(--gc-text)' }}
+                      >
+                        <Paperclip className="h-3.5 w-3.5" />
+                        {a.documentCount}
+                        {!a.documentKinds.includes('mvr') && (
+                          <span className="text-amber-600">· no MVR</span>
+                        )}
+                      </button>
+                    ) : (
+                      <span style={{ color: 'var(--gc-text-muted)' }}>—</span>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     {!contract && <span style={{ color: 'var(--gc-text-muted)' }}>—</span>}
@@ -361,6 +420,14 @@ function HiringPage() {
                     </div>
                   </td>
                 </tr>
+                {open && (
+                  <tr className="border-t" style={{ borderColor: 'var(--gc-border)' }}>
+                    <td colSpan={7} className="p-0">
+                      <ApplicantPanel applicant={a} />
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               );
             })}
           </tbody>

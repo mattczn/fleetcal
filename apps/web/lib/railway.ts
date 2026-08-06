@@ -131,6 +131,10 @@ export interface HiringApplicant {
   state: string | null;
   postal_code: string | null;
   cdl_class: string | null;
+  license_number: string | null;
+  license_state: string | null;
+  dob: string | null;
+  experience: string | null;
   position: string | null;
   start_date: string | null;
   status: 'new' | 'screening' | 'offered' | 'hired' | 'rejected';
@@ -139,6 +143,16 @@ export interface HiringApplicant {
   driver_id: number | null;
   hired_at: string | null;
   created_at: string;
+  /** Signed MVR / background authorization from the website form. Null on
+   *  applicants typed in by hand — they never signed one. */
+  consent_signature: string | null;
+  consent_signed_at: string | null;
+  consent_ip: string | null;
+  consent_records: boolean | null;
+  consent_employers: boolean | null;
+  certified: boolean | null;
+  documentCount: number;
+  documentKinds: string[];
   contract: {
     id: string;
     public_token: string;
@@ -147,6 +161,24 @@ export interface HiringApplicant {
     document_path: string | null;
     signingUrl: string;
   } | null;
+}
+
+/** An applicant's document. These are `driver_documents` rows with a null
+ *  driver_id — the same table the driver profile reads, which is why hiring
+ *  is a re-point rather than a copy. `onDriver` is true once that happened. */
+export type ApplicantDocumentKind = 'license' | 'medical_card' | 'mvr' | 'other';
+
+export interface ApplicantDocument {
+  id: string;
+  kind: ApplicantDocumentKind;
+  fileName: string;
+  mimeType: string | null;
+  sizeBytes: number | null;
+  notes: string | null;
+  uploadedAt: string;
+  uploadedBy: string;
+  onDriver: boolean;
+  url: string | null;
 }
 
 const BASE_URL =
@@ -597,6 +629,19 @@ class RailwayClient {
   sendApplicantContract(id: string) {
     return this.req<{ sent: boolean; to: string; signingUrl: string }>(
       'POST', `/v1/applicants/${id}/send-contract`);
+  }
+  listApplicantDocuments(id: string) {
+    return this.req<{ documents: ApplicantDocument[] }>('GET', `/v1/applicants/${id}/documents`);
+  }
+  uploadApplicantDocument(id: string, file: File, kind: ApplicantDocumentKind, notes?: string) {
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('kind', kind);
+    if (notes) fd.append('notes', notes);
+    return this.req<{ document: ApplicantDocument }>('POST', `/v1/applicants/${id}/documents`, fd);
+  }
+  deleteApplicantDocument(id: string, documentId: string) {
+    return this.req<{ ok: true }>('DELETE', `/v1/applicants/${id}/documents/${documentId}`);
   }
 
   createLoad(req: CreateLoadRequest)  { return this.req<CreateLoadResponse>('POST',   '/v1/loads', req); }

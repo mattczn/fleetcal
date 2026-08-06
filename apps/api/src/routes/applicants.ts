@@ -13,6 +13,7 @@ import { Hono } from "hono";
 import { supabase } from "../lib/supabase.js";
 import { TEMPLATE_VERSION } from "../lib/contracts/ica.js";
 import { sendSms, toE164US, isSmsConfigured } from "../lib/twilio.js";
+import { convertIfHeicAtUpload } from "../lib/heicToJpeg.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireModule, requireCapability } from "../middleware/require.js";
 
@@ -25,9 +26,19 @@ applicants.use("*", requireModule("hiring"), requireCapability("hiring.access"))
 const COLS =
   "id, first_name, last_name, phone, email, address, " +
   "address_line1, address_line2, city, state, postal_code, " +
-  "cdl_class, position, start_date, status, source, notes, driver_id, hired_at, created_at";
+  "cdl_class, license_number, license_state, dob, experience, " +
+  "position, start_date, status, source, notes, driver_id, hired_at, created_at, " +
+  "consent_signature, consent_signed_at, consent_ip, consent_records, consent_employers, certified";
 
 const BUCKET = "driver-documents";
+
+const DOC_COLS =
+  "id, kind, storage_path, file_name, mime_type, size_bytes, notes, uploaded_at, uploaded_by, driver_id";
+
+/** Ops can add any of the four existing kinds. The MVR is the one that
+ *  matters here — it's ordered off the applicant's signed authorization and
+ *  has nowhere else to live until they're hired. */
+const DOC_KINDS = new Set(["license", "medical_card", "mvr", "other"]);
 
 /** Applicants hold address parts; the driver record and the agreement print
  *  one line. Compose rather than asking anyone to retype it. */
@@ -84,11 +95,32 @@ applicants.get("/", async (c) => {
     );
   }
 
+  // Document counts, so the table can say "CDL + medical card on file, no
+  // MVR yet" without a request per row.
+  const docCounts = new Map<string, { total: number; kinds: string[] }>();
+  if (list.length) {
+    const { data: docs } = await sb
+      .from("driver_documents")
+      .select("application_id, kind")
+      .eq("org_id", orgId)
+      .in("application_id", list.map((a: { id: string }) => a.id));
+
+    for (const doc of (docs ?? []) as Array<{ application_id: string; kind: string }>) {
+      const entry = docCounts.get(doc.application_id) ?? { total: 0, kinds: [] };
+      entry.total += 1;
+      if (!entry.kinds.includes(doc.kind)) entry.kinds.push(doc.kind);
+      docCounts.set(doc.application_id, entry);
+    }
+  }
+
   return c.json({
-    applicants: list.map((a: { driver_id: number | null }) => {
+    applicants: list.map((a: { id: string; driver_id: number | null }) => {
       const contract = a.driver_id ? contractsByDriver.get(a.driver_id) : null;
+      const docs = docCounts.get(a.id) ?? { total: 0, kinds: [] };
       return {
         ...a,
+        documentCount: docs.total,
+        documentKinds: docs.kinds,
         contract: contract
           ? {
               ...(contract as Record<string, unknown>),
@@ -153,13 +185,17 @@ applicants.patch("/:id", async (c) => {
   const map: Record<string, string> = {
     firstName: "first_name", lastName: "last_name", phone: "phone", email: "email",
     cdlClass: "cdl_class", position: "position",
+    licenseNumber: "license_number", licenseState: "license_state",
+    dob: "dob", experience: "experience",
     startDate: "start_date", status: "status", notes: "notes",
     ...ADDRESS_FIELDS,
   };
   for (const [key, column] of Object.entries(map)) {
     if (key in body) {
       let value = body[key] === "" ? null : body[key];
-      if (column === "state" && typeof value === "string") value = value.toUpperCase();
+      if ((column === "state" || column === "license_state") && typeof value === "string") {
+        value = value.toUpperCase();
+      }
       patch[column] = value;
     }
   }
@@ -284,6 +320,24 @@ applicants.post("/:id/hire", async (c) => {
     .eq("id", applicant.id)
     .eq("org_id", orgId);
 
+  // Hand the documents over. The CDL photos and MVR gathered during hiring
+  // are the same documents the driver profile wants, so they're re-pointed
+  // rather than copied — one object in storage, one row, visible from both
+  // sides. Rows keep their application_id, so the hiring page still shows
+  // what was collected before the hire.
+  const { error: handoffError } = await sb
+    .from("driver_documents")
+    .update({ driver_id: driverId })
+    .eq("org_id", orgId)
+    .eq("application_id", applicant.id)
+    .is("driver_id", null);
+
+  if (handoffError) {
+    // Not fatal: the driver and the agreement both exist, and the documents
+    // are still reachable from the applicant.
+    console.error("[applicants] document handoff failed:", handoffError);
+  }
+
   return c.json({
     driverId,
     contract,
@@ -335,6 +389,185 @@ applicants.get("/:id/agreement", async (c) => {
     signedAt: contract.signed_at,
     signedName: contract.signed_name,
   });
+});
+
+// ── Applicant documents ────────────────────────────────────────────────────
+//   GET    /v1/applicants/:id/documents  — list, with signed URLs
+//   POST   /v1/applicants/:id/documents  — upload (multipart): the MVR, or
+//                                          anything the website didn't collect
+//   DELETE /v1/applicants/:id/documents/:docId
+//
+// These are the same `driver_documents` rows the driver profile uses. An
+// applicant's documents carry `driver_id = null` until they're hired, which
+// is what keeps someone still being screened out of the driver surfaces.
+
+async function requireApplicant(orgId: string, id: string) {
+  const { data } = await sb
+    .from("driver_applications")
+    .select("id, driver_id")
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  return data as { id: string; driver_id: number | null } | null;
+}
+
+applicants.get("/:id/documents", async (c) => {
+  const orgId = c.get("orgId");
+  const applicant = await requireApplicant(orgId, c.req.param("id"));
+  if (!applicant) return c.json({ error: "Applicant not found." }, 404);
+
+  const { data: rows, error } = await sb
+    .from("driver_documents")
+    .select(DOC_COLS)
+    .eq("org_id", orgId)
+    .eq("application_id", applicant.id)
+    .order("uploaded_at", { ascending: false });
+
+  if (error) {
+    console.error("[applicants] document list failed:", error);
+    return c.json({ error: "Could not load documents." }, 500);
+  }
+
+  const list = (rows ?? []) as Array<Record<string, unknown> & { storage_path: string }>;
+  const urlByPath = new Map<string, string>();
+
+  if (list.length) {
+    const { data: signed } = await sb.storage
+      .from(BUCKET)
+      .createSignedUrls(list.map((r) => r.storage_path), 60 * 60);
+    for (const s of (signed ?? []) as Array<{ path: string; signedUrl: string }>) {
+      urlByPath.set(s.path, s.signedUrl);
+    }
+  }
+
+  return c.json({
+    documents: list.map((r) => ({
+      id: r.id,
+      kind: r.kind,
+      fileName: r.file_name,
+      mimeType: r.mime_type,
+      sizeBytes: r.size_bytes,
+      notes: r.notes,
+      uploadedAt: r.uploaded_at,
+      uploadedBy: r.uploaded_by,
+      onDriver: r.driver_id != null,
+      url: urlByPath.get(r.storage_path) ?? null,
+    })),
+  });
+});
+
+applicants.post("/:id/documents", async (c) => {
+  const orgId = c.get("orgId");
+  const userId = c.get("userId");
+  const applicant = await requireApplicant(orgId, c.req.param("id"));
+  if (!applicant) return c.json({ error: "Applicant not found." }, 404);
+
+  let form: FormData;
+  try {
+    form = await c.req.formData();
+  } catch {
+    return c.json({ error: "Could not read that upload." }, 400);
+  }
+
+  const file = form.get("file");
+  if (!file || typeof file === "string" || file.size === 0) {
+    return c.json({ error: "Choose a file to upload." }, 400);
+  }
+
+  const kind = (form.get("kind")?.toString() || "other").trim();
+  if (!DOC_KINDS.has(kind)) return c.json({ error: "Unknown document type." }, 400);
+
+  let bytes = new Uint8Array(await file.arrayBuffer());
+  let mime = file.type || "application/octet-stream";
+  let name = file.name || `${kind}.bin`;
+
+  const converted = await convertIfHeicAtUpload(file, bytes, "[applicants documents]");
+  if ("failed" in converted) {
+    return c.json({ error: "That photo couldn't be read. Try a JPEG or PDF." }, 415);
+  }
+  bytes = converted.bytes;
+  mime = converted.mime || mime;
+  name = converted.name;
+
+  const ext = (name.split(".").pop() ?? "bin").toLowerCase();
+  const rand = Math.random().toString(36).slice(2, 10);
+  const path = `${orgId}/applications/${applicant.id}/${kind}_${Date.now()}_${rand}.${ext}`;
+
+  const { error: uploadError } = await sb.storage
+    .from(BUCKET)
+    .upload(path, bytes, { contentType: mime, upsert: false });
+  if (uploadError) {
+    console.error("[applicants] document upload failed:", uploadError);
+    return c.json({ error: "Could not store that file." }, 502);
+  }
+
+  const { data, error } = await sb
+    .from("driver_documents")
+    .insert({
+      org_id: orgId,
+      // Already hired? Then it belongs to the driver too, immediately —
+      // otherwise an MVR added after the hire would be stranded on the
+      // applicant and invisible on the driver profile.
+      driver_id: applicant.driver_id,
+      application_id: applicant.id,
+      kind,
+      storage_path: path,
+      file_name: name,
+      mime_type: mime,
+      size_bytes: bytes.length,
+      notes: form.get("notes")?.toString().trim() || null,
+      uploaded_by: userId,
+    })
+    .select(DOC_COLS)
+    .single();
+
+  if (error || !data) {
+    void sb.storage.from(BUCKET).remove([path]);
+    console.error("[applicants] document insert failed:", error);
+    return c.json({ error: "Could not save that document." }, 500);
+  }
+
+  const { data: signed } = await sb.storage.from(BUCKET).createSignedUrl(path, 60 * 60);
+
+  return c.json({
+    document: {
+      id: data.id,
+      kind: data.kind,
+      fileName: data.file_name,
+      mimeType: data.mime_type,
+      sizeBytes: data.size_bytes,
+      notes: data.notes,
+      uploadedAt: data.uploaded_at,
+      uploadedBy: data.uploaded_by,
+      onDriver: data.driver_id != null,
+      url: signed?.signedUrl ?? null,
+    },
+  });
+});
+
+applicants.delete("/:id/documents/:docId", async (c) => {
+  const orgId = c.get("orgId");
+
+  // Scoped by application_id as well as id: a doc id from another applicant
+  // must not delete through this path.
+  const { data: doc } = await sb
+    .from("driver_documents")
+    .select("id, storage_path")
+    .eq("id", c.req.param("docId"))
+    .eq("org_id", orgId)
+    .eq("application_id", c.req.param("id"))
+    .maybeSingle();
+
+  if (!doc) return c.json({ error: "Document not found." }, 404);
+
+  const { error } = await sb.from("driver_documents").delete().eq("id", doc.id);
+  if (error) {
+    console.error("[applicants] document delete failed:", error);
+    return c.json({ error: "Could not delete that document." }, 500);
+  }
+  void sb.storage.from(BUCKET).remove([doc.storage_path]);
+
+  return c.json({ ok: true });
 });
 
 // ── POST /v1/applicants/:id/send-contract ──────────────────────────────────
