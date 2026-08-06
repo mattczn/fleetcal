@@ -1103,7 +1103,9 @@ function ConfidenceChip({ line }: { line: ParsedPaymentLine }) {
     line.matchedBy === 'load_num'         ? 'load #'    :
     line.matchedBy === 'internal_load_id' ? 'load id'   :
     line.matchedBy === 'ambiguous'        ? 'ambiguous' :
-    line.matchedBy === 'processor_ref'    ? 'processor' : '—';
+    line.matchedBy === 'processor_ref'    ? 'processor' :
+    line.matchedBy === 'amount'           ? 'amount' :
+    line.matchedBy === 'manual'           ? 'you picked' : '—';
   const strong = line.confidence >= 90;
   return (
     <span className="text-[10px] px-1.5 py-0.5 rounded shrink-0 mt-0.5" style={{

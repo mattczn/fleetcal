@@ -31,11 +31,15 @@
  *     parser truncated input at 4,000 chars and capped output at 512 tokens,
  *     so long remittances silently lost rows with no error anywhere.
  *
- *  3. The REFERENCE matches; the AMOUNT never does. Amount only adjusts
- *     confidence. Matching on amount alone produces confident wrong
- *     allocations, which are worse than no allocation because nobody goes
- *     looking for them. `scoreLine` structurally cannot return a match from
- *     an amount.
+ *  3. The REFERENCE matches. The AMOUNT only adjusts confidence — with one
+ *     tightly fenced exception. Matching on amount alone produces confident
+ *     wrong allocations, which are worse than no allocation because nobody
+ *     goes looking for them, so `scoreLine` cannot turn an amount into a
+ *     match. The exception is a last-resort fallback used only when the
+ *     reference is unusable, and only when BOTH guards hold: the search is
+ *     scoped to a single customer, and exactly one of their open invoices
+ *     carries that exact balance. It scores 70 — below AUTO_APPLY_THRESHOLD
+ *     — so it always reaches a human. It suggests; it never applies.
  *
  *  4. References are stored verbatim and normalized by RULE, not by prompt.
  *     Observed in the corpus: ITS prints `4419274-21 | 4419274-21` for what
@@ -266,6 +270,9 @@ export type MatchedBy =
   | "load_num"
   | "internal_load_id"
   | "processor_ref"
+  /** Last resort: exactly ONE open invoice for this customer has this exact
+   *  balance. Never auto-applied — see NAMESPACE_SCORE. */
+  | "amount"
   | "ambiguous"
   | "none";
 
@@ -301,6 +308,12 @@ const NAMESPACE_SCORE: Record<Exclude<MatchedBy, "ambiguous" | "none">, number> 
   load_num:         95,
   internal_load_id: 95,
   processor_ref:    65,
+  // Deliberately below AUTO_APPLY_THRESHOLD. An amount match is a strong
+  // SUGGESTION for a human, never an instruction to move money — the whole
+  // reason amount-matching is fenced off is that it produces confident
+  // wrong answers, and a wrong allocation is worse than an unapplied one
+  // because nobody goes looking for it.
+  amount:           70,
 };
 
 /** At or above this, a line may be applied without human review. Set so
@@ -469,6 +482,39 @@ export async function resolveLines(
     }
   }
 
+  // 2b. Amount fallback, customer-scoped only.
+  //
+  //     Some payers bill amounts that are effectively unique per load, so
+  //     when a reference is unusable — truncated on the document, or an
+  //     identifier we never recorded — the balance still identifies the
+  //     invoice. This is safe ONLY under two conditions, both enforced
+  //     here: the search is confined to one customer, and exactly one of
+  //     their open invoices carries that exact balance. A second invoice
+  //     at the same amount makes it ambiguous, and ambiguous is a review
+  //     item, never a guess.
+  //
+  //     Org-wide amount matching is deliberately not offered. Across 135
+  //     customers, round figures like 650.00 collide constantly.
+  let byAmount: Map<string, InvoiceRow[]> | null = null;
+  if (opts.customerId) {
+    const { data: openRows } = await supabase
+      .from("invoices")
+      .select(invCols + ",paid_amount")
+      .eq("org_id", orgId)
+      .eq("customer_id", opts.customerId)
+      .neq("status", "paid")
+      .neq("status", "void");
+    byAmount = new Map();
+    for (const row of (openRows ?? []) as Array<InvoiceRow & { paid_amount?: number }>) {
+      const bal = round2(Number(row.total ?? 0) - Number(row.paid_amount ?? 0));
+      if (bal <= 0) continue;
+      const key = bal.toFixed(2);
+      const list = byAmount.get(key) ?? [];
+      list.push(row);
+      byAmount.set(key, list);
+    }
+  }
+
   // 3. UNION the hits from every namespace, then require exactly one distinct
   //    invoice.
   //
@@ -533,6 +579,26 @@ export async function resolveLines(
         line, candidates, invoiceId: null, matchedBy: "ambiguous", confidence: 0,
         ambiguous: [...hits.keys()],
         note: `${hits.size} distinct invoices matched — needs a human`,
+      };
+    }
+
+    // Nothing resolved by reference. Try the balance, if we are scoped to a
+    // customer and it picks out exactly one invoice.
+    const amountHits = byAmount?.get(round2(line.amount).toFixed(2)) ?? [];
+    if (amountHits.length === 1) {
+      const inv = amountHits[0]!;
+      return {
+        line, candidates, invoiceId: inv.id, matchedBy: "amount",
+        confidence: scoreLine(line, "amount", inv, false),
+        note: "no usable reference — matched on the only open invoice for " +
+              "this customer with this exact balance",
+      };
+    }
+    if (amountHits.length > 1) {
+      return {
+        line, candidates, invoiceId: null, matchedBy: "ambiguous", confidence: 0,
+        ambiguous: amountHits.map((i) => i.id),
+        note: `${amountHits.length} open invoices share this amount — needs a human`,
       };
     }
 
