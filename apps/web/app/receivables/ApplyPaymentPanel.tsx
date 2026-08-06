@@ -21,6 +21,13 @@
  *    nobody catches later: the allocations that land look perfect and the
  *    invoice for the missing row just stays open.
  *
+ * Several files can be dropped at once, and they form a QUEUE rather than a
+ * batch: each is still parsed, shown against its source, and confirmed one
+ * at a time. Backlogs arrive by the month — a broker who pays daily leaves
+ * forty documents to file — and the cost of that is opening the panel forty
+ * times, not the confirming. Batch-applying them unreviewed would trade the
+ * one safeguard this screen exists for against the wrong kind of speed.
+ *
  * Visual language is deliberately the Receivables ledger's own, at close
  * range: the same aging tints, the same tabular figures, the same chip
  * vocabulary. A payment screen that invented its own look would make the
@@ -133,12 +140,38 @@ function parseCsv(text: string): string[][] {
   return rows.filter(r => r.some(c => c.trim() !== ''));
 }
 
+/** What became of one queued document. Pending is the ABSENCE of a result,
+ *  not a value — so "have I dealt with this yet" is one lookup, not two. */
+type QueueState = 'applied' | 'attached' | 'skipped' | 'failed';
+type QueueResult = { state: QueueState; note?: string };
+
+/** Uber names its remittances `CURZON TRUCKING LLC_2026-08-06_remittance.pdf`;
+ *  factoring portals are no shorter. The date is the only part that tells one
+ *  from another at a glance, so it is what the queue chip shows. */
+function chipLabel(name: string): string {
+  const iso = name.match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${Number(iso[2])}/${Number(iso[3])}`;
+  const stem = name.replace(/\.[^.]+$/, '');
+  return stem.length > 12 ? `${stem.slice(0, 11)}…` : stem;
+}
+
 export default function ApplyPaymentPanel({
   customers, initialCustomerId, onClose, onSaved,
 }: ApplyPaymentPanelProps) {
-  const [file,    setFile]    = useState<File | null>(null);
+  /** The documents to work through, in the order they were dropped, and
+   *  which one is on screen. A single file is just a queue of one. */
+  const [queue,   setQueue]   = useState<File[]>([]);
+  const [qIndex,  setQIndex]  = useState(0);
+  const [results, setResults] = useState<Record<number, QueueResult>>({});
+  const file = queue[qIndex] ?? null;
+
   const [parsed,  setParsed]  = useState<ParsePaymentResponse | null>(null);
   const [customerId, setCustomerId] = useState<string>(initialCustomerId ?? '');
+  /** True once a human picked the customer, or the panel was opened from a
+   *  customer's page. An inferred customer must NOT carry to the next
+   *  document — a mixed drop would then be read against the wrong payer,
+   *  and scoping the search that way turns wrong into confident. */
+  const [customerLocked, setCustomerLocked] = useState(!!initialCustomerId);
   const [skip,    setSkip]    = useState<Set<number>>(new Set());
   const [busy,    setBusy]    = useState(false);
   const [phase,   setPhase]   = useState<'idle' | 'reading' | 'applying'>('idle');
@@ -242,9 +275,15 @@ export default function ApplyPaymentPanel({
     }
   }, []);
 
-  const accept = useCallback(async (f: File | null) => {
-    if (!f) return;
-    setFile(f); setParsed(null); setErr(null);
+  /** Put one document on screen. Excel is converted to CSV first so there
+   *  is still a single extraction route behind this. */
+  const openDoc = useCallback(async (f: File, forCustomer: string | null) => {
+    // Every per-document decision resets. `run` clears most of these on a
+    // successful parse, but a parse that throws would otherwise leave the
+    // previous document's hand-picked invoices sitting under the new one.
+    setParsed(null); setErr(null);
+    setPicked({}); setSearchFor(null); setSkip(new Set()); setHoverRow(null);
+    setDateOverride('');
     if (/\.(xlsx|xlsm|xls)$/i.test(f.name)) {
       try {
         const wb = XLSX.read(await f.arrayBuffer(), { type: 'array' });
@@ -256,15 +295,73 @@ export default function ApplyPaymentPanel({
         }) ?? wb.SheetNames[0];
         const csv = XLSX.utils.sheet_to_csv(wb.Sheets[name]);
         setSheetCsv({ file: f, csv, sheets: wb.SheetNames });
-        void run(f, customerId || null, csv);
+        await run(f, forCustomer, csv);
       } catch {
         setErr("Couldn't read that spreadsheet — try exporting the sheet as CSV.");
       }
       return;
     }
     setSheetCsv(null);
-    void run(f, customerId || null);
-  }, [run, customerId]);
+    await run(f, forCustomer);
+  }, [run]);
+
+  /** The customer to read the NEXT document against. Only a deliberate
+   *  choice carries forward; an inference belongs to the document it came
+   *  from. See `customerLocked`. */
+  const carryCustomer = useCallback(
+    () => (customerLocked ? (customerId || null) : null),
+    [customerLocked, customerId],
+  );
+
+  /** Start over with a new set of files. Dropping again replaces the queue
+   *  rather than appending, which is what "Replace" has always meant here. */
+  const accept = useCallback(async (files: FileList | File[] | null) => {
+    const list = Array.from(files ?? []);
+    if (!list.length) return;
+    setQueue(list); setQIndex(0); setResults({});
+    if (!customerLocked) setCustomerId('');
+    await openDoc(list[0], carryCustomer());
+  }, [openDoc, carryCustomer, customerLocked]);
+
+  const goTo = useCallback(async (i: number) => {
+    if (i < 0 || i >= queue.length || busy) return;
+    setQIndex(i);
+    if (!customerLocked) setCustomerId('');
+    await openDoc(queue[i], carryCustomer());
+  }, [queue, busy, openDoc, carryCustomer, customerLocked]);
+
+  /** Record what happened to the document on screen and move to the next one
+   *  that hasn't been dealt with. A one-file queue keeps the old behaviour of
+   *  closing outright — there is nothing to move on to. */
+  const settle = useCallback(async (state: QueueState, note?: string) => {
+    const next: Record<number, QueueResult> = { ...results, [qIndex]: { state, note } };
+    setResults(next);
+    if (queue.length <= 1) { onClose(); return; }
+    // Forward first, then wrap — so skipping something to come back to it
+    // later actually brings you back to it.
+    let target = queue.findIndex((_, i) => i > qIndex && !next[i]);
+    if (target < 0) target = queue.findIndex((_, i) => !next[i]);
+    if (target < 0) return;                  // nothing left; the summary shows
+    setQIndex(target);
+    if (!customerLocked) setCustomerId('');
+    await openDoc(queue[target], carryCustomer());
+  }, [results, qIndex, queue, onClose, openDoc, carryCustomer, customerLocked]);
+
+  const remaining = queue.filter((_, i) => !results[i]).length;
+  const allDone   = queue.length > 1 && remaining === 0;
+  /** An unresolved error keeps its own document on screen even when nothing
+   *  is left to move on to — swapping in a cheerful summary over the top of
+   *  "4 of 9 could not be recorded" would bury the one thing worth reading. */
+  const showSummary = allDone && !err;
+
+  /** Running total of what this sitting actually put on the books, added to
+   *  as each document lands rather than reconstructed from the results. */
+  const [appliedTotal, setAppliedTotal] = useState(0);
+  const tally = useMemo(() => {
+    const t = { applied: 0, attached: 0, skipped: 0, failed: 0 };
+    for (const r of Object.values(results)) t[r.state] += 1;
+    return t;
+  }, [results]);
 
   // Memoized: `parsed?.lines ?? []` allocates a fresh array every render,
   // which would invalidate every downstream useMemo on each pass.
@@ -374,10 +471,12 @@ export default function ApplyPaymentPanel({
       onSaved();
       if (failed.length) {
         setErr(`${failed.length} of ${attachable.length} could not be linked: ${failed.join(', ')}`);
+        setResults(r => ({ ...r, [qIndex]: { state: 'failed', note: `${failed.length} not linked` } }));
       } else if (linked === 0) {
         setErr('Those payments already have proof attached — nothing to link.');
+        setResults(r => ({ ...r, [qIndex]: { state: 'failed', note: 'already had proof' } }));
       } else {
-        onClose();
+        await settle('attached', `proof on ${linked} allocation${linked === 1 ? '' : 's'}`);
       }
     } catch (e) {
       setErr(errText(e, 'Failed to attach the proof'));
@@ -450,8 +549,13 @@ export default function ApplyPaymentPanel({
       }
 
       onSaved();
-      if (failed.length) setErr(`${failed.length} of ${included.length} could not be recorded: ${failed.join(', ')}`);
-      else onClose();
+      if (failed.length) {
+        setErr(`${failed.length} of ${invoiceCount} could not be recorded: ${failed.join(', ')}`);
+        setResults(r => ({ ...r, [qIndex]: { state: 'failed', note: `${failed.length} not recorded` } }));
+      } else {
+        setAppliedTotal(t => Math.round((t + includedTotal) * 100) / 100);
+        await settle('applied', `${money2(includedTotal)} · ${invoiceCount} invoice${invoiceCount === 1 ? '' : 's'}`);
+      }
     } catch (e) {
       setErr(errText(e, 'Failed to apply payment'));
     } finally {
@@ -466,9 +570,9 @@ export default function ApplyPaymentPanel({
          style={{ background: 'rgba(0,0,0,0.36)', zIndex: 60 }}
          onMouseDown={e => { if (!busy && e.target === e.currentTarget) onClose(); }}>
       <div className="flex flex-col overflow-hidden" style={{
-        width:     !file ? 'min(96vw, 520px)'
+        width:     !file || showSummary ? 'min(96vw, 560px)'
                  : isPage ? 'min(97vw, 1400px)' : 'min(96vw, 1120px)',
-        height:    !file ? undefined
+        height:    !file || showSummary ? undefined
                  : isPage ? 'min(94vh, 980px)'  : 'min(88vh, 800px)',
         maxHeight: '94vh',
         transition: 'width .18s ease',
@@ -481,7 +585,16 @@ export default function ApplyPaymentPanel({
         <div className="shrink-0 flex items-start justify-between gap-4 px-5 pt-4 pb-3"
              style={{ borderBottom: '1px solid var(--gc-border)' }}>
           <div className="min-w-0">
-            {doc ? (
+            {showSummary ? (
+              <>
+                <div className="text-[15px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+                  Done
+                </div>
+                <div className="text-xs mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
+                  Nothing left in this batch
+                </div>
+              </>
+            ) : doc ? (
               <>
                 <div className="text-[11px] font-semibold uppercase tracking-wide"
                      style={{ color: 'var(--gc-text-3)' }}>
@@ -524,6 +637,108 @@ export default function ApplyPaymentPanel({
           </button>
         </div>
 
+        {/* ── the queue: where you are in the stack, and where you've been ──
+            Deliberately a rail of every document rather than "3 of 45": a
+            backlog is filed over several sittings, and the thing you need to
+            see is which ones you already dealt with. Chips are clickable so a
+            skipped one can be come back to. */}
+        {queue.length > 1 && !allDone && (
+          <div className="shrink-0 flex items-center gap-2 px-5 py-2"
+               style={{ borderBottom: '1px solid var(--gc-border)', background: 'var(--gc-bg)' }}>
+            <span className="text-[11px] font-semibold shrink-0 tabular-nums"
+                  style={{ color: 'var(--gc-text-3)' }}>
+              {qIndex + 1}/{queue.length}
+              <span className="ml-1.5" style={{ color: 'var(--gc-text-3)' }}>
+                · {remaining} to go
+              </span>
+            </span>
+            <div className="flex-1 min-w-0 flex items-center gap-1 overflow-x-auto">
+              {queue.map((f, i) => {
+                const r = results[i];
+                const here = i === qIndex;
+                const tint =
+                  r?.state === 'applied' || r?.state === 'attached' ? { fg: GREEN, bg: GREEN_BG, bd: GREEN }
+                  : r?.state === 'failed'                           ? { fg: RED,   bg: RED_BG,   bd: RED }
+                  : r?.state === 'skipped'                          ? { fg: 'var(--gc-text-3)', bg: 'var(--gc-surface)', bd: 'var(--gc-border)' }
+                  : here                                            ? { fg: BLUE,  bg: BLUE_BG,  bd: BLUE }
+                  :                                                   { fg: 'var(--gc-text-3)', bg: 'var(--gc-surface)', bd: 'var(--gc-border)' };
+                return (
+                  <button key={`${f.name}-${i}`} onClick={() => { void goTo(i); }} disabled={busy}
+                          title={`${f.name}${r?.note ? ` — ${r.note}` : ''}`}
+                          className="shrink-0 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] font-semibold tabular-nums"
+                          style={{
+                            color: tint.fg, background: tint.bg,
+                            border: `1px solid ${tint.bd}`,
+                            outline: here ? `2px solid ${BLUE}` : 'none',
+                            outlineOffset: 1,
+                            opacity: r && !here ? 0.75 : 1,
+                            cursor: busy ? 'default' : 'pointer',
+                          }}>
+                    {(r?.state === 'applied' || r?.state === 'attached') && <Check size={9} />}
+                    {r?.state === 'failed' && <CircleAlert size={9} />}
+                    {chipLabel(f.name)}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {showSummary ? (
+          <div className="flex-1 min-h-0 overflow-y-auto px-6 py-6">
+            <div className="flex items-center gap-2">
+              <Check size={18} style={{ color: GREEN }} />
+              <span className="text-[15px] font-bold" style={{ color: 'var(--gc-text-1)' }}>
+                {queue.length} documents worked through
+              </span>
+            </div>
+            <div className="flex items-baseline gap-2 mt-3">
+              <span className="tabular-nums" style={{
+                fontSize: 26, fontWeight: 700, letterSpacing: '-0.02em',
+                color: 'var(--gc-text-1)', lineHeight: 1.1,
+              }}>
+                {money2(appliedTotal)}
+              </span>
+              <span className="text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
+                applied across {tally.applied} remittance{tally.applied === 1 ? '' : 's'}
+              </span>
+            </div>
+            <div className="mt-4 rounded-lg border overflow-hidden"
+                 style={{ borderColor: 'var(--gc-border)' }}>
+              {queue.map((f, i) => {
+                const r = results[i];
+                const fg = r?.state === 'applied' || r?.state === 'attached' ? GREEN
+                         : r?.state === 'failed' ? RED : 'var(--gc-text-3)';
+                return (
+                  <div key={`${f.name}-${i}`}
+                       className="flex items-center gap-2 px-3 py-1.5 text-[11.5px]"
+                       style={{ borderTop: i ? '1px solid var(--gc-border-light)' : 'none' }}>
+                    <span className="flex-1 min-w-0 truncate" style={{ color: 'var(--gc-text-2)' }}>
+                      {f.name}
+                    </span>
+                    <span className="shrink-0 font-semibold" style={{ color: fg }}>
+                      {r?.state === 'applied'  ? 'applied'
+                       : r?.state === 'attached' ? 'proof filed'
+                       : r?.state === 'failed'   ? 'failed'
+                       : 'skipped'}
+                    </span>
+                    {r?.note && (
+                      <span className="shrink-0 tabular-nums" style={{ color: 'var(--gc-text-3)' }}>
+                        {r.note}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            {tally.skipped > 0 && (
+              <div className="text-[11px] mt-3" style={{ color: 'var(--gc-text-3)' }}>
+                Skipped documents were not recorded and nothing about them changed —
+                drop them in again whenever you want to deal with them.
+              </div>
+            )}
+          </div>
+        ) : (
         <div className="flex-1 min-h-0 flex">
           {/* ── left: the source document, verbatim ── */}
           {file && (
@@ -567,7 +782,7 @@ export default function ApplyPaymentPanel({
                   onDragLeave={() => setDragOver(false)}
                   onDrop={e => {
                     e.preventDefault(); setDragOver(false);
-                    void accept(e.dataTransfer.files?.[0] ?? null);
+                    void accept(e.dataTransfer.files);
                   }}
                   onClick={() => inputRef.current?.click()}
                   className="flex flex-col items-center justify-center text-center cursor-pointer"
@@ -587,6 +802,9 @@ export default function ApplyPaymentPanel({
                   </div>
                   <div className="text-xs mt-1" style={{ color: 'var(--gc-text-3)' }}>
                     or <span style={{ color: BLUE, fontWeight: 600 }}>browse your files</span>
+                  </div>
+                  <div className="text-[11px] mt-1.5" style={{ color: 'var(--gc-text-3)' }}>
+                    Drop several at once — you&apos;ll confirm them one at a time
                   </div>
                   <div className="flex items-center gap-1 mt-3 flex-wrap justify-center">
                     {['PDF', 'Screenshot', 'Excel', 'CSV', 'Email'].map(t => (
@@ -611,9 +829,9 @@ export default function ApplyPaymentPanel({
                   </span>
                 </button>
               )}
-              <input ref={inputRef} type="file" className="hidden" disabled={busy}
+              <input ref={inputRef} type="file" className="hidden" disabled={busy} multiple
                      accept=".pdf,.csv,.txt,.eml,.xlsx,.xlsm,.xls,.png,.jpg,.jpeg,.gif,.webp,application/pdf,text/csv,text/plain,image/*"
-                     onChange={e => { void accept(e.target.files?.[0] ?? null); }} />
+                     onChange={e => { void accept(e.target.files); }} />
 
               {busy && phase === 'reading' && (
                 <div className="flex items-center gap-2 text-xs mt-3" style={{ color: 'var(--gc-text-3)' }}>
@@ -663,6 +881,10 @@ export default function ApplyPaymentPanel({
                             onChange={e => {
                               const v = e.target.value;
                               setCustomerId(v);
+                              // A deliberate choice, so it carries to the rest
+                              // of the queue. Choosing "let the document
+                              // decide" hands that back.
+                              setCustomerLocked(!!v);
                               // Re-read scoped to the customer: narrowing the
                               // search resolves references ambiguous org-wide.
                               if (file) void run(file, v || null, excelCsv ?? undefined);
@@ -884,9 +1106,25 @@ export default function ApplyPaymentPanel({
             </div>
           </div>
         </div>
+        )}
 
         {/* ── footer ── */}
-        {(file || parsed) && (
+        {showSummary ? (
+          <div className="shrink-0 px-5 py-3 flex items-center gap-3"
+               style={{ borderTop: '1px solid var(--gc-border)' }}>
+            <span className="text-[11px] mr-auto" style={{ color: 'var(--gc-text-3)' }}>
+              {tally.applied} applied
+              {tally.attached ? ` · ${tally.attached} proof-only` : ''}
+              {tally.skipped  ? ` · ${tally.skipped} skipped`     : ''}
+              {tally.failed   ? ` · ${tally.failed} failed`       : ''}
+            </span>
+            <button onClick={onClose}
+                    className="text-xs font-semibold px-3.5 py-2 rounded shrink-0"
+                    style={{ background: BLUE, color: '#fff', cursor: 'pointer' }}>
+              Close
+            </button>
+          </div>
+        ) : (file || parsed) && (
           <div className="shrink-0 px-5 py-3 flex items-center gap-3"
                style={{ borderTop: '1px solid var(--gc-border)' }}>
             <div className="min-w-0 mr-auto">
@@ -922,10 +1160,22 @@ export default function ApplyPaymentPanel({
                 Set the payment date first
               </span>
             )}
+            {queue.length > 1 && (
+              // Leaves the document untouched and moves on. A backlog always
+              // contains a few that need a decision made elsewhere first, and
+              // stalling the whole queue on one of them is how the other
+              // forty stay unfiled.
+              <button onClick={() => { void settle('skipped'); }} disabled={busy}
+                      className="text-xs font-semibold px-3 py-1.5 rounded border shrink-0"
+                      style={{ borderColor: 'var(--gc-border)', color: 'var(--gc-text-2)' }}>
+                Skip
+              </button>
+            )}
             <button onClick={onClose} disabled={busy}
                     className="text-xs font-semibold px-3 py-1.5 rounded border shrink-0"
                     style={{ borderColor: 'var(--gc-border)', color: 'var(--gc-text-2)' }}>
-              Cancel
+              {/* Once anything has landed, "Cancel" would be a lie. */}
+              {Object.keys(results).length ? 'Close' : 'Cancel'}
             </button>
             {/* When every matched invoice is already credited there is nothing
                 to apply — the useful action is to file the evidence against
