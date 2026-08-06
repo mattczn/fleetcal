@@ -15,6 +15,7 @@
     "@clerk/backend": "^1.21.0",
     "@fleetcal/types": "*",
     "@hono/node-server": "^1.13.0",
+    "@pdf-lib/fontkit": "^1.1.1",
     "@react-pdf/renderer": "^4.5.1",
     "@sentry/node": "^10.56.0",
     "@supabase/supabase-js": "^2.105.1",

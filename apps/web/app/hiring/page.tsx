@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   UserPlus, Link2, MessageSquare, FileCheck2, Loader2, Check, X, Inbox,
+  Pencil, FileDown,
 } from 'lucide-react';
 import RequireCap from '@/components/auth/RequireCap';
 import AppShell from '@/components/nav/AppShell';
@@ -30,8 +31,21 @@ const STATUS_STYLE: Record<string, { label: string; className: string }> = {
 
 const EMPTY_FORM = {
   firstName: '', lastName: '', phone: '', email: '',
-  address: '', cdlClass: '', position: '', startDate: '', notes: '',
+  addressLine1: '', addressLine2: '', city: '', state: '', postalCode: '',
+  cdlClass: '', position: '', startDate: '', notes: '',
 };
+
+/** Applicant row → form shape. Nulls become '' so inputs stay controlled. */
+function toForm(a: HiringApplicant) {
+  return {
+    firstName: a.first_name ?? '', lastName: a.last_name ?? '',
+    phone: a.phone ?? '', email: a.email ?? '',
+    addressLine1: a.address_line1 ?? '', addressLine2: a.address_line2 ?? '',
+    city: a.city ?? '', state: a.state ?? '', postalCode: a.postal_code ?? '',
+    cdlClass: a.cdl_class ?? '', position: a.position ?? '',
+    startDate: a.start_date ?? '', notes: a.notes ?? '',
+  };
+}
 
 function HiringPage() {
   const [applicants, setApplicants] = useState<HiringApplicant[]>([]);
@@ -39,6 +53,7 @@ function HiringPage() {
   const [error, setError] = useState('');
 
   const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
 
@@ -60,19 +75,45 @@ function HiringPage() {
 
   useEffect(() => { void load(); }, [load]);
 
-  async function handleCreate(e: React.FormEvent) {
+  async function handleSave(e: React.FormEvent) {
     e.preventDefault();
     if (!form.firstName.trim() || !form.lastName.trim()) return;
     setSaving(true);
     try {
-      await railway.createApplicant(form);
-      setForm(EMPTY_FORM);
-      setShowForm(false);
+      if (editingId) await railway.updateApplicant(editingId, form);
+      else await railway.createApplicant(form);
+      closeForm();
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not save that applicant.');
     } finally {
       setSaving(false);
+    }
+  }
+
+  function openEdit(a: HiringApplicant) {
+    setEditingId(a.id);
+    setForm(toForm(a));
+    setShowForm(true);
+    setError('');
+  }
+
+  function closeForm() {
+    setShowForm(false);
+    setEditingId(null);
+    setForm(EMPTY_FORM);
+  }
+
+  async function handleViewAgreement(a: HiringApplicant) {
+    setBusyId(a.id);
+    setError('');
+    try {
+      const { url } = await railway.applicantAgreement(a.id);
+      window.open(url, '_blank', 'noopener');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not open that agreement.');
+    } finally {
+      setBusyId(null);
     }
   }
 
@@ -130,7 +171,7 @@ function HiringPage() {
           </p>
         </div>
         <button
-          onClick={() => setShowForm((v) => !v)}
+          onClick={() => (showForm ? closeForm() : setShowForm(true))}
           className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white"
           style={{ background: 'var(--gc-accent, #1a73e8)' }}
         >
@@ -152,7 +193,7 @@ function HiringPage() {
 
       {showForm && (
         <form
-          onSubmit={handleCreate}
+          onSubmit={handleSave}
           className="mb-6 rounded-xl border p-5"
           style={{ borderColor: 'var(--gc-border)', background: 'var(--gc-surface)' }}
         >
@@ -162,7 +203,11 @@ function HiringPage() {
               ['lastName', 'Last name *', 'text'],
               ['phone', 'Mobile (for the signing link)', 'tel'],
               ['email', 'Email', 'email'],
-              ['address', 'Mailing address', 'text'],
+              ['addressLine1', 'Address line 1', 'text'],
+              ['addressLine2', 'Address line 2', 'text'],
+              ['city', 'City', 'text'],
+              ['state', 'State', 'text'],
+              ['postalCode', 'ZIP', 'text'],
               ['startDate', 'Start date (agreement effective date)', 'date'],
             ] as const).map(([key, label, type]) => (
               <label key={key} className="block">
@@ -186,7 +231,7 @@ function HiringPage() {
             style={{ background: 'var(--gc-accent, #1a73e8)' }}
           >
             {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-            Save applicant
+            {editingId ? 'Save changes' : 'Save applicant'}
           </button>
         </form>
       )}
@@ -258,6 +303,28 @@ function HiringPage() {
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex justify-end gap-2">
+                      <button
+                        onClick={() => openEdit(a)}
+                        title="Edit applicant"
+                        className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold"
+                        style={{ borderColor: 'var(--gc-border)', color: 'var(--gc-text)' }}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                        Edit
+                      </button>
+
+                      {contract?.status === 'signed' && (
+                        <button
+                          onClick={() => handleViewAgreement(a)}
+                          disabled={busy}
+                          className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold disabled:opacity-60"
+                          style={{ borderColor: 'var(--gc-border)', color: 'var(--gc-text)' }}
+                        >
+                          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileDown className="h-3.5 w-3.5" />}
+                          View agreement
+                        </button>
+                      )}
+
                       {!contract && (
                         <button
                           onClick={() => handleHire(a)}

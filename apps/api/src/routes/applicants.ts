@@ -23,8 +23,32 @@ const applicants = new Hono<{ Variables: AuthVariables }>();
 applicants.use("*", requireModule("hiring"), requireCapability("hiring.access"));
 
 const COLS =
-  "id, first_name, last_name, phone, email, address, cdl_class, position, " +
-  "start_date, status, source, notes, driver_id, hired_at, created_at";
+  "id, first_name, last_name, phone, email, address, " +
+  "address_line1, address_line2, city, state, postal_code, " +
+  "cdl_class, position, start_date, status, source, notes, driver_id, hired_at, created_at";
+
+const BUCKET = "driver-documents";
+
+/** Applicants hold address parts; the driver record and the agreement print
+ *  one line. Compose rather than asking anyone to retype it. */
+function composeAddress(parts: {
+  address_line1?: string | null; address_line2?: string | null;
+  city?: string | null; state?: string | null; postal_code?: string | null;
+}): string | null {
+  const street = [parts.address_line1, parts.address_line2].filter(Boolean).join(" ");
+  const region = [parts.city, parts.state].filter(Boolean).join(", ");
+  const tail = [region, parts.postal_code].filter(Boolean).join(" ");
+  const full = [street, tail].filter(Boolean).join(", ").trim();
+  return full || null;
+}
+
+const ADDRESS_FIELDS: Record<string, string> = {
+  addressLine1: "address_line1",
+  addressLine2: "address_line2",
+  city: "city",
+  state: "state",
+  postalCode: "postal_code",
+};
 
 function signingBase(): string {
   return process.env.CONTRACT_SIGNING_BASE_URL || "https://curzontrucking.com";
@@ -95,7 +119,15 @@ applicants.post("/", async (c) => {
       last_name: lastName,
       phone: String(body.phone ?? "").trim() || null,
       email: String(body.email ?? "").trim() || null,
-      address: String(body.address ?? "").trim() || null,
+      address_line1: String(body.addressLine1 ?? "").trim() || null,
+      address_line2: String(body.addressLine2 ?? "").trim() || null,
+      city: String(body.city ?? "").trim() || null,
+      state: String(body.state ?? "").trim().toUpperCase() || null,
+      postal_code: String(body.postalCode ?? "").trim() || null,
+      address: composeAddress({
+        address_line1: body.addressLine1, address_line2: body.addressLine2,
+        city: body.city, state: body.state, postal_code: body.postalCode,
+      }),
       cdl_class: String(body.cdlClass ?? "").trim() || null,
       position: String(body.position ?? "").trim() || null,
       start_date: body.startDate || null,
@@ -120,13 +152,29 @@ applicants.patch("/:id", async (c) => {
   const patch: Record<string, unknown> = {};
   const map: Record<string, string> = {
     firstName: "first_name", lastName: "last_name", phone: "phone", email: "email",
-    address: "address", cdlClass: "cdl_class", position: "position",
+    cdlClass: "cdl_class", position: "position",
     startDate: "start_date", status: "status", notes: "notes",
+    ...ADDRESS_FIELDS,
   };
   for (const [key, column] of Object.entries(map)) {
-    if (key in body) patch[column] = body[key] === "" ? null : body[key];
+    if (key in body) {
+      let value = body[key] === "" ? null : body[key];
+      if (column === "state" && typeof value === "string") value = value.toUpperCase();
+      patch[column] = value;
+    }
   }
   if (!Object.keys(patch).length) return c.json({ error: "Nothing to update." }, 400);
+
+  // Any address part changing means the composed line is stale.
+  if (Object.values(ADDRESS_FIELDS).some((col) => col in patch)) {
+    const { data: current } = await sb
+      .from("driver_applications")
+      .select("address_line1, address_line2, city, state, postal_code")
+      .eq("id", c.req.param("id"))
+      .eq("org_id", orgId)
+      .maybeSingle();
+    patch.address = composeAddress({ ...(current ?? {}), ...patch } as never);
+  }
 
   const { data, error } = await sb
     .from("driver_applications")
@@ -240,6 +288,52 @@ applicants.post("/:id/hire", async (c) => {
     driverId,
     contract,
     signingUrl: `${signingBase()}/contract/${contract.public_token}`,
+  });
+});
+
+// ── GET /v1/applicants/:id/agreement ───────────────────────────────────────
+// A short-lived signed URL for the filed PDF. Minted on demand rather than
+// baked into the list response, where it would be stale by the time anyone
+// clicked it.
+applicants.get("/:id/agreement", async (c) => {
+  const orgId = c.get("orgId");
+
+  const { data: applicant } = await sb
+    .from("driver_applications")
+    .select("driver_id")
+    .eq("id", c.req.param("id"))
+    .eq("org_id", orgId)
+    .maybeSingle();
+
+  if (!applicant?.driver_id) return c.json({ error: "No agreement yet." }, 404);
+
+  const { data: contract } = await sb
+    .from("driver_contracts")
+    .select("document_path, status, signed_at, signed_name")
+    .eq("org_id", orgId)
+    .eq("driver_id", applicant.driver_id)
+    .is("voided_at", null)
+    .order("sent_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!contract?.document_path) {
+    return c.json({ error: "That agreement hasn't been signed yet." }, 404);
+  }
+
+  const { data: signed, error } = await sb.storage
+    .from(BUCKET)
+    .createSignedUrl(contract.document_path, 60 * 10);
+
+  if (error || !signed?.signedUrl) {
+    console.error("[applicants] signed URL failed:", error);
+    return c.json({ error: "Could not open that document." }, 502);
+  }
+
+  return c.json({
+    url: signed.signedUrl,
+    signedAt: contract.signed_at,
+    signedName: contract.signed_name,
   });
 });
 

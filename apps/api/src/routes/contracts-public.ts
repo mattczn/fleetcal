@@ -24,6 +24,7 @@ import { Hono } from "hono";
 import { supabase } from "../lib/supabase.js";
 import { renderDocuments, TEMPLATE_VERSION } from "../lib/contracts/ica.js";
 import { buildContractPdf } from "../lib/contracts/pdf.js";
+import { sendSignedContract } from "../lib/contracts/email.js";
 import { isModuleEnabled } from "@fleetcal/types";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -193,6 +194,27 @@ contracts.post("/:token/sign", async (c) => {
       .eq("org_id", contract.org_id);
   }
 
+  // Deliver a copy to the office and the driver in one email. Deliberately
+  // after the row is marked signed and NOT awaited into the response's
+  // success: the agreement is already stored and recorded, so a mail failure
+  // is a resend, not a lost contract.
+  const { data: driver } = await sb
+    .from("drivers")
+    .select("email")
+    .eq("id", contract.driver_id)
+    .eq("org_id", contract.org_id)
+    .maybeSingle();
+
+  const mailed = await sendSignedContract({
+    driverName: contract.contractor_name,
+    driverEmail: driver?.email ?? null,
+    signedAt,
+    pdf: Buffer.from(pdfBytes),
+  });
+  if (!mailed.ok) {
+    console.warn("[contracts] signed but not emailed:", mailed.reason, contract.id);
+  }
+
   const { data: signed } = await sb.storage
     .from(BUCKET)
     .createSignedUrl(documentPath, 60 * 60);
@@ -201,6 +223,7 @@ contracts.post("/:token/sign", async (c) => {
     signed: true,
     signedAt: signedAt.toISOString(),
     documentUrl: signed?.signedUrl ?? null,
+    emailedTo: mailed.ok ? mailed.to : null,
   });
 });
 

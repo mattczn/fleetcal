@@ -15,4 +15,13 @@ export default defineConfig({
   minify: false,
   // Bundle workspace packages; leave node_modules deps external.
   noExternal: ["@fleetcal/types"],
+  // The signature font is a binary asset, not something tsup bundles. Copy it
+  // next to the bundle so the contract PDF renders signatures in script in
+  // production, not just in dev where the source tree is present.
+  async onSuccess() {
+    const { mkdir, copyFile } = await import("node:fs/promises");
+    await mkdir("dist/assets/fonts", { recursive: true });
+    await copyFile("src/assets/fonts/Signature.ttf", "dist/assets/fonts/Signature.ttf");
+    await copyFile("src/assets/fonts/OFL.txt", "dist/assets/fonts/OFL.txt");
+  },
 });

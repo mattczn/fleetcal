@@ -125,6 +125,11 @@ export interface HiringApplicant {
   phone: string | null;
   email: string | null;
   address: string | null;
+  address_line1: string | null;
+  address_line2: string | null;
+  city: string | null;
+  state: string | null;
+  postal_code: string | null;
   cdl_class: string | null;
   position: string | null;
   start_date: string | null;
@@ -584,6 +589,10 @@ class RailwayClient {
   }
   hireApplicant(id: string, body: Record<string, unknown> = {}) {
     return this.req<{ driverId: number; signingUrl: string }>('POST', `/v1/applicants/${id}/hire`, body);
+  }
+  applicantAgreement(id: string) {
+    return this.req<{ url: string; signedAt: string | null; signedName: string | null }>(
+      'GET', `/v1/applicants/${id}/agreement`);
   }
   sendApplicantContract(id: string) {
     return this.req<{ sent: boolean; to: string; signingUrl: string }>(

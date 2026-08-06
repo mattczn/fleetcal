@@ -7,6 +7,10 @@
  */
 
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
+import fontkit from "@pdf-lib/fontkit";
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
 import type { Block, ContractDocument } from "./ica.js";
 
 const PAGE_W = 612;   // US Letter, 72dpi
@@ -19,6 +23,30 @@ const MUTED = rgb(0.35, 0.4, 0.46);
 const RULE = rgb(0.82, 0.8, 0.76);
 
 interface Run { text: string; bold: boolean }
+
+// Great Vibes (SIL OFL 1.1) — a script face so a typed signature reads as a
+// signature rather than as another line of body copy. Read once and cached;
+// the file is ~450KB and this runs on every signing.
+const HERE = dirname(fileURLToPath(import.meta.url));
+let signatureFontBytes: Uint8Array | null = null;
+
+async function loadSignatureFont(): Promise<Uint8Array | null> {
+  if (signatureFontBytes) return signatureFontBytes;
+  // tsup bundles to dist/, so resolve relative to the source tree in dev and
+  // the copied asset in prod. Missing font must not break signing.
+  for (const candidate of [
+    resolve(HERE, "../../assets/fonts/Signature.ttf"),
+    resolve(HERE, "../assets/fonts/Signature.ttf"),
+    resolve(HERE, "assets/fonts/Signature.ttf"),
+  ]) {
+    try {
+      signatureFontBytes = await readFile(candidate);
+      return signatureFontBytes;
+    } catch { /* try the next location */ }
+  }
+  console.warn("[contracts] signature font not found — falling back to bold text");
+  return null;
+}
 
 /** Splits `**bold**` markup into runs. */
 function toRuns(text: string): Run[] {
@@ -74,8 +102,13 @@ export async function buildContractPdf(
   signature: SignatureInfo
 ): Promise<Uint8Array> {
   const pdf = await PDFDocument.create();
+  pdf.registerFontkit(fontkit);
   const regular = await pdf.embedFont(StandardFonts.Helvetica);
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
+
+  const signatureBytes = await loadSignatureFont();
+  const script = signatureBytes ? await pdf.embedFont(signatureBytes) : bold;
+  const scriptSize = signatureBytes ? 26 : 15;
 
   let page: PDFPage = pdf.addPage([PAGE_W, PAGE_H]);
   let y = PAGE_H - MARGIN;
@@ -186,12 +219,12 @@ export async function buildContractPdf(
           drawRuns([{ text: label, bold: true }], 10);
           gap(4);
 
-          // The typed name rendered as the signature mark.
-          need(24);
+          // The typed name rendered as the signature mark, in script.
+          need(34);
           page.drawText(who, {
-            x: MARGIN + 4, y: y - 13, size: 15, font: bold, color: INK,
+            x: MARGIN + 4, y: y - scriptSize + 4, size: scriptSize, font: script, color: INK,
           });
-          y -= 20;
+          y -= scriptSize + 4;
           page.drawLine({
             start: { x: MARGIN, y }, end: { x: MARGIN + 250, y },
             thickness: 0.7, color: RULE,
