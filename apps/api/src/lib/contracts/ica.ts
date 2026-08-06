@@ -625,13 +625,19 @@ export const ICA_DOCUMENTS: ContractDocument[] = [
 export function renderDocuments(values: {
   effectiveDate: string;
   contractorName: string;
-  contractorAddress: string;
+  /** Left as the literal {{contractorAddress}} token when unknown, so the
+   *  signing page can substitute what the driver types before they sign. A
+   *  contract must never be rendered with a blank where an address belongs. */
+  contractorAddress?: string | null;
 }): ContractDocument[] {
-  const swap = (text: string) =>
-    text
+  const swap = (text: string) => {
+    const out = text
       .replace(/\{\{effectiveDate\}\}/g, values.effectiveDate)
-      .replace(/\{\{contractorName\}\}/g, values.contractorName)
-      .replace(/\{\{contractorAddress\}\}/g, values.contractorAddress || "—");
+      .replace(/\{\{contractorName\}\}/g, values.contractorName);
+    return values.contractorAddress
+      ? out.replace(/\{\{contractorAddress\}\}/g, values.contractorAddress)
+      : out;
+  };
 
   return ICA_DOCUMENTS.map((doc) => ({
     ...doc,

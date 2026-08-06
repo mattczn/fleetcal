@@ -54,6 +54,8 @@ export type OrgModule =
   // ── Cross-source spend surfaces (2026-07-07) ────────────────────────
   | "expenses"           // /expenses dashboard + Ramp card spend surface. Federated view over fuel_transactions, payroll_records, and ramp_transactions; buckets grow as more sources integrate (equipment depreciation, tolls, insurance).
   // ── Collections (2026-07-30) ────────────────────────────────────────
+  // ── Hiring & onboarding (2026-08-06) ────────────────────────────────
+  | "hiring"             // Applicant pipeline + driver onboarding documents (independent contractor agreement e-signing). DEFAULT-OFF for every org including Curzon — the agreement template is carrier-specific today, so this stays dark until a carrier's own documents are loaded.
   | "receivables";       // /receivables — open AR by customer, aging, and the payment-proof ledger. Split from `accounting` deliberately: Billing is "did we invoice it", Receivables is "did they pay and how do we know". A carrier can run the invoice pipeline without wanting a collections desk, and the payment evidence surface is where custom bank/remittance integrations will land.
 
 export const ORG_MODULES: readonly OrgModule[] = [
@@ -75,6 +77,7 @@ export const ORG_MODULES: readonly OrgModule[] = [
   "crm",
   "expenses",
   "receivables",
+  "hiring",
 ] as const;
 
 /** Display labels (singular). Used in Settings → Modules toggles
@@ -98,6 +101,7 @@ export const ORG_MODULE_LABEL: Record<OrgModule, string> = {
   crm:                "Sales CRM (internal)",
   expenses:           "Expenses dashboard",
   receivables:        "Receivables",
+  hiring:             "Hiring & onboarding",
 };
 
 /** Short description for the Settings → Modules toggle UI. */
@@ -119,6 +123,7 @@ export const ORG_MODULE_BLURB: Record<OrgModule, string> = {
   invoicing_advanced: "Advanced invoice template tweaks — custom From-address (own verified domain), remit-to block, invoice-number prefix, footer notes, outbound email template overrides. Defaults work end-to-end without this.",
   crm:                "FleetCal-internal sales tooling — FMCSA lead ingest, outreach sequences, call queue. Not a customer feature.",
   expenses:           "Cross-source expenses dashboard (fuel + payroll + card spend) with per-bucket rollups and the Ramp card-transaction board.",
+  hiring:             "Applicant pipeline and driver onboarding paperwork — send a contractor agreement by link, collect a signature on any device, and file the signed PDF against the driver. Off until your own agreement template is loaded.",
   receivables:        "Collections desk — open AR by customer, aging buckets, and recording payments with the remittance or bank line that proves them. Billing sends the invoice; this tracks getting paid for it.",
 };
 
@@ -134,6 +139,10 @@ export const ORG_MODULE_BLURB: Record<OrgModule, string> = {
  */
 export const DEFAULT_OFF_MODULES: ReadonlySet<OrgModule> = new Set<OrgModule>([
   "crm",
+  // Hiring ships dark. The contract template is Curzon's agreement, so no org
+  // — including Curzon — gets this until it is turned on deliberately in
+  // /admin/orgs. Absent flags mean DISABLED here, not enabled.
+  "hiring",
 ]);
 
 /**
@@ -244,6 +253,11 @@ export const MVP_LAUNCH_DEFAULTS: Readonly<Record<OrgModule, boolean>> = {
   // turning it on later loses no payment history: every payment already
   // recorded shows up the moment the page appears.
   receivables:        false,
+  // Hiring: OFF, and also in DEFAULT_OFF_MODULES so absent flags read as
+  // disabled rather than enabled. The contractor agreement is one carrier's
+  // document; until templates are per-org data this must not light up for
+  // anyone who didn't ask for it.
+  hiring:             false,
 };
 
 // ── Resolution ────────────────────────────────────────────────────

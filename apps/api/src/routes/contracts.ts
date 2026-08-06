@@ -10,11 +10,16 @@ import { Hono } from "hono";
 import { supabase } from "../lib/supabase.js";
 import { TEMPLATE_VERSION } from "../lib/contracts/ica.js";
 import type { AuthVariables } from "../middleware/clerk.js";
+import { requireModule } from "../middleware/require.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const sb = supabase as any;
 
 const contracts = new Hono<{ Variables: AuthVariables }>();
+
+// Ships dark. No org — including Curzon — reaches these until `hiring` is
+// switched on in /admin/orgs.
+contracts.use("*", requireModule("hiring"));
 
 // ── POST /v1/contracts — issue an agreement for a driver ───────────────────
 contracts.post("/", async (c) => {

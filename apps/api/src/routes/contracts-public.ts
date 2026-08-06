@@ -24,6 +24,7 @@ import { Hono } from "hono";
 import { supabase } from "../lib/supabase.js";
 import { renderDocuments, TEMPLATE_VERSION } from "../lib/contracts/ica.js";
 import { buildContractPdf } from "../lib/contracts/pdf.js";
+import { isModuleEnabled } from "@fleetcal/types";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const sb = supabase as any;
@@ -62,6 +63,17 @@ async function loadByToken(token: string) {
     .eq("public_token", token)
     .maybeSingle();
   if (!data || data.voided_at) return null;
+
+  // There is no Clerk session on this route, so the module check reads the
+  // org off the contract itself. Turning `hiring` off must kill live signing
+  // links too, not just the dispatch-side UI.
+  const { data: settings } = await sb
+    .from("org_settings")
+    .select("modules")
+    .eq("org_id", data.org_id)
+    .maybeSingle();
+  if (!isModuleEnabled("hiring", settings?.modules)) return null;
+
   return data;
 }
 
@@ -80,10 +92,13 @@ contracts.get("/:token", async (c) => {
     companySigner: COMPANY_SIGNER,
     signedName: contract.signed_name,
     signedAt: contract.signed_at,
+    // Null when we don't have one — the driver fills it in as part of signing,
+    // the way they would on the paper form.
+    needsAddress: !contract.contractor_address,
     documents: renderDocuments({
       effectiveDate,
       contractorName: contract.contractor_name,
-      contractorAddress: contract.contractor_address ?? "",
+      contractorAddress: contract.contractor_address,
     }),
   });
 });
@@ -100,9 +115,13 @@ contracts.post("/:token/sign", async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const signedName = String(body.signedName ?? "").trim();
   const consented = body.consented === true;
+  const address = String(body.contractorAddress ?? "").trim() || contract.contractor_address;
 
   if (signedName.length < 3) {
     return c.json({ error: "Type your full legal name to sign." }, 400);
+  }
+  if (!address || address.length < 6) {
+    return c.json({ error: "Enter your mailing address." }, 400);
   }
   if (!consented) {
     return c.json({ error: "Please confirm you agree to sign electronically." }, 400);
@@ -116,7 +135,7 @@ contracts.post("/:token/sign", async (c) => {
   const documents = renderDocuments({
     effectiveDate,
     contractorName: contract.contractor_name,
-    contractorAddress: contract.contractor_address ?? "",
+    contractorAddress: address,
   });
 
   const pdfBytes = await buildContractPdf(documents, {
@@ -153,6 +172,7 @@ contracts.post("/:token/sign", async (c) => {
       signed_ip: signedIp,
       signed_user_agent: signedUserAgent,
       consented: true,
+      contractor_address: address,
       document_path: documentPath,
       template_version: TEMPLATE_VERSION,
     })
@@ -161,6 +181,16 @@ contracts.post("/:token/sign", async (c) => {
   if (updateError) {
     console.error("[contracts] status update failed:", updateError);
     return c.json({ error: "We couldn't record your signature. Please try again." }, 502);
+  }
+
+  // Push the address back onto the driver record so the next document — W-9,
+  // renewal, anything — already has it and nobody retypes it.
+  if (!contract.contractor_address && address) {
+    await sb
+      .from("drivers")
+      .update({ address })
+      .eq("id", contract.driver_id)
+      .eq("org_id", contract.org_id);
   }
 
   const { data: signed } = await sb.storage
