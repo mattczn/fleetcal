@@ -1678,6 +1678,11 @@ export interface ParsePaymentResponse {
   reason: string | null;
   duplicate: ParsePaymentDuplicate | null;
   cohort: ParsePaymentCohort | null;
+  /** paymentTotal was summed from the rows because the document prints no
+   *  total — so the dropped-row check verified nothing. */
+  totalsDerived: boolean;
+  /** The document carries no payment date; the operator must supply one. */
+  dateMissing:   boolean;
   doc: {
     source:             string;
     payerNameAsPrinted: string;

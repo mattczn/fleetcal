@@ -126,6 +126,8 @@ export default function ApplyPaymentPanel({
   const [err,     setErr]     = useState<string | null>(null);
   const [done,    setDone]    = useState(0);
   const [dragOver, setDragOver] = useState(false);
+  /** Filled in by hand when the document prints no payment date. */
+  const [dateOverride, setDateOverride] = useState('');
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   /** Invoices chosen by hand for lines the resolver couldn't place, keyed
@@ -209,6 +211,7 @@ export default function ApplyPaymentPanel({
       // are already settled. Those are the signature of a re-uploaded
       // remittance, and re-applying would push them overpaid.
       setPicked({}); setSearchFor(null);
+      setDateOverride(res.dateMissing ? new Date().toISOString().slice(0, 10) : '');
       setSkip(new Set(
         res.lines.filter(l => !l.invoiceId || l.alreadyPaid).map(l => l.rowIndex),
       ));
@@ -285,10 +288,15 @@ export default function ApplyPaymentPanel({
     [lines, skip],
   );
 
-  const totalsFailed = parsed?.totals ? !parsed.totals.ok : false;
-  const canApply  = !!parsed?.isRemittance && !totalsFailed && included.length > 0 && !busy;
-  const canAttach = !!parsed?.isRemittance && attachable.length > 0 && !busy;
   const doc = parsed?.doc ?? null;
+  /** The date that will land on the proof and every allocation. Either the
+   *  document's own, or the one the operator supplied when it has none. */
+  const effectiveDate = doc ? (doc.paymentDate || dateOverride) : '';
+
+  const totalsFailed = parsed?.totals ? !parsed.totals.ok : false;
+  const canApply  = !!parsed?.isRemittance && !totalsFailed && included.length > 0
+                    && !!effectiveDate && !busy;
+  const canAttach = !!parsed?.isRemittance && attachable.length > 0 && !busy;
   const chosenCustomer = customers.find(c => c.id === customerId) ?? null;
   const inferred = !!parsed?.inferredCustomerId && parsed.inferredCustomerId === customerId;
 
@@ -306,7 +314,7 @@ export default function ApplyPaymentPanel({
       const created = await railway.createPaymentProof({
         kind:       'remittance',
         source:     'upload',
-        occurredOn: parsed.doc.paymentDate,
+        occurredOn: effectiveDate,
         amount:     parsed.doc.paymentTotal,
         ...(parsed.doc.externalId ? { reference: parsed.doc.externalId } : {}),
         ...(parsed.doc.payerNameAsPrinted ? { payerRaw: parsed.doc.payerNameAsPrinted } : {}),
@@ -356,7 +364,7 @@ export default function ApplyPaymentPanel({
       const created = await railway.createPaymentProof({
         kind:       'remittance',
         source:     'upload',
-        occurredOn: parsed.doc.paymentDate,
+        occurredOn: effectiveDate,
         // The proof records what the payer SENT, not what we managed to
         // apply. Any remainder stays visible as unapplied evidence rather
         // than disappearing.
@@ -374,7 +382,7 @@ export default function ApplyPaymentPanel({
         try {
           await railway.createInvoicePayment(l.invoiceId!, {
             amount:  l.amount,
-            paidOn:  parsed.doc.paymentDate,
+            paidOn:  effectiveDate,
             proofId: created.proof.id,
             note:    `Remittance ${parsed.doc.externalId ?? ''} row ${l.rowIndex + 1}`.trim(),
           });
@@ -438,7 +446,7 @@ export default function ApplyPaymentPanel({
                   </span>
                 </div>
                 <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-                  <MetaChip>{shortDate(doc.paymentDate) ?? doc.paymentDate}</MetaChip>
+                  <MetaChip>{shortDate(effectiveDate) ?? 'no date'}</MetaChip>
                   {doc.externalId && <MetaChip mono>{doc.externalId}</MetaChip>}
                   <MetaChip>{lines.length} row{lines.length === 1 ? '' : 's'}</MetaChip>
                 </div>
@@ -622,6 +630,33 @@ export default function ApplyPaymentPanel({
                 </div>
               )}
 
+              {/* A document we recognised but couldn't use must SAY so.
+                  Rendering nothing reads as a silent failure. */}
+              {parsed?.isRemittance && !parsed.doc && (
+                <div className="rounded-lg border p-3 mt-3 text-xs flex gap-2"
+                     style={{ borderColor: AMBER, background: AMBER_BG, color: '#92400e' }}>
+                  <CircleAlert size={14} className="shrink-0 mt-px" />
+                  <span>
+                    <strong>This looks like a remittance, but nothing could be applied.</strong>
+                    <span className="block mt-1">{parsed.reason}</span>
+                  </span>
+                </div>
+              )}
+
+              {/* 2. Supply the date the document doesn't carry. */}
+              {parsed?.dateMissing && doc && (
+                <div className="rounded-lg border p-3 mt-3"
+                     style={{ borderColor: AMBER, background: AMBER_BG }}>
+                  <div className="text-xs mb-2" style={{ color: '#92400e' }}>
+                    <strong>No payment date on this document.</strong> It is recorded on the
+                    proof and on every allocation, so it is not guessed.
+                  </div>
+                  <input type="date" value={dateOverride}
+                         onChange={e => setDateOverride(e.target.value)}
+                         style={{ ...inputStyle, maxWidth: 200 }} />
+                </div>
+              )}
+
               {/* ── duplicate guard ── */}
               {parsed?.duplicate && (
                 <div className="rounded-lg border p-3 mt-3 text-xs flex gap-2"
@@ -666,14 +701,27 @@ export default function ApplyPaymentPanel({
               {/* ── totals invariant ── */}
               {parsed?.totals && (
                 <div className="rounded-lg border p-3 mt-3 text-xs flex gap-2"
-                     style={parsed.totals.ok
-                       ? { borderColor: 'var(--gc-border)', color: 'var(--gc-text-2)' }
-                       : { borderColor: RED, background: RED_BG, color: '#991b1b' }}>
-                  {parsed.totals.ok
-                    ? <Check size={14} className="shrink-0 mt-px" style={{ color: GREEN }} />
-                    : <AlertTriangle size={14} className="shrink-0 mt-px" />}
+                     style={!parsed.totals.ok
+                       ? { borderColor: RED, background: RED_BG, color: '#991b1b' }
+                       : parsed.totalsDerived
+                         ? { borderColor: AMBER, background: AMBER_BG, color: '#92400e' }
+                         : { borderColor: 'var(--gc-border)', color: 'var(--gc-text-2)' }}>
+                  {!parsed.totals.ok
+                    ? <AlertTriangle size={14} className="shrink-0 mt-px" />
+                    : parsed.totalsDerived
+                      ? <AlertTriangle size={14} className="shrink-0 mt-px" />
+                      : <Check size={14} className="shrink-0 mt-px" style={{ color: GREEN }} />}
                   <span>
-                    {parsed.totals.ok ? (
+                    {parsed.totals.ok && parsed.totalsDerived ? (
+                      <>
+                        <strong>No total printed on this document.</strong>
+                        <span className="block mt-1">
+                          The {money2(parsed.totals.lineSum)} above is the sum of its{' '}
+                          {lines.length} rows, so nothing cross-checked them — a missed row
+                          would not show up here. Worth comparing against the document.
+                        </span>
+                      </>
+                    ) : parsed.totals.ok ? (
                       <>Every row adds up to the {money2(parsed.totals.declared)} printed on the document.</>
                     ) : (
                       <>

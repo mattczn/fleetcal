@@ -77,6 +77,13 @@ export interface ExtractResult {
   doc:        RemittanceDoc | null;
   isRemittance: boolean;
   reason?:    string;
+  /** The document printed no total, so paymentTotal is the sum of its rows.
+   *  The dropped-row check cannot run against a figure derived FROM the
+   *  rows it is meant to check — the caller must say so rather than show a
+   *  green tick that means nothing. */
+  derivedTotal?: boolean;
+  /** The document carries no payment date. The operator supplies one. */
+  missingDate?:  boolean;
   /** Raw model output, kept for the review queue and for replaying an
    *  extraction after a rule or prompt change. */
   raw:        unknown;
@@ -324,12 +331,15 @@ export async function extractRemittance(
     };
   }
 
-  // A remittance with no date or total can't be reconciled or applied.
-  // Surface it as a review item rather than inventing values.
-  if (!raw.paymentDate || raw.paymentTotal == null) {
+  // Plenty of real remittances print neither a total nor a payment date —
+  // a check stub listing bills is still a payment. Refusing those outright
+  // threw away documents whose rows were perfectly readable, so missing
+  // header fields are now degradations, not failures. What cannot be
+  // degraded is having no rows: with nothing to apply there is no payment.
+  if (!raw.lines?.length) {
     return {
       doc: null, isRemittance: true, raw, usage,
-      reason: "remittance is missing a payment date or declared total",
+      reason: "no payment rows could be read from this document",
     };
   }
 
@@ -342,15 +352,22 @@ export async function extractRemittance(
     deductionLabel:     l.deductionLabel ?? null,
   }));
 
+  const derivedTotal = raw.paymentTotal == null;
+  const missingDate   = !raw.paymentDate;
+  const lineSum = Math.round(lines.reduce((s, l) => s + (Number(l.amount) || 0), 0) * 100) / 100;
+
   const doc: RemittanceDoc = {
     source:             input.kind,
     payerNameAsPrinted: raw.payerNameAsPrinted ?? "",
-    paymentDate:        raw.paymentDate.slice(0, 10),
-    paymentTotal:       Number(raw.paymentTotal) || 0,
+    // Empty rather than invented. The panel makes the operator supply it,
+    // because a guessed payment date lands on the proof and then on every
+    // allocation citing it.
+    paymentDate:        missingDate ? "" : String(raw.paymentDate).slice(0, 10),
+    paymentTotal:       derivedTotal ? lineSum : (Number(raw.paymentTotal) || 0),
     externalId:         raw.externalId ?? null,
     lines,
     unparsedRows:       raw.unparsedRows ?? [],
   };
 
-  return { doc, isRemittance: true, raw, usage };
+  return { doc, isRemittance: true, raw, usage, derivedTotal, missingDate };
 }

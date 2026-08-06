@@ -1195,6 +1195,10 @@ payments.post("/parse", async (c) => {
 
   const doc     = extracted.doc;
   const totals  = checkTotals(doc);
+  // A total we computed from the rows cannot be used to check those rows.
+  // Say so instead of showing a tick that verified nothing.
+  const totalsDerived = !!extracted.derivedTotal;
+  const dateMissing   = !!extracted.missingDate;
   const scoped  = body.customerId?.trim() || null;
   const lines   = totals.ok
     ? await resolveLines(orgId, doc, { customerId: scoped })
@@ -1420,6 +1424,8 @@ payments.post("/parse", async (c) => {
     reason:       null,
     duplicate,
     cohort,
+    totalsDerived,
+    dateMissing,
     doc: {
       source:             doc.source,
       payerNameAsPrinted: doc.payerNameAsPrinted,
