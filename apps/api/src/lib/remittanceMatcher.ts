@@ -312,6 +312,14 @@ export interface ResolvedLine {
   /** Populated when more than one invoice matched, so the reviewer can pick. */
   ambiguous?:  string[];
   note?:       string;
+  /** How many lines on THIS document settle the same invoice, and what they
+   *  come to together. Remittances routinely break one load into its
+   *  charges — Linehaul, Lumper, Detention — so a $95 lumper line is not a
+   *  short payment on a $675 invoice, it is one component of it. */
+  chargeCount?:    number;
+  chargeTotal?:    number;
+  /** The charges on this invoice add up to its full balance. */
+  settlesInvoice?: boolean;
 }
 
 /**
@@ -381,6 +389,11 @@ export function scoreLine(
   matchedBy: Exclude<MatchedBy, "ambiguous" | "none">,
   invoice:   InvoiceRow,
   viaRule:   boolean,
+  /** Total of every line on the document settling this same invoice.
+   *  Defaults to this line alone. Judging a single charge against the whole
+   *  invoice marks each component of a correctly-paid invoice as a short
+   *  payment, which is both wrong and alarming. */
+  groupAmount?: number,
 ): number {
   let score = NAMESPACE_SCORE[matchedBy];
 
@@ -391,7 +404,7 @@ export function scoreLine(
   if (viaRule) score -= 15;
 
   const total = Number(invoice.total ?? 0);
-  const paid  = Number(line.amount ?? 0);
+  const paid  = Number(groupAmount ?? line.amount ?? 0);
 
   if (total > 0) {
     const diff = Math.abs(total - paid);
@@ -679,7 +692,14 @@ export async function resolveLines(
     ["ref_num",          byRefNum],
   ];
 
-  return perLine.map(({ line, detailed, candidates }): ResolvedLine => {
+  /** invoiceId -> the row it resolved to, so the grouping pass below can
+   *  re-score against the invoice without another query. */
+  const rowById = new Map<string, InvoiceRow>();
+  /** Whether each resolved line got there via a customer rule, needed to
+   *  reproduce its score once the group total is known. */
+  const viaRuleByRow = new Map<number, boolean>();
+
+  const resolved = perLine.map(({ line, detailed, candidates }): ResolvedLine => {
     type Hit = {
       row: InvoiceRow; via: Set<Exclude<MatchedBy, "ambiguous" | "none">>; minIdx: number;
     };
@@ -719,6 +739,8 @@ export async function resolveLines(
       const matchedBy =
         (["invoice_number", "load_num", "internal_load_id", "ref_num"] as const)
           .find((n) => hit.via.has(n))!;
+      rowById.set(hit.row.id, hit.row);
+      viaRuleByRow.set(line.rowIndex, viaRule);
       return {
         line, candidates, invoiceId: hit.row.id, matchedBy,
         confidence: scoreLine(line, matchedBy, hit.row, viaRule),
@@ -743,6 +765,8 @@ export async function resolveLines(
     const amountHits = byAmount?.get(round2(line.amount).toFixed(2)) ?? [];
     if (amountHits.length === 1) {
       const inv = amountHits[0]!;
+      rowById.set(inv.id, inv);
+      viaRuleByRow.set(line.rowIndex, false);
       return {
         line, candidates, invoiceId: inv.id, matchedBy: "amount",
         confidence: scoreLine(line, "amount", inv, false),
@@ -766,7 +790,48 @@ export async function resolveLines(
           "carrier-side identifier at all",
     };
   });
+
+  // ── charges → invoice ───────────────────────────────────────────────
+  //
+  // A remittance commonly itemises one load: Linehaul 580, Lumper 95, all
+  // settling a single $675 invoice. Judged individually each is an 86%
+  // short payment; judged together they pay it exactly. Group by invoice,
+  // then re-score every line in a multi-line group against the group total
+  // so the short-pay penalty reflects what the payer actually sent.
+  const byInvoice = new Map<string, ResolvedLine[]>();
+  for (const r of resolved) {
+    if (!r.invoiceId) continue;
+    const list = byInvoice.get(r.invoiceId) ?? [];
+    list.push(r);
+    byInvoice.set(r.invoiceId, list);
+  }
+
+  for (const [invoiceId, group] of byInvoice) {
+    const row = rowById.get(invoiceId);
+    const chargeTotal = round2(group.reduce((sum, r) => sum + (Number(r.line.amount) || 0), 0));
+    const settles = !!row && Math.abs(Number(row.total ?? 0) - chargeTotal) <= CENT;
+
+    for (const r of group) {
+      r.chargeCount    = group.length;
+      r.chargeTotal    = chargeTotal;
+      r.settlesInvoice = settles;
+      if (group.length > 1 && row && r.matchedBy !== "ambiguous" && r.matchedBy !== "none") {
+        r.confidence = scoreLine(
+          r.line, r.matchedBy, row, viaRuleByRow.get(r.line.rowIndex) ?? false, chargeTotal,
+        );
+        r.note = settles
+          ? `one of ${group.length} charges on this invoice — together they pay it in full`
+          : `one of ${group.length} charges on this invoice, ${money(chargeTotal)} of ` +
+            `${money(Number(row.total ?? 0))} in total`;
+      }
+    }
+  }
+
+  return resolved;
 }
+
+const money = (n: number) =>
+  n.toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2 });
 
 // ── Roll-up ───────────────────────────────────────────────────────────
 

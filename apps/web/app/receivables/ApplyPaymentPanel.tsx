@@ -1058,8 +1058,11 @@ function LineRow({
 }) {
   const matched = !!line.invoiceId;
   const age     = line.agingDays;
-  const short   = matched && line.invoiceTotal != null
-    && Math.abs(line.invoiceTotal - line.amount) > 0.005;
+  // Short-paid only if the WHOLE set of charges on this invoice falls short.
+  // A $95 lumper line beside a $580 linehaul line is not a short payment.
+  const grouped = line.chargeCount > 1;
+  const short   = matched && line.invoiceTotal != null && !line.settlesInvoice
+    && Math.abs(line.invoiceTotal - line.chargeTotal) > 0.005;
 
   return (
     <div style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
@@ -1132,6 +1135,12 @@ function LineRow({
               {line.referenceAsPrinted}
             </span>
           ) : 'no reference printed'}
+          {grouped && (
+            <span style={{ color: line.settlesInvoice ? GREEN : AMBER }}>
+              {' · '}charge {line.chargeCount > 1 ? `of ${money2(line.chargeTotal)}` : ''}
+              {line.settlesInvoice ? ' · pays the invoice in full' : ''}
+            </span>
+          )}
           {short && (
             <span style={{ color: AMBER }}>
               {' · '}invoice {money2(line.invoiceTotal!)}

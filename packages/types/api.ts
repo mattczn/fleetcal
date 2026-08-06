@@ -1633,6 +1633,13 @@ export interface ParsedPaymentLine {
   /** Days past due; negative or null means not yet due. */
   agingDays:          number | null;
   matchedBy:          PaymentMatchedBy;
+  /** Lines on this document settling the same invoice, and their sum.
+   *  Remittances itemise a load — Linehaul, Lumper, Detention — so a lone
+   *  charge is not a short payment on the whole invoice. */
+  chargeCount:        number;
+  chargeTotal:        number;
+  /** Those charges together cover the invoice in full. */
+  settlesInvoice:     boolean;
   confidence:         number;
   /** Every form that was looked up, so the reviewer can see what was tried. */
   candidates:         string[];
