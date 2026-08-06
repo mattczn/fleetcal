@@ -16,7 +16,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Loader2, Upload, Trash2, FileText, ShieldCheck, Globe, ExternalLink,
+  Loader2, Upload, Trash2, FileText, ShieldCheck, Globe, ExternalLink, X,
 } from 'lucide-react';
 import {
   railway,
@@ -34,6 +34,11 @@ const KIND_LABEL: Record<ApplicantDocumentKind, string> = {
 
 /** Upload targets, in the order someone collects them. */
 const UPLOAD_KINDS: ApplicantDocumentKind[] = ['mvr', 'license', 'medical_card', 'other'];
+
+/** A CDL photo is worth looking at in place; a PDF isn't worth an <img>. */
+function isImage(doc: ApplicantDocument): boolean {
+  return Boolean(doc.mimeType?.startsWith('image/'));
+}
 
 function fileSize(bytes: number | null): string {
   if (!bytes) return '';
@@ -57,6 +62,7 @@ export default function ApplicantPanel({ applicant }: { applicant: HiringApplica
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState<ApplicantDocumentKind | null>(null);
   const [error, setError] = useState('');
+  const [preview, setPreview] = useState<ApplicantDocument | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const pendingKind = useRef<ApplicantDocumentKind>('mvr');
 
@@ -220,7 +226,22 @@ export default function ApplicantPanel({ applicant }: { applicant: HiringApplica
             <li key={doc.id}
                 className="flex items-center gap-3 rounded-lg border px-3 py-2"
                 style={{ borderColor: 'var(--gc-border)', background: 'var(--gc-surface)' }}>
-              <FileText className="h-4 w-4 shrink-0" style={{ color: 'var(--gc-text-muted)' }} />
+              {isImage(doc) && doc.url ? (
+                // Thumbnail, not a filename: identifying a CDL back from
+                // "licenseBack_1754...jpg" means opening every one of them.
+                <button
+                  onClick={() => setPreview(doc)}
+                  className="h-12 w-16 shrink-0 overflow-hidden rounded border"
+                  style={{ borderColor: 'var(--gc-border)' }}
+                  title="View full size"
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={doc.url} alt={doc.notes || KIND_LABEL[doc.kind]}
+                       className="h-full w-full object-cover" />
+                </button>
+              ) : (
+                <FileText className="h-4 w-4 shrink-0" style={{ color: 'var(--gc-text-muted)' }} />
+              )}
               <div className="min-w-0 flex-1">
                 <div className="truncate text-sm font-semibold" style={{ color: 'var(--gc-text)' }}>
                   {doc.notes || KIND_LABEL[doc.kind]}
@@ -247,6 +268,37 @@ export default function ApplicantPanel({ applicant }: { applicant: HiringApplica
           ))}
         </ul>
       </section>
+
+      {/* Full-size view stays on the page — flipping to a new tab and back
+          for each of four documents is how you lose your place. */}
+      {preview?.url && (
+        <div
+          onClick={() => setPreview(null)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6"
+        >
+          <div className="max-h-full max-w-4xl" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-2 flex items-center justify-between gap-4 text-white">
+              <span className="text-sm font-semibold">
+                {preview.notes || KIND_LABEL[preview.kind]}
+                <span className="ml-2 font-normal opacity-70">{preview.fileName}</span>
+              </span>
+              <div className="flex items-center gap-2">
+                <a href={preview.url} target="_blank" rel="noopener noreferrer"
+                   className="inline-flex items-center gap-1 rounded-lg border border-white/40 px-2.5 py-1 text-xs font-semibold">
+                  <ExternalLink className="h-3 w-3" /> Open
+                </a>
+                <button onClick={() => setPreview(null)}
+                        className="rounded-lg border border-white/40 p-1.5" title="Close">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={preview.url} alt={preview.notes || KIND_LABEL[preview.kind]}
+                 className="max-h-[80vh] w-auto rounded" />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
