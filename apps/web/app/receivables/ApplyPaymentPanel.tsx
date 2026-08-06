@@ -294,6 +294,12 @@ export default function ApplyPaymentPanel({
     () => lines.filter(l => l.invoiceId && !skip.has(l.rowIndex)),
     [lines, skip],
   );
+  /** Invoices touched, which is what actually gets written — several
+   *  charge lines on one invoice collapse into a single allocation. */
+  const invoiceCount = useMemo(
+    () => new Set(included.map(l => l.invoiceId)).size,
+    [included],
+  );
   const includedTotal = useMemo(
     () => Math.round(included.reduce((s, l) => s + l.amount, 0) * 100) / 100,
     [included],
@@ -398,21 +404,48 @@ export default function ApplyPaymentPanel({
       });
       if (file) await railway.uploadProofAttachment(created.proof.id, file);
 
+      // ONE allocation per invoice, not per document line.
+      //
+      // invoice_payments carries a unique index on (invoice_id, proof_id) —
+      // it exists so a double-click can't book the same proof twice against
+      // the same invoice. That means several charge lines from one document
+      // cannot each become their own allocation: the second Uber charge on
+      // an invoice hits the constraint and 409s, which is what rejected
+      // 13125, 13124 and 13046 twice.
+      //
+      // Summing per invoice is also the truer record. An allocation answers
+      // "how much of this payment went to this invoice", and that is one
+      // number; the Linehaul/Lumper/Detention split is a fact about the
+      // document, which is attached to the proof and spelled out in the note.
+      const byInvoice = new Map<string, ParsedPaymentLine[]>();
+      for (const l of included) {
+        const list = byInvoice.get(l.invoiceId!) ?? [];
+        list.push(l);
+        byInvoice.set(l.invoiceId!, list);
+      }
+
       // Sequential: each write recomputes its invoice server-side, and one
       // failure must not abandon the rest.
       const failed: string[] = [];
-      for (const l of included) {
+      for (const [invoiceId, group] of byInvoice) {
+        const amount = Math.round(group.reduce((sum, g) => sum + g.amount, 0) * 100) / 100;
+        const parts  = group
+          .map(g => `${g.deductionLabel ?? 'charge'} ${money2(g.amount)}`)
+          .join(' + ');
         try {
-          await railway.createInvoicePayment(l.invoiceId!, {
-            amount:  l.amount,
+          await railway.createInvoicePayment(invoiceId, {
+            amount,
             paidOn:  effectiveDate,
             proofId: created.proof.id,
-            note:    `Remittance ${parsed.doc.externalId ?? ''} row ${l.rowIndex + 1}`.trim(),
+            note: [
+              `Remittance ${parsed.doc.externalId ?? ''}`.trim(),
+              group.length > 1 ? `${group.length} charges: ${parts}` : '',
+            ].filter(Boolean).join(' · '),
           });
           setDone(d => d + 1);
         } catch (e) {
-          failed.push(l.invoiceNumber ?? String(l.referenceAsPrinted));
-          console.warn('[apply payment] failed for', l.invoiceNumber, e);
+          failed.push(group[0].invoiceNumber ?? String(group[0].referenceAsPrinted));
+          console.warn('[apply payment] failed for', group[0].invoiceNumber, e);
         }
       }
 
@@ -859,7 +892,7 @@ export default function ApplyPaymentPanel({
             <div className="min-w-0 mr-auto">
               {busy && phase === 'applying' ? (
                 <span className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
-                  {done} of {included.length} recorded…
+                  {done} of {invoiceCount} recorded…
                 </span>
               ) : doc && included.length === 0 && attachable.length > 0 ? (
                 <span className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
@@ -921,8 +954,8 @@ export default function ApplyPaymentPanel({
                       cursor: canApply ? 'pointer' : 'default',
                     }}>
               {busy && phase === 'applying' && <Loader2 size={12} className="animate-spin" />}
-              {included.length
-                ? <>Apply to {included.length} invoice{included.length === 1 ? '' : 's'}</>
+              {invoiceCount
+                ? <>Apply to {invoiceCount} invoice{invoiceCount === 1 ? '' : 's'}</>
                 : 'Apply'}
             </button>
             )}
