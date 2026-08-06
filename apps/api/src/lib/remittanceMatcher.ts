@@ -287,6 +287,9 @@ export type MatchedBy =
   | "invoice_number"
   | "load_num"
   | "internal_load_id"
+  /** A broker-side identifier recorded on the load — PO #, Order #, PRO #,
+   *  BOL, Cust Ref. 66% of loads carry at least one. */
+  | "ref_num"
   | "processor_ref"
   /** Last resort: exactly ONE open invoice for this customer has this exact
    *  balance. Never auto-applied — see NAMESPACE_SCORE. */
@@ -325,6 +328,12 @@ const NAMESPACE_SCORE: Record<Exclude<MatchedBy, "ambiguous" | "none">, number> 
   invoice_number:   95,
   load_num:         95,
   internal_load_id: 95,
+  // Slightly under the canonical three. A broker's PO or Order number is a
+  // real identifier, but it is THEIR field: one PO legitimately covers
+  // several loads, so it collides more often. When it does, the
+  // union-then-require-unique rule turns it into a review item, and this
+  // score keeps a lone hit reviewable unless the amount agrees too.
+  ref_num:          92,
   processor_ref:    65,
   // Deliberately below AUTO_APPLY_THRESHOLD. An amount match is a strong
   // SUGGESTION for a human, never an instruction to move money — the whole
@@ -435,6 +444,7 @@ export async function resolveLines(
   const byInvoiceNumber = new Map<string, InvoiceRow[]>();
   const byLoadNum       = new Map<string, InvoiceRow[]>();
   const byInternalId    = new Map<string, InvoiceRow[]>();
+  const byRefNum        = new Map<string, InvoiceRow[]>();
 
   // Coerce with String(): invoice_number and internal_load_id come back as
   // NUMBERS from PostgREST, not strings, so a bare .trim() throws. Candidates
@@ -508,6 +518,56 @@ export async function resolveLines(
     );
   }
 
+  // ── ref_nums ────────────────────────────────────────────────────────
+  //
+  // Loads carry broker-side identifiers in `ref_nums` — a TEXT column
+  // holding JSON like [{"label":"PRO #","value":"4752138"}]. Two thirds of
+  // loads have one, and they hold 5,016 values that differ from load_num.
+  // A remittance headed "PRO #" or "PO #" is quoting exactly this, so
+  // ignoring the column threw away a whole namespace.
+  //
+  // Queried LOOSELY then verified EXACTLY: ilike finds rows whose JSON text
+  // contains the candidate anywhere (including inside a longer number or a
+  // label), and the parse below keeps only true value-equality. Getting
+  // extra rows back is cheap; accepting a substring hit as a match is not.
+  //
+  // Only candidates made of safe characters are used, so nothing can break
+  // the .or() the way an unescaped reference broke the load lookup.
+  const SAFE = /^[A-Za-z0-9._-]{3,}$/;
+  const refCandidates = allCandidates.filter((c) => SAFE.test(c));
+  const refValueToLoadIds = new Map<string, Set<string>>();
+
+  for (let i = 0; i < refCandidates.length; i += 20) {
+    const chunk = refCandidates.slice(i, i + 20);
+    const { data, error } = await supabase
+      .from("loads")
+      .select("id,load_num,internal_load_id,ref_nums")
+      .eq("org_id", orgId)
+      .or(chunk.map((c) => `ref_nums.ilike.*${c}*`).join(","));
+    if (error) {
+      console.error("[remittanceMatcher] ref_nums lookup failed:", error);
+      continue;
+    }
+    for (const row of (data ?? []) as Array<{
+      id: string; load_num: string | number | null;
+      internal_load_id: string | number | null; ref_nums: string | null;
+    }>) {
+      let parsed: unknown;
+      try {
+        parsed = typeof row.ref_nums === "string" ? JSON.parse(row.ref_nums) : row.ref_nums;
+      } catch { continue; }
+      if (!Array.isArray(parsed)) continue;
+      for (const entry of parsed) {
+        const value = String((entry as { value?: unknown })?.value ?? "").trim();
+        if (!value) continue;
+        const set = refValueToLoadIds.get(value) ?? new Set<string>();
+        set.add(row.id);
+        refValueToLoadIds.set(value, set);
+        loadRowsById.set(row.id, row as never);
+      }
+    }
+  }
+
   const loads = [...loadRowsById.values()];
 
   if (loads.length) {
@@ -529,6 +589,12 @@ export async function resolveLines(
       for (const inv of invByLoad.get(l.id) ?? []) {
         index(byLoadNum,    l.load_num,         inv);
         index(byInternalId, l.internal_load_id, inv);
+      }
+    }
+    // Every verified ref value points at whatever invoices its load has.
+    for (const [value, loadIdSet] of refValueToLoadIds) {
+      for (const loadId of loadIdSet) {
+        for (const inv of invByLoad.get(loadId) ?? []) index(byRefNum, value, inv);
       }
     }
   }
@@ -583,6 +649,7 @@ export async function resolveLines(
     ["invoice_number",   byInvoiceNumber],
     ["load_num",         byLoadNum],
     ["internal_load_id", byInternalId],
+    ["ref_num",          byRefNum],
   ];
 
   return perLine.map(({ line, detailed, candidates }): ResolvedLine => {
@@ -616,7 +683,8 @@ export async function resolveLines(
       // Namespaces score equally, so this is a label for the reviewer, not a
       // ranking. Report the most human-recognisable one that hit.
       const matchedBy =
-        (["invoice_number", "load_num", "internal_load_id"] as const).find((n) => hit.via.has(n))!;
+        (["invoice_number", "load_num", "internal_load_id", "ref_num"] as const)
+          .find((n) => hit.via.has(n))!;
       return {
         line, candidates, invoiceId: hit.row.id, matchedBy,
         confidence: scoreLine(line, matchedBy, hit.row, viaRule),

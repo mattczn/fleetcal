@@ -1102,6 +1102,7 @@ function ConfidenceChip({ line }: { line: ParsedPaymentLine }) {
     line.matchedBy === 'invoice_number'   ? 'invoice #' :
     line.matchedBy === 'load_num'         ? 'load #'    :
     line.matchedBy === 'internal_load_id' ? 'load id'   :
+    line.matchedBy === 'ref_num'          ? 'ref #'     :
     line.matchedBy === 'ambiguous'        ? 'ambiguous' :
     line.matchedBy === 'processor_ref'    ? 'processor' :
     line.matchedBy === 'amount'           ? 'amount' :

@@ -1575,6 +1575,8 @@ export interface CreatePaymentProofResponse { proof: PaymentProof; }
  *  `ambiguous` means more than one invoice matched — never auto-applied. */
 export type PaymentMatchedBy =
   | 'invoice_number' | 'load_num' | 'internal_load_id'
+  /** Broker-side identifier on the load: PO #, Order #, PRO #, BOL. */
+  | 'ref_num'
   | 'processor_ref'
   /** Only open invoice for the customer with this exact balance. Suggestion
    *  only — scores below the auto-apply threshold. */
