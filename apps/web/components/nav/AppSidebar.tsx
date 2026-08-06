@@ -86,7 +86,7 @@ export const PRIMARY_NAV: NavItem[] = [
   // Hiring: applicant pipeline + the contractor agreement they sign. Its
   // module is in DEFAULT_OFF_MODULES, so this leaf stays hidden for every
   // org until it's switched on in /admin/orgs.
-  { kind: 'leaf', href: '/hiring',      label: 'Hiring',         icon: UserPlus,        cap: 'drivers.view',       module: 'hiring' },
+  { kind: 'leaf', href: '/hiring',      label: 'Hiring',         icon: UserPlus,        cap: 'hiring.access',      module: 'hiring' },
   {
     kind: 'group',
     href: '/equipment?tab=maintenance',

@@ -14,13 +14,13 @@ import { supabase } from "../lib/supabase.js";
 import { TEMPLATE_VERSION } from "../lib/contracts/ica.js";
 import { sendSms, toE164US, isSmsConfigured } from "../lib/twilio.js";
 import type { AuthVariables } from "../middleware/clerk.js";
-import { requireModule } from "../middleware/require.js";
+import { requireModule, requireCapability } from "../middleware/require.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const sb = supabase as any;
 
 const applicants = new Hono<{ Variables: AuthVariables }>();
-applicants.use("*", requireModule("hiring"));
+applicants.use("*", requireModule("hiring"), requireCapability("hiring.access"));
 
 const COLS =
   "id, first_name, last_name, phone, email, address, cdl_class, position, " +

@@ -162,6 +162,13 @@ export type Capability =
   // the Billing board still rides accounting.access, so revoking this
   // hides the AR view without breaking Mark Paid.
   | "receivables.access"
+
+  // Hiring — the applicant pipeline and the contractor agreement drivers sign
+  // before their first load. Deliberately NOT folded into drivers.create:
+  // adding a driver to the roster is an operations task, while hiring issues
+  // a legal agreement and creates the employment record behind it. Admin-only
+  // by default; tunable per-org in the Role Permissions matrix.
+  | "hiring.access"
   | "payroll.access"
   | "payroll.adjust"
   | "payroll.finalize"
@@ -224,6 +231,7 @@ const ALL_CAPS: Capability[] = [
   "closeout.access", "closeout.release", "closeout.flag",
   "accounting.access", "accounting.send_invoice",
   "receivables.access",
+  "hiring.access",
   "payroll.access", "payroll.adjust", "payroll.finalize",
   "maintenance.access", "maintenance.edit", "inspections.access",
   "fuel.access", "fuel.edit",
@@ -359,6 +367,7 @@ export const CAPABILITY_CATALOG: CapabilityInfo[] = [
   { cap: "closeout.access",   label: "Paperwork",     group: "Module access", hint: "POD verification + flag queue." },
   { cap: "accounting.access", label: "Billing",       group: "Module access", hint: "Invoice list, send/void, payment status." },
   { cap: "receivables.access", label: "Receivables",  group: "Module access", hint: "Open AR by customer, aging buckets, and recording payments with the remittance or bank line that backs them. Independent of Billing — a bookkeeper can collect without being able to send invoices." },
+  { cap: "hiring.access",     label: "Hiring",        group: "Module access", hint: "Applicant pipeline and onboarding paperwork — add applicants, hire them, and issue the contractor agreement they sign. Creates driver records, so it's admin-only by default." },
   { cap: "payroll.access",    label: "Payroll",       group: "Module access", hint: "Per-driver weekly pay + adjustments." },
   { cap: "maintenance.access", label: "Maintenance",  group: "Module access", hint: "Equipment → Maintenance tab: work orders + defects." },
   { cap: "inspections.access", label: "Inspections",  group: "Module access", hint: "Equipment → Inspections tab: driver-submitted pre/post-trip inspections." },

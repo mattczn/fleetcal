@@ -305,7 +305,7 @@ function HiringPage() {
 
 export default function Page() {
   return (
-    <RequireCap cap="drivers.view" module="hiring">
+    <RequireCap cap="hiring.access" module="hiring">
       <AppShell>
         <HiringPage />
       </AppShell>

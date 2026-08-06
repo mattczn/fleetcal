@@ -27,7 +27,7 @@ const NAV_LINKS: Array<{
   // AppSidebar's PRIMARY_NAV. Both nav lists must stay in sync.
   { href: '/receivables', label: 'Receivables',    icon: HandCoins,       cap: 'receivables.access', module: 'receivables' },
   // Hiring — see the note in AppSidebar's PRIMARY_NAV. Both lists stay in sync.
-  { href: '/hiring',      label: 'Hiring',         icon: UserPlus,        cap: 'drivers.view',       module: 'hiring' },
+  { href: '/hiring',      label: 'Hiring',         icon: UserPlus,        cap: 'hiring.access',      module: 'hiring' },
   // Equipment subsumes the old Fuel + Maintenance nav links — one
   // page with three sub-tabs (Inspections / Maintenance / Fuel). The
   // /fuel and /maintenance routes still exist as redirects to
