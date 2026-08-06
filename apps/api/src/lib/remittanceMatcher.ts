@@ -654,32 +654,57 @@ export async function resolveLines(
   //
   //    Unioning turns every one of those cases into `ambiguous` — a review
   //    item instead of a wrong allocation.
-  const NS: Array<[Exclude<MatchedBy, "ambiguous" | "none">, Map<string, InvoiceRow[]>]> = [
+  // Two TIERS, and the distinction matters.
+  //
+  // Tier 1 is our own record of the load: invoice_number, load_num and
+  // internal_load_id are three views of one thing we control, so they carry
+  // equal weight and are unioned together.
+  //
+  // Tier 2 is `ref_num` — the BROKER's field, populated from rate cons by a
+  // parser, and demonstrably prone to error: in Curzon prod load 4743612
+  // carries "PRO # 4743608", which is load 4743608's number. Unioned with
+  // tier 1 that single bad row turned a perfect load_num match into an
+  // ambiguity and cost a line that had every right to resolve.
+  //
+  // So tier 2 is consulted only when tier 1 finds nothing. That still covers
+  // the case this namespace exists for — a payer quoting their own PO, or a
+  // parser having filed our load number under ref_nums — while stopping one
+  // mistyped reference from outvoting the canonical record.
+  const TIER1: Array<[Exclude<MatchedBy, "ambiguous" | "none">, Map<string, InvoiceRow[]>]> = [
     ["invoice_number",   byInvoiceNumber],
     ["load_num",         byLoadNum],
     ["internal_load_id", byInternalId],
+  ];
+  const TIER2: Array<[Exclude<MatchedBy, "ambiguous" | "none">, Map<string, InvoiceRow[]>]> = [
     ["ref_num",          byRefNum],
   ];
 
   return perLine.map(({ line, detailed, candidates }): ResolvedLine => {
-    const hits = new Map<
-      string,
-      { row: InvoiceRow; via: Set<Exclude<MatchedBy, "ambiguous" | "none">>; minIdx: number }
-    >();
-
-    for (const [ns, map] of NS) {
-      for (const [i, cand] of candidates.entries()) {
-        for (const row of map.get(cand) ?? []) {
-          const cur = hits.get(row.id);
-          if (cur) {
-            cur.via.add(ns);
-            cur.minIdx = Math.min(cur.minIdx, i);
-          } else {
-            hits.set(row.id, { row, via: new Set([ns]), minIdx: i });
+    type Hit = {
+      row: InvoiceRow; via: Set<Exclude<MatchedBy, "ambiguous" | "none">>; minIdx: number;
+    };
+    const gather = (
+      tier: Array<[Exclude<MatchedBy, "ambiguous" | "none">, Map<string, InvoiceRow[]>]>,
+    ) => {
+      const found = new Map<string, Hit>();
+      for (const [ns, map] of tier) {
+        for (const [i, cand] of candidates.entries()) {
+          for (const row of map.get(cand) ?? []) {
+            const cur = found.get(row.id);
+            if (cur) {
+              cur.via.add(ns);
+              cur.minIdx = Math.min(cur.minIdx, i);
+            } else {
+              found.set(row.id, { row, via: new Set([ns]), minIdx: i });
+            }
           }
         }
       }
-    }
+      return found;
+    };
+
+    const tier1 = gather(TIER1);
+    const hits  = tier1.size ? tier1 : gather(TIER2);
 
     if (hits.size === 1) {
       const hit = [...hits.values()][0]!;
