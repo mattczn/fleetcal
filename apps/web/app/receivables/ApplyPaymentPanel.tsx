@@ -31,7 +31,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   X, Check, AlertTriangle, Loader2, FileText, HelpCircle, ExternalLink,
-  UploadCloud, Building2, Truck, CircleAlert, Copy,
+  UploadCloud, Building2, Truck, CircleAlert, Copy, Paperclip,
 } from 'lucide-react';
 import { railway } from '@/lib/railway';
 import type { ParsePaymentResponse, ParsedPaymentLine } from '@fleetcal/types';
@@ -213,11 +213,77 @@ export default function ApplyPaymentPanel({
     [included],
   );
 
+  // Already-credited invoices that this document is evidence FOR. The money
+  // is on the books; what's missing is the proof. Ticking such a row means
+  // "credit it again anyway", so ticked rows drop out of this set.
+  const attachable = useMemo(
+    () => lines.filter(l => l.invoiceId && l.alreadyPaid && skip.has(l.rowIndex)),
+    [lines, skip],
+  );
+
   const totalsFailed = parsed?.totals ? !parsed.totals.ok : false;
-  const canApply = !!parsed?.isRemittance && !totalsFailed && included.length > 0 && !busy;
+  const canApply  = !!parsed?.isRemittance && !totalsFailed && included.length > 0 && !busy;
+  const canAttach = !!parsed?.isRemittance && attachable.length > 0 && !busy;
   const doc = parsed?.doc ?? null;
   const chosenCustomer = customers.find(c => c.id === customerId) ?? null;
   const inferred = !!parsed?.inferredCustomerId && parsed.inferredCustomerId === customerId;
+
+  /** Create the proof and hang it on the allocations that already exist,
+   *  without crediting anything a second time.
+   *
+   *  This is the common case for anything credited before the evidence
+   *  arrived — the imported payment history, a manual Mark Paid, a bank
+   *  line matched by hand. The money was never in question; the document
+   *  proving it simply had nowhere to live until now. */
+  async function handleAttach() {
+    if (!parsed?.doc || !canAttach) return;
+    setBusy(true); setPhase('applying'); setErr(null); setDone(0);
+    try {
+      const created = await railway.createPaymentProof({
+        kind:       'remittance',
+        source:     'upload',
+        occurredOn: parsed.doc.paymentDate,
+        amount:     parsed.doc.paymentTotal,
+        ...(parsed.doc.externalId ? { reference: parsed.doc.externalId } : {}),
+        ...(parsed.doc.payerNameAsPrinted ? { payerRaw: parsed.doc.payerNameAsPrinted } : {}),
+        ...(customerId ? { customerId } : {}),
+      });
+      if (file) await railway.uploadProofAttachment(created.proof.id, file);
+
+      const failed: string[] = [];
+      let linked = 0;
+      for (const l of attachable) {
+        try {
+          const { payments } = await railway.listInvoicePayments(l.invoiceId!);
+          // Only fill in allocations that have no evidence yet — never
+          // overwrite a proof someone already attached.
+          const bare = payments.filter(p => !p.proofId);
+          if (!bare.length) continue;
+          for (const p of bare) {
+            await railway.updateInvoicePayment(l.invoiceId!, p.id, { proofId: created.proof.id });
+            linked++;
+          }
+          setDone(d => d + 1);
+        } catch (e) {
+          failed.push(l.invoiceNumber ?? String(l.referenceAsPrinted));
+          console.warn('[attach proof] failed for', l.invoiceNumber, e);
+        }
+      }
+
+      onSaved();
+      if (failed.length) {
+        setErr(`${failed.length} of ${attachable.length} could not be linked: ${failed.join(', ')}`);
+      } else if (linked === 0) {
+        setErr('Those payments already have proof attached — nothing to link.');
+      } else {
+        onClose();
+      }
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Failed to attach the proof');
+    } finally {
+      setBusy(false); setPhase('idle');
+    }
+  }
 
   async function handleApply() {
     if (!parsed?.doc || !canApply) return;
@@ -507,7 +573,8 @@ export default function ApplyPaymentPanel({
                       {parsed.duplicate.appliedCount > 0
                         ? `, applied to ${parsed.duplicate.appliedCount} invoice${parsed.duplicate.appliedCount === 1 ? '' : 's'}.`
                         : ', but not applied to anything yet.'}
-                      {' '}Applying it again would double-credit those invoices.
+                      {' '}Applying it again would double-credit those invoices —
+                      but you can still attach this document as the proof.
                     </span>
                   </span>
                 </div>
@@ -522,8 +589,9 @@ export default function ApplyPaymentPanel({
                       {parsed!.summary!.alreadyPaid === 1 ? ' is' : 's are'} already paid.
                     </strong>
                     <span className="block mt-1">
-                      Unticked below so they aren&apos;t double-credited. If this is a
-                      genuinely separate payment, tick them back on.
+                      Unticked below so they aren&apos;t double-credited. Attach this
+                      document as their proof instead, or tick them back on if it
+                      really is a separate payment.
                     </span>
                   </span>
                 </div>
@@ -613,6 +681,11 @@ export default function ApplyPaymentPanel({
                 <span className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
                   {done} of {included.length} recorded…
                 </span>
+              ) : doc && included.length === 0 && attachable.length > 0 ? (
+                <span className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
+                  Already credited — this files the document as the proof.
+                  No money moves.
+                </span>
               ) : doc && included.length > 0 ? (
                 <>
                   <div className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>Applying</div>
@@ -636,6 +709,25 @@ export default function ApplyPaymentPanel({
                     style={{ borderColor: 'var(--gc-border)', color: 'var(--gc-text-2)' }}>
               Cancel
             </button>
+            {/* When every matched invoice is already credited there is nothing
+                to apply — the useful action is to file the evidence against
+                the payment that already exists. It becomes the primary button
+                in that case, and a secondary one when both are possible. */}
+            {canAttach && (
+              <button onClick={() => { void handleAttach(); }} disabled={busy}
+                      className="text-xs font-semibold px-3.5 py-2 rounded inline-flex items-center gap-1.5 shrink-0"
+                      style={{
+                        background: included.length === 0 ? BLUE : 'var(--gc-surface)',
+                        color:      included.length === 0 ? '#fff' : BLUE,
+                        border:     included.length === 0 ? 'none' : `1px solid ${BLUE}`,
+                        cursor: 'pointer',
+                      }}>
+                {busy && phase === 'applying' && <Loader2 size={12} className="animate-spin" />}
+                <Paperclip size={12} />
+                Attach as proof to {attachable.length} invoice{attachable.length === 1 ? '' : 's'}
+              </button>
+            )}
+            {(included.length > 0 || !canAttach) && (
             <button onClick={() => { void handleApply(); }} disabled={!canApply}
                     className="text-xs font-semibold px-3.5 py-2 rounded inline-flex items-center gap-1.5 shrink-0"
                     style={{
@@ -648,6 +740,7 @@ export default function ApplyPaymentPanel({
                 ? <>Apply to {included.length} invoice{included.length === 1 ? '' : 's'}</>
                 : 'Apply'}
             </button>
+            )}
           </div>
         )}
       </div>
