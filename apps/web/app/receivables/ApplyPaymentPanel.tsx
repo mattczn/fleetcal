@@ -33,6 +33,7 @@ import {
   X, Check, AlertTriangle, Loader2, FileText, HelpCircle, ExternalLink,
   UploadCloud, Building2, Truck, CircleAlert, Copy, Paperclip, Search, CalendarClock,
 } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { railway } from '@/lib/railway';
 import type {
   ParsePaymentResponse, ParsedPaymentLine, InvoiceSearchResult,
@@ -143,6 +144,7 @@ export default function ApplyPaymentPanel({
   // Derived, not stored: setting state synchronously inside an effect causes
   // the cascading re-render React 19 warns about. The URL is computed from
   // the file, and the effect exists only to revoke it.
+  const isExcel = !!file && /\.(xlsx|xlsm|xls)$/i.test(file.name);
   const isPdf   = !!file && (/\.pdf$/i.test(file.name) || file.type === 'application/pdf');
   const isImage = !!file && (/\.(png|jpe?g|gif|webp)$/i.test(file.name) || file.type.startsWith('image/'));
   const isPage  = isPdf || isImage;          // rendered documents need room
@@ -150,6 +152,13 @@ export default function ApplyPaymentPanel({
     () => (file && isPage ? URL.createObjectURL(file) : null),
     [file, isPage],
   );
+
+  /** Excel is a zip — neither the model nor the CSV reader can take it
+   *  directly. Converted to CSV in the browser and sent down the existing
+   *  text path, so there is still ONE extraction route. The original file
+   *  is what gets attached as the proof; this is only what gets read. */
+  const [sheetCsv, setSheetCsv] = useState<{ file: File; csv: string; sheets: string[] } | null>(null);
+  const excelCsv = sheetCsv && sheetCsv.file === file ? sheetCsv.csv : null;
   useEffect(() => {
     if (!docUrl) return;
     return () => URL.revokeObjectURL(docUrl);
@@ -160,11 +169,11 @@ export default function ApplyPaymentPanel({
   // can never paint under the new one.
   const [textFor, setTextFor] = useState<{ file: File; text: string } | null>(null);
   useEffect(() => {
-    if (!file || docUrl) return;          // PDFs/images render from the URL
+    if (!file || docUrl || isExcel) return;   // those render another way
     let alive = true;
     void file.text().then(t => { if (alive) setTextFor({ file, text: t }); });
     return () => { alive = false; };
-  }, [file, docUrl]);
+  }, [file, docUrl, isExcel]);
   const docText = textFor && textFor.file === file ? textFor.text : null;
 
   // Esc closes, except mid-write — losing the modal while allocations are
@@ -175,13 +184,20 @@ export default function ApplyPaymentPanel({
     return () => window.removeEventListener('keydown', onKey);
   }, [busy, onClose]);
 
-  const run = useCallback(async (f: File, forCustomer: string | null) => {
+  const run = useCallback(async (
+    f: File, forCustomer: string | null, asCsv?: string,
+  ) => {
     setBusy(true); setPhase('reading'); setErr(null);
     try {
+      // For a converted spreadsheet, send the CSV text under a .csv name so
+      // the server takes its ordinary text path; the xlsx itself is still
+      // what gets stored as the proof.
       const res = await railway.parsePaymentDocument({
-        filename: f.name,
-        mimeType: f.type || 'application/octet-stream',
-        dataBase64: await toBase64(f),
+        filename:   asCsv ? f.name.replace(/\.(xlsx|xlsm|xls)$/i, '.csv') : f.name,
+        mimeType:   asCsv ? 'text/csv' : (f.type || 'application/octet-stream'),
+        dataBase64: asCsv
+          ? btoa(unescape(encodeURIComponent(asCsv)))
+          : await toBase64(f),
         ...(forCustomer ? { customerId: forCustomer } : {}),
       });
       setParsed(res);
@@ -204,9 +220,27 @@ export default function ApplyPaymentPanel({
     }
   }, []);
 
-  const accept = useCallback((f: File | null) => {
+  const accept = useCallback(async (f: File | null) => {
     if (!f) return;
     setFile(f); setParsed(null); setErr(null);
+    if (/\.(xlsx|xlsm|xls)$/i.test(f.name)) {
+      try {
+        const wb = XLSX.read(await f.arrayBuffer(), { type: 'array' });
+        // First sheet that actually has rows — workbooks routinely lead
+        // with an empty cover or instructions tab.
+        const name = wb.SheetNames.find(n => {
+          const ref = wb.Sheets[n]?.['!ref'];
+          return !!ref && ref !== 'A1:A1';
+        }) ?? wb.SheetNames[0];
+        const csv = XLSX.utils.sheet_to_csv(wb.Sheets[name]);
+        setSheetCsv({ file: f, csv, sheets: wb.SheetNames });
+        void run(f, customerId || null, csv);
+      } catch {
+        setErr("Couldn't read that spreadsheet — try exporting the sheet as CSV.");
+      }
+      return;
+    }
+    setSheetCsv(null);
     void run(f, customerId || null);
   }, [run, customerId]);
 
@@ -450,7 +484,9 @@ export default function ApplyPaymentPanel({
                 )}
               </div>
               <DocumentPane
-                text={docText} url={docUrl} filename={file.name} isImage={isImage}
+                text={excelCsv ?? docText} url={docUrl}
+              filename={excelCsv ? file.name.replace(/\.(xlsx|xlsm|xls)$/i, '.csv') : file.name}
+              isImage={isImage}
                 hoverRow={hoverRow} onHoverRow={setHoverRow}
               />
             </div>
@@ -467,7 +503,7 @@ export default function ApplyPaymentPanel({
                   onDragLeave={() => setDragOver(false)}
                   onDrop={e => {
                     e.preventDefault(); setDragOver(false);
-                    accept(e.dataTransfer.files?.[0] ?? null);
+                    void accept(e.dataTransfer.files?.[0] ?? null);
                   }}
                   onClick={() => inputRef.current?.click()}
                   className="flex flex-col items-center justify-center text-center cursor-pointer"
@@ -489,7 +525,7 @@ export default function ApplyPaymentPanel({
                     or <span style={{ color: BLUE, fontWeight: 600 }}>browse your files</span>
                   </div>
                   <div className="flex items-center gap-1 mt-3 flex-wrap justify-center">
-                    {['PDF', 'Screenshot', 'CSV', 'Email'].map(t => (
+                    {['PDF', 'Screenshot', 'Excel', 'CSV', 'Email'].map(t => (
                       <span key={t} className="text-[10px] font-semibold px-1.5 py-0.5 rounded"
                             style={{ background: 'var(--gc-surface)', color: 'var(--gc-text-3)',
                                      border: '1px solid var(--gc-border)' }}>
@@ -512,8 +548,8 @@ export default function ApplyPaymentPanel({
                 </button>
               )}
               <input ref={inputRef} type="file" className="hidden" disabled={busy}
-                     accept=".pdf,.csv,.txt,.eml,.png,.jpg,.jpeg,.gif,.webp,application/pdf,text/csv,text/plain,image/*"
-                     onChange={e => accept(e.target.files?.[0] ?? null)} />
+                     accept=".pdf,.csv,.txt,.eml,.xlsx,.xlsm,.xls,.png,.jpg,.jpeg,.gif,.webp,application/pdf,text/csv,text/plain,image/*"
+                     onChange={e => { void accept(e.target.files?.[0] ?? null); }} />
 
               {busy && phase === 'reading' && (
                 <div className="flex items-center gap-2 text-xs mt-3" style={{ color: 'var(--gc-text-3)' }}>
@@ -565,7 +601,7 @@ export default function ApplyPaymentPanel({
                               setCustomerId(v);
                               // Re-read scoped to the customer: narrowing the
                               // search resolves references ambiguous org-wide.
-                              if (file) void run(file, v || null);
+                              if (file) void run(file, v || null, excelCsv ?? undefined);
                             }}>
                       <option value="">Let the document decide</option>
                       {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}

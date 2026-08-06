@@ -1154,11 +1154,13 @@ payments.post("/parse", async (c) => {
     } satisfies ApiErrorResponse, 400);
   }
   if (medium === "spreadsheet") {
-    // .xlsx is a zip archive; neither the model nor this route can read it as
-    // a document. Say so plainly rather than failing in a confusing way.
+    // .xlsx is a zip archive — not something the model or this route can
+    // read as a document. The Apply-a-payment panel converts spreadsheets
+    // to CSV in the browser and posts the text, so reaching here means the
+    // caller skipped that step.
     return c.json({
       error: "validation_failed",
-      errors: ["Excel files can't be read directly yet — export the sheet as CSV and upload that"],
+      errors: ["Spreadsheets must be converted to CSV before parsing"],
     } satisfies ApiErrorResponse, 400);
   }
 
