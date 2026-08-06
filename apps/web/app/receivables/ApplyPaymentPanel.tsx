@@ -56,6 +56,25 @@ const money0 = (n: number) =>
 const ageColor = (d: number | null | undefined) =>
   d === null || d === undefined || d <= 0 ? 'var(--gc-text-3)' : d <= 30 ? AMBER : RED;
 
+/**
+ * Pull the server's own words out of a failed request.
+ *
+ * RailwayError carries the parsed body on `detail`, but Error.message is
+ * just "POST /v1/payments/proofs → 400" — which tells the operator that
+ * something failed and nothing about what. The API already returns a
+ * `errors: string[]` explaining itself; this surfaces it.
+ */
+function errText(e: unknown, fallback: string): string {
+  const detail = (e as { detail?: unknown })?.detail as
+    { errors?: unknown; error?: unknown; detail?: unknown } | undefined;
+  if (Array.isArray(detail?.errors) && detail.errors.length) {
+    return detail.errors.map(String).join('; ');
+  }
+  if (detail?.detail) return String(detail.detail);
+  if (detail?.error)  return String(detail.error);
+  return e instanceof Error ? e.message : fallback;
+}
+
 const shortDate = (iso: string | null | undefined) => {
   if (!iso) return null;
   const d = new Date(iso);
@@ -216,7 +235,7 @@ export default function ApplyPaymentPanel({
         res.lines.filter(l => !l.invoiceId || l.alreadyPaid).map(l => l.rowIndex),
       ));
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Could not read that document');
+      setErr(errText(e, 'Could not read that document'));
       setParsed(null);
     } finally {
       setBusy(false); setPhase('idle');
@@ -296,7 +315,11 @@ export default function ApplyPaymentPanel({
   const totalsFailed = parsed?.totals ? !parsed.totals.ok : false;
   const canApply  = !!parsed?.isRemittance && !totalsFailed && included.length > 0
                     && !!effectiveDate && !busy;
-  const canAttach = !!parsed?.isRemittance && attachable.length > 0 && !busy;
+  // Attaching creates a proof too, so it needs the date just as much as
+  // applying does. Without this it posted occurredOn: '' and the server
+  // rejected it — correctly, and unhelpfully.
+  const canAttach = !!parsed?.isRemittance && attachable.length > 0
+                    && !!effectiveDate && !busy;
   const chosenCustomer = customers.find(c => c.id === customerId) ?? null;
   const inferred = !!parsed?.inferredCustomerId && parsed.inferredCustomerId === customerId;
 
@@ -351,7 +374,7 @@ export default function ApplyPaymentPanel({
         onClose();
       }
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Failed to attach the proof');
+      setErr(errText(e, 'Failed to attach the proof'));
     } finally {
       setBusy(false); setPhase('idle');
     }
@@ -397,7 +420,7 @@ export default function ApplyPaymentPanel({
       if (failed.length) setErr(`${failed.length} of ${included.length} could not be recorded: ${failed.join(', ')}`);
       else onClose();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Failed to apply payment');
+      setErr(errText(e, 'Failed to apply payment'));
     } finally {
       setBusy(false); setPhase('idle');
     }
@@ -861,6 +884,11 @@ export default function ApplyPaymentPanel({
                 </>
               ) : null}
             </div>
+            {doc && !effectiveDate && (
+              <span className="text-[11px] mr-1" style={{ color: AMBER }}>
+                Set the payment date first
+              </span>
+            )}
             <button onClick={onClose} disabled={busy}
                     className="text-xs font-semibold px-3 py-1.5 rounded border shrink-0"
                     style={{ borderColor: 'var(--gc-border)', color: 'var(--gc-text-2)' }}>
