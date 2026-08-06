@@ -1269,12 +1269,26 @@ payments.post("/parse", async (c) => {
     reference: string | null; createdAt: string; appliedCount: number;
   } | null = null;
 
-  if (doc.externalId) {
+  // Words that are a payment METHOD, not an identifier. Remittances
+  // routinely print "ACH" or "Check" in a field labelled Check/Ref No, and
+  // matching on those makes every ACH look like a duplicate of every other
+  // one. A reference has to be able to identify a single payment.
+  const GENERIC_REF = new Set([
+    "ach", "check", "cheque", "wire", "eft", "payment", "remittance",
+    "transfer", "direct deposit", "dd", "n/a", "na", "none", "-",
+  ]);
+  const refKey = (doc.externalId ?? "").trim().toLowerCase();
+  const usableRef = refKey.length >= 4 && !GENERIC_REF.has(refKey);
+
+  if (usableRef) {
     const { data: dupRows } = await supabase
       .from("payment_proofs")
       .select(PROOF_COLS)
       .eq("org_id", orgId)
       .eq("reference", doc.externalId)
+      // Same reference AND same amount. Two payments can legitimately share
+      // a weak reference; they cannot also happen to be for the same total.
+      .eq("amount", round2(doc.paymentTotal))
       .order("created_at", { ascending: false })
       .limit(1);
     const hit = (dupRows ?? [])[0] as ProofRow | undefined;
@@ -1326,6 +1340,76 @@ payments.post("/parse", async (c) => {
       alreadyPaid:   out.filter((l) => l.alreadyPaid).length,
     },
   });
+});
+
+// ── invoice lookup for manual matching ────────────────────────────────
+//
+// When the resolver finds nothing — a truncated reference, a payer using an
+// identifier we never recorded — the operator still knows which load it is.
+// This searches everything a person might recognise it by, scoped to one
+// customer so the result set stays small enough to choose from.
+
+payments.get("/invoice-search", async (c) => {
+  const orgId      = c.get("orgId");
+  const q          = (c.req.query("q") ?? "").trim();
+  const customerId = (c.req.query("customerId") ?? "").trim();
+  const scope      = c.req.query("scope") ?? "open";
+
+  if (q.length < 2) return c.json({ invoices: [] });
+
+  const like = `%${q.replace(/[%_]/g, "")}%`;
+
+  // Loads first: load_num / internal_load_id / the pickup leg's title are
+  // all things a person recognises, and none of them live on the invoice.
+  let loadQ = supabase
+    .from("loads")
+    .select("id")
+    .eq("org_id", orgId)
+    .is("deleted_at", null)
+    .or(`load_num.ilike.${like},internal_load_id.ilike.${like}`)
+    .limit(200);
+  if (customerId) loadQ = loadQ.eq("customer_id", customerId);
+  const { data: loadHits } = await loadQ;
+  const loadIds = ((loadHits ?? []) as Array<{ id: string }>).map((l) => l.id);
+
+  let invQ = supabase
+    .from("invoices")
+    .select(RECEIVABLE_INVOICE_COLS + ",paid_amount")
+    .eq("org_id", orgId)
+    .limit(40);
+  if (customerId) invQ = invQ.eq("customer_id", customerId);
+  if (scope === "open") invQ = invQ.neq("status", "paid");
+
+  invQ = loadIds.length
+    ? invQ.or(`invoice_number.ilike.${like},load_id.in.(${loadIds.join(",")})`)
+    : invQ.ilike("invoice_number", like);
+
+  const { data: rows, error } = await invQ;
+  if (error) {
+    console.error("[GET /v1/payments/invoice-search] failed:", error);
+    return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  }
+
+  const today = Date.now();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const invoices = ((rows ?? []) as any[]).map((r) => {
+    const leg = pickupLeg(r);
+    return {
+      invoiceId:     r.id as string,
+      invoiceNumber: String(r.invoice_number ?? ""),
+      invoiceTotal:  Number(r.total ?? 0),
+      invoicePaid:   Number(r.paid_amount ?? 0),
+      invoiceStatus: String(r.status ?? ""),
+      loadNum:        r.loads?.load_num != null ? String(r.loads.load_num) : null,
+      internalLoadId: r.loads?.internal_load_id != null ? String(r.loads.internal_load_id) : null,
+      title:          leg?.title ?? null,
+      pickupAt:       leg?.start ?? null,
+      customerName:   r.customers?.name ?? null,
+      agingDays:      daysPastDue((r.due_at as string | null) ?? null, today),
+    };
+  });
+
+  return c.json({ invoices });
 });
 
 export default payments;

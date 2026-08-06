@@ -31,10 +31,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   X, Check, AlertTriangle, Loader2, FileText, HelpCircle, ExternalLink,
-  UploadCloud, Building2, Truck, CircleAlert, Copy, Paperclip,
+  UploadCloud, Building2, Truck, CircleAlert, Copy, Paperclip, Search,
 } from 'lucide-react';
 import { railway } from '@/lib/railway';
-import type { ParsePaymentResponse, ParsedPaymentLine } from '@fleetcal/types';
+import type {
+  ParsePaymentResponse, ParsedPaymentLine, InvoiceSearchResult,
+} from '@fleetcal/types';
 
 // ── shared vocabulary with the ledger ─────────────────────────────────
 // Same tints the bucket tiles and invoice rows use, so "amber" and "red"
@@ -125,6 +127,12 @@ export default function ApplyPaymentPanel({
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
+  /** Invoices chosen by hand for lines the resolver couldn't place, keyed
+   *  by row. A truncated reference or an identifier we never recorded is
+   *  unrecoverable by rule — but the operator still knows which load it is. */
+  const [picked, setPicked] = useState<Record<number, InvoiceSearchResult>>({});
+  const [searchFor, setSearchFor] = useState<number | null>(null);
+
   /** Links a row in the source document to its extracted line, both ways. */
   const [hoverRow, setHoverRow] = useState<number | null>(null);
 
@@ -184,6 +192,7 @@ export default function ApplyPaymentPanel({
       // Default to applying everything that matched — EXCEPT invoices that
       // are already settled. Those are the signature of a re-uploaded
       // remittance, and re-applying would push them overpaid.
+      setPicked({}); setSearchFor(null);
       setSkip(new Set(
         res.lines.filter(l => !l.invoiceId || l.alreadyPaid).map(l => l.rowIndex),
       ));
@@ -203,7 +212,28 @@ export default function ApplyPaymentPanel({
 
   // Memoized: `parsed?.lines ?? []` allocates a fresh array every render,
   // which would invalidate every downstream useMemo on each pass.
-  const lines    = useMemo(() => parsed?.lines ?? [], [parsed]);
+  const rawLines = useMemo(() => parsed?.lines ?? [], [parsed]);
+  const lines    = useMemo(() => rawLines.map((l): ParsedPaymentLine => {
+    const p = picked[l.rowIndex];
+    if (!p) return l;
+    return {
+      ...l,
+      invoiceId:     p.invoiceId,
+      invoiceNumber: p.invoiceNumber,
+      invoiceTotal:  p.invoiceTotal,
+      invoicePaid:   p.invoicePaid,
+      invoiceStatus: p.invoiceStatus,
+      alreadyPaid:   p.invoiceStatus === 'paid',
+      loadNum:       p.loadNum,
+      title:         p.title,
+      pickupAt:      p.pickupAt,
+      agingDays:     p.agingDays,
+      matchedBy:     'manual',
+      confidence:    100,
+      ambiguous:     null,
+      note:          'chosen by hand',
+    };
+  }), [rawLines, picked]);
   const included = useMemo(
     () => lines.filter(l => l.invoiceId && !skip.has(l.rowIndex)),
     [lines, skip],
@@ -645,6 +675,15 @@ export default function ApplyPaymentPanel({
                                disabled={busy || !l.invoiceId}
                                hovered={hoverRow === l.rowIndex}
                                onHover={setHoverRow}
+                               searching={searchFor === l.rowIndex}
+                               onSearch={() => setSearchFor(searchFor === l.rowIndex ? null : l.rowIndex)}
+                               customerId={customerId || null}
+                               onPick={inv => {
+                                 setPicked(p => ({ ...p, [l.rowIndex]: inv }));
+                                 setSearchFor(null);
+                                 // A hand-picked line is meant to be applied.
+                                 setSkip(sk => { const n = new Set(sk); n.delete(l.rowIndex); return n; });
+                               }}
                                onToggle={() => setSkip(s => {
                                  const n = new Set(s);
                                  if (n.has(l.rowIndex)) n.delete(l.rowIndex);
@@ -862,9 +901,14 @@ function DocumentPane({ text, url, filename, isImage, hoverRow, onHoverRow }: {
  * invoice number alone is not recognisable — "Load 61934, Salt Lake → Reno,
  * picked up Jul 1" is what tells the operator this is the right load.
  */
-function LineRow({ line, included, disabled, onToggle, hovered, onHover }: {
+function LineRow({
+  line, included, disabled, onToggle, hovered, onHover,
+  searching, onSearch, onPick, customerId,
+}: {
   line: ParsedPaymentLine; included: boolean; disabled: boolean; onToggle: () => void;
   hovered: boolean; onHover: (r: number | null) => void;
+  searching: boolean; onSearch: () => void;
+  onPick: (inv: InvoiceSearchResult) => void; customerId: string | null;
 }) {
   const matched = !!line.invoiceId;
   const age     = line.agingDays;
@@ -872,11 +916,11 @@ function LineRow({ line, included, disabled, onToggle, hovered, onHover }: {
     && Math.abs(line.invoiceTotal - line.amount) > 0.005;
 
   return (
+    <div style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
     <div className="flex items-start gap-2.5 px-2.5 py-2"
          onMouseEnter={() => onHover(line.rowIndex)}
          onMouseLeave={() => onHover(null)}
          style={{
-           borderBottom: '1px solid var(--gc-border-light)',
            background: hovered ? BLUE_BG : included ? 'rgba(26,115,232,.055)' : 'transparent',
            boxShadow: hovered ? `inset 2px 0 0 ${BLUE}` : undefined,
          }}>
@@ -951,7 +995,101 @@ function LineRow({ line, included, disabled, onToggle, hovered, onHover }: {
         </span>
       </span>
 
-      <ConfidenceChip line={line} />
+      <span className="flex flex-col items-end gap-1 shrink-0">
+        <ConfidenceChip line={line} />
+        {/* A reference the resolver can't place is not always recoverable —
+            it may be truncated on the document, or an identifier we never
+            recorded. The operator still knows the load, so let them say. */}
+        <button type="button" onClick={onSearch}
+                className="text-[10px] font-semibold inline-flex items-center gap-0.5"
+                style={{ color: searching ? 'var(--gc-text-3)' : BLUE }}>
+          <Search size={9} /> {line.invoiceId ? 'change' : 'find'}
+        </button>
+      </span>
+    </div>
+
+    {searching && (
+      <InvoiceSearch customerId={customerId} amount={line.amount} onPick={onPick} />
+    )}
+    </div>
+  );
+}
+
+/** Search this customer's invoices by invoice #, load #, or internal load
+ *  id. Seeded blank rather than with the unusable reference — the whole
+ *  reason we are here is that the printed one didn't resolve. */
+function InvoiceSearch({ customerId, amount, onPick }: {
+  customerId: string | null; amount: number; onPick: (inv: InvoiceSearchResult) => void;
+}) {
+  const [q, setQ] = useState('');
+  const [rows, setRows] = useState<InvoiceSearchResult[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  // Both setState calls live inside async callbacks. Doing either in the
+  // effect body synchronously is the cascading-render pattern React 19
+  // warns about; stale rows are handled by deriving `shown` instead of
+  // clearing them eagerly.
+  useEffect(() => {
+    const term = q.trim();
+    if (term.length < 2) return;
+    let alive = true;
+    const t = setTimeout(() => {
+      if (!alive) return;
+      setBusy(true);
+      void railway.searchInvoices({ q: term, customerId, scope: 'open' })
+        .then(r => { if (alive) setRows(r.invoices); })
+        .catch(() => { if (alive) setRows([]); })
+        .finally(() => { if (alive) setBusy(false); });
+    }, 250);
+    return () => { alive = false; clearTimeout(t); };
+  }, [q, customerId]);
+
+  const shown = q.trim().length >= 2 ? rows : [];
+
+  return (
+    <div className="px-2.5 pb-2.5" style={{ background: 'var(--gc-bg)' }}>
+      <div className="flex items-center gap-1.5 rounded border px-2 py-1.5 mb-1.5"
+           style={{ borderColor: 'var(--gc-border)', background: 'var(--gc-surface)' }}>
+        <Search size={12} style={{ color: 'var(--gc-text-3)' }} />
+        <input autoFocus value={q} onChange={e => setQ(e.target.value)}
+               placeholder="Invoice #, load #, or internal load id…"
+               className="flex-1 min-w-0 outline-none"
+               style={{ fontSize: 12, background: 'transparent', color: 'var(--gc-text-1)' }} />
+        {busy && <Loader2 size={11} className="animate-spin" style={{ color: 'var(--gc-text-3)' }} />}
+      </div>
+
+      {q.trim().length >= 2 && !busy && shown.length === 0 && (
+        <div className="text-[11px] px-1 py-1" style={{ color: 'var(--gc-text-3)' }}>
+          Nothing open matches that for this customer.
+        </div>
+      )}
+
+      {shown.map(r => {
+        // Same amount is a strong hint, so say so — without letting it pick.
+        const exact = Math.abs(r.invoiceTotal - amount) < 0.005;
+        return (
+          <button key={r.invoiceId} type="button" onClick={() => onPick(r)}
+                  className="w-full text-left flex items-center gap-2 px-2 py-1.5 rounded"
+                  style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', marginBottom: 4 }}>
+            <span className="flex-1 min-w-0">
+              <span className="block text-[12px] font-bold truncate" style={{ color: BLUE }}>
+                #{r.invoiceNumber}
+                {r.loadNum && <span style={{ color: 'var(--gc-text-3)', fontWeight: 600 }}> · Load {r.loadNum}</span>}
+              </span>
+              <span className="block text-[10.5px] truncate" style={{ color: 'var(--gc-text-3)' }}>
+                {r.title ?? 'No load title'}
+                {shortDate(r.pickupAt) ? ` · picked up ${shortDate(r.pickupAt)}` : ''}
+              </span>
+            </span>
+            {exact && (
+              <span className="text-[9.5px] font-bold px-1 py-0.5 rounded shrink-0"
+                    style={{ background: GREEN_BG, color: GREEN }}>same amount</span>
+            )}
+            <span className="text-[12px] font-bold tabular-nums shrink-0"
+                  style={{ color: 'var(--gc-text-1)' }}>{money2(r.invoiceTotal)}</span>
+          </button>
+        );
+      })}
     </div>
   );
 }

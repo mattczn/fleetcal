@@ -1575,7 +1575,28 @@ export interface CreatePaymentProofResponse { proof: PaymentProof; }
  *  `ambiguous` means more than one invoice matched — never auto-applied. */
 export type PaymentMatchedBy =
   | 'invoice_number' | 'load_num' | 'internal_load_id'
-  | 'processor_ref'  | 'ambiguous' | 'none';
+  | 'processor_ref'  | 'ambiguous' | 'none'
+  /** Chosen by a person from the invoice search — the resolver found nothing
+   *  or found the wrong thing, and a human said which invoice it is. */
+  | 'manual';
+
+/** A candidate returned by the invoice search, shaped so it can be shown
+ *  the same way a matched line is. */
+export interface InvoiceSearchResult {
+  invoiceId:      string;
+  invoiceNumber:  string;
+  invoiceTotal:   number;
+  invoicePaid:    number;
+  invoiceStatus:  string;
+  loadNum:        string | null;
+  internalLoadId: string | null;
+  title:          string | null;
+  pickupAt:       string | null;
+  customerName:   string | null;
+  agingDays:      number | null;
+}
+
+export interface SearchInvoicesResponse { invoices: InvoiceSearchResult[]; }
 
 export interface ParsedPaymentLine {
   rowIndex:           number;

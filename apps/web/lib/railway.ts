@@ -71,7 +71,7 @@ import type {
   ListPaymentProofsQuery, ListPaymentProofsResponse,
   GetPaymentProofResponse,
   CreatePaymentProofRequest, CreatePaymentProofResponse,
-  ParsePaymentResponse,
+  ParsePaymentResponse, SearchInvoicesResponse,
   UpdatePaymentProofRequest, UpdatePaymentProofResponse,
   DeletePaymentProofResponse, UploadProofAttachmentResponse,
   ListInvoicePaymentsResponse,
@@ -1537,6 +1537,14 @@ class RailwayClient {
    *  Writes nothing — the operator confirms, then the normal proof +
    *  allocation calls do the writing. Pass `customerId` to narrow the
    *  search once the customer is known. */
+  /** Find invoices for a customer by invoice #, load #, or internal load id.
+   *  Used to match a remittance line the resolver couldn't place. */
+  searchInvoices(query: { q: string; customerId?: string | null; scope?: 'open' | 'all' }) {
+    const p = new URLSearchParams({ q: query.q });
+    if (query.customerId) p.set('customerId', query.customerId);
+    if (query.scope)      p.set('scope', query.scope);
+    return this.req<SearchInvoicesResponse>('GET', `/v1/payments/invoice-search?${p}`);
+  }
   parsePaymentDocument(body: {
     filename: string; mimeType: string; dataBase64: string; customerId?: string | null;
   }) {
