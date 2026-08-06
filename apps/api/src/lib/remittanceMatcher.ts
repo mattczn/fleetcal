@@ -294,6 +294,10 @@ export type MatchedBy =
   /** Last resort: exactly ONE open invoice for this customer has this exact
    *  balance. Never auto-applied — see NAMESPACE_SCORE. */
   | "amount"
+  /** Inferred from the batch: the other lines on this document all settle
+   *  invoices billed on one date, and exactly one unclaimed invoice from
+   *  that same date matches this line's amount. A proposal, not a match. */
+  | "cohort"
   | "ambiguous"
   | "none";
 
@@ -341,6 +345,11 @@ const NAMESPACE_SCORE: Record<Exclude<MatchedBy, "ambiguous" | "none">, number> 
   // wrong answers, and a wrong allocation is worse than an unapplied one
   // because nobody goes looking for it.
   amount:           70,
+  // Two weak signals agreeing (same billing batch + exact balance) is
+  // stronger than either alone, and still not a reference. Below
+  // AUTO_APPLY_THRESHOLD on purpose: it hands the operator an answer to
+  // confirm rather than moving money on an inference.
+  cohort:           80,
 };
 
 /** At or above this, a line may be applied without human review. Set so

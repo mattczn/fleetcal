@@ -1581,6 +1581,9 @@ export type PaymentMatchedBy =
   /** Only open invoice for the customer with this exact balance. Suggestion
    *  only — scores below the auto-apply threshold. */
   | 'amount'
+  /** Proposed from the billing batch — same issued date as the rest of the
+   *  document, and the only unclaimed invoice from it at this amount. */
+  | 'cohort'
   | 'ambiguous' | 'none'
   /** Chosen by a person from the invoice search — the resolver found nothing
    *  or found the wrong thing, and a human said which invoice it is. */
@@ -1650,11 +1653,31 @@ export interface ParsePaymentDuplicate {
   appliedCount: number;
 }
 
+/** What else this customer was billed on the same day(s) the document
+ *  settles. A broker quietly dropping loads from a batch payment otherwise
+ *  looks identical to a clean one. */
+export interface ParsePaymentCohort {
+  /** Billing dates the matched invoices fall on, YYYY-MM-DD. */
+  dates:       string[];
+  billedCount: number;
+  onDocument:  number;
+  missing: Array<{
+    invoiceId:     string;
+    invoiceNumber: string;
+    total:         number;
+    balance:       number;
+    status:        string;
+    loadNum:       string | null;
+    title:         string | null;
+  }>;
+}
+
 export interface ParsePaymentResponse {
   isRemittance: boolean;
   /** Why it was rejected, when isRemittance is false. */
   reason: string | null;
   duplicate: ParsePaymentDuplicate | null;
+  cohort: ParsePaymentCohort | null;
   doc: {
     source:             string;
     payerNameAsPrinted: string;

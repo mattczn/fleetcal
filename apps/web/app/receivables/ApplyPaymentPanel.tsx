@@ -31,7 +31,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   X, Check, AlertTriangle, Loader2, FileText, HelpCircle, ExternalLink,
-  UploadCloud, Building2, Truck, CircleAlert, Copy, Paperclip, Search,
+  UploadCloud, Building2, Truck, CircleAlert, Copy, Paperclip, Search, CalendarClock,
 } from 'lucide-react';
 import { railway } from '@/lib/railway';
 import type {
@@ -692,6 +692,40 @@ export default function ApplyPaymentPanel({
                                })} />
                     ))}
                   </div>
+                  {parsed.cohort && parsed.cohort.missing.length > 0 && (
+                    <div className="rounded-lg border p-3 mb-2 text-xs flex gap-2"
+                         style={{ borderColor: AMBER, background: AMBER_BG, color: '#92400e' }}>
+                      <CalendarClock size={14} className="shrink-0 mt-px" />
+                      <span className="min-w-0">
+                        <strong>
+                          {parsed.cohort.missing.length} invoice
+                          {parsed.cohort.missing.length === 1 ? '' : 's'} billed the same day
+                          {parsed.cohort.missing.length === 1 ? ' is' : ' are'} not on this document.
+                        </strong>
+                        <span className="block mt-1">
+                          {parsed.cohort.billedCount} invoice
+                          {parsed.cohort.billedCount === 1 ? '' : 's'} billed{' '}
+                          {parsed.cohort.dates.map(d => shortDate(d) ?? d).join(', ')};
+                          this covers {parsed.cohort.onDocument}. Worth checking whether they were
+                          short-paid or simply left out.
+                        </span>
+                        <span className="block mt-1.5">
+                          {parsed.cohort.missing.slice(0, 6).map(m => (
+                            <span key={m.invoiceId} className="block truncate">
+                              #{m.invoiceNumber}
+                              {m.loadNum ? ` · Load ${m.loadNum}` : ''}
+                              {' · '}{money2(m.balance)}
+                              {m.status === 'paid' ? ' · already paid' : ''}
+                            </span>
+                          ))}
+                          {parsed.cohort.missing.length > 6 && (
+                            <span className="block">…and {parsed.cohort.missing.length - 6} more</span>
+                          )}
+                        </span>
+                      </span>
+                    </div>
+                  )}
+
                   {(parsed.summary?.unmatched ?? 0) > 0 && (
                     <div className="text-[11px] mb-2" style={{ color: 'var(--gc-text-3)' }}>
                       Unmatched rows aren&apos;t applied. The payment is still recorded in full,
@@ -1106,6 +1140,7 @@ function ConfidenceChip({ line }: { line: ParsedPaymentLine }) {
     line.matchedBy === 'ambiguous'        ? 'ambiguous' :
     line.matchedBy === 'processor_ref'    ? 'processor' :
     line.matchedBy === 'amount'           ? 'amount' :
+    line.matchedBy === 'cohort'           ? 'same batch' :
     line.matchedBy === 'manual'           ? 'you picked' : '—';
   const strong = line.confidence >= 90;
   return (

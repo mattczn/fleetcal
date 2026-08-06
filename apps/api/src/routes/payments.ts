@@ -1252,6 +1252,110 @@ payments.post("/parse", async (c) => {
     };
   });
 
+  // ── billing-batch cohort ─────────────────────────────────────────────
+  //
+  // Remittances tend to settle one day's billing. Measured on Curzon prod:
+  // ITS billed 16 invoices on 2026-07-01 and REMIT272541 paid exactly those
+  // 16. That makes the batch a genuinely useful second signal, used two
+  // ways — neither of which is allowed to move money on its own.
+  //
+  //   1. A line that resolved to nothing gets its candidates narrowed to
+  //      unclaimed invoices from the same billing date(s). When exactly one
+  //      of those also matches the line's amount, it is PROPOSED at
+  //      confidence 80 — below auto-apply, so the operator confirms.
+  //   2. Anything billed on those dates and absent from the document is
+  //      reported. A broker dropping two loads from a batch payment
+  //      otherwise looks exactly like a clean payment.
+  const effectiveCustomerId =
+    scoped ||
+    ([...new Set(out.filter((l) => l.invoiceId).map((l) => l.invoiceCustomerId).filter(Boolean))]
+      .length === 1
+      ? (out.find((l) => l.invoiceId)?.invoiceCustomerId ?? null)
+      : null);
+
+  let cohort: {
+    dates: string[]; billedCount: number; onDocument: number;
+    missing: Array<Record<string, unknown>>;
+  } | null = null;
+
+  if (effectiveCustomerId) {
+    const dates = [...new Set(
+      out.filter((l) => l.invoiceId && l.issuedAt)
+         .map((l) => String(l.issuedAt).slice(0, 10)),
+    )].sort();
+
+    if (dates.length && dates.length <= 4) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const batch: any[] = [];
+      for (const d of dates) {
+        const { data, error } = await supabase
+          .from("invoices")
+          .select(RECEIVABLE_INVOICE_COLS + ",paid_amount")
+          .eq("org_id", orgId)
+          .eq("customer_id", effectiveCustomerId)
+          .gte("issued_at", `${d}T00:00:00`)
+          .lte("issued_at", `${d}T23:59:59`);
+        if (error) { console.error("[parse] cohort fetch failed:", error); continue; }
+        batch.push(...(data ?? []));
+      }
+
+      const claimed = new Set(out.map((l) => l.invoiceId).filter(Boolean) as string[]);
+
+      // 1. Propose a batch invoice for lines that resolved to nothing.
+      for (const line of out) {
+        if (line.invoiceId) continue;
+        const free = batch.filter((b) => !claimed.has(b.id));
+        const byAmt = free.filter(
+          (b) => Math.abs(round2(Number(b.total ?? 0) - Number(b.paid_amount ?? 0)) - line.amount) < 0.005,
+        );
+        if (byAmt.length !== 1) continue;
+        const b = byAmt[0];
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const leg = pickupLeg(b as any);
+        claimed.add(b.id);
+        line.invoiceId         = b.id;
+        line.invoiceNumber     = String(b.invoice_number ?? "");
+        line.invoiceTotal      = Number(b.total ?? 0);
+        line.invoicePaid       = Number(b.paid_amount ?? 0);
+        line.invoiceStatus     = String(b.status ?? "");
+        line.alreadyPaid       = String(b.status ?? "") === "paid";
+        line.invoiceCustomerId = (b.customer_id as string | null) ?? null;
+        line.customerName      = (b.customers as { name?: string } | null)?.name ?? null;
+        line.loadNum           = b.loads?.load_num != null ? String(b.loads.load_num) : null;
+        line.internalLoadId    = b.loads?.internal_load_id != null ? String(b.loads.internal_load_id) : null;
+        line.title             = leg?.title ?? null;
+        line.pickupAt          = leg?.start ?? null;
+        line.issuedAt          = (b.issued_at as string | null) ?? null;
+        line.dueAt             = (b.due_at as string | null) ?? null;
+        line.agingDays         = daysPastDue((b.due_at as string | null) ?? null, today);
+        line.matchedBy         = "cohort";
+        line.confidence        = 80;
+        line.note =
+          `no usable reference — the only invoice billed ${String(b.issued_at).slice(0, 10)} ` +
+          `for this customer at this amount that isn't already on this document`;
+      }
+
+      // 2. What was billed on those dates and is NOT on this document.
+      const missing = batch
+        .filter((b) => !claimed.has(b.id))
+        .map((b) => ({
+          invoiceId:     b.id as string,
+          invoiceNumber: String(b.invoice_number ?? ""),
+          total:         Number(b.total ?? 0),
+          balance:       round2(Number(b.total ?? 0) - Number(b.paid_amount ?? 0)),
+          status:        String(b.status ?? ""),
+          loadNum:       b.loads?.load_num != null ? String(b.loads.load_num) : null,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          title:         pickupLeg(b as any)?.title ?? null,
+        }));
+
+      cohort = {
+        dates, billedCount: batch.length,
+        onDocument: batch.length - missing.length, missing,
+      };
+    }
+  }
+
   const matched = out.filter((l) => l.invoiceId);
 
   // ── duplicate guard ──────────────────────────────────────────────────
@@ -1313,6 +1417,7 @@ payments.post("/parse", async (c) => {
     isRemittance: true,
     reason:       null,
     duplicate,
+    cohort,
     doc: {
       source:             doc.source,
       payerNameAsPrinted: doc.payerNameAsPrinted,
