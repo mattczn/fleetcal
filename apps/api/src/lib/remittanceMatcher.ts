@@ -188,17 +188,29 @@ export type RefRule =
  * only for tie-breaking — a hit is a hit regardless of which form produced
  * it.
  */
-export function referenceCandidates(raw: string | null, rules: RefRule[] = []): string[] {
+export interface RefCandidate {
+  value: string;
+  /** True only when a CUSTOMER-CONFIGURED rule produced this form. The
+   *  built-in fallbacks are the same tested code on every document, so
+   *  they carry no extra doubt; a freshly added rule does. */
+  fromRule: boolean;
+}
+
+export function referenceCandidatesDetailed(
+  raw: string | null, rules: RefRule[] = [],
+): RefCandidate[] {
   if (!raw) return [];
-  const out: string[] = [];
+  const out: RefCandidate[] = [];
+  let inRules = false;
   const push = (v: string | null | undefined) => {
     const t = (v ?? "").trim();
-    if (t && !out.includes(t)) out.push(t);
+    if (t && !out.some((c) => c.value === t)) out.push({ value: t, fromRule: inRules });
   };
 
   push(raw);
   let cur = raw.trim();
 
+  inRules = true;
   for (const rule of rules) {
     try {
       switch (rule.kind) {
@@ -232,6 +244,7 @@ export function referenceCandidates(raw: string | null, rules: RefRule[] = []): 
     }
   }
 
+  inRules = false;
   // Generic fallbacks, safe for every vendor because candidates only ever
   // ADD: a useless one simply matches nothing, and one that collides with a
   // real invoice produces `ambiguous` (a review item) rather than a wrong
@@ -259,6 +272,11 @@ export function referenceCandidates(raw: string | null, rules: RefRule[] = []): 
   if (head) push(head[1]);
 
   return out;
+}
+
+/** Values only — the common case and what tests read. */
+export function referenceCandidates(raw: string | null, rules: RefRule[] = []): string[] {
+  return referenceCandidatesDetailed(raw, rules).map((c) => c.value);
 }
 
 // ── Resolution ────────────────────────────────────────────────────────
@@ -400,10 +418,10 @@ export async function resolveLines(
   const rules = opts.rules ?? [];
 
   // 1. Candidate forms for every line, and the flat set to look up.
-  const perLine = doc.lines.map((line) => ({
-    line,
-    candidates: referenceCandidates(line.referenceAsPrinted, rules),
-  }));
+  const perLine = doc.lines.map((line) => {
+    const detailed = referenceCandidatesDetailed(line.referenceAsPrinted, rules);
+    return { line, detailed, candidates: detailed.map((c) => c.value) };
+  });
   const allCandidates = [...new Set(perLine.flatMap((p) => p.candidates))];
 
   if (!allCandidates.length) {
@@ -443,21 +461,54 @@ export async function resolveLines(
     index(byInvoiceNumber, row.invoice_number, row);
   }
 
-  // Loads carry two more namespaces; resolve loads first, then their invoices.
-  const { data: loadRows } = await supabase
-    .from("loads")
-    .select("id,load_num,internal_load_id")
-    .eq("org_id", orgId)
-    .or(
-      `load_num.in.(${allCandidates.map((c) => `"${c}"`).join(",")}),` +
-      `internal_load_id.in.(${allCandidates.map((c) => `"${c}"`).join(",")})`,
-    );
+  // Loads carry two more namespaces. Queried SEPARATELY, and never through
+  // a hand-built .or() string.
+  //
+  // The columns have different types and that difference is load-bearing:
+  // `load_num` is text and accepts anything, but `internal_load_id` is an
+  // INTEGER. Passing a printed reference like "4752138-21 | 4752138-21" to
+  // it makes Postgres reject the whole statement (22P02), and the digits
+  // fallback can overflow it besides (22003). Because both columns shared
+  // one .or(), a single unparseable candidate killed BOTH namespaces for
+  // the entire document — silently, since only `data` was destructured.
+  // That is why references whose load was sitting right there resolved to
+  // nothing.
+  const numericCandidates = allCandidates.filter((c) => /^\d{1,9}$/.test(c));
 
-  const loads = (loadRows ?? []) as Array<{
-    id: string;
-    load_num: string | number | null;
-    internal_load_id: string | number | null;
-  }>;
+  const loadRowsById = new Map<string, {
+    id: string; load_num: string | number | null; internal_load_id: string | number | null;
+  }>();
+
+  const collectLoads = async (label: string, build: () => any) => {
+    const { data, error } = await build();
+    if (error) {
+      // Loudly: a failure here silently disables a whole namespace.
+      console.error(`[remittanceMatcher] load lookup by ${label} failed:`, error);
+      return;
+    }
+    for (const row of (data ?? []) as Array<{ id: string }>) {
+      loadRowsById.set(row.id, row as never);
+    }
+  };
+
+  await collectLoads("load_num", () =>
+    supabase
+      .from("loads")
+      .select("id,load_num,internal_load_id")
+      .eq("org_id", orgId)
+      .in("load_num", allCandidates),
+  );
+  if (numericCandidates.length) {
+    await collectLoads("internal_load_id", () =>
+      supabase
+        .from("loads")
+        .select("id,load_num,internal_load_id")
+        .eq("org_id", orgId)
+        .in("internal_load_id", numericCandidates),
+    );
+  }
+
+  const loads = [...loadRowsById.values()];
 
   if (loads.length) {
     let loadInvQ = supabase
@@ -534,7 +585,7 @@ export async function resolveLines(
     ["internal_load_id", byInternalId],
   ];
 
-  return perLine.map(({ line, candidates }): ResolvedLine => {
+  return perLine.map(({ line, detailed, candidates }): ResolvedLine => {
     const hits = new Map<
       string,
       { row: InvoiceRow; via: Set<Exclude<MatchedBy, "ambiguous" | "none">>; minIdx: number }
@@ -556,9 +607,12 @@ export async function resolveLines(
 
     if (hits.size === 1) {
       const hit = [...hits.values()][0]!;
-      // candidates[0] is the verbatim printed form. Only if NO literal form
-      // matched did a normalization rule actually do the work.
-      const viaRule = hit.minIdx > 0;
+      // Only a CUSTOMER-CONFIGURED rule counts as "derived". The built-in
+      // segment/digit fallbacks run identically on every document and are
+      // covered by tests, so penalising them would permanently hold back
+      // every payer whose reference simply isn't a bare number — which is
+      // most of them.
+      const viaRule = detailed[hit.minIdx]?.fromRule ?? false;
       // Namespaces score equally, so this is a label for the reviewer, not a
       // ranking. Report the most human-recognisable one that hit.
       const matchedBy =

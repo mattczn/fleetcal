@@ -1359,18 +1359,34 @@ payments.get("/invoice-search", async (c) => {
 
   const like = `%${q.replace(/[%_]/g, "")}%`;
 
-  // Loads first: load_num / internal_load_id / the pickup leg's title are
-  // all things a person recognises, and none of them live on the invoice.
-  let loadQ = supabase
-    .from("loads")
-    .select("id")
-    .eq("org_id", orgId)
-    .is("deleted_at", null)
-    .or(`load_num.ilike.${like},internal_load_id.ilike.${like}`)
-    .limit(200);
-  if (customerId) loadQ = loadQ.eq("customer_id", customerId);
-  const { data: loadHits } = await loadQ;
-  const loadIds = ((loadHits ?? []) as Array<{ id: string }>).map((l) => l.id);
+  // Loads first: the load number is what a person recognises, and it does
+  // not live on the invoice.
+  //
+  // `load_num` is text so it takes ilike. `internal_load_id` is an INTEGER
+  // — Postgres has no ilike for it, and casting doesn't help through
+  // PostgREST (42883), so it is matched exactly and only when the term is
+  // a number that fits. Folding both into one .or() made every search
+  // fail outright, which is why searching a reference returned nothing
+  // even when the load was on screen.
+  const loadIdSet = new Set<string>();
+  const collect = async (label: string, build: () => any) => {
+    const { data, error } = await build();
+    if (error) { console.error(`[invoice-search] ${label} failed:`, error); return; }
+    for (const r of (data ?? []) as Array<{ id: string }>) loadIdSet.add(r.id);
+  };
+
+  const baseLoads = () => {
+    let b = supabase.from("loads").select("id").eq("org_id", orgId)
+      .is("deleted_at", null).limit(200);
+    if (customerId) b = b.eq("customer_id", customerId);
+    return b;
+  };
+
+  await collect("load_num", () => baseLoads().ilike("load_num", like));
+  if (/^\d{1,9}$/.test(q)) {
+    await collect("internal_load_id", () => baseLoads().eq("internal_load_id", Number(q)));
+  }
+  const loadIds = [...loadIdSet];
 
   let invQ = supabase
     .from("invoices")
