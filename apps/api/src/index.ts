@@ -68,6 +68,8 @@ import fleetRoute from "./routes/fleet.js";
 import costAnalysisRoute from "./routes/cost-analysis.js";
 import capacityRoute from "./routes/capacity.js";
 import trackingRoute from "./routes/tracking-public.js";
+import contractsPublicRoute from "./routes/contracts-public.js";
+import contractsRoute from "./routes/contracts.js";
 import contactSalesRoute from "./routes/contact-sales.js";
 import supportRoute from "./routes/support.js";
 import { syncIncrementalAllOrgs, snapshotOdometersAllOrgs } from "./lib/motiveIngest.js";
@@ -211,6 +213,10 @@ app.route("/v1/capacity", capacityRoute);
 // notes at the top of routes/tracking-public.ts before changing anything.
 app.route("/v1/tracking", trackingRoute);
 
+// Public contract signing — the driver opens a tokenized link and signs.
+// The token resolves its own org, so this needs no per-carrier config.
+app.route("/v1/contracts", contractsPublicRoute);
+
 // Public lead intake — fleetcal.app/contact-sales wizard POSTs here,
 // the route emails CONTACT_SALES_TO (defaults to hello@fleetcal.app)
 // via Resend. Honeypot + time-gate stops drive-by spam.
@@ -233,6 +239,7 @@ authed.get("/whoami", (c) =>
   }),
 );
 
+authed.route("/contracts", contractsRoute);
 authed.route("/loads", loadsRoute);
 authed.route("/closeout", closeoutRoute);
 authed.route("/events", eventsRoute);
