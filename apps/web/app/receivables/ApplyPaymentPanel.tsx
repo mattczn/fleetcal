@@ -63,6 +63,10 @@ const shortDate = (iso: string | null | undefined) => {
 
 export interface ApplyPaymentPanelProps {
   customers: { id: string; name: string }[];
+  /** Pre-selects the customer, and scopes the very first parse to them.
+   *  Set when opening from inside a customer profile — narrowing the
+   *  search there resolves references that are ambiguous org-wide. */
+  initialCustomerId?: string | null;
   onClose:   () => void;
   /** Called after allocations land so the ledger can refetch. */
   onSaved:   () => void;
@@ -107,10 +111,12 @@ function parseCsv(text: string): string[][] {
   return rows.filter(r => r.some(c => c.trim() !== ''));
 }
 
-export default function ApplyPaymentPanel({ customers, onClose, onSaved }: ApplyPaymentPanelProps) {
+export default function ApplyPaymentPanel({
+  customers, initialCustomerId, onClose, onSaved,
+}: ApplyPaymentPanelProps) {
   const [file,    setFile]    = useState<File | null>(null);
   const [parsed,  setParsed]  = useState<ParsePaymentResponse | null>(null);
-  const [customerId, setCustomerId] = useState<string>('');
+  const [customerId, setCustomerId] = useState<string>(initialCustomerId ?? '');
   const [skip,    setSkip]    = useState<Set<number>>(new Set());
   const [busy,    setBusy]    = useState(false);
   const [phase,   setPhase]   = useState<'idle' | 'reading' | 'applying'>('idle');

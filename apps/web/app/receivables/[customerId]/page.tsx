@@ -31,11 +31,11 @@ import EventModal from '@/components/calendar/EventModal';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 import BulkPaymentPanel from '../BulkPaymentPanel';
 import RecordPaymentPanel from '../RecordPaymentPanel';
+import ApplyPaymentPanel from '../ApplyPaymentPanel';
 import BillingCard from '../BillingCard';
 import Breadcrumbs from '@/app/admin/Breadcrumbs';
 import Tooltip from '@/components/ui/Tooltip';
 import { CopyableCell, CopyableLoadNum, StatusPill } from '@/components/queue/QueueTablePrimitives';
-import { InvoiceDetailModal } from '@/components/invoicing/InvoiceDetailModal';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { railway } from '@/lib/railway';
 import type { CustomerReceivables, ReceivableInvoice, AgingBucket } from '@fleetcal/types';
@@ -92,9 +92,9 @@ function CustomerViewInner() {
   const [scope,   setScope]   = useState<Scope>('open');
   const [search,  setSearch]  = useState('');
   const [term,    setTerm]    = useState('');
-  const [openInvoiceId, setOpenInvoiceId] = useState<string | null>(null);
   /** Invoice whose payment record + proof is being inspected. */
   const [proofFor, setProofFor] = useState<ReceivableInvoice | null>(null);
+  const [applyOpen, setApplyOpen] = useState(false);
   const [profileOpen,   setProfileOpen]   = useState(false);
   const [selected,      setSelected]      = useState<Set<string>>(new Set());
   const [bulkOpen,      setBulkOpen]      = useState(false);
@@ -208,14 +208,13 @@ function CustomerViewInner() {
           <Mail size={13} /> Send statement
         </span>
       </Tooltip>
-      <Tooltip content="Remittance matching isn't wired up yet — record payments from the Receivables ledger." placement="bottom">
-        <span className="inline-flex items-center gap-1.5" style={{
+      <button onClick={() => setApplyOpen(true)}
+        className="inline-flex items-center gap-1.5" style={{
           height: 32, padding: '0 12px', borderRadius: 8, background: '#1a73e8',
-          color: '#fff', fontSize: 12, fontWeight: 700, opacity: 0.55, cursor: 'default',
+          color: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer',
         }}>
-          <ArrowRightLeft size={13} /> Apply a payment
-        </span>
-      </Tooltip>
+        <ArrowRightLeft size={13} /> Apply a payment
+      </button>
     </div>
   );
 
@@ -520,7 +519,7 @@ function CustomerViewInner() {
                     </span>
                   </div>
                   {g.rows.map(inv => (
-                    <InvoiceRow key={inv.id} inv={inv} onOpen={setOpenInvoiceId} onOpenPayments={setProofFor}
+                    <InvoiceRow key={inv.id} inv={inv} onOpenPayments={setProofFor}
                       onOpenLoad={openLoadInModal}
                       selected={selected.has(inv.id)} onToggle={toggleOne} />
                   ))}
@@ -528,7 +527,7 @@ function CustomerViewInner() {
               ))
             ) : (
               invoices.map(inv => (
-                <InvoiceRow key={inv.id} inv={inv} onOpen={setOpenInvoiceId} onOpenPayments={setProofFor}
+                <InvoiceRow key={inv.id} inv={inv} onOpenPayments={setProofFor}
                   onOpenLoad={openLoadInModal}
                   selected={selected.has(inv.id)} onToggle={toggleOne} />
               ))
@@ -571,6 +570,15 @@ function CustomerViewInner() {
           sets store state. */}
       <DataLoader />
       <EventModal />
+      {applyOpen && data && (
+        <ApplyPaymentPanel
+          customers={[{ id: customerId, name: data.customerName }]}
+          initialCustomerId={customerId}
+          onSaved={() => void load()}
+          onClose={() => setApplyOpen(false)}
+        />
+      )}
+
       {proofFor && (
         <RecordPaymentPanel
           row={proofFor}
@@ -579,9 +587,6 @@ function CustomerViewInner() {
         />
       )}
 
-      {openInvoiceId && (
-        <InvoiceDetailModal invoiceId={openInvoiceId} onClose={() => setOpenInvoiceId(null)} />
-      )}
       {bulkOpen && selectedInvoices.length > 0 && (
         <BulkPaymentPanel
           invoices={selectedInvoices}
@@ -608,9 +613,8 @@ const CARD: React.CSSProperties = {
   boxShadow: '0 1px 2px rgba(60,64,67,.1)',
 };
 
-function InvoiceRow({ inv, onOpen, onOpenPayments, onOpenLoad, selected, onToggle }: {
+function InvoiceRow({ inv, onOpenPayments, onOpenLoad, selected, onToggle }: {
   inv: ReceivableInvoice;
-  onOpen: (id: string) => void;
   onOpenPayments: (inv: ReceivableInvoice) => void;
   onOpenLoad: (inv: ReceivableInvoice) => void;
   selected: boolean;
@@ -620,9 +624,9 @@ function InvoiceRow({ inv, onOpen, onOpenPayments, onOpenLoad, selected, onToggl
   const stripe = age != null && age > 30 ? '#c5221f' : age != null && age > 0 ? '#e37400' : 'transparent';
   const payable = inv.balance > 0.005;
   return (
-    <div onClick={() => onOpen(inv.id)}
+    <div onClick={() => onOpenPayments(inv)}
       className="cursor-pointer"
-      title="Open the invoice"
+      title="Payment details — record a payment or view its proof"
       style={{
         display: 'grid', gridTemplateColumns: GRID, gap: 10, padding: '0 14px',
         height: 40, alignItems: 'center', fontSize: 12.5,
