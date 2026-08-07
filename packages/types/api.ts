@@ -1621,6 +1621,11 @@ export interface ParsedPaymentLine {
   invoiceStatus:      string | null;
   /** Invoice is already settled — re-applying would push it overpaid. */
   alreadyPaid:        boolean;
+  /** This exact money is ALREADY recorded against this invoice — an
+   *  allocation for the same amount exists. Independent of invoice status,
+   *  which is why it catches the re-upload of a remittance whose invoices
+   *  never closed (a quick-pay shortfall leaves them `sent` forever). */
+  alreadyOnInvoice:   { amount: number; paidOn: string; hasProof: boolean } | null;
   invoiceCustomerId:  string | null;
   customerName:       string | null;
   loadNum:            string | null;
@@ -1645,6 +1650,11 @@ export interface ParsedPaymentLine {
   candidates:         string[];
   ambiguous:          string[] | null;
   note:               string | null;
+  /** This line is short of the invoice balance by exactly the customer's
+   *  recorded quick-pay rate, so the shortfall is the agreed fee and the
+   *  invoice settles at what arrived. Null means either no arrangement or
+   *  a shortfall that isn't one — which stays open on purpose. */
+  quickPay:           { rate: number; withheld: number } | null;
 }
 
 /** An earlier proof carrying the same reference. Warned about, not blocked:

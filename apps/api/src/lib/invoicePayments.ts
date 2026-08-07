@@ -15,12 +15,30 @@
  * subsystems both claiming authorship of "paid".
  *
  * Settlement rule: an invoice is `paid` once applied >= total (within a
- * cent). Anything less leaves it `sent` with a partial paid_amount —
- * there is deliberately no `partially_paid` status, because the
- * /accounting board's bucket logic keys off the four existing statuses
- * and a fifth would silently drop partial invoices out of every view
- * that enumerates them. The Receivables page distinguishes partial from
+ * cent), OR once an allocation explains the difference — see below.
+ * Anything less leaves it `sent` with a partial paid_amount — there is
+ * deliberately no `partially_paid` status, because the /accounting
+ * board's bucket logic keys off the four existing statuses and a fifth
+ * would silently drop partial invoices out of every view that
+ * enumerates them. The Receivables page distinguishes partial from
  * untouched via balance, which is derived.
+ *
+ * VARIANCE CLOSES THE INVOICE. `invoice_payments.variance_reason` exists
+ * for exactly the case where the money that arrived is the money that was
+ * ever going to arrive: a quick-pay fee, an agreed deduction, a short-pay
+ * that has been accepted. Until this was wired up, a broker paying 99%
+ * under a 1% quick-pay agreement left a permanent 1% balance — 279 Triple
+ * T invoices sitting in past-due for $3.01 and $4.51 each, $1,365 of
+ * receivable that was never receivable.
+ *
+ * That was not only cosmetic. `alreadyPaid` on the remittance parser read
+ * `status === 'paid'`, so an invoice stuck at 99% did not look settled,
+ * and re-uploading its remittance re-applied the whole amount on top.
+ * Every one of those 279 was one upload away from double-crediting.
+ *
+ * So a reason is a decision, not a note: setting one says the remainder is
+ * explained and the invoice is closed. Disputing a short-pay means leaving
+ * the reason NULL and letting the balance stand.
  */
 
 import { supabase as supabaseTyped } from "./supabase.js";
@@ -53,6 +71,7 @@ interface AllocRow {
   paid_on:  string;
   method:   string | null;
   proof_id: string | null;
+  variance_reason: string | null;
 }
 
 /**
@@ -82,14 +101,21 @@ export async function recomputeInvoicePaid(
 
   const { data: rows } = await supabase
     .from("invoice_payments")
-    .select("amount,paid_on,method,proof_id")
+    .select("amount,paid_on,method,proof_id,variance_reason")
     .eq("invoice_id", invoiceId)
     .eq("org_id", orgId);
 
   const allocs = (rows ?? []) as AllocRow[];
   const total   = Number(invoice.total ?? 0);
   const applied = round2(allocs.reduce((s, r) => s + Number(r.amount), 0));
-  const isPaid  = allocs.length > 0 && applied >= total - CENT;
+  // An explained shortfall is a settled invoice. See the header: the reason
+  // is the decision that the remainder is not coming, so the invoice closes
+  // at whatever arrived. An OVERPAYMENT reason doesn't need this — that one
+  // already clears the total on its own.
+  const varianceClosed = allocs.some(
+    (r) => !!r.variance_reason && r.variance_reason !== "overpayment",
+  );
+  const isPaid = allocs.length > 0 && (applied >= total - CENT || varianceClosed);
 
   // Latest allocation drives paid_at and paid_method — for a partial
   // series, "when was this paid" means the most recent money in.

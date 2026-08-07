@@ -259,13 +259,23 @@ export default function ApplyPaymentPanel({
       // payer name — remittances are routinely sent by a factoring company
       // or under a legal entity we hold under a different name.
       if (!forCustomer && res.inferredCustomerId) setCustomerId(res.inferredCustomerId);
-      // Default to applying everything that matched — EXCEPT invoices that
-      // are already settled. Those are the signature of a re-uploaded
-      // remittance, and re-applying would push them overpaid.
+      // Default to applying everything that matched — EXCEPT anything the
+      // books already account for. Two separate signals, and the second one
+      // is the load-bearing one:
+      //
+      //   alreadyPaid      the invoice is settled
+      //   alreadyOnInvoice this exact amount is already allocated to it
+      //
+      // Unticking only on status was the bug that double-credited 32
+      // invoices: a quick-pay shortfall leaves an invoice `sent` forever,
+      // so a re-uploaded remittance looked entirely fresh even though every
+      // dollar of it was already recorded.
       setPicked({}); setSearchFor(null);
       setDateOverride(res.dateMissing ? new Date().toISOString().slice(0, 10) : '');
       setSkip(new Set(
-        res.lines.filter(l => !l.invoiceId || l.alreadyPaid).map(l => l.rowIndex),
+        res.lines
+          .filter(l => !l.invoiceId || l.alreadyPaid || l.alreadyOnInvoice)
+          .map(l => l.rowIndex),
       ));
     } catch (e) {
       setErr(errText(e, 'Could not read that document'));
@@ -406,8 +416,19 @@ export default function ApplyPaymentPanel({
   // is on the books; what's missing is the proof. Ticking such a row means
   // "credit it again anyway", so ticked rows drop out of this set.
   const attachable = useMemo(
-    () => lines.filter(l => l.invoiceId && l.alreadyPaid && skip.has(l.rowIndex)),
+    () => lines.filter(l =>
+      l.invoiceId && (l.alreadyPaid || l.alreadyOnInvoice) && skip.has(l.rowIndex)),
     [lines, skip],
+  );
+
+  /** Lines whose money is demonstrably already on the invoice — a stronger
+   *  statement than "the invoice is settled", and the one worth saying out
+   *  loud, because it means re-applying would literally double the figure. */
+  const repeats = useMemo(() => lines.filter(l => l.alreadyOnInvoice), [lines]);
+  /** …and the ones ticked back on anyway, which is a deliberate re-credit. */
+  const repeatsTicked = useMemo(
+    () => repeats.filter(l => !skip.has(l.rowIndex)).length,
+    [repeats, skip],
   );
 
   const doc = parsed?.doc ?? null;
@@ -531,14 +552,22 @@ export default function ApplyPaymentPanel({
         const parts  = group
           .map(g => `${g.deductionLabel ?? 'charge'} ${money2(g.amount)}`)
           .join(' + ');
+        // A shortfall the customer's quick-pay agreement accounts for is
+        // recorded as one, which is what CLOSES the invoice. Without the
+        // reason it stays `sent` at 99% forever — and an invoice that never
+        // closes never looks settled, which is how the same remittance got
+        // applied to it twice.
+        const qp = group.find(g => g.quickPay)?.quickPay ?? null;
         try {
           await railway.createInvoicePayment(invoiceId, {
             amount,
             paidOn:  effectiveDate,
             proofId: created.proof.id,
+            ...(qp ? { varianceReason: 'quick_pay' as const } : {}),
             note: [
               `Remittance ${parsed.doc.externalId ?? ''}`.trim(),
               group.length > 1 ? `${group.length} charges: ${parts}` : '',
+              qp ? `quick pay ${(qp.rate * 100).toFixed(2).replace(/\.?0+$/, '')}% — ${money2(qp.withheld)} withheld` : '',
             ].filter(Boolean).join(' · '),
           });
           setDone(d => d + 1);
@@ -958,6 +987,42 @@ export default function ApplyPaymentPanel({
                   </span>
                 </div>
               )}
+              {/* The sharpest signal there is: not "this invoice looks
+                  settled" but "this exact figure is already sitting on it".
+                  Stated before the softer status-based notice below, and
+                  louder when it's about to happen anyway. */}
+              {repeats.length > 0 && (
+                <div className="rounded-lg border p-3 mt-3 text-xs flex gap-2"
+                     style={repeatsTicked > 0
+                       ? { borderColor: RED,   background: RED_BG,   color: '#991b1b' }
+                       : { borderColor: AMBER, background: AMBER_BG, color: '#92400e' }}>
+                  <Copy size={14} className="shrink-0 mt-px" />
+                  <span className="min-w-0">
+                    <strong>
+                      {repeats.length} of these {repeats.length === 1 ? 'amount is' : 'amounts are'} already
+                      recorded against the same invoice{repeats.length === 1 ? '' : 's'}.
+                    </strong>
+                    <span className="block mt-1">
+                      {repeatsTicked > 0
+                        ? `${repeatsTicked} ${repeatsTicked === 1 ? 'is' : 'are'} still ticked — applying now would credit that money a second time.`
+                        : 'Unticked, so nothing gets credited twice. Attach this document as their proof instead.'}
+                    </span>
+                    <span className="block mt-1.5">
+                      {repeats.slice(0, 5).map(l => (
+                        <span key={l.rowIndex} className="block truncate">
+                          #{l.invoiceNumber} · {money2(l.alreadyOnInvoice!.amount)} recorded{' '}
+                          {shortDate(l.alreadyOnInvoice!.paidOn) ?? l.alreadyOnInvoice!.paidOn}
+                          {l.alreadyOnInvoice!.hasProof ? ' · has proof' : ' · no proof yet'}
+                        </span>
+                      ))}
+                      {repeats.length > 5 && (
+                        <span className="block">…and {repeats.length - 5} more</span>
+                      )}
+                    </span>
+                  </span>
+                </div>
+              )}
+
               {!parsed?.duplicate && (parsed?.summary?.alreadyPaid ?? 0) > 0 && (
                 <div className="rounded-lg border p-3 mt-3 text-xs flex gap-2"
                      style={{ borderColor: AMBER, background: AMBER_BG, color: '#92400e' }}>
@@ -1424,10 +1489,23 @@ function LineRow({
               {line.settlesInvoice ? ' · pays the invoice in full' : ''}
             </span>
           )}
-          {short && (
+          {/* An agreed shortfall is not a short payment, and saying so is
+              the difference between an invoice that closes and one that
+              sits in past due for $4.51 until someone gives up on it. */}
+          {line.quickPay ? (
+            <span style={{ color: GREEN }}>
+              {' · '}quick pay {(line.quickPay.rate * 100).toFixed(2).replace(/\.?0+$/, '')}%
+              {' · '}{money2(line.quickPay.withheld)} withheld · settles the invoice
+            </span>
+          ) : short && (
             <span style={{ color: AMBER }}>
               {' · '}invoice {money2(line.invoiceTotal!)}
               {line.deductionLabel ? ` · ${line.deductionLabel}` : ' · short-paid'}
+            </span>
+          )}
+          {line.alreadyOnInvoice && (
+            <span style={{ color: RED }}>
+              {' · '}already recorded {shortDate(line.alreadyOnInvoice.paidOn) ?? ''}
             </span>
           )}
         </span>

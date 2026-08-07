@@ -1208,6 +1208,9 @@ payments.post("/parse", async (c) => {
   // without a second round trip.
   const invIds = [...new Set(lines.map((l) => l.invoiceId).filter(Boolean))] as string[];
   const invById = new Map<string, Record<string, unknown>>();
+  // Money already sitting on each matched invoice, so a line can be checked
+  // against what is ALREADY recorded rather than against invoice status.
+  const allocsByInvoice = new Map<string, Array<{ amount: number; paid_on: string; proof_id: string | null }>>();
   if (invIds.length) {
     // Same columns the Receivables table reads, so a matched line can show
     // the load and its age exactly as the operator already sees them there.
@@ -1217,7 +1220,38 @@ payments.post("/parse", async (c) => {
       .eq("org_id", orgId)
       .in("id", invIds);
     for (const r of (rows ?? []) as Array<{ id: string }>) invById.set(r.id, r);
+
+    const { data: allocRows, error: allocErr } = await supabase
+      .from("invoice_payments")
+      .select("invoice_id,amount,paid_on,proof_id")
+      .eq("org_id", orgId)
+      .in("invoice_id", invIds);
+    if (allocErr) console.error("[parse] allocation fetch failed:", allocErr);
+    for (const a of (allocRows ?? []) as Array<{
+      invoice_id: string; amount: string | number; paid_on: string; proof_id: string | null;
+    }>) {
+      const list = allocsByInvoice.get(a.invoice_id) ?? [];
+      list.push({ amount: Number(a.amount), paid_on: a.paid_on, proof_id: a.proof_id });
+      allocsByInvoice.set(a.invoice_id, list);
+    }
   }
+
+  /**
+   * Is this invoice already carrying this exact money?
+   *
+   * Compared against the amount that would actually be WRITTEN — for a
+   * document that itemises one invoice into several charges, that is the
+   * charge total, not the individual line, because the apply path sums them
+   * into a single allocation. Matching per-line here would miss precisely
+   * the re-upload it exists to catch.
+   */
+  const repeatOf = (invoiceId: string, amount: number) => {
+    const hit = (allocsByInvoice.get(invoiceId) ?? [])
+      .find((a) => Math.abs(a.amount - amount) < 0.005);
+    return hit
+      ? { amount: hit.amount, paidOn: hit.paid_on, hasProof: hit.proof_id !== null }
+      : null;
+  };
 
   const today = Date.now();
   const out = lines.map((l) => {
@@ -1240,7 +1274,18 @@ payments.post("/parse", async (c) => {
       invoiceStatus:      inv ? String(inv.status ?? "") : null,
       // Already settled — re-applying would push it overpaid. The panel
       // unchecks these by default.
+      //
+      // Status ALONE is not enough, and trusting it cost $13,819 across 32
+      // invoices. A broker paying 99% under a quick-pay agreement left the
+      // invoice at `sent`, so it never looked settled, so re-uploading the
+      // same remittance re-applied the full amount on top of the money
+      // already there. `alreadyOnInvoice` asks the question that actually
+      // matters — is THIS money already recorded here — and it holds
+      // whatever the status says.
       alreadyPaid:        inv ? String(inv.status ?? "") === "paid" : false,
+      alreadyOnInvoice:   l.invoiceId
+        ? repeatOf(l.invoiceId, l.chargeTotal ?? l.line.amount)
+        : null,
       invoiceCustomerId:  inv ? (inv.customer_id as string | null) : null,
       customerName:       inv ? ((inv.customers as { name?: string } | null)?.name ?? null) : null,
       loadNum:            load?.load_num != null ? String(load.load_num) : null,
@@ -1258,8 +1303,54 @@ payments.post("/parse", async (c) => {
       candidates:         l.candidates,
       ambiguous:          l.ambiguous ?? null,
       note:               l.note ?? null,
+      // Filled in by the quick-pay pass below, once the customer is known.
+      quickPay:           null as { rate: number; withheld: number } | null,
     };
   });
+
+  // ── quick pay ────────────────────────────────────────────────────────
+  //
+  // A payment that lands short BY AGREEMENT settles its invoice. Without
+  // this, a broker paying 99% under a 1% quick-pay arrangement leaves a
+  // permanent 1% balance — 290 Triple T invoices sitting in past due for
+  // $3.01 and $4.51 apiece, $1,002 of receivable that was never receivable.
+  //
+  // Keyed on the customer's recorded rate, NOT on a tolerance. The same
+  // ledger holds six invoices short by 7–15%, which are deductions or
+  // short-pays worth looking at rather than agreements; a threshold wide
+  // enough to close the 1% cases would eventually swallow those too. The
+  // rate says which shortfall was agreed to and leaves every other one
+  // open.
+  const custIds = [...new Set(out.map((l) => l.invoiceCustomerId).filter(Boolean))] as string[];
+  if (custIds.length) {
+    const { data: custRows, error: custErr } = await supabase
+      .from("customers")
+      .select("id,quick_pay_rate")
+      .eq("org_id", orgId)
+      .in("id", custIds);
+    if (custErr) console.error("[parse] quick-pay rate fetch failed:", custErr);
+    const rateById = new Map<string, number>();
+    for (const r of (custRows ?? []) as Array<{ id: string; quick_pay_rate: string | number | null }>) {
+      if (r.quick_pay_rate != null) rateById.set(r.id, Number(r.quick_pay_rate));
+    }
+
+    for (const line of out) {
+      if (!line.invoiceId || !line.invoiceCustomerId || line.invoiceTotal == null) continue;
+      const rate = rateById.get(line.invoiceCustomerId);
+      if (!rate) continue;
+      // What this document puts on the invoice, against what is still owed
+      // on it — so a second payment against a part-paid invoice is measured
+      // against the remainder, not the original total.
+      const applying    = line.chargeTotal ?? line.amount;
+      const outstanding = round2(line.invoiceTotal - (line.invoicePaid ?? 0));
+      if (applying >= outstanding - 0.005) continue;      // not short at all
+      const expected = round2(outstanding * (1 - rate));
+      // A cent or two of slack: the payer rounds their own fee, and being
+      // strict here would reopen the exact problem this closes.
+      if (Math.abs(applying - expected) > 0.02) continue; // short by something else
+      line.quickPay = { rate, withheld: round2(outstanding - applying) };
+    }
+  }
 
   // ── billing-batch cohort ─────────────────────────────────────────────
   //
@@ -1328,6 +1419,9 @@ payments.post("/parse", async (c) => {
         line.invoicePaid       = Number(b.paid_amount ?? 0);
         line.invoiceStatus     = String(b.status ?? "");
         line.alreadyPaid       = String(b.status ?? "") === "paid";
+        // Cohort candidates are chosen BY their remaining balance matching
+        // this line, so by construction the money isn't already on them.
+        line.alreadyOnInvoice  = null;
         line.invoiceCustomerId = (b.customer_id as string | null) ?? null;
         line.customerName      = (b.customers as { name?: string } | null)?.name ?? null;
         line.loadNum           = b.loads?.load_num != null ? String(b.loads.load_num) : null;
@@ -1393,17 +1487,40 @@ payments.post("/parse", async (c) => {
   const refKey = (doc.externalId ?? "").trim().toLowerCase();
   const usableRef = refKey.length >= 4 && !GENERIC_REF.has(refKey);
 
-  if (usableRef) {
-    const { data: dupRows } = await supabase
+  // A useless reference must WEAKEN the check, never switch it off.
+  //
+  // The blocklist above was added so one ACH wouldn't look like a duplicate
+  // of every other ACH. It went too far: a Redbone remittance printing
+  // "ACH" was uploaded twice, sixty seconds apart, for the identical
+  // $6,926.40 — and because the reference was blocked, nothing was
+  // compared at all and three invoices went to exactly 2× paid.
+  //
+  // So when the reference can't identify a payment, fall back to the facts
+  // that can: same customer, same amount, same date. Two genuinely distinct
+  // payments do not agree on all three.
+  //
+  // With neither available there is nothing to key on that wouldn't flag
+  // unrelated payments, so the document-level check sits out. The
+  // line-level `alreadyOnInvoice` check still applies — it is the backstop
+  // that doesn't depend on identifying the document at all.
+  const canMatchOnIdentity = usableRef || !!(effectiveCustomerId && doc.paymentDate);
+
+  if (canMatchOnIdentity) {
+    let dupQuery = supabase
       .from("payment_proofs")
       .select(PROOF_COLS)
       .eq("org_id", orgId)
-      .eq("reference", doc.externalId)
-      // Same reference AND same amount. Two payments can legitimately share
-      // a weak reference; they cannot also happen to be for the same total.
+      // Same amount in both modes. Two payments can share a weak reference;
+      // they cannot also happen to be for the same total.
       .eq("amount", round2(doc.paymentTotal))
       .order("created_at", { ascending: false })
       .limit(1);
+
+    dupQuery = usableRef
+      ? dupQuery.eq("reference", doc.externalId)
+      : dupQuery.eq("customer_id", effectiveCustomerId).eq("occurred_on", doc.paymentDate);
+
+    const { data: dupRows } = await dupQuery;
     const hit = (dupRows ?? [])[0] as ProofRow | undefined;
     if (hit) {
       const { data: allocRows } = await supabase
