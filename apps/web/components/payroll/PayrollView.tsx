@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useOrganization, useUser } from '@clerk/nextjs';
 import { Users, ChevronDown, Loader2, AlertCircle, Check, Pencil, Plus, X, Trash2, CornerDownRight, Lock, Unlock, Download, RotateCcw, Info, Eye, History } from 'lucide-react';
 import Tooltip from '@/components/ui/Tooltip';
+import InfoDot from '@/components/ui/InfoDot';
 import CopyChip from '@/components/ui/CopyChip';
 import DriversModal from '@/components/sidebar/DriversModal';
 import {
@@ -243,37 +244,68 @@ function PayCell({ load, legRevenue, legCount, locked }: {
     </span>
   );
 
-  // ONE line, no wrapping — the row must not grow a third line when a
-  // relay leg shows both percentages plus the reset and the marker.
+  // Consolidated info: one ⓘ that reveals both percentages + provenance
+  // on hover, and (when applicable) a separate icon-only reset button.
+  // Prior layout put all four chips + a wide text button on every row
+  // — a wall of noise on a fleet-scale payroll page. Now the row shows
+  // just the price and (at most) two tiny icons; details are one hover
+  // away. Reset stays as a visible button because it's the one thing
+  // you CLICK; keeping it in the tooltip would put the click across a
+  // mouse-leave gap.
   const badges = (
-    <div className="print:hidden flex items-center gap-1 overflow-hidden whitespace-nowrap"
-      style={{ lineHeight: 1.4 }}>
-      {chip(pctOfLeg, basis, isRelay)}
-      {/* A single-leg load's two denominators ARE the same number —
-          showing both would be noise. */}
-      {isRelay && chip(pctOfLoad, PAY_BASIS_LABEL.load, false)}
+    <div className="print:hidden flex items-center gap-1"
+      style={{ lineHeight: 1.4, marginLeft: 4 }}>
+      <InfoDot
+        placement="bottom"
+        label="Driver pay detail"
+        content={
+          <div className="flex flex-col gap-1.5" style={{ minWidth: 180 }}>
+            {pctOfLeg !== null && (
+              <div className="flex items-baseline justify-between gap-3">
+                <span style={{ opacity: 0.75 }}>{fmtPct(pctOfLeg)}%</span>
+                <span style={{ opacity: 0.85 }}>{basis}</span>
+              </div>
+            )}
+            {isRelay && pctOfLoad !== null && (
+              <div className="flex items-baseline justify-between gap-3">
+                <span style={{ opacity: 0.75 }}>{fmtPct(pctOfLoad)}%</span>
+                <span style={{ opacity: 0.85 }}>{PAY_BASIS_LABEL.load}</span>
+              </div>
+            )}
+            {paySource && (
+              <div className="flex items-baseline justify-between gap-3 pt-1"
+                style={{ borderTop: '1px solid rgba(255,255,255,0.15)' }}>
+                <span style={{ opacity: 0.75 }}>Source</span>
+                <span style={{ opacity: 0.95, fontWeight: 600 }}>
+                  {paySource === 'auto' ? 'Auto' : 'Manual'}
+                </span>
+              </div>
+            )}
+          </div>
+        }
+      />
       {showReset && (
-        <button type="button"
-          onClick={() => void applyPay(autoFor!, 'auto')}
-          title={`Set this leg's pay to ${driverPayPct}% of its ${isRelay ? 'share' : 'price'} ($${autoFor!.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`}
-          className="flex items-center gap-1 rounded transition-colors font-semibold shrink-0"
-          style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--gc-text-3)', padding: '1px 4px', fontSize: 10 }}
-          onMouseEnter={e => { e.currentTarget.style.color = '#1d4ed8'; e.currentTarget.style.background = '#dbeafe'; }}
-          onMouseLeave={e => { e.currentTarget.style.color = 'var(--gc-text-3)'; e.currentTarget.style.background = 'transparent'; }}>
-          <RotateCcw size={10} />
-          Set to {driverPayPct}% {basis}
-        </button>
+        <Tooltip
+          content={`Set this leg's pay to ${driverPayPct}% of its ${isRelay ? 'share' : 'price'} ($${autoFor!.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`}>
+          <button type="button"
+            onClick={() => void applyPay(autoFor!, 'auto')}
+            aria-label={`Reset to ${driverPayPct}% ${basis}`}
+            className="flex items-center rounded transition-colors shrink-0"
+            style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--gc-text-3)', padding: 2 }}
+            onMouseEnter={e => { e.currentTarget.style.color = '#1d4ed8'; e.currentTarget.style.background = '#dbeafe'; }}
+            onMouseLeave={e => { e.currentTarget.style.color = 'var(--gc-text-3)'; e.currentTarget.style.background = 'transparent'; }}>
+            <RotateCcw size={11} />
+          </button>
+        </Tooltip>
       )}
-      {/* Nothing at all when provenance is unknown. */}
-      {paySource && <PaySourceBadge source={paySource} />}
     </div>
   );
   // A row with no pay, no configured percentage and no history has
-  // nothing to say — don't give it a second line to say it on.
+  // nothing to reveal — don't render the icon at all.
   const hasBadges = pctOfLeg !== null || (isRelay && pctOfLoad !== null) || showReset || !!paySource;
 
   return (
-    <span ref={cellRef} data-pay-cell-id={load.id} className="inline-flex flex-col items-start gap-0.5 min-w-0">
+    <span ref={cellRef} data-pay-cell-id={load.id} className="inline-flex items-center gap-1 min-w-0">
       <span className="inline-flex">
       {editing ? (
         <div className="flex items-center gap-1">
