@@ -84,6 +84,13 @@ export interface ExtractResult {
   derivedTotal?: boolean;
   /** The document carries no payment date. The operator supplies one. */
   missingDate?:  boolean;
+  /** "statement" means many settlements reported together with no single
+   *  transfer behind them — a factoring portal's paid-transactions export.
+   *  It still says which invoices were paid, which is what the matcher
+   *  needs, but it must NOT be filed as one payment: doing so puts a wire
+   *  in the ledger that nobody ever sent, and bank reconciliation would
+   *  then be looking for it forever. */
+  documentKind?: "payment" | "statement";
   /** Raw model output, kept for the review queue and for replaying an
    *  extraction after a rule or prompt change. */
   raw:        unknown;
@@ -114,6 +121,7 @@ const DOC_SCHEMA = {
   properties: {
     isRemittance:        { type: "boolean" },
     notRemittanceReason: nullableString,
+    documentKind:        { enum: ["payment", "statement"] },
     payerNameAsPrinted:  { type: "string" },
     paymentDate:         nullableString,
     paymentTotal:        nullableNumber,
@@ -122,7 +130,7 @@ const DOC_SCHEMA = {
     unparsedRows:        { type: "array", items: { type: "string" } },
   },
   required: [
-    "isRemittance", "notRemittanceReason", "payerNameAsPrinted",
+    "isRemittance", "notRemittanceReason", "documentKind", "payerNameAsPrinted",
     "paymentDate", "paymentTotal", "externalId", "lines", "unparsedRows",
   ],
   additionalProperties: false,
@@ -141,17 +149,39 @@ const DOC_SCHEMA = {
  * Cleaning is versioned code's job precisely so it can be replayed and
  * corrected.
  */
-const BASE_PROMPT = `You are extracting a payment remittance for a trucking carrier, so its payments can be applied to the right invoices.
+const BASE_PROMPT = `You are extracting a payment record for a trucking carrier, so its payments can be applied to the right invoices.
 
-FIRST decide whether this document is a remittance / payment advice at all — a notice that money HAS BEEN SENT to the carrier. Set isRemittance accordingly.
+FIRST decide whether this document ASSERTS THAT MONEY WAS PAID to the carrier. That is the only test. Set isRemittance accordingly.
 
-These are NOT remittances (set isRemittance false and explain in notRemittanceReason):
+These qualify:
+  • a remittance advice or payment advice for a single payment
+  • a settlement or receivables report listing transactions already PAID —
+    a factoring or payment portal (ePayManager, Triumph, RTS and the like)
+    will export a table of settled loads with a paid/credit amount per row.
+    It is not one payment, but it is a statement of money received, and it
+    is the only record the carrier gets. Take it.
+
+These do NOT (set isRemittance false and explain in notRemittanceReason):
   • bills or invoices the carrier OWES someone
   • proof-of-delivery, bills of lading, or document-submission confirmations
   • "invoice received / pending approval / rejected" workflow notices
-  • account statements, rate confirmations, general correspondence
+  • an OPEN accounts-receivable or aging report — a list of what is still
+    owed, with nothing marked paid. The difference from the settlement
+    report above is whether the rows record money that ARRIVED.
+  • rate confirmations, general correspondence
 
-If it IS a remittance, transcribe it. Follow these rules exactly:
+SECOND, set documentKind:
+  • "payment" — one payment covering one or more invoices. It has a single
+    payment date and usually a single declared total, check number or trace
+    id. This is the ordinary remittance.
+  • "statement" — many settlements reported together, with no single
+    transfer behind them. A portal's paid-transactions export is this. Say
+    "statement" whenever the rows were plainly not all paid by one payment,
+    or when there is no payment date for the document as a whole. Getting
+    this wrong invents a wire transfer that never happened, so when the
+    document does not clearly describe ONE payment, choose "statement".
+
+If it qualifies, transcribe it. Follow these rules exactly:
 
 1. COPY REFERENCES CHARACTER FOR CHARACTER into referenceAsPrinted.
    Do not tidy, trim, de-duplicate, pad, unpad, or reformat them. If a cell
@@ -178,10 +208,17 @@ If it IS a remittance, transcribe it. Follow these rules exactly:
    type, not a reference. If a row genuinely has no identifier, set
    referenceAsPrinted to null rather than substituting a different column.
 
-5. paymentTotal is the total of the payment as DECLARED on the document
-   (check total, ACH total, amount paid). Do not compute it yourself by
-   adding the rows — the declared figure is checked against the row sum
-   downstream, and that comparison is what catches a row you missed.
+5. paymentTotal is the total as DECLARED on the document (check total, ACH
+   total, amount paid, or a report's own total row). Do not compute it
+   yourself by adding the rows — the declared figure is checked against the
+   row sum downstream, and that comparison is what catches a row you missed.
+
+5b. paymentDate is the date the money moved. On a statement there usually
+   isn't one: a report's generation date, its search range, and the pickup
+   or delivery dates in its rows are NOT payment dates. Leave paymentDate
+   null rather than substituting any of them — a wrong date is recorded
+   against every allocation and is worse than an absent one, which the
+   operator is asked to supply.
 
 6. externalId is the document's own unique identifier if it has one — check
    number, remittance advice number, transaction id, payment reference.
@@ -246,6 +283,7 @@ function buildPrompt(input: ExtractInput, ctx: ExtractContext): string {
 interface RawDoc {
   isRemittance:        boolean;
   notRemittanceReason: string | null;
+  documentKind:        "payment" | "statement";
   payerNameAsPrinted:  string;
   paymentDate:         string | null;
   paymentTotal:        number | null;
@@ -354,6 +392,13 @@ export async function extractRemittance(
 
   const derivedTotal = raw.paymentTotal == null;
   const missingDate   = !raw.paymentDate;
+  // Default to "statement" when the model didn't say, for the same reason
+  // the prompt tells it to: calling a settlement report a payment invents a
+  // transfer that never happened, and the ledger has no way to notice.
+  const documentKind: "payment" | "statement" =
+    raw.documentKind === "payment" ? "payment"
+    : raw.documentKind === "statement" ? "statement"
+    : missingDate ? "statement" : "payment";
   const lineSum = Math.round(lines.reduce((s, l) => s + (Number(l.amount) || 0), 0) * 100) / 100;
 
   const doc: RemittanceDoc = {
@@ -369,5 +414,5 @@ export async function extractRemittance(
     unparsedRows:       raw.unparsedRows ?? [],
   };
 
-  return { doc, isRemittance: true, raw, usage, derivedTotal, missingDate };
+  return { doc, isRemittance: true, raw, usage, derivedTotal, missingDate, documentKind };
 }

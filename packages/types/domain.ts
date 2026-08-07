@@ -1410,7 +1410,12 @@ export interface Invoice {
 // allocations, not an independent source of truth.
 
 /** What kind of artifact backs the payment claim. */
-export type PaymentProofKind = 'remittance' | 'bank_transaction' | 'check' | 'other';
+/** `statement` is evidence of payment that is NOT a single transfer — a
+ *  factoring portal's paid-transactions export covering many settlements.
+ *  Kept distinct from `remittance` so bank reconciliation never tries to
+ *  match a deposit against a sum that never moved as one. */
+export type PaymentProofKind =
+  'remittance' | 'statement' | 'bank_transaction' | 'check' | 'other';
 
 /** How the proof entered FleetCal. `manual`/`upload` are operator
  *  actions; `csv`/`email`/`api` are reserved for ingest adapters, which

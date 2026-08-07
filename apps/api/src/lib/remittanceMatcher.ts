@@ -258,7 +258,14 @@ export function referenceCandidatesDetailed(
   // Compound references are common: payers routinely concatenate their own
   // identifier with ours, e.g. "A-92641B-13541" where 13541 is our invoice
   // number. Offer each delimited segment, and the numeric run at either end.
-  for (const seg of cur.split(/[-_/|\s]+/)) {
+  //
+  // Commas and semicolons count as delimiters, not just dashes and spaces.
+  // A portal that packs several references into one cell separates them that
+  // way — ePayManager stacks its own number, the customer's references and
+  // the carrier's into a single cell, and the middle one arrives as
+  // "203532587,1248701,4580928003". Without the comma that whole string is
+  // one segment and none of the three is ever looked up.
+  for (const seg of cur.split(/[-_/|,;\s]+/)) {
     const t = seg.trim();
     if (t.length >= 3) {
       push(t);

@@ -281,6 +281,14 @@ function ReceivablesPageInner() {
     return m;
   }, [rows]);
 
+  /** What the ticked rows come to, for the pinned action bar. Worth stating
+   *  before the panel opens — selecting across a long list is easy to lose
+   *  track of, and the total is the check that you ticked what you meant. */
+  const selectedBalance = useMemo(
+    () => rows.filter(r => selected.has(r.id)).reduce((s, r) => s + r.balance, 0),
+    [rows, selected],
+  );
+
   /** A hit on an invoice #, load # or load title should surface its
    *  customer even when the query doesn't match the customer's name —
    *  otherwise searching a load number returns nothing, because the
@@ -902,6 +910,46 @@ function ReceivablesPageInner() {
           </div>
         </div>
       </div>
+
+      {/* Selection has to stay reachable.
+          The same Mark-paid button sits in the expanded group's footer, and
+          on a customer with 325 open invoices that footer is hundreds of
+          rows below wherever you ticked something — so selecting two rows
+          appeared to do nothing at all. The customer page never had this
+          problem because its list scrolls inside a fixed-height panel and
+          the footer is pinned; this page grows down the document instead.
+          Rather than restructure the layout, the action follows you. */}
+      {selected.size > 0 && (
+        <div className="fixed inset-x-0 flex justify-center pointer-events-none"
+             style={{ bottom: 22, zIndex: 40 }}>
+          <div className="pointer-events-auto flex items-center gap-3"
+               style={{
+                 padding: '9px 12px 9px 16px', borderRadius: 12,
+                 background: 'var(--gc-surface)', border: '1px solid var(--gc-border)',
+                 boxShadow: 'var(--shadow-3)',
+               }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--gc-text-1)' }}>
+              {selected.size} selected
+            </span>
+            <span style={{ fontSize: 12, color: 'var(--gc-text-3)' }}>
+              {money0(selectedBalance)}
+            </span>
+            <button onClick={() => setSelected(new Set())}
+                    style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--gc-text-3)' }}>
+              Clear
+            </button>
+            <button onClick={() => setBulkOpen(true)}
+                    className="inline-flex items-center gap-1.5"
+                    style={{
+                      height: 30, padding: '0 12px', borderRadius: 8,
+                      background: '#dcfce7', color: '#15803d', border: '1px solid #86efac',
+                      fontSize: 12, fontWeight: 700,
+                    }}>
+              <Check size={12} /> Mark {selected.size} paid
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Recording a payment still lives here: the redesign's "Apply a
           payment" workspace isn't built, so an invoice row opens the

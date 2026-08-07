@@ -66,7 +66,7 @@ const supabase = supabaseTyped as any;
 export const PROOF_BUCKET = "payment-proofs";
 
 const PROOF_KINDS: readonly PaymentProofKind[] =
-  ["remittance", "bank_transaction", "check", "other"];
+  ["remittance", "statement", "bank_transaction", "check", "other"];
 const PROOF_SOURCES: readonly PaymentProofSource[] =
   ["manual", "upload", "csv", "email", "api"];
 
@@ -1199,6 +1199,10 @@ payments.post("/parse", async (c) => {
   // Say so instead of showing a tick that verified nothing.
   const totalsDerived = !!extracted.derivedTotal;
   const dateMissing   = !!extracted.missingDate;
+  // "statement" = many settlements reported together (a factoring portal's
+  // paid-transactions export). It says which invoices were paid, which is
+  // all the matcher needs, but there is no single transfer behind it.
+  const documentKind  = extracted.documentKind ?? "payment";
   const scoped  = body.customerId?.trim() || null;
   const lines   = totals.ok
     ? await resolveLines(orgId, doc, { customerId: scoped })
@@ -1546,6 +1550,7 @@ payments.post("/parse", async (c) => {
     cohort,
     totalsDerived,
     dateMissing,
+    documentKind,
     doc: {
       source:             doc.source,
       payerNameAsPrinted: doc.payerNameAsPrinted,

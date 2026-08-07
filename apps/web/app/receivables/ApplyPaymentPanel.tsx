@@ -436,6 +436,12 @@ export default function ApplyPaymentPanel({
    *  document's own, or the one the operator supplied when it has none. */
   const effectiveDate = doc ? (doc.paymentDate || dateOverride) : '';
 
+  /** Many settlements reported together rather than one payment — a
+   *  factoring portal's paid-transactions export. The invoices it names
+   *  were really paid, so it applies like anything else; what changes is
+   *  that it is never recorded AS a transfer. */
+  const isStatement = parsed?.documentKind === 'statement';
+
   const totalsFailed = parsed?.totals ? !parsed.totals.ok : false;
   const canApply  = !!parsed?.isRemittance && !totalsFailed && included.length > 0
                     && !!effectiveDate && !busy;
@@ -459,7 +465,7 @@ export default function ApplyPaymentPanel({
     setBusy(true); setPhase('applying'); setErr(null); setDone(0);
     try {
       const created = await railway.createPaymentProof({
-        kind:       'remittance',
+        kind:       isStatement ? 'statement' : 'remittance',
         source:     'upload',
         occurredOn: effectiveDate,
         amount:     parsed.doc.paymentTotal,
@@ -511,7 +517,11 @@ export default function ApplyPaymentPanel({
     setBusy(true); setPhase('applying'); setErr(null); setDone(0);
     try {
       const created = await railway.createPaymentProof({
-        kind:       'remittance',
+        // A settlement report is evidence that these invoices were paid, but
+        // it is not one transfer. Filing it as a remittance would assert a
+        // $55,400 wire that nobody sent, and bank matching would hunt for
+        // that deposit forever.
+        kind:       isStatement ? 'statement' : 'remittance',
         source:     'upload',
         occurredOn: effectiveDate,
         // The proof records what the payer SENT, not what we managed to
@@ -950,6 +960,27 @@ export default function ApplyPaymentPanel({
                 </div>
               )}
 
+              {/* What kind of document this is, when it isn't one payment.
+                  Said before anything else, because everything below reads
+                  differently once you know the total never moved as a
+                  single sum. */}
+              {isStatement && doc && (
+                <div className="rounded-lg border p-3 mt-3 text-xs flex gap-2"
+                     style={{ borderColor: BLUE, background: BLUE_BG, color: '#1558d6' }}>
+                  <FileText size={14} className="shrink-0 mt-px" />
+                  <span>
+                    <strong>This is a settlement report, not a single payment.</strong>
+                    <span className="block mt-1">
+                      It lists {lines.length} transaction{lines.length === 1 ? '' : 's'} the
+                      payer has already settled, paid at different times. The invoices below
+                      are credited exactly as they would be from a remittance — but the
+                      evidence is filed as a statement, not as a {money0(doc.paymentTotal)}{' '}
+                      transfer, so nothing goes looking for a deposit that size.
+                    </span>
+                  </span>
+                </div>
+              )}
+
               {/* 2. Supply the date the document doesn't carry. */}
               {parsed?.dateMissing && doc && (
                 <div className="rounded-lg border p-3 mt-3"
@@ -957,6 +988,13 @@ export default function ApplyPaymentPanel({
                   <div className="text-xs mb-2" style={{ color: '#92400e' }}>
                     <strong>No payment date on this document.</strong> It is recorded on the
                     proof and on every allocation, so it is not guessed.
+                    {isStatement && (
+                      <span className="block mt-1">
+                        A report like this rarely prints one. Its rows were settled on
+                        different days, so whatever you put here is an approximation for all
+                        of them — the report&apos;s own date is the usual choice.
+                      </span>
+                    )}
                   </div>
                   <input type="date" value={dateOverride}
                          onChange={e => setDateOverride(e.target.value)}

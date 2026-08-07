@@ -1700,6 +1700,11 @@ export interface ParsePaymentResponse {
   totalsDerived: boolean;
   /** The document carries no payment date; the operator must supply one. */
   dateMissing:   boolean;
+  /** "statement" means the document reports MANY settlements together with
+   *  no single transfer behind them — a factoring portal's paid-transactions
+   *  export. The invoices it names were genuinely paid, but filing it as one
+   *  payment would put a wire in the ledger nobody ever sent. */
+  documentKind:  'payment' | 'statement';
   doc: {
     source:             string;
     payerNameAsPrinted: string;
