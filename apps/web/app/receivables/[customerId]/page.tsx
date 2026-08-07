@@ -487,9 +487,29 @@ function CustomerViewInner() {
           {/* Every row renders — no pagination on one broker's book. */}
           <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}
                onScroll={e => {
-                 const y = e.currentTarget.scrollTop;
-                 if (y > 40 && !compact) setCompact(true);
-                 else if (y < 8 && compact) setCompact(false);
+                 // Compacting removes the two blocks above this list, so the
+                 // list gets TALLER — and a taller viewport over the same rows
+                 // leaves less to scroll. On a short book that erased the very
+                 // scroll position that triggered it: scrollTop got clamped
+                 // toward 0, which un-compacted, which shrank the list again,
+                 // which restored the scroll and re-compacted. The list fought
+                 // being scrolled, several times a second.
+                 //
+                 // Hysteresis alone could never fix this. The thresholds were
+                 // never the problem — the state change invalidates its own
+                 // trigger, so both directions have to be gated on there still
+                 // being somewhere to scroll afterwards.
+                 //
+                 // Only visible on a SHORT list, which is why it looked
+                 // customer-specific: 97 of Curzon's 116 customers have 20 or
+                 // fewer open invoices, and a 325-row book has scroll to spare.
+                 const el = e.currentTarget;
+                 const maxScroll = el.scrollHeight - el.clientHeight;
+                 const y = el.scrollTop;
+                 // Don't collapse unless there is room to stay collapsed.
+                 if (!compact && y > 40 && maxScroll > 160) setCompact(true);
+                 // Don't expand on a scrollTop that was clamped rather than chosen.
+                 else if (compact && y < 8 && maxScroll > 8) setCompact(false);
                }}>
             {loading ? (
               <div style={{ padding: 24, fontSize: 12.5, color: 'var(--gc-text-3)' }}>Loading…</div>

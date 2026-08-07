@@ -631,9 +631,18 @@ function ReceivablesPageInner() {
           {/* body — the page's only scroll container */}
           <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}
                onScroll={e => {
-                 const y = e.currentTarget.scrollTop;
-                 if (y > 40 && !tilesCompact) setTilesCompact(true);
-                 else if (y < 8 && tilesCompact) setTilesCompact(false);
+                 // Same self-invalidating trigger as the customer page:
+                 // collapsing the tiles makes this list taller, which leaves
+                 // less to scroll, which can clamp scrollTop back under the
+                 // un-collapse threshold and start it oscillating. Rarer here
+                 // — the ledger lists every customer, so there is usually
+                 // scroll to spare — but a filtered view down to one or two
+                 // customers is exactly the short list that triggers it.
+                 const el = e.currentTarget;
+                 const maxScroll = el.scrollHeight - el.clientHeight;
+                 const y = el.scrollTop;
+                 if (!tilesCompact && y > 40 && maxScroll > 160) setTilesCompact(true);
+                 else if (tilesCompact && y < 8 && maxScroll > 8) setTilesCompact(false);
                }}>
             {loading ? (
               <div style={{ padding: 24, fontSize: 12.5, color: 'var(--gc-text-3)' }}>Loading…</div>
