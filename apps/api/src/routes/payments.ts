@@ -527,6 +527,8 @@ interface ReceivableInvoiceRow {
   loads?: {
     internal_load_id: number | null;
     load_num:         string | null;
+    /** JSON in a TEXT column — see refNumValues. */
+    ref_nums:         string | null;
     events?: { id: string; title: string | null; leg_index: number | null; start: string | null }[] | null;
   } | null;
   customers?: { name: string | null } | null;
@@ -609,6 +611,7 @@ function toReceivableInvoice(
     loadId:         r.load_id,
     internalLoadId: r.loads?.internal_load_id ?? undefined,
     loadNum:        r.loads?.load_num ?? undefined,
+    refNums:        refNumValues(r.loads?.ref_nums),
     title:          leg?.title ?? undefined,
     pickupAt:       leg?.start ?? undefined,
     pickupEventId:  leg?.id,
@@ -628,7 +631,44 @@ function toReceivableInvoice(
 
 const RECEIVABLE_INVOICE_COLS =
   "id,invoice_number,status,total,issued_at,due_at,customer_id,load_id," +
-  "loads(internal_load_id,load_num,events(id,title,leg_index,start)),customers(name)";
+  "loads(internal_load_id,load_num,ref_nums,events(id,title,leg_index,start))," +
+  "customers(name)";
+
+/**
+ * The customer's OWN reference numbers, flattened to plain strings.
+ *
+ * Carried on the receivable so a statement can be reconciled by the person
+ * receiving it. Their AP clerk searches their system by their PO or order
+ * number — our invoice number means nothing there. Ryder proved the point:
+ * their remittance line reads `1000974-31410-59503-1`, which is our load
+ * number followed by the very ref_num stored here.
+ *
+ * ref_nums is JSON in a TEXT column, and dirty: it holds arrays of
+ * {label,value}, occasionally a bare array of strings, sometimes nothing
+ * parseable. A statement is not the place to throw, so anything unreadable
+ * yields no references rather than an error.
+ */
+function refNumValues(raw: unknown): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!Array.isArray(parsed)) return [];
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const r of parsed) {
+      const v = (typeof r === "string" ? r : String((r as { value?: unknown })?.value ?? "")).trim();
+      // Deduplicated: prod holds rows whose ref_nums repeat the same value
+      // under two labels, and "509413, 509413" on a statement sent to a
+      // broker reads as a system that doesn't know what it's doing.
+      if (!v || seen.has(v)) continue;
+      seen.add(v);
+      out.push(v);
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
 
 payments.get("/receivables", async (c) => {
   const orgId = c.get("orgId");

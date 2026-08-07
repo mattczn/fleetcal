@@ -1517,6 +1517,11 @@ export interface ReceivableInvoice {
    *  gets pasted into a broker portal. This is what "Load #" means to an
    *  operator, and it is NOT internalLoadId. */
   loadNum?:      string;
+  /** The customer's own reference numbers (loads.ref_nums), values only.
+   *  Their PO / order / BOL number — the identifier THEY can look up. Our
+   *  invoice number is meaningless in their AP system, so a statement that
+   *  omits this can't be reconciled by the person receiving it. */
+  refNums?:      string[];
   /** Pickup leg's event title — the human label for the load. */
   title?:        string;
   /** Pickup leg's scheduled start — when the freight actually moved, as

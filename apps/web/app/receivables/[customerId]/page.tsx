@@ -20,6 +20,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import { useOrganization } from '@clerk/nextjs';
 import {
   HandCoins, Mail, Phone, Truck, ArrowRightLeft, Download, ChevronLeft,
   UserRound, Check, Paperclip,
@@ -37,6 +38,7 @@ import Breadcrumbs from '@/app/admin/Breadcrumbs';
 import Tooltip from '@/components/ui/Tooltip';
 import { CopyableCell, CopyableLoadNum, StatusPill } from '@/components/queue/QueueTablePrimitives';
 import { useCalendarStore } from '@/store/useCalendarStore';
+import { downloadStatement } from '../statement';
 import { railway } from '@/lib/railway';
 import type { CustomerReceivables, ReceivableInvoice, AgingBucket } from '@fleetcal/types';
 import { AGING_BUCKETS, AGING_BUCKET_LABEL, agingBucketFor } from '@fleetcal/types';
@@ -85,6 +87,8 @@ function CustomerViewInner() {
   const params     = useParams<{ customerId: string }>();
   const router     = useRouter();
   const customerId = params?.customerId ?? '';
+  /** Our own name, for the top of a statement being sent out. */
+  const { organization } = useOrganization();
 
   const [data,    setData]    = useState<CustomerReceivables | null>(null);
   const [loading, setLoading] = useState(true);
@@ -572,14 +576,32 @@ function CustomerViewInner() {
               </button>
             )}
             <div style={{ flex: 1 }} />
-            {/* Statement generation isn't built — rendered so the
-                affordance is where the design puts it. */}
-            <Tooltip content="Statement PDFs aren't wired up yet." placement="top">
-              <span className="inline-flex items-center gap-1.5" style={{
-                fontSize: 11.5, fontWeight: 700, color: '#1967d2', opacity: 0.55, cursor: 'default',
-              }}>
-                <Download size={12} /> Download statement PDF
-              </span>
+            {/* A spreadsheet rather than a PDF: the person receiving this
+                has to reconcile it against their own system, and half of
+                them will want to filter or paste it somewhere. A PDF is
+                only better for the one who sends it. */}
+            <Tooltip
+              content={invoices.length
+                ? `${invoices.length} invoice${invoices.length === 1 ? '' : 's'}, led by their own reference numbers`
+                : 'Nothing to put on a statement'}
+              placement="top">
+              <button
+                onClick={() => downloadStatement({
+                  customerName: data?.customerName ?? 'Customer',
+                  fromName:     organization?.name ?? null,
+                  invoices,
+                  scope,
+                })}
+                disabled={!invoices.length}
+                className="inline-flex items-center gap-1.5"
+                style={{
+                  fontSize: 11.5, fontWeight: 700,
+                  color: invoices.length ? '#1967d2' : 'var(--gc-text-3)',
+                  opacity: invoices.length ? 1 : 0.55,
+                  cursor: invoices.length ? 'pointer' : 'default',
+                }}>
+                <Download size={12} /> Download statement
+              </button>
             </Tooltip>
           </div>
         </div>
