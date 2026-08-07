@@ -1,11 +1,11 @@
 'use client';
 
-import { useMemo, useState, useEffect, useRef, useCallback, Fragment } from 'react';
+import { useMemo, useState, useEffect, useLayoutEffect, useRef, useCallback, Fragment } from 'react';
+import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import { useOrganization, useUser } from '@clerk/nextjs';
 import { Users, ChevronDown, Loader2, AlertCircle, Check, Pencil, Plus, X, Trash2, CornerDownRight, Lock, Unlock, Download, RotateCcw, Info, Eye, History } from 'lucide-react';
 import Tooltip from '@/components/ui/Tooltip';
-import InfoDot from '@/components/ui/InfoDot';
 import CopyChip from '@/components/ui/CopyChip';
 import DriversModal from '@/components/sidebar/DriversModal';
 import {
@@ -140,7 +140,9 @@ function PayCell({ load, legRevenue, legCount, locked }: {
   // to. It is never used to label provenance — a dispatcher can type the
   // exact percentage figure, and this cell would then claim the app
   // chose it.
-  const showReset = !locked && autoFor != null && !payMatchesPct(payNum, base, driverPayPct);
+  // Kept as a defined var so any later render logic can reference it,
+  // but consumed only by showResetLeg below in the popover branch.
+  void (!locked && autoFor != null && !payMatchesPct(payNum, base, driverPayPct));
   // What determined the number currently on screen, read from history.
   // undefined for every row whose pay predates paySource — those render
   // no marker at all rather than a guess.
@@ -244,115 +246,249 @@ function PayCell({ load, legRevenue, legCount, locked }: {
     </span>
   );
 
-  // Consolidated info: one ⓘ that reveals both percentages + provenance
-  // on hover, and (when applicable) a separate icon-only reset button.
-  // Prior layout put all four chips + a wide text button on every row
-  // — a wall of noise on a fleet-scale payroll page. Now the row shows
-  // just the price and (at most) two tiny icons; details are one hover
-  // away. Reset stays as a visible button because it's the one thing
-  // you CLICK; keeping it in the tooltip would put the click across a
-  // mouse-leave gap.
-  const badges = (
-    <div className="print:hidden flex items-center gap-1"
-      style={{ lineHeight: 1.4, marginLeft: 4 }}>
-      <InfoDot
-        placement="bottom"
-        label="Driver pay detail"
-        content={
-          <div className="flex flex-col gap-1.5" style={{ minWidth: 180 }}>
-            {pctOfLeg !== null && (
-              <div className="flex items-baseline justify-between gap-3">
-                <span style={{ opacity: 0.75 }}>{fmtPct(pctOfLeg)}%</span>
-                <span style={{ opacity: 0.85 }}>{basis}</span>
-              </div>
-            )}
-            {isRelay && pctOfLoad !== null && (
-              <div className="flex items-baseline justify-between gap-3">
-                <span style={{ opacity: 0.75 }}>{fmtPct(pctOfLoad)}%</span>
-                <span style={{ opacity: 0.85 }}>{PAY_BASIS_LABEL.load}</span>
-              </div>
-            )}
-            {paySource && (
-              <div className="flex items-baseline justify-between gap-3 pt-1"
-                style={{ borderTop: '1px solid rgba(255,255,255,0.15)' }}>
-                <span style={{ opacity: 0.75 }}>Source</span>
-                <span style={{ opacity: 0.95, fontWeight: 600 }}>
-                  {paySource === 'auto' ? 'Auto' : 'Manual'}
-                </span>
-              </div>
-            )}
-          </div>
-        }
-      />
-      {showReset && (
-        <Tooltip
-          content={`Set this leg's pay to ${driverPayPct}% of its ${isRelay ? 'share' : 'price'} ($${autoFor!.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`}>
-          <button type="button"
-            onClick={() => void applyPay(autoFor!, 'auto')}
-            aria-label={`Reset to ${driverPayPct}% ${basis}`}
-            className="flex items-center rounded transition-colors shrink-0"
-            style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--gc-text-3)', padding: 2 }}
-            onMouseEnter={e => { e.currentTarget.style.color = '#1d4ed8'; e.currentTarget.style.background = '#dbeafe'; }}
-            onMouseLeave={e => { e.currentTarget.style.color = 'var(--gc-text-3)'; e.currentTarget.style.background = 'transparent'; }}>
-            <RotateCcw size={11} />
-          </button>
-        </Tooltip>
-      )}
-    </div>
-  );
-  // A row with no pay, no configured percentage and no history has
-  // nothing to reveal — don't render the icon at all.
-  const hasBadges = pctOfLeg !== null || (isRelay && pctOfLoad !== null) || showReset || !!paySource;
+  // Everything that USED to live as chips beside the pay input now lives
+  // inside the edit popover — dispatcher clicks the pay figure, popover
+  // opens with the input, the two percentages + reset buttons, and the
+  // source marker. Read-only view is just the number.
+  // Both reset targets: 27% of THIS LEG's share vs 27% of the FULL load
+  // price. Same on a single-leg load (base === loadPrice) so the popover
+  // collapses to one row there.
+  const autoForLoad = autoPayFor(lp, driverPayPct);
+  const showResetLeg  = !locked && autoFor      != null && !payMatchesPct(payNum, base, driverPayPct);
+  const showResetLoad = !locked && isRelay && autoForLoad != null && !payMatchesPct(payNum, lp,   driverPayPct);
 
+  const triggerRef = useRef<HTMLButtonElement>(null);
   return (
     <span ref={cellRef} data-pay-cell-id={load.id} className="inline-flex items-center gap-1 min-w-0">
-      <span className="inline-flex">
-      {editing ? (
-        <div className="flex items-center gap-1">
-          <span style={{ color: 'var(--gc-text-3)' }} className="text-sm">$</span>
-          <input
-            ref={inputRef}
-            type="number"
-            step="0.01"
-            value={raw}
-            onChange={e => setRaw(e.target.value)}
-            onBlur={() => commit()}
-            onKeyDown={e => {
-              if (e.key === 'Enter') { e.preventDefault(); void commit({ advance: true }); }
-              if (e.key === 'Escape') setEditing(false);
-            }}
-            className="w-24 px-2 py-0.5 rounded text-sm font-semibold text-right"
-            style={{
-              background: 'var(--gc-bg)',
-              border: '1px solid var(--gc-blue)',
-              color: 'var(--gc-text-1)',
-              outline: 'none',
-            }}
-            autoFocus
-          />
-        </div>
-      ) : (
-        <button
-          onClick={startEdit}
-          className="group flex items-center gap-1.5 rounded px-1.5 py-0.5 transition-colors"
-          style={{ background: 'transparent' }}
-          onMouseOver={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
-          onMouseOut={e => (e.currentTarget.style.background = 'transparent')}
-          title="Click to edit driver pay (Enter saves + jumps to next)"
-        >
-          {saving ? (
-            <Loader2 size={12} className="animate-spin" style={{ color: 'var(--gc-blue)' }} />
-          ) : (
-            <span className="text-[13px] font-semibold" style={{ color: load.driverPay != null ? 'var(--gc-text-1)' : 'var(--gc-text-3)' }}>
-              {load.driverPay != null ? fmtMoney(load.driverPay) : '—'}
-            </span>
-          )}
-          <Pencil size={11} className="opacity-0 group-hover:opacity-60 transition-opacity shrink-0" style={{ color: 'var(--gc-text-3)' }} />
-        </button>
+      <button
+        ref={triggerRef}
+        onClick={() => { if (!editing) startEdit(); }}
+        className="group flex items-center gap-1.5 rounded px-1.5 py-0.5 transition-colors"
+        style={{ background: editing ? 'var(--gc-hover)' : 'transparent' }}
+        onMouseOver={e => { if (!editing) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+        onMouseOut={e =>  { if (!editing) e.currentTarget.style.background = 'transparent'; }}
+        title="Click to edit driver pay (Enter saves + jumps to next)"
+      >
+        {saving ? (
+          <Loader2 size={12} className="animate-spin" style={{ color: 'var(--gc-blue)' }} />
+        ) : (
+          <span className="text-[13px] font-semibold" style={{ color: load.driverPay != null ? 'var(--gc-text-1)' : 'var(--gc-text-3)' }}>
+            {load.driverPay != null ? fmtMoney(load.driverPay) : '—'}
+          </span>
+        )}
+        <Pencil size={11} className="opacity-0 group-hover:opacity-60 transition-opacity shrink-0" style={{ color: 'var(--gc-text-3)' }} />
+      </button>
+      {editing && (
+        <PayEditPopover
+          anchorRef={triggerRef}
+          raw={raw}
+          setRaw={setRaw}
+          inputRef={inputRef}
+          pctOfLeg={pctOfLeg}
+          pctOfLoad={pctOfLoad}
+          basis={basis}
+          isRelay={isRelay}
+          driverPayPct={driverPayPct}
+          autoForLeg={autoFor}
+          autoForLoad={autoForLoad}
+          showResetLeg={showResetLeg}
+          showResetLoad={showResetLoad}
+          paySource={paySource}
+          onResetLeg={() => {
+            setRaw(String(autoFor));
+            void applyPay(autoFor!, 'auto');
+            setEditing(false);
+          }}
+          onResetLoad={() => {
+            setRaw(String(autoForLoad));
+            void applyPay(autoForLoad!, 'auto');
+            setEditing(false);
+          }}
+          onCommit={(advance) => commit({ advance })}
+          onCancel={() => setEditing(false)}
+        />
       )}
-      </span>
-      {hasBadges && badges}
     </span>
+  );
+}
+
+/** Popover anchored to the pay-cell trigger. Portalled so it can't be
+ *  clipped by row/table overflow. Click-outside closes without saving
+ *  (only Enter or a reset commits). */
+function PayEditPopover({
+  anchorRef, raw, setRaw, inputRef,
+  pctOfLeg, pctOfLoad, basis, isRelay,
+  driverPayPct, autoForLeg, autoForLoad, showResetLeg, showResetLoad,
+  paySource, onResetLeg, onResetLoad, onCommit, onCancel,
+}: {
+  anchorRef: React.RefObject<HTMLButtonElement | null>;
+  raw: string;
+  setRaw: (v: string) => void;
+  inputRef: React.RefObject<HTMLInputElement | null>;
+  pctOfLeg:  number | null;
+  pctOfLoad: number | null;
+  basis: string;
+  isRelay: boolean;
+  driverPayPct: number | null;
+  autoForLeg:  number | null;
+  autoForLoad: number | null;
+  showResetLeg:  boolean;
+  showResetLoad: boolean;
+  paySource: 'auto' | 'manual' | undefined;
+  onResetLeg:  () => void;
+  onResetLoad: () => void;
+  onCommit: (advance: boolean) => void;
+  onCancel: () => void;
+}) {
+  const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
+  const bubbleRef = useRef<HTMLDivElement>(null);
+
+  // Position under the trigger, clamped to viewport. Recompute on
+  // scroll/resize so the popover follows the cell if the table scrolls.
+  useLayoutEffect(() => {
+    const place = () => {
+      const trigger = anchorRef.current;
+      const bubble  = bubbleRef.current;
+      if (!trigger || !bubble) return;
+      const tr = trigger.getBoundingClientRect();
+      const bw = bubble.offsetWidth;
+      const bh = bubble.offsetHeight;
+      const gap = 4;
+      // Prefer below; flip above when there isn't room.
+      let top = tr.bottom + gap;
+      if (top + bh > window.innerHeight - 8) top = tr.top - bh - gap;
+      let left = tr.left;
+      if (left + bw > window.innerWidth - 8) left = window.innerWidth - bw - 8;
+      if (left < 8) left = 8;
+      setCoords({ top, left });
+    };
+    place();
+    window.addEventListener('scroll',  place, true);
+    window.addEventListener('resize',  place);
+    return () => {
+      window.removeEventListener('scroll',  place, true);
+      window.removeEventListener('resize',  place);
+    };
+  }, [anchorRef]);
+
+  // Click-outside closes. Focus the input on mount for immediate typing.
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      const bubble = bubbleRef.current;
+      const trigger = anchorRef.current;
+      const target = e.target as Node;
+      if (bubble?.contains(target) || trigger?.contains(target)) return;
+      onCancel();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCancel();
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown',   onKey);
+    setTimeout(() => inputRef.current?.select(), 0);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown',   onKey);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (typeof document === 'undefined') return null;
+
+  const money = (n: number) =>
+    `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+  const pctRow = (kind: 'leg' | 'load') => {
+    const pct   = kind === 'leg' ? pctOfLeg : pctOfLoad;
+    const target = kind === 'leg' ? autoForLeg : autoForLoad;
+    const show   = kind === 'leg' ? showResetLeg : showResetLoad;
+    const label  = kind === 'leg' ? basis : PAY_BASIS_LABEL.load;
+    return (
+      <div className="flex items-center justify-between gap-3 py-1.5">
+        <div className="flex items-center gap-2 text-[12px]" style={{ color: 'var(--gc-text-2)' }}>
+          <span className="tabular-nums font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+            {pct !== null ? `${fmtPct(pct)}%` : '—'}
+          </span>
+          <span style={{ color: 'var(--gc-text-3)' }}>{label}</span>
+        </div>
+        {show && driverPayPct != null && target != null && (
+          <button type="button"
+            onClick={kind === 'leg' ? onResetLeg : onResetLoad}
+            className="flex items-center gap-1 rounded px-2 py-1 text-[11px] font-semibold transition-colors"
+            style={{ background: 'transparent', border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)' }}
+            onMouseEnter={e => { e.currentTarget.style.background = '#dbeafe'; e.currentTarget.style.color = '#1d4ed8'; e.currentTarget.style.borderColor = '#bfdbfe'; }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gc-text-2)'; e.currentTarget.style.borderColor = 'var(--gc-border)'; }}
+            title={`Set pay to ${driverPayPct}% of ${label} (${money(target)})`}>
+            <RotateCcw size={10} />
+            Reset to {driverPayPct}% {label}
+          </button>
+        )}
+      </div>
+    );
+  };
+
+  return createPortal(
+    <div
+      ref={bubbleRef}
+      role="dialog"
+      onMouseDown={e => e.stopPropagation()}
+      style={{
+        position:  'fixed',
+        top:       coords?.top ?? -9999,
+        left:      coords?.left ?? -9999,
+        zIndex:    1000,
+        minWidth:  280,
+        background: 'var(--gc-surface)',
+        border:    '1px solid var(--gc-border)',
+        borderRadius: 10,
+        boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+        padding:   12,
+        visibility: coords ? 'visible' : 'hidden',
+      }}>
+      {/* Input */}
+      <div className="flex items-center gap-2 mb-2">
+        <span style={{ color: 'var(--gc-text-3)' }} className="text-sm">$</span>
+        <input
+          ref={inputRef}
+          type="number"
+          step="0.01"
+          value={raw}
+          onChange={e => setRaw(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter') { e.preventDefault(); onCommit(true); }
+            // Escape handled by the doc listener above.
+          }}
+          className="flex-1 px-2 py-1 rounded text-sm font-semibold text-right"
+          style={{
+            background: 'var(--gc-bg)',
+            border: '1px solid var(--gc-blue)',
+            color: 'var(--gc-text-1)',
+            outline: 'none',
+          }}
+        />
+      </div>
+
+      {/* Percentages + reset buttons */}
+      <div style={{ borderTop: '1px solid var(--gc-border-light)' }}>
+        {pctRow('leg')}
+        {/* Only relays get the second row — for a single-leg load the
+            two denominators are the same number and the two rows would
+            just duplicate. */}
+        {isRelay && pctRow('load')}
+      </div>
+
+      {/* Source marker + save hint */}
+      <div className="flex items-center justify-between pt-2 mt-1 text-[11px]"
+        style={{ borderTop: '1px solid var(--gc-border-light)', color: 'var(--gc-text-3)' }}>
+        <div>
+          Source: <span style={{ color: 'var(--gc-text-1)', fontWeight: 600 }}>
+            {paySource === 'auto' ? 'Auto' : paySource === 'manual' ? 'Manual' : '—'}
+          </span>
+        </div>
+        <div style={{ opacity: 0.7 }}>Enter to save · Esc to cancel</div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 
