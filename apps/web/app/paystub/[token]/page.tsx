@@ -177,7 +177,6 @@ export default function PaystubPage() {
               <thead>
                 <tr className="text-xs uppercase tracking-wider text-neutral-500 border-b border-neutral-200">
                   <th className="text-left font-semibold px-6 py-3">Description</th>
-                  <th className="text-left font-semibold px-6 py-3 hidden sm:table-cell">Date</th>
                   <th className="text-right font-semibold px-6 py-3">Amount</th>
                 </tr>
               </thead>
@@ -188,22 +187,27 @@ export default function PaystubPage() {
                       <div className="text-neutral-900">
                         {li.label ?? (li.kind === 'load' ? `Load ${li.loadNum ?? ''}` : li.kind)}
                       </div>
-                      {/* Loads always show a Legs sub-line ("Legs: All" for
-                          single-leg, "Legs: Pickup" / "Legs: Transfer" etc.
-                          for relay legs). Adjustments + accessorials use
-                          the category label. */}
-                      {li.kind === 'load' ? (
-                        <div className="text-xs text-neutral-500 mt-0.5">
-                          Legs: {li.legLabel ?? 'All'}
-                        </div>
-                      ) : li.category ? (
-                        <div className="text-xs text-neutral-500 mt-0.5">
-                          {li.category}
-                        </div>
-                      ) : null}
-                    </td>
-                    <td className="px-6 py-3 text-neutral-600 hidden sm:table-cell">
-                      {li.date ? fmtDate(li.date) : ''}
+                      {/* Sub-line: date + legs (or category for
+                          adjustments/accessorials). Everything a driver
+                          needs to identify the row stays on-screen at
+                          phone width — the old separate Date column
+                          was hidden below sm and left mobile drivers
+                          guessing which load a pay figure belonged
+                          to. Kept as a "· " join so it reads
+                          naturally on one line. */}
+                      {(() => {
+                        const dateStr    = li.date ? fmtDate(li.date) : null;
+                        const contextStr = li.kind === 'load'
+                          ? `Legs: ${li.legLabel ?? 'All'}`
+                          : (li.category ?? null);
+                        const parts = [dateStr, contextStr].filter(Boolean);
+                        if (parts.length === 0) return null;
+                        return (
+                          <div className="text-xs text-neutral-500 mt-0.5">
+                            {parts.join(' · ')}
+                          </div>
+                        );
+                      })()}
                     </td>
                     <td className={`px-6 py-3 text-right tabular-nums font-medium ${li.amount < 0 ? 'text-red-600' : 'text-neutral-900'}`}>
                       {li.amount < 0 ? '−' : ''}{money(Math.abs(li.amount))}
@@ -214,7 +218,6 @@ export default function PaystubPage() {
               <tfoot>
                 <tr className="bg-neutral-50 font-semibold">
                   <td className="px-6 py-3 text-neutral-900">Total</td>
-                  <td className="hidden sm:table-cell" />
                   <td className="px-6 py-3 text-right tabular-nums text-neutral-900">{money(paystub.totalPay)}</td>
                 </tr>
               </tfoot>
