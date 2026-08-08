@@ -600,24 +600,31 @@ payroll.post("/records/:id/send", requireCapability("payroll.finalize"), async (
   // (3) Mint the view token on first send. Reuse on resend so a driver
   //     who bookmarked the link doesn't 404.
   const viewToken = rec.view_token ?? mintViewToken();
-  const publicUrl = `${env.publicWebUrl.replace(/\/$/, "")}/paystub/${viewToken}`;
   const weekLabel = fmtWeekLabel(rec.week_start);
   const netStr    = fmtMoney(Number(rec.total_pay));
 
-  // Org display name for the SMS prefix. Drivers don't know "FleetCal"
-  // (it's the platform); they know their carrier. Pulled from the same
-  // invoice_settings.companyName every other outbound-to-broker/driver
-  // surface uses. Falls back to "Your carrier" if the org somehow
-  // hasn't set it — better than a bare colon.
+  // Both the SMS prefix (companyName) and the paystub URL host
+  // (driver_portal_url) are per-org config. Fetched together in one
+  // round-trip. Orgs without driver_portal_url set fall back to the
+  // process-wide PUBLIC_WEB_URL (which itself falls back to
+  // fleetcal.app) — that keeps every existing FleetCal customer
+  // working while letting Curzon route paystubs through
+  // curzontrucking.com.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: settingsRow } = await (supabase as any)
     .from("org_settings")
-    .select("invoice_settings")
+    .select("invoice_settings, driver_portal_url")
     .eq("org_id", orgId)
     .maybeSingle();
+  const orgSettings = settingsRow as {
+    invoice_settings:  { companyName?: string } | null;
+    driver_portal_url: string | null;
+  } | null;
   const orgLabel =
-    (settingsRow as { invoice_settings: { companyName?: string } | null } | null)
-      ?.invoice_settings?.companyName?.trim() || "Your carrier";
+    orgSettings?.invoice_settings?.companyName?.trim() || "Your carrier";
+  const paystubHost =
+    orgSettings?.driver_portal_url?.trim() || env.publicWebUrl;
+  const publicUrl = `${paystubHost.replace(/\/$/, "")}/paystub/${viewToken}`;
 
   // (4) Fire push (independent of SMS — some drivers have the app but
   //     no valid phone). sendPushToDriver silently no-ops when there
