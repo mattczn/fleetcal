@@ -18,12 +18,9 @@ import * as Sentry from "@sentry/node";
 
 import { env, isProd } from "./lib/env.js";
 import { clerkAuth, type AuthVariables } from "./middleware/clerk.js";
-import { botAuth } from "./middleware/botAuth.js";
 import { captureErrors } from "./middleware/captureErrors.js";
 import loadsRoute from "./routes/loads.js";
 import closeoutRoute from "./routes/closeout.js";
-import botLoadsRoute from "./routes/bot-loads.js";
-import botEmailThreadRoute from "./routes/bot-email-thread.js";
 import eventsRoute from "./routes/events.js";
 import documentsRoute from "./routes/documents.js";
 import notificationsRoute from "./routes/notifications.js";
@@ -292,16 +289,6 @@ authed.route("/reports", reportsRoute);
 // INTERNAL sales CRM — triple-gated inside the route group
 // (internal-org allowlist → 404, crm module flag, crm.* capabilities).
 authed.route("/crm", crmRoute);
-
-// ── Bot routes (API key auth, read-only load access) ────────────────────
-// Must be mounted before /v1 so Hono doesn't match /v1/bot/* against the
-// Clerk-authenticated group first.
-
-const bot = new Hono<{ Variables: AuthVariables }>();
-bot.use("*", botAuth);
-bot.route("/loads", botLoadsRoute);
-bot.route("/email-thread", botEmailThreadRoute);
-app.route("/v1/bot", bot);
 
 // ── Driver routes (Supabase-JWT auth, scoped to one driver) ─────────────
 // Mounted before /v1 to avoid the Clerk middleware. Driver app passes the

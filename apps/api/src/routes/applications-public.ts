@@ -17,9 +17,9 @@
  * 2. The org is derived from the key, never from the request body. A
  *    body-supplied org_id here would let anyone holding one carrier's key
  *    file applicants into another's pipeline. Which carrier the key feeds
- *    falls back to BOT_ORG_ID — this deployment's single-carrier pin, the
- *    same one the Telegram bot writes into — with APPLICATION_INTAKE_ORG_ID
- *    available to override it if the two ever need to differ.
+ *    falls back to CURZON_ORG_ID — this deployment's single-carrier pin —
+ *    with APPLICATION_INTAKE_ORG_ID available to override it if the two
+ *    ever need to differ.
  *
  * 3. Nothing is read back out. This endpoint only writes — there is no GET,
  *    no echo of the stored row, no applicant lookup. A leaked key is then a
@@ -64,7 +64,7 @@ const ACCEPTED_TYPES = new Set([
 
 function intakeOrg(key: string | undefined): string | null {
   const expected = process.env.APPLICATION_INTAKE_KEY;
-  const orgId = process.env.APPLICATION_INTAKE_ORG_ID || env.botOrgId;
+  const orgId = process.env.APPLICATION_INTAKE_ORG_ID || env.curzonOrgId;
   if (!expected || !orgId) return null; // not configured = closed
   if (!key || key !== expected) return null;
   return orgId;

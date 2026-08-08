@@ -37,9 +37,13 @@ export const env = {
   supabaseUrl:            required("SUPABASE_URL"),
   supabaseServiceRoleKey: required("SUPABASE_SERVICE_ROLE_KEY"),
   anthropicApiKey:        required("ANTHROPIC_API_KEY"),
-  // Optional — only needed when the Telegram bot is connected.
-  botApiKey:              process.env.BOT_API_KEY || undefined,
-  botOrgId:               process.env.BOT_ORG_ID || undefined,
+  /** Clerk org id for Curzon (Matt's own carrier org). This deployment's
+   *  single-carrier default for surfaces where an org can't be derived
+   *  from the request — the driver-applications intake endpoint being
+   *  the current caller. Reads CURZON_ORG_ID first, falling back to the
+   *  older BOT_ORG_ID for transition — Railway env has both today, drop
+   *  BOT_ORG_ID once nothing references it. */
+  curzonOrgId:            process.env.CURZON_ORG_ID || process.env.BOT_ORG_ID || undefined,
   // Optional — invoice email delivery. Without a Resend key the
   // send endpoint refuses email sends (still allows manual/portal).
   resendApiKey:           process.env.RESEND_API_KEY || undefined,
