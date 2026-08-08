@@ -90,10 +90,15 @@ function parseLineItems(raw: unknown): LineItem[] {
 
 paystubsPublic.get("/:token", async (c) => {
   const token = c.req.param("token");
-  // Token shape: 22-23 chars of our custom base32 alphabet. Reject
-  // obviously-wrong inputs before hitting the DB so a scanner doesn't
-  // burn queries. Lowercase + no 0/1/l/o (see mintViewToken).
-  if (!/^[a-hjkmnp-z2-9]{16,32}$/i.test(token)) {
+  // Cheap format guard so a URL scanner can't burn DB queries. Kept
+  // permissive on the character class — the generator's alphabet has
+  // shifted before, and the DB lookup is an exact-string match anyway
+  // (110 bits of entropy makes a false positive on any random string
+  // effectively impossible). Prior stricter regex excluded `i` and
+  // `o` while the generator included them, so ~76% of real tokens
+  // 404'd here as "expired." Length + alphanumeric-lowercase is
+  // sufficient to reject nonsense URLs.
+  if (!/^[a-z0-9]{16,32}$/i.test(token)) {
     return c.json({ error: "not_found" }, 404);
   }
 
