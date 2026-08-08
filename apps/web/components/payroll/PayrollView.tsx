@@ -2072,6 +2072,13 @@ export default function PayrollView() {
   const [fetching, setFetching] = useState(false);
   // Driver names that have adjustments this week (even with no loads — e.g. deferred carry-ins)
   const [adjDriverNames, setAdjDriverNames] = useState<string[]>([]);
+  // Full week-wide adjustments list, kept at page level so the header
+  // strip can sum "Total Adjustments" and "Total Payroll" (loads +
+  // adjustments). Previously each driver card fetched adjustments in
+  // isolation and the totals up top only knew about load driverPay —
+  // hence the header underreporting vs the dashboard's frozen-record
+  // number by exactly the adjustments amount.
+  const [weekAdjustments, setWeekAdjustments] = useState<PayrollAdjustment[]>([]);
   // Driver names with a FINALIZED record for this week. A finalized week
   // must keep its card even when the week no longer computes any loads
   // for that driver — e.g. the load was edited across the Saturday
@@ -2097,6 +2104,7 @@ export default function PayrollView() {
     fetchPayrollAdjustments(orgId, weekStart).then(adjs => {
       const names = [...new Set(adjs.map(a => a.driverName).filter(Boolean))];
       setAdjDriverNames(names);
+      setWeekAdjustments(adjs);
     });
   }, [orgId, weekStart]); // eslint-disable-line
 
@@ -2309,8 +2317,25 @@ export default function PayrollView() {
 
   // Total driver pay across every leg — each driver gets paid for
   // their leg, so summing every event's driverPay is the correct
-  // "what did we pay drivers this week" answer.
+  // "what left our books via loads" answer. NOT the whole payroll —
+  // see totalPayroll below.
   const totalPay = driverGroups.reduce((s, g) => s + g.loads.reduce((ss, l) => ss + (l.driverPay ?? 0), 0), 0);
+  // Adjustments (bonuses, deductions, per-diem, deferrals) are stored
+  // in payroll_adjustments and can be negative. Summed here so the
+  // strip up top can show them separately AND folded into a true
+  // "Total Payroll" figure. Restricted to the same driver-name set
+  // the driver cards actually render so an owner-op adjustment we
+  // deliberately exclude from cards can't sneak into the total.
+  const visibleDriverNameSet = new Set(driverGroups.map(g => g.driverName));
+  const totalAdjustments = weekAdjustments.reduce(
+    (s, a) => visibleDriverNameSet.has(a.driverName) ? s + (a.amount ?? 0) : s,
+    0,
+  );
+  // What the dashboard's Total Payroll tile is trying to show —
+  // driver pay from loads + every adjustment. This should match the
+  // dashboard's frozen-record number for a fully finalized week
+  // (unless a load was edited after finalization).
+  const totalPayroll = totalPay + totalAdjustments;
   // Total LOADS and Total REVENUE — both come from the canonical
   // /v1/reports/loads server endpoint (weekLoadSummaries) so this
   // tile agrees with the Dashboard's Total Revenue card exactly. One
@@ -2361,8 +2386,12 @@ export default function PayrollView() {
   // Payroll as % of revenue — the headline labor-cost ratio. Null
   // when revenue is zero (we'd be dividing by 0) so the UI can render
   // an em-dash instead of "Infinity%".
+  // Uses totalPayroll (loads + adjustments) so bonuses/deductions
+  // move this ratio the same way they move the actual bank hit —
+  // previously it read the load-only figure and understated the true
+  // cost of the week.
   const payrollPctOfRevenue = totalRevenue > 0
-    ? (totalPay / totalRevenue) * 100
+    ? (totalPayroll / totalRevenue) * 100
     : null;
 
   const orgName    = organization?.name    ?? 'My Organization';
@@ -2414,6 +2443,38 @@ export default function PayrollView() {
                 </div>
                 <div className="text-[22px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
                   {fmtMoney(totalPay)}
+                </div>
+              </div>
+              <div style={{ width: 1, height: 40, background: 'var(--gc-border)' }} />
+              <div>
+                <div className="text-[11px] font-semibold uppercase tracking-wide mb-0.5" style={{ color: 'var(--gc-text-3)' }}>
+                  Total Adjustments
+                </div>
+                {/* Negative net (net deductions > bonuses) tints red so
+                    the sign isn't only carried by a small "-" in front
+                    of the figure. Zero renders neutral, not colored. */}
+                <div
+                  className="text-[22px] font-semibold"
+                  style={{
+                    color:
+                      totalAdjustments > 0  ? '#1e8e3e' :
+                      totalAdjustments < 0  ? '#d93025' :
+                                              'var(--gc-text-3)',
+                  }}>
+                  {totalAdjustments === 0
+                    ? '—'
+                    : `${totalAdjustments < 0 ? '−' : '+'}${fmtMoney(Math.abs(totalAdjustments))}`}
+                </div>
+              </div>
+              <div style={{ width: 1, height: 40, background: 'var(--gc-border)' }} />
+              <div>
+                <div className="text-[11px] font-semibold uppercase tracking-wide mb-0.5" style={{ color: 'var(--gc-text-3)' }}>
+                  Total Payroll
+                </div>
+                {/* The number that should agree with the dashboard's
+                    Total Payroll tile (driver pay + adjustments). */}
+                <div className="text-[22px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+                  {fmtMoney(totalPayroll)}
                 </div>
               </div>
               <div style={{ width: 1, height: 40, background: 'var(--gc-border)' }} />
