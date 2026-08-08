@@ -751,6 +751,20 @@ export interface Customer {
    */
   invoiceInstructions?: string;
   /**
+   * Fraction this broker withholds under a quick-pay agreement, e.g. 0.025
+   * for "2.50% discount for payment within 2 days". A payment short by
+   * exactly this much SETTLES its invoice instead of leaving a balance
+   * that can never be collected.
+   *
+   * Undefined means no arrangement, and any shortfall stays open — which
+   * is the right default for a broker who is simply underpaying.
+   *
+   * A rate, not a tolerance. A blanket "close anything within 3%" cannot
+   * tell a contracted fee from a broker quietly shorting you inside the
+   * threshold; the rate says which shortfall was agreed to.
+   */
+  quickPayRate?: number;
+  /**
    * Billing / remit-to address for the customer. Rendered as the
    * "Bill To" block on every invoice for this customer; if absent
    * the invoice falls back to just the customer name.
@@ -1613,6 +1627,9 @@ export interface CustomerReceivables {
   /** Free-text broker-wide billing policy (terms, required docs, factor
    *  preferences) — customers.invoice_instructions. */
   billingNotes?:  string;
+  /** Fraction withheld under a quick-pay agreement (0.025 = 2.5%). Drives
+   *  whether a short payment settles its invoice or stays open. */
+  quickPayRate?:  number;
 
   /** Same rollup shape the ledger row uses — byBucket, oldest, terms,
    *  avgDaysToPay. */

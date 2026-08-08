@@ -959,11 +959,12 @@ payments.get("/receivables/:customerId", async (c) => {
   let contactPhone: string | undefined;
   let billingAddress: string | undefined;
   let billingNotes: string | undefined;
+  let quickPayRate: number | undefined;
   let invoiceMethod: "email" | "portal" | undefined;
   if (!isNone) {
     const { data: cust } = await supabase
       .from("customers")
-      .select("id,name,mc_num,invoice_method,invoice_email,invoice_portal,contact_phone,billing_address,invoice_instructions")
+      .select("id,name,mc_num,invoice_method,invoice_email,invoice_portal,contact_phone,billing_address,invoice_instructions,quick_pay_rate")
       .eq("id", customerId)
       .eq("org_id", orgId)
       .maybeSingle();
@@ -973,6 +974,7 @@ payments.get("/receivables/:customerId", async (c) => {
       invoice_method: string | null; invoice_email: string | null;
       invoice_portal: string | null; contact_phone: string | null;
       billing_address: string | null; invoice_instructions: string | null;
+      quick_pay_rate: string | number | null;
     };
     name          = row.name ?? "Unnamed customer";
     mcNum         = row.mc_num         ?? undefined;
@@ -981,6 +983,7 @@ payments.get("/receivables/:customerId", async (c) => {
     contactPhone  = row.contact_phone  ?? undefined;
     billingAddress = row.billing_address ?? undefined;
     billingNotes   = row.invoice_instructions ?? undefined;
+    quickPayRate   = row.quick_pay_rate == null ? undefined : Number(row.quick_pay_rate);
     invoiceMethod  = row.invoice_method === "portal" ? "portal"
                    : row.invoice_method === "email"  ? "email" : undefined;
   }
@@ -1120,7 +1123,7 @@ payments.get("/receivables/:customerId", async (c) => {
       customerId: isNone ? null : customerId,
       customerName: name,
       mcNum, contactPhone, lifetimeLoads,
-      invoiceMethod, invoiceEmail, invoicePortal, billingAddress, billingNotes,
+      invoiceMethod, invoiceEmail, invoicePortal, billingAddress, billingNotes, quickPayRate,
       summary, paid90d, paid90dCount, weekly, invoices,
     },
   };

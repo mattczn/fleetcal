@@ -47,6 +47,7 @@ interface DbCustomerRow {
   invoice_email: string | null;
   invoice_portal: string | null;
   invoice_instructions: string | null;
+  quick_pay_rate: string | number | null;
   billing_address: string | null;
 }
 
@@ -84,11 +85,12 @@ function rowToCustomer(r: DbCustomerRow): Customer {
     invoiceEmail:        r.invoice_email        ?? undefined,
     invoicePortal:       r.invoice_portal       ?? undefined,
     invoiceInstructions: r.invoice_instructions ?? undefined,
+    quickPayRate:        r.quick_pay_rate == null ? undefined : Number(r.quick_pay_rate),
     billingAddress:      r.billing_address      ?? undefined,
   };
 }
 
-const COLS = "id,name,short_name,aliases,mc_num,contact_name,contact_email,contact_phone,contacts,notes,parse_hints,invoice_method,invoice_email,invoice_portal,invoice_instructions,billing_address";
+const COLS = "id,name,short_name,aliases,mc_num,contact_name,contact_email,contact_phone,contacts,notes,parse_hints,invoice_method,invoice_email,invoice_portal,invoice_instructions,quick_pay_rate,billing_address";
 
 customers.get("/", requireCapability("customers.view"), async (c) => {
   const orgId = c.get("orgId");
@@ -160,6 +162,7 @@ customers.post("/", requireCapability("customers.create"), async (c) => {
     invoice_email:        body.invoiceEmail        ?? null,
     invoice_portal:       body.invoicePortal       ?? null,
     invoice_instructions: body.invoiceInstructions ?? null,
+    quick_pay_rate:       body.quickPayRate ?? null,
     billing_address:      body.billingAddress      ?? null,
   };
   const { data, error } = await supabase
@@ -180,6 +183,21 @@ customers.patch("/:id", requireCapability("customers.edit"), async (c) => {
   const id = c.req.param("id");
   const body = await c.req.json<UpdateCustomerRequest>();
 
+  // Checked here as well as by the CHECK constraint, so a fat-fingered
+  // "25" instead of "2.5" comes back as a sentence rather than a Postgres
+  // violation surfacing as an opaque 500. The ceiling is deliberately
+  // generous — no real quick-pay agreement approaches 50% — and its job is
+  // to catch a percent typed as a fraction or vice versa.
+  if (body.quickPayRate != null) {
+    const r = Number(body.quickPayRate);
+    if (!Number.isFinite(r) || r < 0 || r >= 0.5) {
+      return c.json({
+        error: "validation_failed",
+        errors: ["quickPayRate must be a fraction between 0 and 0.5 — 0.025 for a 2.5% discount"],
+      } satisfies ApiErrorResponse, 400);
+    }
+  }
+
   const update: Record<string, unknown> = {};
   if ("name"         in body) update.name          = body.name;
   if ("shortName"    in body) update.short_name    = body.shortName    ?? null;
@@ -195,6 +213,7 @@ customers.patch("/:id", requireCapability("customers.edit"), async (c) => {
   if ("invoiceEmail"        in body) update.invoice_email        = body.invoiceEmail        ?? null;
   if ("invoicePortal"       in body) update.invoice_portal       = body.invoicePortal       ?? null;
   if ("invoiceInstructions" in body) update.invoice_instructions = body.invoiceInstructions ?? null;
+  if ("quickPayRate"        in body) update.quick_pay_rate       = body.quickPayRate       ?? null;
   if ("billingAddress"      in body) update.billing_address      = body.billingAddress      ?? null;
   if (Object.keys(update).length === 0) {
     return c.json({ error: "validation_failed", errors: ["no fields"] } satisfies ApiErrorResponse, 400);

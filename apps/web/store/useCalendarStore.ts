@@ -518,7 +518,12 @@ interface CalendarStore extends ModalState {
   customers: Customer[];
   fetchCustomers: () => Promise<void>;
   addCustomer: (c: Omit<Customer, 'id'>, force?: boolean) => Promise<Customer | null>;
-  updateCustomer: (id: string, updates: Partial<Omit<Customer, 'id'>>) => Promise<void>;
+  /** quickPayRate is nullable here — see lib/db.ts. Passing null ENDS a
+   *  quick-pay arrangement; omitting the key leaves it untouched. */
+  updateCustomer: (
+    id: string,
+    updates: Partial<Omit<Customer, 'id' | 'quickPayRate'>> & { quickPayRate?: number | null },
+  ) => Promise<void>;
   removeCustomer: (id: string) => Promise<void>;
   /** Fold `sourceId` into `targetId` — server reassigns every load +
    *  invoice, then deletes the source. Drops the source from the store
@@ -1154,7 +1159,14 @@ export const useCalendarStore = create<CalendarStore>()(
   },
   updateCustomer: async (id, updates) => {
     await updateCustomer(id, updates);
-    set((s) => ({ customers: s.customers.map(c => c.id === id ? { ...c, ...updates } : c) }));
+    // null is how the API is told to CLEAR a quick-pay rate, but the local
+    // Customer models "no arrangement" as absent. Normalising here keeps the
+    // optimistic copy identical to what the next fetch will return, instead
+    // of leaving a null that reads as 0% until a refresh.
+    const local = updates.quickPayRate === null
+      ? { ...updates, quickPayRate: undefined }
+      : (updates as Partial<Customer>);
+    set((s) => ({ customers: s.customers.map(c => c.id === id ? { ...c, ...local } : c) }));
   },
   removeCustomer: async (id) => {
     try {

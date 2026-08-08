@@ -255,7 +255,17 @@ export async function mergeCustomer(sourceId: string, targetId: string): Promise
   return railway.mergeCustomer(sourceId, targetId);
 }
 
-export async function updateCustomer(id: string, updates: Partial<Omit<Customer, 'id'>>): Promise<void> {
+export async function updateCustomer(
+  id: string,
+  // quickPayRate is widened to accept null so ENDING a quick-pay
+  // arrangement is expressible. The other optional fields can only be set,
+  // never cleared, because `undefined` is dropped before it reaches here.
+  // quickPayRate is OMITTED from the spread and re-declared as nullable so
+  // ENDING a quick-pay arrangement is expressible. Intersecting instead of
+  // omitting silently collapses `number | undefined` and `number | null` to
+  // plain `number`, which makes null a type error at every call site.
+  updates: Partial<Omit<Customer, 'id' | 'quickPayRate'>> & { quickPayRate?: number | null },
+): Promise<void> {
   // Whitelist of fields to forward. Every field that BrokerProfileModal
   // (and other call sites) writes must be listed here — anything left
   // out gets silently dropped before reaching the API, which has been
@@ -277,6 +287,7 @@ export async function updateCustomer(id: string, updates: Partial<Omit<Customer,
     ...(updates.invoiceEmail !== undefined        ? { invoiceEmail: updates.invoiceEmail ?? null } : {}),
     ...(updates.invoicePortal !== undefined       ? { invoicePortal: updates.invoicePortal ?? null } : {}),
     ...(updates.invoiceInstructions !== undefined ? { invoiceInstructions: updates.invoiceInstructions ?? null } : {}),
+    ...(updates.quickPayRate        !== undefined ? { quickPayRate:        updates.quickPayRate } : {}),
     ...(updates.billingAddress      !== undefined ? { billingAddress:      updates.billingAddress      ?? null } : {}),
   };
   if (Object.keys(body).length === 0) return;

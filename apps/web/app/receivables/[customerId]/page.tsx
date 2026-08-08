@@ -419,6 +419,7 @@ function CustomerViewInner() {
               invoicePortal:  data?.invoicePortal,
               billingAddress: data?.billingAddress,
               billingNotes:   data?.billingNotes,
+              quickPayRate:   data?.quickPayRate,
             }}
             onSaved={() => void load()}
           />

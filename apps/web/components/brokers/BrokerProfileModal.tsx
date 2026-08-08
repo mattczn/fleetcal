@@ -6,7 +6,7 @@ import {
   TrendingUp, Package, Clock, CheckCircle2, Search,
   ChevronUp, ChevronDown, ChevronsUpDown, ArrowLeft,
   Truck, Calendar, DollarSign, ExternalLink, Plus, Trash2, GitMerge, AlertTriangle,
-  Sparkles, Loader2, AlertCircle, MapPin,
+  Sparkles, Loader2, AlertCircle, MapPin, Percent,
 } from 'lucide-react';
 import { railway } from '@/lib/railway';
 import { useCalendarStore } from '@/store/useCalendarStore';
@@ -543,6 +543,23 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
   const [invoicePortal,       setInvoicePortal]       = useState(broker.invoicePortal       ?? '');
   const [invoiceInstructions, setInvoiceInstructions] = useState(broker.invoiceInstructions ?? '');
   const [billingAddress,      setBillingAddress]      = useState(broker.billingAddress      ?? '');
+  /** Held as the PERCENT the broker withholds, as a string, because that is
+   *  what the agreement says and what someone types. Converted to a
+   *  fraction only on save — keeping it a string means a half-typed "2."
+   *  doesn't round-trip through a number and erase itself. */
+  const [quickPayPct,         setQuickPayPct]         = useState(
+    broker.quickPayRate != null ? String(+(broker.quickPayRate * 100).toFixed(4)) : '');
+
+  const quickPayNum   = Number(quickPayPct);
+  const quickPayValid = quickPayPct.trim() === ''
+    ? null
+    : Number.isFinite(quickPayNum) && quickPayNum >= 0 && quickPayNum < 50;
+  /** The fraction actually stored. null ENDS the arrangement, which is why
+   *  it is null and not undefined — undefined would be dropped and the old
+   *  rate would silently survive. */
+  const quickPayRate: number | null = quickPayPct.trim() === ''
+    ? null
+    : quickPayValid ? +(quickPayNum / 100).toFixed(6) : (broker.quickPayRate ?? null);
 
   // Google Places autocomplete for billing address — same pattern
   // SavedLocationsDirectoryBody uses for the location address input.
@@ -605,6 +622,7 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
     setInvoiceEmail(broker.invoiceEmail ?? '');
     setInvoicePortal(broker.invoicePortal ?? '');
     setInvoiceInstructions(broker.invoiceInstructions ?? '');
+    setQuickPayPct(broker.quickPayRate != null ? String(+(broker.quickPayRate * 100).toFixed(4)) : '');
     setBillingAddress(broker.billingAddress ?? '');
     setRefreshError(null);
     setRefreshedFromLoad(null);
@@ -635,6 +653,7 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
     invoiceEmail.trim()        !== (broker.invoiceEmail        ?? '') ||
     invoicePortal.trim()       !== (broker.invoicePortal       ?? '') ||
     invoiceInstructions.trim() !== (broker.invoiceInstructions ?? '') ||
+    quickPayRate               !== (broker.quickPayRate        ?? null) ||
     billingAddress.trim()      !== (broker.billingAddress      ?? '');
 
   useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
@@ -704,6 +723,10 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
       invoiceEmail:        invoiceMethod === 'email'  ? (invoiceEmail.trim()  || undefined) : undefined,
       invoicePortal:       invoiceMethod === 'portal' ? (invoicePortal.trim() || undefined) : undefined,
       invoiceInstructions: invoiceInstructions.trim() || undefined,
+      // null ENDS the arrangement. updateCustomer widens this one field to
+      // accept null precisely so that is expressible — every other optional
+      // field here can only be set, never cleared.
+      quickPayRate,
       billingAddress:      billingAddress.trim()      || undefined,
     }),
     discard: () => {
@@ -716,9 +739,10 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
       setInvoiceEmail(broker.invoiceEmail ?? '');
       setInvoicePortal(broker.invoicePortal ?? '');
       setInvoiceInstructions(broker.invoiceInstructions ?? '');
+      setQuickPayPct(broker.quickPayRate != null ? String(+(broker.quickPayRate * 100).toFixed(4)) : '');
       setBillingAddress(broker.billingAddress ?? '');
     },
-  }), [name, shortName, mcNum, contacts, notes, invoiceMethod, invoiceEmail, invoicePortal, invoiceInstructions, billingAddress, broker]);
+  }), [name, shortName, mcNum, contacts, notes, invoiceMethod, invoiceEmail, invoicePortal, invoiceInstructions, quickPayRate, billingAddress, broker]);
 
   const handleSort = (field: SortField) => {
     if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -1061,6 +1085,37 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
               </div>
               <div className="text-[11px] mt-1.5" style={{ color: 'var(--gc-text-3)' }}>
                 Shown on every invoice for this customer in the &ldquo;Bill To&rdquo; block. Multi-line is fine.
+              </div>
+            </PField>
+          </div>
+          <div className="mt-2">
+            {/* Quick pay.
+                Without this, a broker paying 97.5% under a 2.5% agreement
+                leaves an uncollectable 2.5% on every invoice forever —
+                Direct Connect alone is 41 invoices and $4,263 of balance
+                that was never receivable. Entered as the PERCENT WITHHELD
+                because that is how the agreement is written and how it is
+                printed in the billing notes above ("2.50% discount for
+                payment within 2 days"); stored as a fraction. */}
+            <PField label="Quick pay discount" icon={<Percent size={11} />}>
+              <div className="flex items-center gap-2">
+                <input
+                  value={quickPayPct}
+                  onChange={e => setQuickPayPct(e.target.value.replace(/[^\d.]/g, ''))}
+                  inputMode="decimal" placeholder="none"
+                  style={{ ...P_INPUT, width: 110, textAlign: 'right' }}
+                  onFocus={e => (e.currentTarget.style.borderColor = ACCENT)}
+                  onBlur={e => e.currentTarget.style.borderColor = 'var(--gc-border)'} />
+                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--gc-text-2)' }}>
+                  % withheld
+                </span>
+              </div>
+              <div className="text-[11px] mt-1.5" style={{ color: 'var(--gc-text-3)' }}>
+                {quickPayValid === false
+                  ? 'Must be a percentage between 0 and 50.'
+                  : quickPayNum > 0
+                    ? `A payment of ${(100 - quickPayNum).toFixed(2).replace(/\.?0+$/, '')}% settles the invoice; the ${quickPayNum}% is recorded as a quick-pay fee rather than left owing. Anything short by a different amount still stays open.`
+                    : 'Leave empty if there is no arrangement — then any short payment stays open, which is what you want from a broker who is simply underpaying.'}
               </div>
             </PField>
           </div>

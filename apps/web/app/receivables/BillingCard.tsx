@@ -18,7 +18,7 @@
 
 import { useEffect, useState } from 'react';
 import {
-  Mail, MapPin, StickyNote, ExternalLink, RefreshCw, Check, Loader2, Pencil, X,
+  Mail, MapPin, StickyNote, ExternalLink, RefreshCw, Check, Loader2, Pencil, X, Percent,
 } from 'lucide-react';
 import { railway } from '@/lib/railway';
 import { usePermissions } from '@/lib/usePermissions';
@@ -29,6 +29,8 @@ export interface BillingCardValues {
   invoicePortal?:  string;
   billingAddress?: string;
   billingNotes?:   string;
+  /** Fraction withheld under a quick-pay agreement (0.025 = 2.5%). */
+  quickPayRate?:   number;
 }
 
 export interface BillingCardProps {
@@ -192,6 +194,21 @@ export default function BillingCard({ customerId, values, onSaved }: BillingCard
                       ? <a href={`mailto:${values.invoiceEmail}`} className="hover:underline"
                            style={{ color: 'var(--gc-blue-text)' }}>{values.invoiceEmail}</a>
                       : <Muted>no billing email on file</Muted>)}
+              </ReadField>
+
+              {/* Read-only here; edited in the broker profile alongside the
+                  rest of the billing terms. Shown even when unset, because
+                  an unset rate on a broker who takes a discount is the
+                  thing that quietly builds an uncollectable balance. */}
+              <ReadField icon={<Percent size={12} />} label="Quick pay">
+                {values.quickPayRate != null
+                  ? <span>
+                      {+(values.quickPayRate * 100).toFixed(4)}% withheld
+                      <span style={{ color: 'var(--gc-text-3)' }}>
+                        {' · '}pays {+(100 - values.quickPayRate * 100).toFixed(4)}%
+                      </span>
+                    </span>
+                  : <Muted>no arrangement</Muted>}
               </ReadField>
 
               <ReadField icon={<MapPin size={12} />} label="Billing address">

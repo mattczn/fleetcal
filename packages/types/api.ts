@@ -822,6 +822,8 @@ export interface CreateCustomerRequest {
    *  "already exists" prompt and chose to create a separate record
    *  anyway. */
   force?:               boolean;
+  /** Fraction withheld under a quick-pay agreement (0.025 = 2.5%). */
+  quickPayRate?:        number | null;
 }
 export interface CreateCustomerResponse { customer: Customer; }
 
@@ -870,6 +872,9 @@ export interface UpdateCustomerRequest {
   invoiceEmail?:        string | null;
   invoicePortal?:       string | null;
   invoiceInstructions?: string | null;
+  /** Fraction withheld under a quick-pay agreement (0.025 = 2.5%).
+   *  Explicit null ENDS the arrangement; omitting the key leaves it. */
+  quickPayRate?:        number | null;
   billingAddress?:      string | null;
 }
 export interface UpdateCustomerResponse { customer: Customer; }
