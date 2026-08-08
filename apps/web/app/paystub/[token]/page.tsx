@@ -95,7 +95,7 @@ export default function PaystubPage() {
 
   if (loading) {
     return (
-      <main className="min-h-screen flex items-center justify-center bg-neutral-50 text-neutral-500 text-sm">
+      <main className="h-screen overflow-y-auto flex items-center justify-center bg-neutral-50 text-neutral-500 text-sm">
         Loading paystub…
       </main>
     );
@@ -103,7 +103,7 @@ export default function PaystubPage() {
 
   if (error || !paystub) {
     return (
-      <main className="min-h-screen flex items-center justify-center bg-neutral-50">
+      <main className="h-screen overflow-y-auto flex items-center justify-center bg-neutral-50">
         <div className="max-w-md text-center px-6">
           <div className="text-4xl mb-4">🔒</div>
           <h1 className="text-lg font-semibold text-neutral-900 mb-2">Paystub not available</h1>
@@ -117,7 +117,7 @@ export default function PaystubPage() {
   const superseded = paystub.supersededAt != null;
 
   return (
-    <main className="min-h-screen bg-neutral-50 py-6 px-4 md:py-10 print:py-0 print:px-0 print:bg-white">
+    <main className="h-screen overflow-y-auto bg-neutral-50 py-6 px-4 md:py-10 print:h-auto print:overflow-visible print:py-0 print:px-0 print:bg-white">
       {/* Print rules: hide the "Save as PDF" button + the footer nudge,
           and drop the page background so the paystub card fills the
           printed page without a colored margin around it. */}
