@@ -1521,6 +1521,37 @@ loads.patch("/:id", requireCapability("loads.edit"), async (c) => {
       console.error("[PATCH /v1/loads/:id] update failed:", error);
       return c.json({ error: "update_failed", detail: error.message } satisfies ApiErrorResponse, 500);
     }
+
+    // Re-point this load's invoices at the new customer.
+    //
+    // invoices.customer_id is denormalised from the load at invoice-creation
+    // time, and until now nothing re-synced it. Receivables groups by the
+    // INVOICE's customer, so correcting a mis-filed load moved the load and
+    // left its invoice behind: Curzon had invoice #11464 sitting in
+    // Lighthouse Recycling's ledger while its load read Go Lighthouse, with
+    // no way to shift it from any screen. The reported symptom is exactly
+    // that — "I changed the customer and the invoice didn't update".
+    //
+    // Void invoices are skipped. Voiding is an accounting decision that
+    // outranks a data correction, and a void invoice is expected to keep
+    // whatever it said when it was voided.
+    //
+    // Allocations need no attention: they key on invoice_id, so the money
+    // and its proofs follow the invoice automatically.
+    if ("customerId" in body) {
+      const { error: invErr } = await supabase
+        .from("invoices")
+        .update({ customer_id: (body.customerId ?? null) as never })
+        .eq("load_id", loadId)
+        .eq("org_id", orgId)
+        .neq("status", "void");
+      if (invErr) {
+        // Not fatal — the load edit succeeded and is the thing the caller
+        // asked for. Logged loudly because a silent failure here recreates
+        // the exact drift this block exists to prevent.
+        console.error("[PATCH /v1/loads/:id] invoice customer re-point failed:", invErr);
+      }
+    }
   }
 
   // Server-side APPEND — read-modify-write inside appendLoadAudit, with
