@@ -28,6 +28,7 @@ import type {
   PaymentProofSource,
   InvoicePayment,
   ReceivableInvoice,
+  FlagInvoiceRequest,
   ReceivableCustomerSummary,
   ReceivablesTotals,
   AgingBucket,
@@ -45,7 +46,7 @@ import type {
   WeeklyCollection,
   ApiErrorResponse,
 } from "@fleetcal/types";
-import { agingBucketFor, AGING_BUCKETS } from "@fleetcal/types";
+import { agingBucketFor, AGING_BUCKETS, INVOICE_FLAG_REASONS } from "@fleetcal/types";
 
 import { supabase as supabaseTyped } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
@@ -524,6 +525,11 @@ interface ReceivableInvoiceRow {
   due_at:         string | null;
   customer_id:    string | null;
   load_id:        string;
+  flagged_reason:    string | null;
+  flagged_note:      string | null;
+  flagged_at:        string | null;
+  flagged_by:        string | null;
+  promised_pay_date: string | null;
   loads?: {
     internal_load_id: number | null;
     load_num:         string | null;
@@ -625,12 +631,18 @@ function toReceivableInvoice(
     agingDays:      daysPastDue(r.due_at, today),
     paymentCount:   allocs.length,
     lastPaidOn,
+    flaggedReason:  (r.flagged_reason as ReceivableInvoice["flaggedReason"]) ?? undefined,
+    flaggedNote:    r.flagged_note ?? undefined,
+    flaggedAt:      r.flagged_at ?? undefined,
+    flaggedBy:      r.flagged_by ?? undefined,
+    promisedPayDate: r.promised_pay_date ?? undefined,
     hasProof:       allocs.some((a) => a.hasProof),
   };
 }
 
 const RECEIVABLE_INVOICE_COLS =
   "id,invoice_number,status,total,issued_at,due_at,customer_id,load_id," +
+  "flagged_reason,flagged_note,flagged_at,flagged_by,promised_pay_date," +
   "loads(internal_load_id,load_num,ref_nums,events(id,title,leg_index,start))," +
   "customers(name)";
 
@@ -1629,6 +1641,81 @@ payments.post("/parse", async (c) => {
 // identifier we never recorded — the operator still knows which load it is.
 // This searches everything a person might recognise it by, scoped to one
 // customer so the result set stays small enough to choose from.
+
+// ── follow-up flags ───────────────────────────────────────────────────
+//
+// One endpoint for flagging, editing the note, recording a promised pay
+// date, and unflagging. Every field is optional and explicit null clears
+// it, so the client never has to know which of those it is doing.
+//
+// Nothing here touches money, aging or status. A flag is an annotation: it
+// says someone is chasing this, not that the invoice is any less late. The
+// buckets are computed from due_at exactly as before, which is why a
+// promised date can be recorded without quietly deflating past-due totals.
+payments.patch("/invoices/:id/flag", async (c) => {
+  const orgId = c.get("orgId");
+  const id    = c.req.param("id");
+  const body  = await c.req.json<FlagInvoiceRequest>();
+
+  if (body.flaggedReason != null && !INVOICE_FLAG_REASONS.includes(body.flaggedReason)) {
+    return c.json({
+      error: "validation_failed",
+      errors: [`flaggedReason must be one of ${INVOICE_FLAG_REASONS.join("|")}`],
+    } satisfies ApiErrorResponse, 400);
+  }
+  if (body.promisedPayDate != null && !/^\d{4}-\d{2}-\d{2}$/.test(body.promisedPayDate)) {
+    return c.json({
+      error: "validation_failed",
+      errors: ["promisedPayDate must be YYYY-MM-DD"],
+    } satisfies ApiErrorResponse, 400);
+  }
+
+  const update: Record<string, unknown> = {};
+  if ("flaggedNote"     in body) update.flagged_note      = body.flaggedNote     ?? null;
+  if ("promisedPayDate" in body) update.promised_pay_date = body.promisedPayDate ?? null;
+  if ("flaggedReason"   in body) {
+    update.flagged_reason = body.flaggedReason ?? null;
+    // flagged_at is the "am I chasing this" switch the list keys on, so it
+    // tracks the reason rather than being set independently. Clearing the
+    // reason unflags outright, including the note — a stale note under no
+    // flag is the kind of thing that gets read months later as current.
+    if (body.flaggedReason) {
+      update.flagged_at = new Date().toISOString();
+      update.flagged_by = c.get("userId") ?? null;
+    } else {
+      update.flagged_at   = null;
+      update.flagged_by   = null;
+      update.flagged_note = null;
+    }
+  }
+  if (Object.keys(update).length === 0) {
+    return c.json({ error: "validation_failed", errors: ["no fields"] } satisfies ApiErrorResponse, 400);
+  }
+
+  const { error } = await supabase
+    .from("invoices")
+    .update(update as never)
+    .eq("id", id)
+    .eq("org_id", orgId);
+  if (error) {
+    console.error("[PATCH /v1/payments/invoices/:id/flag] failed:", error);
+    return c.json({ error: "update_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  }
+
+  const { data: row } = await supabase
+    .from("invoices")
+    .select(RECEIVABLE_INVOICE_COLS)
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (!row) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+
+  const allocs = await allocationsFor(orgId, [id]);
+  const today  = Date.parse(new Date().toISOString().slice(0, 10) + "T00:00:00Z");
+  return c.json({
+    invoice: toReceivableInvoice(row as unknown as ReceivableInvoiceRow, allocs.get(id) ?? [], today),
+  });
+});
 
 payments.get("/invoice-search", async (c) => {
   const orgId      = c.get("orgId");

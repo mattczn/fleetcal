@@ -1518,6 +1518,23 @@ export interface InvoicePayment {
  *
  *  `balance` and `agingDays` are computed server-side so every surface
  *  buckets identically. */
+/** Why an invoice is flagged for follow-up. */
+export const INVOICE_FLAG_REASONS = [
+  'awaiting_payment', 'disputed', 'short_paid', 'missing_paperwork',
+  'billing_error', 'collections', 'other',
+] as const;
+export type InvoiceFlagReason = typeof INVOICE_FLAG_REASONS[number];
+
+export const INVOICE_FLAG_LABEL: Record<InvoiceFlagReason, string> = {
+  awaiting_payment:  'Awaiting payment',
+  disputed:          'Disputed',
+  short_paid:        'Short paid',
+  missing_paperwork: 'Missing paperwork',
+  billing_error:     'Billing error',
+  collections:       'Collections',
+  other:             'Other',
+};
+
 export interface ReceivableInvoice {
   id:            string;
   invoiceNumber: string;
@@ -1561,6 +1578,20 @@ export interface ReceivableInvoice {
 
   paymentCount:  number;
   lastPaidOn?:   string;
+
+  // ── follow-up ────────────────────────────────────────────────────
+  /** Structured tag for why this is being chased. Mirrors the loads
+   *  flag vocabulary so one habit covers both. */
+  flaggedReason?: InvoiceFlagReason;
+  /** What you're waiting on, who you spoke to, what they said. */
+  flaggedNote?:   string;
+  flaggedAt?:     string;
+  flaggedBy?:     string;
+  /** Date the payer said the money would be sent. CONTEXT ONLY — never
+   *  an input to aging. A promise from someone who has not paid is not
+   *  evidence that the invoice is less late than it is, so the buckets
+   *  are unmoved and the row is merely marked. */
+  promisedPayDate?: string;
   /** False when no allocation cites a proof — someone marked it paid on
    *  trust and evidence was never attached. Surfaced in the table so
    *  unbacked claims are visible rather than indistinguishable. */

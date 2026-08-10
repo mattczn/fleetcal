@@ -71,7 +71,7 @@ import type {
   ListPaymentProofsQuery, ListPaymentProofsResponse,
   GetPaymentProofResponse,
   CreatePaymentProofRequest, CreatePaymentProofResponse,
-  ParsePaymentResponse, SearchInvoicesResponse,
+  ParsePaymentResponse, SearchInvoicesResponse, FlagInvoiceRequest, FlagInvoiceResponse,
   UpdatePaymentProofRequest, UpdatePaymentProofResponse,
   DeletePaymentProofResponse, UploadProofAttachmentResponse,
   ListInvoicePaymentsResponse,
@@ -1040,6 +1040,12 @@ class RailwayClient {
 
   listCustomers()                            { return this.req<ListCustomersResponse>('GET', '/v1/customers'); }
   createCustomer(body: CreateCustomerRequest) { return this.req<CreateCustomerResponse>('POST', '/v1/customers', body); }
+  /** Flag / unflag an invoice for follow-up, edit its note, or record a
+   *  promised pay date. Explicit null on any field clears it; sending
+   *  `flaggedReason: null` unflags outright. */
+  flagInvoice(id: string, body: FlagInvoiceRequest) {
+    return this.req<FlagInvoiceResponse>('PATCH', `/v1/payments/invoices/${id}/flag`, body);
+  }
   updateCustomer(id: string, body: UpdateCustomerRequest) {
     return this.req<UpdateCustomerResponse>('PATCH', `/v1/customers/${id}`, body);
   }

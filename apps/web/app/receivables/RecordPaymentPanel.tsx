@@ -23,12 +23,13 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { X, Paperclip, Trash2, FileText, AlertTriangle, Check } from 'lucide-react';
+import { X, Paperclip, Trash2, FileText, AlertTriangle, Check, Flag, CalendarClock } from 'lucide-react';
 import { railway } from '@/lib/railway';
 import type {
   ReceivableInvoice, InvoicePayment, PaymentProof,
-  PaymentMethod, PaymentVarianceReason, PaymentProofKind,
+  PaymentMethod, PaymentVarianceReason, PaymentProofKind, InvoiceFlagReason,
 } from '@fleetcal/types';
+import { INVOICE_FLAG_REASONS, INVOICE_FLAG_LABEL } from '@fleetcal/types';
 
 const fmtMoney = (n: number) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
@@ -93,6 +94,36 @@ export default function RecordPaymentPanel({ row, onSaved, onClose }: RecordPaym
   // rather than synced by an effect, so it re-suggests automatically as
   // the amount changes and stops the moment the operator picks one.
   const [reason,    setReason]    = useState<PaymentVarianceReason | ''>('');
+
+  // ── Follow-up ─────────────────────────────────────────────────────
+  // Separate from the payment form on purpose: flagging is what you do
+  // when money has NOT arrived, and making it share a Save button with
+  // "record a payment" would mean picking an amount to say "still chasing".
+  const [flagReason,  setFlagReason]  = useState<InvoiceFlagReason | ''>(row.flaggedReason ?? '');
+  const [flagNote,    setFlagNote]    = useState(row.flaggedNote ?? '');
+  const [promisedOn,  setPromisedOn]  = useState(row.promisedPayDate ?? '');
+  const [flagBusy,    setFlagBusy]    = useState(false);
+
+  const flagDirty =
+    (flagReason || '') !== (row.flaggedReason ?? '') ||
+    flagNote.trim()    !== (row.flaggedNote ?? '') ||
+    (promisedOn || '') !== (row.promisedPayDate ?? '');
+
+  async function saveFlag() {
+    setFlagBusy(true); setErr(null);
+    try {
+      await railway.flagInvoice(row.id, {
+        flaggedReason:   flagReason || null,
+        flaggedNote:     flagReason ? (flagNote.trim() || null) : null,
+        promisedPayDate: promisedOn || null,
+      });
+      onSaved();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Could not save the follow-up');
+    } finally {
+      setFlagBusy(false);
+    }
+  }
 
   // ── Proof selection ───────────────────────────────────────────────
   // 'none' = record without evidence; 'existing' = apply an unapplied
@@ -348,6 +379,66 @@ export default function RecordPaymentPanel({ row, onSaved, onClose }: RecordPaym
           )}
 
           {/* Record form */}
+          {/* ── Follow-up ────────────────────────────────────────────
+              Sits ABOVE "record a payment" because when you open this
+              drawer on an overdue invoice, the likeliest reason is that
+              the money has NOT arrived and you want to note why.
+
+              A promised date does NOT change the aging. The 31+ bucket
+              keeps meaning "31+ days late" rather than "…except the ones
+              someone said they'd pay" — a promise from a party who has
+              already not paid is context, not evidence. */}
+          <SectionLabel>Follow-up</SectionLabel>
+          <div className="rounded-lg border p-3 mb-4"
+               style={{
+                 borderColor: row.flaggedAt ? '#f6aea9' : 'var(--gc-border)',
+                 background:  row.flaggedAt ? '#fef7f7' : undefined,
+               }}>
+            <div className="flex items-center gap-1.5 mb-2">
+              <Flag size={12} style={{ color: flagReason ? '#c5221f' : 'var(--gc-text-3)' }} />
+              <select value={flagReason} disabled={flagBusy}
+                      onChange={e => setFlagReason(e.target.value as InvoiceFlagReason | '')}
+                      style={{ ...inputStyle, flex: 1 }}>
+                <option value="">Not flagged</option>
+                {INVOICE_FLAG_REASONS.map(r => (
+                  <option key={r} value={r}>{INVOICE_FLAG_LABEL[r]}</option>
+                ))}
+              </select>
+            </div>
+
+            {flagReason && (
+              <input value={flagNote} disabled={flagBusy}
+                     onChange={e => setFlagNote(e.target.value)}
+                     placeholder="What are you waiting on? Who did you speak to?"
+                     style={{ ...inputStyle, width: '100%', marginBottom: 8 }} />
+            )}
+
+            <div className="flex items-center gap-2">
+              <CalendarClock size={12} style={{ color: 'var(--gc-text-3)' }} className="shrink-0" />
+              <span className="text-[11px] shrink-0" style={{ color: 'var(--gc-text-2)' }}>
+                Payment promised
+              </span>
+              <input type="date" value={promisedOn} disabled={flagBusy}
+                     onChange={e => setPromisedOn(e.target.value)}
+                     style={{ ...inputStyle, flex: 1 }} />
+            </div>
+
+            {row.flaggedAt && (
+              <div className="text-[10.5px] mt-2" style={{ color: 'var(--gc-text-3)' }}>
+                Flagged {new Date(row.flaggedAt).toLocaleDateString([], { month: 'short', day: '2-digit', year: '2-digit' })}
+                {row.flaggedBy ? ` · ${row.flaggedBy}` : ''}
+              </div>
+            )}
+
+            {flagDirty && (
+              <button onClick={() => { void saveFlag(); }} disabled={flagBusy}
+                      className="mt-2.5 text-[11.5px] font-semibold px-3 py-1.5 rounded w-full"
+                      style={{ background: '#1a73e8', color: '#fff', cursor: 'pointer' }}>
+                {flagBusy ? 'Saving…' : flagReason || promisedOn ? 'Save follow-up' : 'Clear follow-up'}
+              </button>
+            )}
+          </div>
+
           <SectionLabel>Record a payment</SectionLabel>
           <div className="grid grid-cols-2 gap-2 mb-2">
             <Field label={`Amount (blank = ${fmtMoney(balance)})`}>

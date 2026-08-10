@@ -1527,7 +1527,7 @@ export type { InvoiceStatus };
 
 import type {
   PaymentProof, PaymentProofKind, PaymentProofSource, PaymentMethod,
-  PaymentVarianceReason, InvoicePayment, ReceivableInvoice,
+  PaymentVarianceReason, InvoicePayment, ReceivableInvoice, InvoiceFlagReason,
   ReceivableCustomerSummary, AgingBucket, CustomerReceivables, WeeklyCollection,
 } from './domain';
 
@@ -1611,6 +1611,18 @@ export interface InvoiceSearchResult {
 }
 
 export interface SearchInvoicesResponse { invoices: InvoiceSearchResult[]; }
+
+// ── PATCH /v1/payments/invoices/:id/flag ────────────────────────────────
+//
+// Every field is optional and explicit null CLEARS it, so one endpoint
+// covers flagging, editing the note, recording a promised date, and
+// unflagging entirely. Sending `flaggedReason: null` unflags.
+export interface FlagInvoiceRequest {
+  flaggedReason?:   InvoiceFlagReason | null;
+  flaggedNote?:     string | null;
+  promisedPayDate?: string | null;
+}
+export interface FlagInvoiceResponse { invoice: ReceivableInvoice; }
 
 export interface ParsedPaymentLine {
   rowIndex:           number;
@@ -1846,7 +1858,7 @@ export interface GetCustomerReceivablesResponse {
 
 export type {
   PaymentProof, PaymentProofKind, PaymentProofSource, PaymentMethod,
-  PaymentVarianceReason, InvoicePayment, ReceivableInvoice,
+  PaymentVarianceReason, InvoicePayment, ReceivableInvoice, InvoiceFlagReason,
   ReceivableCustomerSummary, AgingBucket, CustomerReceivables, WeeklyCollection,
 };
 

@@ -23,7 +23,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { useOrganization } from '@clerk/nextjs';
 import {
   HandCoins, Mail, Phone, Truck, ArrowRightLeft, Download, ChevronLeft,
-  UserRound, Check, Paperclip,
+  UserRound, Check, Paperclip, Flag, CalendarClock,
 } from 'lucide-react';
 import RequireCap from '@/components/auth/RequireCap';
 import AppShell from '@/components/nav/AppShell';
@@ -41,7 +41,7 @@ import { useCalendarStore } from '@/store/useCalendarStore';
 import { downloadStatement } from '../statement';
 import { railway } from '@/lib/railway';
 import type { CustomerReceivables, ReceivableInvoice, AgingBucket } from '@fleetcal/types';
-import { AGING_BUCKETS, AGING_BUCKET_LABEL, agingBucketFor } from '@fleetcal/types';
+import { AGING_BUCKETS, AGING_BUCKET_LABEL, agingBucketFor, INVOICE_FLAG_LABEL } from '@fleetcal/types';
 
 const money0 = (n: number) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);
@@ -102,6 +102,9 @@ function CustomerViewInner() {
   const [profileOpen,   setProfileOpen]   = useState(false);
   const [selected,      setSelected]      = useState<Set<string>>(new Set());
   const [bulkOpen,      setBulkOpen]      = useState(false);
+  /** Narrows the list to what's being chased. A view, not a scope — it
+   *  filters rows already fetched and never touches the aging totals. */
+  const [onlyFollowUp,  setOnlyFollowUp]  = useState(false);
   // Scrolling the invoice list collapses the blocks above it. Hysteresis
   // (40 down / 8 up) rather than a single threshold, so a row sitting
   // near the boundary doesn't flicker the whole header on every wheel
@@ -130,13 +133,22 @@ function CustomerViewInner() {
   }, [search]);
 
   const invoices = useMemo(() => {
-    const all = data?.invoices ?? [];
+    let all = data?.invoices ?? [];
+    if (onlyFollowUp) all = all.filter(i => i.flaggedReason || i.promisedPayDate);
     if (!term) return all;
     return all.filter(i =>
       i.invoiceNumber.toLowerCase().includes(term) ||
       (i.loadNum ?? '').toLowerCase().includes(term) ||
-      (i.title ?? '').toLowerCase().includes(term));
-  }, [data, term]);
+      (i.title ?? '').toLowerCase().includes(term) ||
+      (i.flaggedNote ?? '').toLowerCase().includes(term));
+  }, [data, term, onlyFollowUp]);
+
+  /** Counted off the UNFILTERED set, so the badge doesn't drop to zero the
+   *  moment you filter by it. */
+  const followUpCount = useMemo(
+    () => (data?.invoices ?? []).filter(i => i.flaggedReason || i.promisedPayDate).length,
+    [data],
+  );
 
   /** Grouping only applies to Open — Paid and All are read
    *  chronologically, where an aging bucket means nothing. */
@@ -446,6 +458,18 @@ function CustomerViewInner() {
                 borderRadius: 8, fontSize: 12, color: 'var(--gc-text-1)', outline: 'none',
                 background: 'var(--gc-surface)',
               }} />
+            {followUpCount > 0 && (
+              <button onClick={() => setOnlyFollowUp(v => !v)}
+                className="inline-flex items-center gap-1.5 shrink-0"
+                style={{
+                  height: 30, padding: '0 10px', borderRadius: 8, fontSize: 12, fontWeight: 700,
+                  border: `1px solid ${onlyFollowUp ? '#c5221f' : 'var(--gc-border)'}`,
+                  background: onlyFollowUp ? '#fce8e6' : 'var(--gc-surface)',
+                  color:      onlyFollowUp ? '#c5221f' : 'var(--gc-text-2)',
+                }}>
+                <Flag size={12} /> Following up {followUpCount}
+              </button>
+            )}
             <div className="flex" style={{ height: 30, border: '1px solid var(--gc-border)', borderRadius: 8, overflow: 'hidden' }}>
               {(['open', 'paid', 'all'] as Scope[]).map(s => (
                 <button key={s}
@@ -700,13 +724,40 @@ function InvoiceRow({ inv, onOpenPayments, onOpenLoad, selected, onToggle }: {
           ? <CopyableLoadNum value={inv.loadNum} />
           : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
       </span>
+      {/* Title + follow-up markers share one grid cell. The markers do NOT
+          get a column of their own: most rows have neither, and a column
+          that is empty 95% of the time costs every row width for a few. */}
+      <span className="flex items-center gap-1.5 min-w-0">
       <button type="button"
         onClick={e => { e.stopPropagation(); if (inv.pickupEventId) onOpenLoad(inv); }}
         className="text-left font-semibold hover:underline truncate"
-        style={{ color: 'var(--gc-blue)', maxWidth: '100%' }}
+        style={{ color: 'var(--gc-blue)', minWidth: 0 }}
         title="Open load details">
         {inv.title ?? (inv.internalLoadId != null ? `#${inv.internalLoadId}` : '—')}
       </button>
+      <span className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
+        {inv.flaggedReason && (
+          <Tooltip content={inv.flaggedNote || INVOICE_FLAG_LABEL[inv.flaggedReason]} placement="top">
+            <span className="inline-flex items-center gap-1 rounded px-1.5 shrink-0"
+                  style={{ height: 18, fontSize: 10, fontWeight: 800,
+                           background: '#fce8e6', color: '#c5221f', border: '1px solid #f6aea9' }}>
+              <Flag size={9} /> {INVOICE_FLAG_LABEL[inv.flaggedReason]}
+            </span>
+          </Tooltip>
+        )}
+        {inv.promisedPayDate && (
+          <Tooltip
+            content={`Payer said this would be sent ${shortDate(inv.promisedPayDate)}. Aging is unaffected.`}
+            placement="top">
+            <span className="inline-flex items-center gap-1 rounded px-1.5 shrink-0"
+                  style={{ height: 18, fontSize: 10, fontWeight: 800,
+                           background: '#e8f0fe', color: '#1558d6', border: '1px solid #c6dafc' }}>
+              <CalendarClock size={9} /> {shortDate(inv.promisedPayDate)}
+            </span>
+          </Tooltip>
+        )}
+      </span>
+      </span>
       <span style={{ color: 'var(--gc-text-3)' }}>{inv.pickupAt ? shortDate(inv.pickupAt) : '—'}</span>
       <span style={{ color: 'var(--gc-text-3)' }}>{shortDate(inv.issuedAt)}</span>
       <span style={{ color: 'var(--gc-text-3)' }}>{inv.dueAt ? shortDate(inv.dueAt) : '—'}</span>
