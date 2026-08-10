@@ -1412,6 +1412,28 @@ loads.patch("/:id", requireCapability("loads.edit"), async (c) => {
   if ("loadNum"      in body) update.load_num       = body.loadNum      ?? null;
   if ("broker"       in body) update.broker         = body.broker       ?? null;
   if ("customerId"   in body) update.customer_id    = body.customerId   ?? null;
+  // `broker` is free text that predates customer_id and has been allowed to
+  // disagree with the customer it is linked to. On Curzon that produced 695
+  // loads whose printed broker didn't match their link — 672 harmless
+  // spelling variants ("Uber Freight" vs "Uber Freight LLC") and 17 that
+  // named a genuinely different company, worth $30,806. The 15 reading "PT"
+  // were linked to Titan Concepts while PT Brokers existed as its own
+  // customer all along.
+  //
+  // A link and a label for the same fact will always drift when both are
+  // writable, so the label stops being independently writable: whenever a
+  // load is linked to a customer, the text is taken FROM that customer.
+  // Unlinked loads keep their free text — that is the case it exists for.
+  if (body.customerId) {
+    const { data: cust } = await supabase
+      .from("customers")
+      .select("name")
+      .eq("id", body.customerId)
+      .eq("org_id", orgId)
+      .maybeSingle();
+    const nm = (cust as { name?: string } | null)?.name;
+    if (nm) update.broker = nm;
+  }
   if ("dispatcher"   in body) update.dispatcher     = body.dispatcher   ?? null;
   if ("loadPrice"    in body) update.load_price     = body.loadPrice    ?? null;
   if ("commodity"    in body) update.commodity      = body.commodity    ?? null;
