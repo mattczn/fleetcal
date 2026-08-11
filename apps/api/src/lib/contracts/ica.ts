@@ -14,7 +14,7 @@
  * version they were signed under, so a revision never rewrites history.
  */
 
-export const TEMPLATE_VERSION = 1;
+export const TEMPLATE_VERSION = 2;
 
 export type Block =
   | { type: "h1"; text: string }
@@ -616,9 +616,127 @@ const EXHIBIT_A_BLOCKS: Block[] = [
   { type: "signature", party: "contractor" },
 ];
 
+/**
+ * Exhibit B — the FMCSA drug & alcohol policy acknowledgment.
+ *
+ * Condensed from Curzon's full DOT Drug & Alcohol Program into the
+ * driver-facing acknowledgment, and folded into the signing packet rather
+ * than chased separately: it's a condition of the contract, so it belongs on
+ * the same signature as the contract.
+ *
+ * Verbatim from the source document. The prose lists there are broken into
+ * bullets here — a driver reading this on a phone shouldn't have to parse six
+ * testing categories out of one semicolon-separated sentence — but no wording
+ * is changed. This is a regulatory acknowledgment; paraphrasing it would
+ * weaken what they're attesting to.
+ */
+const EXHIBIT_B_BLOCKS: Block[] = [
+  { type: "h1", text: "DRIVER DRUG & ALCOHOL POLICY ACKNOWLEDGMENT" },
+
+  { type: "h2", text: "Purpose" },
+  {
+    type: "p",
+    text:
+      "Curzon Trucking LLC is committed to operating safely and in compliance with FMCSA regulations (49 CFR Parts 40 and 382). All CDL drivers performing safety-sensitive functions must comply with this policy.",
+  },
+
+  { type: "h2", text: "Who Is Covered" },
+  {
+    type: "p",
+    text:
+      "All applicants, company drivers, leased drivers, and owner-operators performing safety-sensitive functions for Curzon Trucking.",
+  },
+
+  { type: "h2", text: "Required DOT Tests" },
+  { type: "p", text: "Drivers are subject to:" },
+  {
+    type: "ul",
+    items: [
+      "Pre-employment drug testing",
+      "Random drug and alcohol testing",
+      "Reasonable suspicion testing",
+      "Post-accident testing when required by FMCSA",
+      "Return-to-duty testing",
+      "Follow-up testing after a DOT violation",
+    ],
+  },
+
+  { type: "h2", text: "Driver Responsibilities" },
+  {
+    type: "ul",
+    items: [
+      "Report immediately when notified for testing",
+      "Cooperate fully",
+      "Provide truthful information",
+      "Notify the company of any medication that could affect safe driving when requested by the Medical Review Officer",
+      "Never report for duty impaired",
+    ],
+  },
+
+  { type: "h2", text: "Prohibited Conduct" },
+  {
+    type: "ul",
+    items: [
+      "Using or possessing illegal controlled substances while on duty or on company property",
+      "Reporting for duty with prohibited alcohol concentration",
+      "Using alcohol within 4 hours before performing safety-sensitive duties",
+      "Using alcohol within 8 hours following a qualifying accident before testing",
+      "Refusing a required DOT drug or alcohol test",
+      "Tampering with or adulterating a specimen",
+    ],
+  },
+
+  { type: "h2", text: "Prescription Medications" },
+  {
+    type: "p",
+    text:
+      "Drivers must use medications only as prescribed. A valid prescription does not automatically permit a driver to operate a CMV if the medication impairs safe driving.",
+  },
+
+  { type: "h2", text: "Medical Marijuana" },
+  {
+    type: "p",
+    text:
+      "Marijuana remains prohibited under DOT regulations regardless of state law or a medical marijuana card.",
+  },
+
+  { type: "h2", text: "Consequences" },
+  {
+    type: "p",
+    text:
+      "Any verified DOT violation will result in **immediate removal from safety-sensitive duties**. Return to duty requires successful completion of the DOT Substance Abuse Professional (SAP) process and all FMCSA requirements. Curzon Trucking may impose additional employment action, up to and including termination or contract cancellation, consistent with applicable law and company policy.",
+  },
+
+  { type: "h2", text: "Confidentiality" },
+  {
+    type: "p",
+    text: "Test results and records will be maintained confidentially as required by law.",
+  },
+
+  { type: "rule" },
+
+  { type: "h2", text: "Driver Acknowledgment" },
+  {
+    type: "p",
+    text:
+      "I acknowledge that I have received, read, and understand the Curzon Trucking Driver Drug & Alcohol Policy. I understand that compliance with this policy and applicable FMCSA regulations is a condition of my employment or contract. I agree to submit to all required DOT drug and alcohol tests and understand the consequences of refusing a test or violating this policy.",
+  },
+  { type: "fieldline", label: "Driver Name:", value: "{{contractorName}}" },
+  { type: "fieldline", label: "Date:", value: "{{effectiveDate}}" },
+  { type: "rule" },
+  { type: "signature", party: "contractor" },
+  { type: "signature", party: "company" },
+  {
+    type: "p",
+    text:
+      "This policy is adapted from an FMCSA-compliant Drug & Alcohol Plan prepared under 49 CFR Parts 40 and 382 and condensed into a driver-facing acknowledgment for onboarding. It is intended to accompany the company's complete DOT Drug & Alcohol Program.",
+  },
+];
+
 export const ICA_DOCUMENTS: ContractDocument[] = [
   { key: "ica", title: "Independent Contractor Agreement", blocks: ICA_BLOCKS },
   { key: "exhibit-a", title: "Exhibit A – Safety Bonus Addendum (2026)", blocks: EXHIBIT_A_BLOCKS },
+  { key: "exhibit-b", title: "Exhibit B – Driver Drug & Alcohol Policy Acknowledgment", blocks: EXHIBIT_B_BLOCKS },
 ];
 
 /** Substitutes the per-driver values into a copy of the blocks. */
