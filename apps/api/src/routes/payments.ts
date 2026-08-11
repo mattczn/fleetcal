@@ -51,7 +51,7 @@ import { agingBucketFor, AGING_BUCKETS, INVOICE_FLAG_REASONS } from "@fleetcal/t
 import { supabase as supabaseTyped } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability, requireModule } from "../middleware/require.js";
-import { appliedByProof, round2 } from "../lib/invoicePayments.js";
+import { appliedByProof, round2, recomputeInvoicePaid } from "../lib/invoicePayments.js";
 import { fetchAllRows } from "../lib/fetchAllRows.js";
 import { extractRemittance } from "../lib/remittanceExtractor.js";
 import {
@@ -1714,6 +1714,114 @@ payments.patch("/invoices/:id/flag", async (c) => {
   const today  = Date.parse(new Date().toISOString().slice(0, 10) + "T00:00:00Z");
   return c.json({
     invoice: toReceivableInvoice(row as unknown as ReceivableInvoiceRow, allocs.get(id) ?? [], today),
+  });
+});
+
+// ── settle a quick-pay backlog ────────────────────────────────────────
+//
+// Closes every open invoice for one customer whose shortfall is exactly
+// their recorded quick-pay rate, by stamping variance_reason on the
+// allocation the fee was taken from.
+//
+// This exists because the rule alone was not enough. quick_pay_rate governs
+// what happens when a payment is APPLIED — but a carrier discovers the
+// agreement by noticing a pile of invoices stuck at 98%, and those are
+// already applied. Without this, every newly-recognised quick-pay customer
+// needed a hand-written script, which makes the author the bottleneck for a
+// thing the operator can see perfectly well on their own screen.
+//
+// Only invoices matching the rate to within two cents. A shortfall that is
+// something else — a deduction, a genuine short pay — is left open on
+// purpose, because that is the whole reason this is a rate and not a
+// tolerance.
+//
+// Dollars are never altered: paid_amount stays what the customer sent and
+// the fee stays visible as the gap to total. Nothing is written off.
+payments.post("/customers/:customerId/settle-quick-pay", async (c) => {
+  const orgId      = c.get("orgId");
+  const customerId = c.req.param("customerId");
+
+  const { data: cust } = await supabase
+    .from("customers")
+    .select("id,name,quick_pay_rate")
+    .eq("id", customerId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  const row = cust as { name?: string; quick_pay_rate?: string | number | null } | null;
+  if (!row) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+
+  const rate = row.quick_pay_rate == null ? null : Number(row.quick_pay_rate);
+  if (!rate || !Number.isFinite(rate) || rate <= 0) {
+    return c.json({
+      error: "validation_failed",
+      errors: ["This customer has no quick-pay rate. Set one on their profile first."],
+    } satisfies ApiErrorResponse, 400);
+  }
+
+  const { data: invRows, error: invErr } = await supabase
+    .from("invoices")
+    .select("id,invoice_number,total,paid_amount")
+    .eq("org_id", orgId)
+    .eq("customer_id", customerId)
+    .in("status", ["draft", "sent"]);
+  if (invErr) {
+    console.error("[settle-quick-pay] invoice fetch failed:", invErr);
+    return c.json({ error: "fetch_failed", detail: invErr.message } satisfies ApiErrorResponse, 500);
+  }
+
+  const eligible = ((invRows ?? []) as Array<{
+    id: string; invoice_number: string; total: number | null; paid_amount: number | null;
+  }>).filter((i) => {
+    const total = Number(i.total ?? 0);
+    const paid  = Number(i.paid_amount ?? 0);
+    if (total <= 0 || paid <= 0 || paid >= total - 0.005) return false;
+    return Math.abs(paid - round2(total * (1 - rate))) <= 0.02;
+  });
+
+  let settled = 0, feeRecognised = 0;
+  for (const inv of eligible) {
+    // The reason goes on the LARGEST allocation — for an invoice settled by
+    // one payment that IS the payment, and for one settled by several it is
+    // the one the fee came out of.
+    const { data: allocs } = await supabase
+      .from("invoice_payments")
+      .select("id,amount,variance_reason")
+      .eq("org_id", orgId)
+      .eq("invoice_id", inv.id)
+      .order("amount", { ascending: false })
+      .limit(1);
+    const target = (allocs ?? [])[0] as { id: string; variance_reason: string | null } | undefined;
+    if (!target || target.variance_reason) continue;
+
+    const { error: upErr } = await supabase
+      .from("invoice_payments")
+      .update({ variance_reason: "quick_pay" } as never)
+      .eq("id", target.id)
+      .eq("org_id", orgId);
+    if (upErr) {
+      console.error("[settle-quick-pay] tag failed for", inv.invoice_number, upErr);
+      continue;
+    }
+    // The single writer closes the invoice — this endpoint never touches
+    // invoices.status itself, so there is still exactly one implementation
+    // of what "settled" means.
+    await recomputeInvoicePaid(inv.id, orgId);
+    settled += 1;
+    feeRecognised += round2(Number(inv.total ?? 0) - Number(inv.paid_amount ?? 0));
+  }
+
+  return c.json({
+    customerName:  row.name ?? "",
+    rate,
+    settled,
+    feeRecognised: round2(feeRecognised),
+    // Open invoices still carrying a balance that ISN'T the agreed rate.
+    // Reported so closing the batch doesn't read as "everything is clean".
+    leftOpen: ((invRows ?? []) as Array<{ total: number | null; paid_amount: number | null }>)
+      .filter((i) => {
+        const t = Number(i.total ?? 0), p = Number(i.paid_amount ?? 0);
+        return t > 0 && p > 0 && p < t - 0.005;
+      }).length - settled,
   });
 });
 

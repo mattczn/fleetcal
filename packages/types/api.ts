@@ -1624,6 +1624,20 @@ export interface FlagInvoiceRequest {
 }
 export interface FlagInvoiceResponse { invoice: ReceivableInvoice; }
 
+// ── POST /v1/payments/customers/:customerId/settle-quick-pay ────────────
+export interface SettleQuickPayResponse {
+  customerName:  string;
+  /** The rate applied, as a fraction. */
+  rate:          number;
+  /** Invoices closed. */
+  settled:       number;
+  /** Total recognised as quick-pay fee rather than left owing. */
+  feeRecognised: number;
+  /** Still short by something that ISN'T the agreed rate — reported so a
+   *  clean run doesn't read as "everything is settled". */
+  leftOpen:      number;
+}
+
 export interface ParsedPaymentLine {
   rowIndex:           number;
   /** Verbatim from the document — not normalized. */

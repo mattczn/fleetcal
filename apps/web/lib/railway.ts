@@ -72,6 +72,7 @@ import type {
   GetPaymentProofResponse,
   CreatePaymentProofRequest, CreatePaymentProofResponse,
   ParsePaymentResponse, SearchInvoicesResponse, FlagInvoiceRequest, FlagInvoiceResponse,
+  SettleQuickPayResponse,
   UpdatePaymentProofRequest, UpdatePaymentProofResponse,
   DeletePaymentProofResponse, UploadProofAttachmentResponse,
   ListInvoicePaymentsResponse,
@@ -1045,6 +1046,12 @@ class RailwayClient {
    *  `flaggedReason: null` unflags outright. */
   flagInvoice(id: string, body: FlagInvoiceRequest) {
     return this.req<FlagInvoiceResponse>('PATCH', `/v1/payments/invoices/${id}/flag`, body);
+  }
+  /** Close every open invoice for this customer whose shortfall is exactly
+   *  their recorded quick-pay rate. No-op without a rate on the profile. */
+  settleQuickPay(customerId: string) {
+    return this.req<SettleQuickPayResponse>(
+      'POST', `/v1/payments/customers/${customerId}/settle-quick-pay`, {});
   }
   updateCustomer(id: string, body: UpdateCustomerRequest) {
     return this.req<UpdateCustomerResponse>('PATCH', `/v1/customers/${id}`, body);

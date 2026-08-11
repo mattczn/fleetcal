@@ -23,7 +23,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { useOrganization } from '@clerk/nextjs';
 import {
   HandCoins, Mail, Phone, Truck, ArrowRightLeft, Download, ChevronLeft,
-  UserRound, Check, Paperclip, Flag, CalendarClock,
+  UserRound, Check, Paperclip, Flag, CalendarClock, X,
 } from 'lucide-react';
 import RequireCap from '@/components/auth/RequireCap';
 import AppShell from '@/components/nav/AppShell';
@@ -105,6 +105,37 @@ function CustomerViewInner() {
   /** Narrows the list to what's being chased. A view, not a scope — it
    *  filters rows already fetched and never touches the aging totals. */
   const [onlyFollowUp,  setOnlyFollowUp]  = useState(false);
+  const [qpBusy,        setQpBusy]        = useState(false);
+  const [qpMsg,         setQpMsg]         = useState<string | null>(null);
+
+  /** Close the invoices this customer's quick-pay agreement already
+   *  settled. The rate governs new payments; this is for the pile that was
+   *  applied before anyone noticed the agreement existed. */
+  async function settleQuickPay() {
+    setQpBusy(true); setQpMsg(null);
+    try {
+      const r = await railway.settleQuickPay(customerId);
+      setQpMsg(r.settled === 0
+        ? 'Nothing matched the quick-pay rate exactly — those balances are something else.'
+        : `Closed ${r.settled} invoice${r.settled === 1 ? '' : 's'} · ${money2(r.feeRecognised)} recorded as quick-pay fee`
+          + (r.leftOpen > 0 ? ` · ${r.leftOpen} still short by a different amount` : ''));
+      await load();
+    } catch (e) {
+      setQpMsg(e instanceof Error ? e.message : 'Could not settle');
+    } finally { setQpBusy(false); }
+  }
+
+  /** Open invoices short by exactly the recorded rate — what the button
+   *  would close. Computed here so the button can state its own size and
+   *  can hide entirely when there is nothing to do. */
+  const qpEligible = useMemo(() => {
+    const rate = data?.quickPayRate;
+    if (!rate) return 0;
+    return (data?.invoices ?? []).filter(i => {
+      if (i.total <= 0 || i.paidAmount <= 0 || i.paidAmount >= i.total - 0.005) return false;
+      return Math.abs(i.paidAmount - Math.round(i.total * (1 - rate) * 100) / 100) <= 0.02;
+    }).length;
+  }, [data]);
   // Scrolling the invoice list collapses the blocks above it. Hysteresis
   // (40 down / 8 up) rather than a single threshold, so a row sitting
   // near the boundary doesn't flicker the whole header on every wheel
@@ -458,6 +489,19 @@ function CustomerViewInner() {
                 borderRadius: 8, fontSize: 12, color: 'var(--gc-text-1)', outline: 'none',
                 background: 'var(--gc-surface)',
               }} />
+            {qpEligible > 0 && (
+              <button onClick={() => { void settleQuickPay(); }} disabled={qpBusy}
+                className="inline-flex items-center gap-1.5 shrink-0"
+                title={`These are short by exactly ${+((data?.quickPayRate ?? 0) * 100).toFixed(4)}%, the agreed quick-pay rate. Closing records the difference as a fee — no money is written off.`}
+                style={{
+                  height: 30, padding: '0 10px', borderRadius: 8, fontSize: 12, fontWeight: 700,
+                  border: '1px solid #86efac', background: '#dcfce7', color: '#15803d',
+                  cursor: qpBusy ? 'default' : 'pointer',
+                }}>
+                <Check size={12} />
+                {qpBusy ? 'Closing…' : `Close ${qpEligible} at quick pay`}
+              </button>
+            )}
             {followUpCount > 0 && (
               <button onClick={() => setOnlyFollowUp(v => !v)}
                 className="inline-flex items-center gap-1.5 shrink-0"
@@ -485,6 +529,19 @@ function CustomerViewInner() {
               ))}
             </div>
           </div>
+
+          {qpMsg && (
+            <div className="flex items-center gap-2" style={{
+              flex: 'none', padding: '8px 14px', fontSize: 12,
+              background: '#e6f4ea', color: '#137333',
+              borderBottom: '1px solid var(--gc-border-light)',
+            }}>
+              <Check size={13} /> {qpMsg}
+              <button onClick={() => setQpMsg(null)} className="ml-auto" style={{ color: '#137333' }}>
+                <X size={13} />
+              </button>
+            </div>
+          )}
 
           <div style={{
             display: 'grid', gridTemplateColumns: GRID, gap: 10, padding: '0 14px',
