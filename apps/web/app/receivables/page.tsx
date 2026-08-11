@@ -43,6 +43,7 @@ import { useCalendarStore } from '@/store/useCalendarStore';
 import { railway } from '@/lib/railway';
 import RecordPaymentPanel from './RecordPaymentPanel';
 import BulkPaymentPanel from './BulkPaymentPanel';
+import BulkFlagButton from './BulkFlagButton';
 import ApplyPaymentPanel from './ApplyPaymentPanel';
 import type {
   ReceivableInvoice, ReceivableCustomerSummary, ReceivablesTotals, AgingBucket,
@@ -947,6 +948,10 @@ function ReceivablesPageInner() {
                     style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--gc-text-3)' }}>
               Clear
             </button>
+            {/* Chasing is a per-CUSTOMER act — you ring a broker about the
+                four they haven't paid, not about one. */}
+            <BulkFlagButton invoiceIds={[...selected]} direction="up"
+                            onDone={() => { setSelected(new Set()); void load(); }} />
             <button onClick={() => setBulkOpen(true)}
                     className="inline-flex items-center gap-1.5"
                     style={{

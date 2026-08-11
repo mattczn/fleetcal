@@ -31,6 +31,7 @@ import DataLoader from '@/components/DataLoader';
 import EventModal from '@/components/calendar/EventModal';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 import BulkPaymentPanel from '../BulkPaymentPanel';
+import BulkFlagButton from '../BulkFlagButton';
 import RecordPaymentPanel from '../RecordPaymentPanel';
 import ApplyPaymentPanel from '../ApplyPaymentPanel';
 import BillingCard from '../BillingCard';
@@ -649,6 +650,12 @@ function CustomerViewInner() {
               {money0(invoices.reduce((s, i) => s + i.balance, 0))} outstanding
               {collected > 0 ? ` · ${money0(collected)} collected against them so far` : ''}
             </span>
+            {selected.size > 0 && (
+              <span style={{ marginLeft: 14 }}>
+                <BulkFlagButton invoiceIds={[...selected]} direction="up"
+                                onDone={() => { setSelected(new Set()); void load(); }} />
+              </span>
+            )}
             {selected.size > 0 && (
               <button onClick={() => setBulkOpen(true)}
                 className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors inline-flex items-center gap-1.5"
