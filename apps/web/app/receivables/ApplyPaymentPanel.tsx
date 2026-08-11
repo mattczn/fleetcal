@@ -425,6 +425,37 @@ export default function ApplyPaymentPanel({
    *  statement than "the invoice is settled", and the one worth saying out
    *  loud, because it means re-applying would literally double the figure. */
   const repeats = useMemo(() => lines.filter(l => l.alreadyOnInvoice), [lines]);
+
+  /**
+   * Charges that DON'T fit the invoice they were grouped onto.
+   *
+   * Grouping several document lines into one allocation is right when they
+   * are a breakdown of one load — Uber's Linehaul $580 + Lumper $95 on a
+   * $675 invoice. It is catastrophic when two DIFFERENT loads resolve to the
+   * same invoice, because the sum is then written as one payment: an RXO
+   * document put $1,250 + $1,250 onto a $1,250 invoice and paid it twice.
+   *
+   * The two cases look identical except for one thing I failed to check —
+   * a real breakdown FITS. If the group sums past what the invoice still
+   * owes, it isn't a breakdown, and the right move is to refuse rather than
+   * guess which line belongs.
+   */
+  const overfilled = useMemo(() => {
+    const by = new Map<string, ParsedPaymentLine[]>();
+    for (const l of included) {
+      const list = by.get(l.invoiceId!) ?? [];
+      list.push(l);
+      by.set(l.invoiceId!, list);
+    }
+    return [...by.entries()]
+      .filter(([, g]) => g.length > 1)
+      .map(([invoiceId, g]) => {
+        const sum = Math.round(g.reduce((s, x) => s + x.amount, 0) * 100) / 100;
+        const owed = Math.round(((g[0].invoiceTotal ?? 0) - (g[0].invoicePaid ?? 0)) * 100) / 100;
+        return { invoiceId, group: g, sum, owed, over: Math.round((sum - owed) * 100) / 100 };
+      })
+      .filter(x => x.owed > 0 && x.over > 0.005);
+  }, [included]);
   /** …and the ones ticked back on anyway, which is a deliberate re-credit. */
   const repeatsTicked = useMemo(
     () => repeats.filter(l => !skip.has(l.rowIndex)).length,
@@ -444,7 +475,7 @@ export default function ApplyPaymentPanel({
 
   const totalsFailed = parsed?.totals ? !parsed.totals.ok : false;
   const canApply  = !!parsed?.isRemittance && !totalsFailed && included.length > 0
-                    && !!effectiveDate && !busy;
+                    && !!effectiveDate && !busy && overfilled.length === 0;
   // Attaching creates a proof too, so it needs the date just as much as
   // applying does. Without this it posted occurredOn: '' and the server
   // rejected it — correctly, and unhelpfully.
@@ -1025,6 +1056,39 @@ export default function ApplyPaymentPanel({
                   </span>
                 </div>
               )}
+              {/* Two document lines landing on ONE invoice and summing past
+                  what it owes. Blocking rather than warning: this wrote
+                  $2,500 against a $1,250 invoice before the check existed,
+                  and the resulting allocation looks completely ordinary
+                  afterwards — one payment, one invoice, plausible amount. */}
+              {overfilled.length > 0 && (
+                <div className="rounded-lg border p-3 mt-3 text-xs flex gap-2"
+                     style={{ borderColor: RED, background: RED_BG, color: '#991b1b' }}>
+                  <AlertTriangle size={14} className="shrink-0 mt-px" />
+                  <span className="min-w-0">
+                    <strong>
+                      {overfilled.length === 1 ? 'A row pair doesn\u2019t fit its invoice.'
+                        : `${overfilled.length} row groups don\u2019t fit their invoices.`}
+                    </strong>
+                    <span className="block mt-1">
+                      Several rows resolved to the same invoice and together they
+                      come to more than it still owes. That is two different loads
+                      landing on one invoice, not a charge breakdown \u2014 applying
+                      would pay it twice. Untick the row that doesn&apos;t belong, or
+                      use <em>find</em> to point it at the right invoice.
+                    </span>
+                    <span className="block mt-1.5">
+                      {overfilled.slice(0, 4).map(o => (
+                        <span key={o.invoiceId} className="block truncate">
+                          #{o.group[0].invoiceNumber} owes {money2(o.owed)} \u00b7 {o.group.length} rows
+                          total {money2(o.sum)} \u00b7 {money2(o.over)} too much
+                        </span>
+                      ))}
+                    </span>
+                  </span>
+                </div>
+              )}
+
               {/* The sharpest signal there is: not "this invoice looks
                   settled" but "this exact figure is already sitting on it".
                   Stated before the softer status-based notice below, and
