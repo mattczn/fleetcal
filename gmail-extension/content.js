@@ -25,11 +25,14 @@
   let LABEL_NAME  = "new load";      // matched case-insensitively, trimmed
   let APP_BASE    = "https://fleetcal.app";
   let CFG_ACCOUNT = "";              // optional gmail-account override (popup fallback)
+  // Off unless switched on. See expandThread() for why the default matters.
+  let AUTO_EXPAND = false;
 
-  chrome.storage.sync.get(["labelName", "appBase", "gmailAccount"], (cfg) => {
+  chrome.storage.sync.get(["labelName", "appBase", "gmailAccount", "autoExpand"], (cfg) => {
     if (cfg.labelName)    LABEL_NAME  = String(cfg.labelName).trim().toLowerCase();
     if (cfg.appBase)      APP_BASE    = String(cfg.appBase).replace(/\/+$/, "");
     if (cfg.gmailAccount) CFG_ACCOUNT = String(cfg.gmailAccount).trim().toLowerCase();
+    AUTO_EXPAND = cfg.autoExpand === true;
     start();
   });
 
@@ -152,10 +155,27 @@
   // an "Expand all" toggle that expands collapsed individual messages AND the
   // super-collapsed middle cluster. Clicking it flips the label to "Collapse
   // all", so it's naturally one-shot. Returns true if it clicked.
+  //
+  // OFF BY DEFAULT. Clicking "Expand all" renders the collapsed middle of a
+  // thread — and Gmail treats rendering a message as reading it, so every
+  // unread message buried in that thread is silently marked read. On a
+  // billing mailbox that is destructive: unread is the working queue, and
+  // opening one thread to glance at it was quietly clearing several.
+  //
+  // The hidden-rate-con case it was written for is real but occasional, so
+  // it becomes a deliberate act: the panel offers "Expand thread" whenever
+  // there is something collapsed, and the popup has a setting for anyone who
+  // wants the old behaviour back.
   function expandThread() {
     const btn = document.querySelector('[aria-label="Expand all"]');
     if (btn && btn.offsetParent !== null) { btn.click(); return true; }
     return false;
+  }
+
+  /** Is there anything collapsed worth offering to expand? */
+  function hasCollapsed() {
+    const btn = document.querySelector('[aria-label="Expand all"]');
+    return !!(btn && btn.offsetParent !== null);
   }
 
   // First pass for an email: existing links, trigger check, and — if it looks
@@ -174,7 +194,8 @@
       || (pdfs0.length > 0 && FREIGHTY.test(pdfs0.map((p) => p.filename).join(" ").toLowerCase()));
     // Only force-expand the thread for emails that look like loads (where a
     // hidden rate con matters) — not every linked/incidental thread.
-    rec.allowExpand = rec.trigger;
+    // Auto-expand only when explicitly switched on — see expandThread().
+    rec.allowExpand = rec.trigger && AUTO_EXPAND;
 
     renderRec();   // show the icon right away on any email
 
@@ -541,6 +562,7 @@
     const fc = btn.dataset.fc;
     if (fc === "close")     { if (rec) { rec.open = false; rec.userToggled = true; } applyPanelVisibility(); }
     if (fc === "scan")      void doScanNow();
+    if (fc === "expand")    { expandThread(); rec.expanded = true; void runSearch(); }
     if (fc === "link")      void linkOne(btn.dataset.loadid, "manual-pick");
     if (fc === "unlinkone") void doUnlinkOne(btn.dataset.loadid);
     if (fc === "createone") void doCreateFromUrls([btn.dataset.url]);

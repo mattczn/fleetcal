@@ -30,6 +30,19 @@
 <input id="labelName" placeholder="New Load" />
 <div class="hint">The label whose emails get checked (case-insensitive).</div>
 
+<label style="display:flex;gap:8px;align-items:flex-start;margin-top:12px">
+  <input id="autoExpand" type="checkbox" style="margin-top:2px" />
+  <span>
+    Auto-expand long threads
+    <small style="display:block;color:#666;line-height:1.4">
+      Off by default. Expanding renders the collapsed middle of a thread,
+      and Gmail marks those messages read — on a billing inbox that clears
+      unread you never opened. Leave off and use “Expand thread” in the
+      panel when a rate con is actually buried.
+    </small>
+  </span>
+</label>
+
 <label for="gmailAccount">Gmail account (optional)</label>
 <input id="gmailAccount" placeholder="you@gmail.com" />
 <div class="hint">Used to key thread↔load links. Auto-detected from the page; set it here if detection fails or you use multiple accounts.</div>
