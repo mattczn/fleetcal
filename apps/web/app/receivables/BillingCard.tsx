@@ -61,6 +61,9 @@ export default function BillingCard({ customerId, values, onSaved }: BillingCard
   const [portal,  setPortal]  = useState('');
   const [address, setAddress] = useState('');
   const [notes,   setNotes]   = useState('');
+  /** Held as the PERCENT withheld, as a string — that is how the agreement
+   *  reads ("2.50% discount") and what someone types. Converted on save. */
+  const [qpPct,   setQpPct]   = useState('');
 
   // Reset the draft whenever the underlying record changes or the form
   // is opened, so a stale edit can't survive a refetch.
@@ -70,6 +73,7 @@ export default function BillingCard({ customerId, values, onSaved }: BillingCard
     setPortal(values.invoicePortal ?? '');
     setAddress(values.billingAddress ?? '');
     setNotes(values.billingNotes ?? '');
+    setQpPct(values.quickPayRate != null ? String(+(values.quickPayRate * 100).toFixed(4)) : '');
   }, [values, editing]);
 
   async function save() {
@@ -83,6 +87,10 @@ export default function BillingCard({ customerId, values, onSaved }: BillingCard
         invoicePortal:       portal.trim()  || null,
         billingAddress:      address.trim() || null,
         invoiceInstructions: notes.trim()   || null,
+        // null ENDS the arrangement. An out-of-range value is rejected by
+        // the API rather than silently coerced, so a typo can't become a
+        // rate that quietly settles short payments.
+        quickPayRate: qpPct.trim() === '' ? null : +(Number(qpPct) / 100).toFixed(6),
       });
       setEditing(false);
       setNote(null);
@@ -162,6 +170,17 @@ export default function BillingCard({ customerId, values, onSaved }: BillingCard
               <FieldWrap label="Billing address" icon={<MapPin size={12} />} width={260}>
                 <textarea value={address} onChange={e => setAddress(e.target.value)}
                           rows={2} placeholder="Remit-to address" style={{ ...input, resize: 'vertical' }} />
+              </FieldWrap>
+              {/* Editable here as well as read-only below. It was display-only
+                  at first, which meant the field simply vanished when you
+                  clicked Edit — visible, apparently editable, and unreachable. */}
+              <FieldWrap label="Quick pay" icon={<Percent size={12} />} width={150}>
+                <div className="flex items-center gap-1.5">
+                  <input value={qpPct} inputMode="decimal" placeholder="none"
+                         onChange={e => setQpPct(e.target.value.replace(/[^\d.]/g, ''))}
+                         style={{ ...input, textAlign: 'right' }} />
+                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--gc-text-2)' }}>%</span>
+                </div>
               </FieldWrap>
               <FieldWrap label="Billing notes" icon={<StickyNote size={12} />} grow>
                 <textarea value={notes} onChange={e => setNotes(e.target.value)}

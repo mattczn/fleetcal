@@ -137,6 +137,54 @@ function CustomerViewInner() {
       return Math.abs(i.paidAmount - Math.round(i.total * (1 - rate) * 100) / 100) <= 0.02;
     }).length;
   }, [data]);
+
+  /**
+   * The rate this customer's payments ACTUALLY imply, when the configured
+   * one doesn't explain them.
+   *
+   * Setting a rate and watching nothing happen is the worst possible
+   * feedback, and it is what GEODIS did: 33 invoices short by exactly 3.00%
+   * against a rate entered as 2.5%. Nothing matched, nothing closed, and the
+   * page said nothing at all. The shortfall is right there in the data — if
+   * a cluster of invoices agrees on a percentage to two decimal places, that
+   * IS the agreement, and the page should say so rather than wait to be
+   * interrogated.
+   *
+   * Only a cluster of 3+ counts. Two invoices agreeing is a coincidence.
+   */
+  const impliedRate = useMemo(() => {
+    const open = (data?.invoices ?? []).filter(i =>
+      i.total > 0 && i.paidAmount > 0 && i.paidAmount < i.total - 0.005);
+    if (open.length < 3) return null;
+    const buckets = new Map<string, number>();
+    for (const i of open) {
+      const pct = Math.round((1 - i.paidAmount / i.total) * 10000) / 100;   // 2dp
+      buckets.set(pct.toFixed(2), (buckets.get(pct.toFixed(2)) ?? 0) + 1);
+    }
+    const [pct, count] = [...buckets.entries()].sort((a, b) => b[1] - a[1])[0];
+    if (count < 3) return null;
+    const asFraction = Number(pct) / 100;
+    // Nothing to say when it already matches what's configured.
+    if (data?.quickPayRate != null && Math.abs(data.quickPayRate - asFraction) < 0.0001) return null;
+    return { pct: Number(pct), fraction: +asFraction.toFixed(6), count };
+  }, [data]);
+
+  const [rateBusy, setRateBusy] = useState(false);
+
+  /** Set the rate the data implies, then close what it settles. Both halves,
+   *  because doing one without the other is the state that caused this. */
+  async function adoptImpliedRate() {
+    if (!impliedRate || !customerId) return;
+    setRateBusy(true); setQpMsg(null);
+    try {
+      await railway.updateCustomer(customerId, { quickPayRate: impliedRate.fraction });
+      const r = await railway.settleQuickPay(customerId);
+      setQpMsg(`Rate set to ${impliedRate.pct}% · closed ${r.settled} invoice${r.settled === 1 ? '' : 's'} · ${money2(r.feeRecognised)} recorded as quick-pay fee`);
+      await load();
+    } catch (e) {
+      setQpMsg(e instanceof Error ? e.message : 'Could not set the rate');
+    } finally { setRateBusy(false); }
+  }
   // Scrolling the invoice list collapses the blocks above it. Hysteresis
   // (40 down / 8 up) rather than a single threshold, so a row sitting
   // near the boundary doesn't flicker the whole header on every wheel
@@ -490,6 +538,18 @@ function CustomerViewInner() {
                 borderRadius: 8, fontSize: 12, color: 'var(--gc-text-1)', outline: 'none',
                 background: 'var(--gc-surface)',
               }} />
+            {impliedRate && (
+              <button onClick={() => { void adoptImpliedRate(); }} disabled={rateBusy}
+                className="inline-flex items-center gap-1.5 shrink-0"
+                title={`${impliedRate.count} open invoices are short by exactly ${impliedRate.pct}%. ${data?.quickPayRate != null ? `The rate on file is ${+(data.quickPayRate * 100).toFixed(4)}%, which matches none of them.` : 'No quick-pay rate is set.'}`}
+                style={{
+                  height: 30, padding: '0 10px', borderRadius: 8, fontSize: 12, fontWeight: 700,
+                  border: '1px solid #fddc9a', background: '#fef7e0', color: '#b06000',
+                  cursor: rateBusy ? 'default' : 'pointer',
+                }}>
+                {rateBusy ? 'Setting…' : `${impliedRate.count} short by exactly ${impliedRate.pct}% — set rate?`}
+              </button>
+            )}
             {qpEligible > 0 && (
               <button onClick={() => { void settleQuickPay(); }} disabled={qpBusy}
                 className="inline-flex items-center gap-1.5 shrink-0"
