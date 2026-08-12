@@ -151,8 +151,18 @@ export async function ensureEventRouteCached(
   const key = stopsKey(coords);
 
   // Cache hit — the stored polyline was computed from exactly these stops
-  // (the stored signature still matches). No Mapbox call.
-  if (storedPolyline != null && current.routeStopsKey === key) {
+  // (the stored signature still matches) AND we have the miles that came
+  // with it. No Mapbox call.
+  //
+  // `storedMiles != null` is load-bearing, not belt-and-braces. Both values
+  // are written by the same update below, but something else can null
+  // loaded_miles while leaving the polyline in place (relay delivery legs
+  // are the usual victims). Without this check, such a row is a permanent
+  // cache hit that keeps handing back null miles — the recompute below can
+  // never run, so it stays broken forever no matter how often it's fetched.
+  // Treating "polyline but no miles" as a miss lets those rows self-heal on
+  // their next read for the cost of one Mapbox call each.
+  if (storedPolyline != null && storedMiles != null && current.routeStopsKey === key) {
     return { routePolyline: storedPolyline, loadedMiles: storedMiles };
   }
 
