@@ -56,6 +56,12 @@ export interface CreateLoadRequestLoad {
   notes?: string;               // load-level notes
   internalNotes?: InternalNote[]; // internal-only dispatch note thread
   createdByName?: string;
+  /** How this load was created. The server records it as the first
+   *  audit entry so a load's history starts at creation instead of at
+   *  its first edit. Omitted by older clients — the server then falls
+   *  back to 'api', which is honest about not knowing rather than
+   *  guessing 'manual'. See LoadAuditEntry.createdVia. */
+  createdVia?: LoadAuditEntry['createdVia'];
 }
 
 /**

@@ -87,6 +87,7 @@ export function buildCreateLoadBody(event: Omit<CalendarEvent, 'id'>): {
     notes:         mergedNotes,
     internalNotes: event.internalNotes && event.internalNotes.length > 0 ? event.internalNotes : undefined,
     createdByName: event.createdByName,
+    createdVia:    event.createdVia,
   });
 
   const ev: CreateLoadRequestEvent = stripUndefined({

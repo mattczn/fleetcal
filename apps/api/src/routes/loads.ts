@@ -526,6 +526,31 @@ loads.post("/", requireCapability("loads.create"), async (c) => {
     }
   }
 
+  // 4. Record HOW this load was created, as the load's first audit entry.
+  //
+  // Written server-side so every creation path is covered — a client
+  // that forgets to send an origin still gets a creation line, and a
+  // client can't retroactively rewrite one. Loads whose history used to
+  // begin at their first edit (often days later) now start here, which
+  // is what makes "why does this load have no stops?" answerable.
+  //
+  // Non-fatal: appendLoadAudit does a read-modify-write and can lose a
+  // race under concurrent edits. Losing the creation line is not worth
+  // failing a create the caller has already had succeed, so this never
+  // rejects the request.
+  try {
+    await appendLoadAudit(loadRow.id, orgId, {
+      changedAt:     new Date().toISOString(),
+      changedByName: body.load.createdByName?.trim() || "Unknown",
+      // 'api' rather than 'manual' when the client says nothing — an
+      // honest "we don't know" beats a plausible wrong answer in an
+      // audit log.
+      createdVia:    body.load.createdVia ?? { method: "api" },
+    });
+  } catch (err) {
+    console.error("[POST /v1/loads] creation audit entry failed (non-fatal):", err);
+  }
+
   const joined = await fetchLoadJoined(loadRow.id, orgId);
   const res: CreateLoadResponse = { loads: joined ?? [] };
   return c.json(res, 201);

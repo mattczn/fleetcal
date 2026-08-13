@@ -866,6 +866,40 @@ export interface AccessorialChange {
 export interface LoadAuditEntry {
   changedAt: string;
   changedByName: string;
+  /** How the load came into existence. Written ONCE, server-side, as the
+   *  first entry in a new load's audit log.
+   *
+   *  Load creation was previously unaudited, so a load's history began
+   *  at its first edit — often days later. That made "why does this
+   *  load have no stops / no broker?" unanswerable after the fact: you
+   *  could see someone changed the truck on the 30th, but not whether
+   *  the load was hand-built, duplicated off last week's, or parsed
+   *  from a PDF.
+   *
+   *  `method` is the origin. The optional fields are frozen context for
+   *  readability, same rule as prevCustomerName / prevTrailerNum — the
+   *  audit fetch has no way to resolve them later.
+   *
+   *  Additive: absent on every load created before this existed, which
+   *  render with no creation line at all rather than a wrong one. */
+  createdVia?: {
+    method:
+      | 'manual'        // typed into a blank modal
+      | 'drag'          // drag-created on the calendar grid, then filled in
+      | 'duplicate'     // Duplicate button on an existing load
+      | 'plus_week'     // "+1 Week" — a duplicate shifted forward 7 days
+      | 'rate_con_ai'   // parsed from a rate-con PDF by the AI extractor
+      | 'split_relay'   // a leg broken out of an existing load
+      | 'import'        // bulk import / backfill script
+      | 'bot'           // Telegram bot / API client
+      | 'api';          // direct API caller with no richer origin
+    /** For duplicate / plus_week: the load this was copied from, frozen
+     *  at write time so it stays readable if the source is later
+     *  renumbered or deleted. */
+    sourceLoadNum?: string;
+    /** For rate_con_ai: the PDF filename the extraction ran against. */
+    fileName?: string;
+  };
   prevDriverName?: string;
   newDriverName?: string;
   prevAssetId?: number;
@@ -1052,6 +1086,12 @@ export interface Load {
   customerId?: string;       // loads.customer_id (uuid FK to customers)
   createdByName?: string;
   createdAt?: string;
+  /** WRITE-ONLY, create path only. How this load is being created, so
+   *  the server can record it as the load's first audit entry. Never
+   *  read back off an existing event — the origin lives in the audit
+   *  log, not on the row, so nothing can rewrite it after the fact.
+   *  See LoadAuditEntry.createdVia. */
+  createdVia?: LoadAuditEntry['createdVia'];
 
   // Equipment
   assetId: number;

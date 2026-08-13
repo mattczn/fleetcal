@@ -32,6 +32,7 @@ import type { Accessorial, AccessorialChange, LoadAuditEntry } from '@fleetcal/t
 // ── Categories ───────────────────────────────────────────────────────
 
 export type AuditCategory =
+  | 'created'
   | 'relay'
   | 'assignment'
   | 'schedule'
@@ -45,6 +46,7 @@ export type AuditCategory =
 /** Approved tints. Text uses the dark tone of the pair — never grey on
  *  tint, which fails contrast on these light backgrounds. */
 export const AUDIT_CATEGORY_STYLE: Record<AuditCategory, { bg: string; fg: string; label: string }> = {
+  created:    { bg: '#E8EFEA', fg: '#1F4A32', label: 'Created' },
   relay:      { bg: '#EEEDFE', fg: '#3C3489', label: 'Relay' },
   assignment: { bg: '#E6F1FB', fg: '#0C447C', label: 'Assignment' },
   schedule:   { bg: '#FAEEDA', fg: '#633806', label: 'Schedule' },
@@ -78,6 +80,26 @@ export function AuditBadge({ category }: { category: AuditCategory }) {
  *  figure is the noteworthy event; 'auto' takes the muted Status tint
  *  because the app doing what it was configured to do is the boring
  *  default. */
+/** Human phrasing for each creation origin. Reads as the tail of
+ *  "Load created …", so each entry is a prepositional phrase, not a
+ *  noun. 'api' stays deliberately vague — it's the fallback for a
+ *  client that sent no origin, and inventing a specific one there would
+ *  put a guess in an audit log. */
+const CREATED_VIA_LABEL: Record<
+  NonNullable<LoadAuditEntry['createdVia']>['method'],
+  string
+> = {
+  manual:      'by hand',
+  drag:        'by dragging on the calendar',
+  duplicate:   'as a duplicate',
+  plus_week:   'with +1 Week',
+  rate_con_ai: 'by Rate Con AI',
+  split_relay: 'by splitting a relay leg',
+  import:      'by a bulk import',
+  bot:         'from the dispatch bot',
+  api:         'via the API',
+};
+
 const PAY_SOURCE_TINT: Record<'auto' | 'manual', AuditCategory> = {
   auto:   'status',
   manual: 'financial',
@@ -183,6 +205,18 @@ export function buildAuditLines(entry: LoadAuditEntry, ctx: AuditRenderCtx): Aud
   const push = (key: string, category: AuditCategory, node: ReactNode) => out.push({ key, category, node });
   const assetName = (id?: number) =>
     id == null ? '—' : (ctx.assetName?.(id) ?? `Asset ${id}`);
+
+  // ── Created ──
+  // First, so a load's history opens with where it came from. Only ever
+  // written once, by the server, at create time.
+  if (entry.createdVia) {
+    const { method, sourceLoadNum, fileName } = entry.createdVia;
+    const from =
+      sourceLoadNum ? <> from {b(sourceLoadNum)}</>
+      : fileName    ? <> from {b(fileName)}</>
+      : null;
+    push('created', 'created', <>{b('Load created')} {CREATED_VIA_LABEL[method] ?? method}{from}</>);
+  }
 
   // ── Assignment ──
   if (entry.prevAssetId !== undefined || entry.newAssetId !== undefined)

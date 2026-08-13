@@ -2079,6 +2079,15 @@ export default function EventModal() {
 
   // PDF parse state
   const [parseState, setParseState] = useState<'idle' | 'parsing' | 'done' | 'error'>('idle');
+  /** How the load being composed came to exist, sent on create so the
+   *  server can record it as the first audit entry.
+   *
+   *  A ref, not state — nothing renders from it, and it must survive the
+   *  re-renders a rate-con parse triggers without scheduling another one.
+   *  Seeded from modalDefaults (Duplicate / +1 Week set it there) and
+   *  upgraded to 'rate_con_ai' if the dispatcher parses a PDF, because
+   *  that's the origin that actually explains the resulting data. */
+  const createdViaRef = useRef<CalendarEvent['createdVia']>(undefined);
   const [reparsing, setReparsing] = useState(false);
   const [loadedMiles,        setLoadedMiles]        = useState<number | null>(null);
   /** Computed road miles for the OTHER legs of a relay, keyed by event
@@ -2816,6 +2825,10 @@ export default function EventModal() {
       }
     } else {
       const d = modalDefaults ?? {};
+      // Seed the origin. Duplicate / +1 Week put it here; a modal opened
+      // any other way (toolbar New Load, drag-create) has none, and falls
+      // back to 'manual' at save time.
+      createdViaRef.current = d.createdVia;
       const today = localDateStr(currentDate);
       const [sd, st = '08:00'] = (d.start ?? `${today}T08:00`).split('T');
       const [ed, et = '09:00'] = (d.end   ?? `${today}T09:00`).split('T');
@@ -3700,6 +3713,9 @@ export default function EventModal() {
         start: `${startDate}T${startTime}`, end: `${endDate}T${endTime}`,
         status,
         createdByName: isEdit ? (existingEv?.createdByName ?? currentUserName) : currentUserName,
+        // Create only — the origin is written once and lives in the audit
+        // log. Sending it on an edit could rewrite history.
+        ...(isEdit ? {} : { createdVia: createdViaRef.current ?? { method: 'manual' as const } }),
         ...(isEdit ? { auditLog: nextAuditLog } : {}),
       };
       // Apply any pending work-order links collected by
@@ -4926,6 +4942,10 @@ export default function EventModal() {
       ...rest,
       accessorials: accessorials.length > 0 ? accessorials : undefined,
       stops: shiftedStops.length > 0 ? shiftedStops : undefined,
+      // Recorded as the new load's first audit entry. sourceLoadNum is
+      // read off the load being copied, NOT `rest` — loadNum was just
+      // stripped above so the copy doesn't inherit it.
+      createdVia: { method: 'plus_week', sourceLoadNum: String(fieldValues['loadNum'] ?? '').trim() || undefined },
     });
   };
 
@@ -4942,6 +4962,9 @@ export default function EventModal() {
       ...rest,
       accessorials: accessorials.length > 0 ? accessorials : undefined,
       stops: cleanedStops.length > 0 ? cleanedStops : undefined,
+      // Same as +1 Week: loadNum was stripped from `rest`, so read the
+      // source number off the load being duplicated.
+      createdVia: { method: 'duplicate', sourceLoadNum: String(fieldValues['loadNum'] ?? '').trim() || undefined },
     });
   };
 
@@ -4966,6 +4989,13 @@ export default function EventModal() {
         });
         const parsed = await res.json();
         if (parsed.error) throw new Error(parsed.error);
+
+        // The parse succeeded, so the AI is what populated this load —
+        // that outranks whatever opened the modal (a dispatcher can hit
+        // Duplicate and then drop a PDF on it). Set only after the error
+        // check: a failed parse leaves the fields untouched, so claiming
+        // the AI created the load would be a lie in the audit trail.
+        createdViaRef.current = { method: 'rate_con_ai', fileName: file.name };
 
         let resolvedBroker: string | undefined;
         if (parsed.loadNum) setField('loadNum', parsed.loadNum);
