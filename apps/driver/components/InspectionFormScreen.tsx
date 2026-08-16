@@ -470,28 +470,46 @@ export default function InspectionFormScreen({ initialAssetId, initialTrailerId,
   }, []);
 
   // ── Optional walkaround video ────────────────────────────────────
-  // Record with the native camera in video mode, 3-min cap. iOS
-  // enforces videoMaxDuration natively; Android doesn't reliably, so
-  // we also reject the clip client-side if it comes back long.
+  // iOS enforces videoMaxDuration natively on the camera; Android
+  // doesn't reliably, AND neither platform enforces it on library
+  // picks — we validate on our side after either path.
   const MAX_VIDEO_SECONDS = 180;
-  const recordVideo = useCallback(async () => {
+
+  /** Take a fresh clip vs pick an existing one from the phone's
+   *  gallery, then run the same duration + state update. Library
+   *  clips can be arbitrarily large; the server-side 400MB cap
+   *  still applies and would reject one, but we don't second-guess
+   *  size here — drivers using pre-recorded footage often have a
+   *  reason (better lighting, stabilization) that outweighs the
+   *  bigger upload. */
+  async function pickVideoFrom(source: "camera" | "library"): Promise<void> {
     if (videos.length >= 1) {
-      Alert.alert("Video recorded", "Remove the current video before recording a new one.");
+      Alert.alert("Video already attached", "Remove the current video before adding a new one.");
       return;
     }
-    const perm = await ImagePicker.requestCameraPermissionsAsync();
+    const perm = source === "camera"
+      ? await ImagePicker.requestCameraPermissionsAsync()
+      : await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) {
-      Alert.alert("Camera", "Enable camera access in Settings.");
+      Alert.alert(
+        source === "camera" ? "Camera" : "Photos",
+        `Enable ${source === "camera" ? "camera" : "photo library"} access in Settings.`,
+      );
       return;
     }
-    const res = await ImagePicker.launchCameraAsync({
+    const opts = {
       mediaTypes:       ImagePicker.MediaTypeOptions.Videos,
       videoMaxDuration: MAX_VIDEO_SECONDS,
       // High (0) = ~720p+ on iOS — readable text on a mudflap or
-      // license plate, visible defect detail. 3-min clip lands
-      // around 100-200MB. Server cap raised to match (see API).
+      // license plate, visible defect detail. 3-min clip lands around
+      // 100-200MB. Server cap raised to match. Note: videoQuality only
+      // affects the CAMERA path — library picks keep their original
+      // encoding.
       videoQuality:     ImagePicker.UIImagePickerControllerQualityType.High,
-    });
+    };
+    const res = source === "camera"
+      ? await ImagePicker.launchCameraAsync(opts)
+      : await ImagePicker.launchImageLibraryAsync(opts);
     if (res.canceled) return;
     const a = res.assets[0];
     if (!a) return;
@@ -513,6 +531,22 @@ export default function InspectionFormScreen({ initialAssetId, initialTrailerId,
       mimeType:        a.mimeType ?? "video/mp4",
       durationSeconds: durSec > 0 ? durSec : 1,
     }]);
+  }
+
+  const attachVideo = useCallback(() => {
+    // Same picker pattern the photo flow uses (see addPhotoFor). Give
+    // the driver the choice up front rather than deciding for them.
+    Alert.alert(
+      "Add video",
+      undefined,
+      [
+        { text: "Record video",         onPress: () => { void pickVideoFrom("camera");  } },
+        { text: "Choose from library",  onPress: () => { void pickVideoFrom("library"); } },
+        { text: "Cancel", style: "cancel" },
+      ],
+      { cancelable: true },
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videos.length]);
 
   const removeVideo = useCallback((key: string) => {
@@ -892,11 +926,11 @@ export default function InspectionFormScreen({ initialAssetId, initialTrailerId,
             Walkaround video (optional)
           </Text>
           <Text style={[txt(500), { fontSize: 12, color: C.t3, marginBottom: 10 }]}>
-            Up to 3 minutes. Filmed with the phone camera. Videos are kept for 90 days.
+            Up to 3 minutes. Record a new one or pick from your library. Videos are kept for 90 days.
           </Text>
           {videos.length === 0 ? (
             <TouchableOpacity
-              onPress={recordVideo}
+              onPress={attachVideo}
               style={{
                 flexDirection: "row", alignItems: "center", justifyContent: "center",
                 borderWidth: 1, borderColor: C.border, borderStyle: "dashed",
@@ -904,7 +938,7 @@ export default function InspectionFormScreen({ initialAssetId, initialTrailerId,
               }}
             >
               <Video size={18} color={C.t2} />
-              <Text style={[txt(600), { fontSize: 14, color: C.t2 }]}>Record video</Text>
+              <Text style={[txt(600), { fontSize: 14, color: C.t2 }]}>Add video</Text>
             </TouchableOpacity>
           ) : (
             videos.map(v => (
