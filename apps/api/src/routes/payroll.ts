@@ -719,4 +719,76 @@ payroll.post("/records/:id/send", requireCapability("payroll.finalize"), async (
   return c.json(res);
 });
 
+// ─────────────────────────────────────────────────────────────────────────
+// POST /v1/payroll/records/:id/preview-link
+//
+// Return the paystub view URL for a finalized record WITHOUT sending
+// anything. Dispatcher uses this to preview what the driver will see
+// before hitting Send.
+//
+// Mints view_token if the record doesn't have one yet — same token
+// the real send will use later, so previewing then sending doesn't
+// rotate the URL under a driver. Requires payroll.access only; the
+// URL leaks nothing dispatch can't already see in the payroll page.
+// ─────────────────────────────────────────────────────────────────────────
+payroll.post("/records/:id/preview-link", async (c) => {
+  const orgId = c.get("orgId");
+  const id    = c.req.param("id");
+
+  const { data: recRaw, error: recErr } = await supabase
+    .from("payroll_records")
+    .select(REC_COLS)
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (recErr) {
+    console.error("[POST /v1/payroll/records/:id/preview-link] fetch failed:", recErr);
+    return c.json({ error: "fetch_failed", detail: recErr.message } satisfies ApiErrorResponse, 500);
+  }
+  if (!recRaw) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+  const rec = recRaw as unknown as RecRow;
+  if (rec.superseded_at) {
+    return c.json({
+      error:  "record_superseded",
+      detail: "This paystub has been reopened or replaced. Preview a fresh record after re-finalizing.",
+    } satisfies ApiErrorResponse, 409);
+  }
+
+  const viewToken = rec.view_token ?? mintViewToken();
+
+  // Fetch driver_portal_url for the URL host — same fallback chain
+  // the send endpoint uses.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: settingsRow } = await (supabase as any)
+    .from("org_settings")
+    .select("driver_portal_url")
+    .eq("org_id", orgId)
+    .maybeSingle();
+  const paystubHost =
+    (settingsRow as { driver_portal_url: string | null } | null)
+      ?.driver_portal_url?.trim() || env.publicWebUrl;
+  const url = `${paystubHost.replace(/\/$/, "")}/paystub/${viewToken}`;
+
+  // Persist the token if we just minted one, so the real send later
+  // reuses it (driver bookmarks stay stable across preview → send).
+  if (!rec.view_token) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error: upErr } = await (supabase as any)
+      .from("payroll_records")
+      .update({ view_token: viewToken })
+      .eq("id", id)
+      .eq("org_id", orgId)
+      .is("superseded_at", null)
+      .is("view_token", null); // don't overwrite if a race got there first
+    if (upErr) {
+      console.error("[POST /v1/payroll/records/:id/preview-link] token persist failed:", upErr);
+      // Non-fatal — the URL is still valid until the next send (which
+      // will mint + persist its own). Fall through with the returned
+      // token; worst case the driver's future SMS uses a different one.
+    }
+  }
+
+  return c.json({ url });
+});
+
 export default payroll;

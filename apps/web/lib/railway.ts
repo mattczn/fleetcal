@@ -1184,6 +1184,12 @@ class RailwayClient {
   sendPaystub(id: string) {
     return this.req<SendPaystubResponse>('POST', `/v1/payroll/records/${id}/send`);
   }
+  /** Return the paystub view URL without sending anything. Mints
+   *  view_token if the record doesn't have one yet — same token the
+   *  next real send will use, so preview → send keeps a stable URL. */
+  previewPaystubLink(id: string) {
+    return this.req<{ url: string }>('POST', `/v1/payroll/records/${id}/preview-link`);
+  }
 
   // ── Org settings ──────────────────────────────────────────────────────
   getOrgSettings()                           { return this.req<GetOrgSettingsResponse>('GET', '/v1/org-settings'); }

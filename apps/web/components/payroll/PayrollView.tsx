@@ -984,6 +984,7 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
    *  under the button (green when everything sent, amber when partial,
    *  red when nothing landed). */
   const [sendFlash,     setSendFlash]     = useState<{ tone: 'ok' | 'warn' | 'err'; msg: string } | null>(null);
+  const [previewing,    setPreviewing]    = useState(false);
   const [showProfile,   setShowProfile]   = useState(false);
   const [printing,      setPrinting]      = useState(false);
   const [trashConfirm,  setTrashConfirm]  = useState<string | null>(null); // adj.id pending confirm
@@ -1238,6 +1239,23 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
     setShowLive(false);
     setReopening(false);
     setConfirmReopen(false);
+  }
+
+  async function handleView() {
+    if (!record) return;
+    setPreviewing(true);
+    setSendFlash(null);
+    try {
+      const res = await railway.previewPaystubLink(record.id);
+      // Open in a new tab so dispatch keeps their spot in payroll.
+      // window.open blockers only fire when the call is NOT in a user
+      // gesture handler; since this runs inside onClick, browsers allow it.
+      window.open(res.url, '_blank', 'noopener,noreferrer');
+    } catch (err) {
+      setSendFlash({ tone: 'err', msg: err instanceof Error ? err.message : 'Could not build the paystub link.' });
+    } finally {
+      setPreviewing(false);
+    }
   }
 
   async function handleSend() {
@@ -1897,6 +1915,30 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
               </>
             ) : (
               <>
+                {/* View — open the driver-facing paystub page in a new
+                    tab so dispatch can eyeball the final numbers before
+                    texting them out. Mints view_token on first click
+                    (same one the real send will use later, so the URL
+                    stays stable across preview → send). */}
+                <Tooltip
+                  content={
+                    <>Open the paystub link in a new tab — same page the driver will see. Useful for a quick sanity check before texting.</>
+                  }>
+                  <button onClick={handleView} disabled={previewing || sending || reopening}
+                    className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
+                    style={{
+                      color: 'var(--gc-text-3)',
+                      background: 'transparent',
+                      border: '1px solid var(--gc-border)',
+                      opacity: previewing ? 0.7 : 1,
+                    }}
+                    onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                    {previewing
+                      ? <Loader2 size={11} className="animate-spin" />
+                      : <><Eye size={11} /> View</>}
+                  </button>
+                </Tooltip>
                 {/* Send / Resend paystub. Only meaningful once finalized;
                     disabled while another action on this row is in flight. */}
                 <Tooltip
@@ -1905,7 +1947,7 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
                       ? <>Resend the paystub link (SMS + push) to the driver. The link and numbers stay the same — this just texts the driver again.</>
                       : <>Text the driver a link to this paystub. Push notification also fires if they have the driver app installed. The numbers in the link are the frozen totals above.</>
                   }>
-                  <button onClick={handleSend} disabled={sending || reopening}
+                  <button onClick={handleSend} disabled={sending || reopening || previewing}
                     className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
                     style={{
                       color:       record?.sentAt ? 'var(--gc-text-3)' : '#fff',
