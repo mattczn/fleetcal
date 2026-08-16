@@ -474,6 +474,12 @@ export default function InspectionFormScreen({ initialAssetId, initialTrailerId,
   // doesn't reliably, AND neither platform enforces it on library
   // picks — we validate on our side after either path.
   const MAX_VIDEO_SECONDS = 180;
+  // Small cap so a driver who taps "Add video" ten times doesn't
+  // saturate cellular upload while dispatch waits on the whole
+  // inspection to land. 5 covers the realistic use cases (walkaround
+  // + a couple of defect close-ups) without becoming a bandwidth
+  // gun. Server-side 400MB per clip still applies.
+  const MAX_VIDEOS_PER_INSPECTION = 5;
 
   /** Take a fresh clip vs pick an existing one from the phone's
    *  gallery, then run the same duration + state update. Library
@@ -483,8 +489,11 @@ export default function InspectionFormScreen({ initialAssetId, initialTrailerId,
    *  reason (better lighting, stabilization) that outweighs the
    *  bigger upload. */
   async function pickVideoFrom(source: "camera" | "library"): Promise<void> {
-    if (videos.length >= 1) {
-      Alert.alert("Video already attached", "Remove the current video before adding a new one.");
+    if (videos.length >= MAX_VIDEOS_PER_INSPECTION) {
+      Alert.alert(
+        "Limit reached",
+        `Up to ${MAX_VIDEOS_PER_INSPECTION} videos per inspection. Remove one to add another.`,
+      );
       return;
     }
     const perm = source === "camera"
@@ -524,13 +533,16 @@ export default function InspectionFormScreen({ initialAssetId, initialTrailerId,
       );
       return;
     }
-    setVideos([{
-      key:             `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-      uri:             a.uri,
-      fileName:        a.fileName ?? `inspection-${Date.now()}.mp4`,
-      mimeType:        a.mimeType ?? "video/mp4",
-      durationSeconds: durSec > 0 ? durSec : 1,
-    }]);
+    setVideos(prev => [
+      ...prev,
+      {
+        key:             `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        uri:             a.uri,
+        fileName:        a.fileName ?? `inspection-${Date.now()}.mp4`,
+        mimeType:        a.mimeType ?? "video/mp4",
+        durationSeconds: durSec > 0 ? durSec : 1,
+      },
+    ]);
   }
 
   const attachVideo = useCallback(() => {
@@ -926,53 +938,60 @@ export default function InspectionFormScreen({ initialAssetId, initialTrailerId,
             Walkaround video (optional)
           </Text>
           <Text style={[txt(500), { fontSize: 12, color: C.t3, marginBottom: 10 }]}>
-            Up to 3 minutes. Record a new one or pick from your library. Videos are kept for 90 days.
+            Up to 3 minutes each, {MAX_VIDEOS_PER_INSPECTION} videos max. Record a new one or pick from your library. Videos are kept for 90 days.
           </Text>
-          {videos.length === 0 ? (
+
+          {/* Attached video tiles */}
+          {videos.map((v, idx) => (
+            <View
+              key={v.key}
+              style={{
+                flexDirection: "row", alignItems: "center",
+                borderWidth: 1, borderColor: C.border, borderRadius: 10,
+                padding: 12, gap: 12,
+                marginBottom: idx === videos.length - 1 ? 0 : 8,
+              }}
+            >
+              <View style={{
+                width: 44, height: 44, borderRadius: 8,
+                backgroundColor: C.t1 + "12",
+                alignItems: "center", justifyContent: "center",
+              }}>
+                <Play size={20} color={C.t1} fill={C.t1} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[txt(700), { fontSize: 14, color: C.t1 }]}>
+                  Video {idx + 1}
+                </Text>
+                <Text style={[txt(500), { fontSize: 12, color: C.t3, marginTop: 2 }]}>
+                  {Math.floor(v.durationSeconds / 60)}:{String(v.durationSeconds % 60).padStart(2, "0")}
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => removeVideo(v.key)}
+                hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+              >
+                <Trash2 size={18} color={C.red} />
+              </TouchableOpacity>
+            </View>
+          ))}
+
+          {/* Add-another button stays visible until the cap is hit. */}
+          {videos.length < MAX_VIDEOS_PER_INSPECTION && (
             <TouchableOpacity
               onPress={attachVideo}
               style={{
                 flexDirection: "row", alignItems: "center", justifyContent: "center",
                 borderWidth: 1, borderColor: C.border, borderStyle: "dashed",
                 borderRadius: 10, paddingVertical: 14, gap: 8,
+                marginTop: videos.length > 0 ? 8 : 0,
               }}
             >
               <Video size={18} color={C.t2} />
-              <Text style={[txt(600), { fontSize: 14, color: C.t2 }]}>Add video</Text>
+              <Text style={[txt(600), { fontSize: 14, color: C.t2 }]}>
+                {videos.length === 0 ? "Add video" : "Add another video"}
+              </Text>
             </TouchableOpacity>
-          ) : (
-            videos.map(v => (
-              <View
-                key={v.key}
-                style={{
-                  flexDirection: "row", alignItems: "center",
-                  borderWidth: 1, borderColor: C.border, borderRadius: 10,
-                  padding: 12, gap: 12,
-                }}
-              >
-                <View style={{
-                  width: 44, height: 44, borderRadius: 8,
-                  backgroundColor: C.t1 + "12",
-                  alignItems: "center", justifyContent: "center",
-                }}>
-                  <Play size={20} color={C.t1} fill={C.t1} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={[txt(700), { fontSize: 14, color: C.t1 }]}>
-                    Video recorded
-                  </Text>
-                  <Text style={[txt(500), { fontSize: 12, color: C.t3, marginTop: 2 }]}>
-                    {Math.floor(v.durationSeconds / 60)}:{String(v.durationSeconds % 60).padStart(2, "0")}
-                  </Text>
-                </View>
-                <TouchableOpacity
-                  onPress={() => removeVideo(v.key)}
-                  hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
-                >
-                  <Trash2 size={18} color={C.red} />
-                </TouchableOpacity>
-              </View>
-            ))
           )}
         </View>
 
