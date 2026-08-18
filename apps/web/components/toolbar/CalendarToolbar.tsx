@@ -213,7 +213,31 @@ export default function CalendarToolbar() {
     );
     const merged = new Map(dbResults.map(e => [e.id, e]));
     inMemory.forEach(e => { if (!merged.has(e.id)) merged.set(e.id, e); });
-    return Array.from(merged.values());
+    const all = Array.from(merged.values());
+
+    // Drop legs that were REMOVED from a load that still exists.
+    //
+    // Search deliberately surfaces soft-deleted rows so a cancelled or
+    // deleted load can be found and restored — that stays. But a leg
+    // taken off a relay is not a load the dispatcher lost; it's an
+    // editing step on a load they then finished configuring. Showing it
+    // makes one load look like several, and the row is not independently
+    // restorable anyway.
+    //
+    // "Still exists" = the same load has at least one live leg in these
+    // results. That's what separates a removed leg from a
+    // cancelled-keep-record load, whose event row is also soft-deleted
+    // but whose load has no live legs left — those must stay findable,
+    // since search is the only way back to them.
+    //
+    // Deliberately conservative: if the live siblings didn't match the
+    // query, we can't prove the load survived, so the row is kept. A
+    // stray extra result is a much smaller failure than a load the
+    // dispatcher can no longer find.
+    const liveLoadIds = new Set(
+      all.filter(e => !e.deletedAt && e.loadId).map(e => e.loadId as string),
+    );
+    return all.filter(e => !(e.deletedAt && e.loadId && liveLoadIds.has(e.loadId)));
   })();
   const searchResults = allSearchResults.slice(0, SEARCH_DISPLAY_LIMIT);
   // hasMore is true whenever the server hit its limit OR the merged

@@ -13,7 +13,7 @@
 import { byLegIndex, legLabel, legShortLabel } from '@fleetcal/types';
 import type { CalendarEvent } from '@/lib/types';
 
-type LegLike = Pick<CalendarEvent, 'id' | 'start' | 'relayGroupId' | 'relayRole' | 'legIndex' | 'legCount'>;
+type LegLike = Pick<CalendarEvent, 'id' | 'start' | 'relayGroupId' | 'relayRole' | 'legIndex' | 'legCount' | 'deletedAt'>;
 
 export interface LegPosition {
   index: number;
@@ -41,9 +41,17 @@ export function legPositionFor(
   }
 
   // Next: siblings sharing the relayGroupId in the provided list.
+  //
+  // Soft-deleted siblings are excluded. A removed leg is not part of the
+  // load any more, but it still sits in lists that deliberately surface
+  // deleted rows (search, recently-deleted), and counting it both
+  // inflates the total and shifts every later leg's number — a 3-leg
+  // load with one removed leg rendered its delivery as "Leg 4 of 4".
+  // `event` itself is never filtered out: a deleted leg still needs a
+  // label wherever it IS shown, and dropping it would break findIndex.
   if (event.relayGroupId && allEvents) {
     const group = allEvents
-      .filter(e => e.relayGroupId === event.relayGroupId)
+      .filter(e => e.relayGroupId === event.relayGroupId && (!e.deletedAt || e.id === event.id))
       .sort(byLegIndex);
     if (group.length > 1) {
       const idx = group.findIndex(e => e.id === event.id);
