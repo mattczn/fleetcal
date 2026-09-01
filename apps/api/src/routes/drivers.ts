@@ -17,6 +17,7 @@ import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability } from "../middleware/require.js";
 import { convertIfHeicAtUpload, HEIC_DECODE_FAILED } from "../lib/heicToJpeg.js";
+import { toE164US } from "../lib/twilio.js";
 
 const drivers = new Hono<{ Variables: AuthVariables }>();
 
@@ -83,11 +84,21 @@ function todayUtcDateKey(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-/** Match web's normalizePhone: keep '+' and digits, strip everything else. */
+/** Normalize an input phone to E.164 US ('+1XXXXXXXXXX') so
+ *  '(385) 422-4655', '385-422-4655', '3854224655', '13854224655' and
+ *  '+13854224655' all round-trip to the same stored value. Feeds the
+ *  drivers_org_phone_uniq index — without this, adding a driver
+ *  whose phone was already on file as a differently-formatted string
+ *  slipped past uniqueness and created a duplicate row (Luis
+ *  Gutierrez 2026-08 incident). Falls back to a bare digits+plus
+ *  strip for non-US numbers so a valid international phone still
+ *  gets stored instead of nulled. */
 function normalizePhone(input: string | null | undefined): string | null {
   if (!input) return null;
   const t = input.trim();
   if (!t) return null;
+  const e164 = toE164US(t);
+  if (e164) return e164;
   return t.replace(/[^\d+]/g, "") || null;
 }
 

@@ -264,7 +264,14 @@ applicants.post("/:id/hire", async (c) => {
         name,
         first_name: applicant.first_name,
         last_name: applicant.last_name,
-        phone: applicant.phone ?? null,
+        // Store E.164 so the drivers_org_phone_uniq index recognises
+        // the same number regardless of the format the applicant
+        // typed. Prior code stored the raw string, which is how
+        // '3854224655' from applications and '+13854224655' from a
+        // manual add both landed as separate drivers (2026-08 Luis
+        // dup incident). Falls back to raw for unusual/international
+        // numbers so we don't nullify a valid non-US phone.
+        phone: applicant.phone ? (toE164US(applicant.phone) ?? applicant.phone) : null,
         email: applicant.email ?? null,
         address: applicant.address ?? null,
         active_from: startDate,
