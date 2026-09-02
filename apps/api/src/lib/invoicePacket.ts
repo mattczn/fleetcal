@@ -159,9 +159,35 @@ function readJpegOrientation(bytes: Uint8Array): 1 | 3 | 6 | 8 {
 }
 
 /**
+ * How far into a file we'll hunt for a misplaced `%PDF` header.
+ *
+ * The spec puts it at byte 0, but real producers emit leading
+ * whitespace or a stray BOM, and every serious PDF reader tolerates it
+ * — Acrobat's own rule is to scan the first 1024 bytes. pdf-lib does
+ * the same, which is why such a file opens fine and only OUR sniff
+ * rejected it.
+ */
+const PDF_HEADER_SCAN_BYTES = 1024;
+
+/** Byte offset of `%PDF` within the first PDF_HEADER_SCAN_BYTES, or -1. */
+function findPdfHeader(bytes: Uint8Array): number {
+  const limit = Math.min(bytes.length - 3, PDF_HEADER_SCAN_BYTES);
+  for (let i = 0; i < limit; i++) {
+    if (bytes[i] === 0x25 && bytes[i + 1] === 0x50 && bytes[i + 2] === 0x44 && bytes[i + 3] === 0x46) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+/**
  * Sniff the file kind from the magic bytes. We can't trust the path
  * extension — some uploads come in as `.jpeg.pdf` etc. PDF starts
  * with `%PDF-`, JPEG with FFD8FF, PNG with 89 50 4E 47.
+ *
+ * The image formats are checked at offset 0 only and BEFORE the
+ * tolerant PDF scan, so a JPEG that happens to contain the bytes
+ * "%PDF" somewhere in its payload can never be misread as a PDF.
  */
 function detectFormat(bytes: Uint8Array): "pdf" | "jpeg" | "png" | "heic" | "unknown" {
   if (bytes.length < 4) return "unknown";
@@ -176,6 +202,17 @@ function detectFormat(bytes: Uint8Array): "pdf" | "jpeg" | "png" | "heic" | "unk
   // the dispatcher "this is HEIC, re-export as JPG" instead of vague
   // "unsupported_format".
   if (isHeicMagic(bytes)) return "heic";
+  // Header not at byte 0. Checked last so it can't shadow the formats
+  // above. A broker's rate con arrived with eight leading spaces before
+  // "%PDF-1.7" (load 12836350): pdf-lib read all three pages happily,
+  // but this sniff called it "unknown" and the packet shipped without
+  // the rate confirmation — silently, because generate never inspected
+  // the skipped list. Cost a real invoice its contract page.
+  const at = findPdfHeader(bytes);
+  if (at > 0) {
+    console.warn(`[invoicePacket] PDF header at byte ${at}, not 0 — accepting anyway`);
+    return "pdf";
+  }
   return "unknown";
 }
 
@@ -547,7 +584,11 @@ export async function persistInvoicePacket(args: {
    *  packet pass it in. The bare invoice is always re-rendered (it's
    *  cheap — no attachments to download). */
   prebuilt?: Buffer;
-}): Promise<{ documentId: string; storagePath: string }> {
+  /** Sources that failed to embed, so callers can surface an incomplete
+   *  packet instead of discovering it in a broker's inbox. Empty when a
+   *  `prebuilt` buffer was supplied — that caller already has its own
+   *  skipped list from the build it did. */
+}): Promise<{ documentId: string; storagePath: string; skipped: PacketResult["skipped"] }> {
   const { invoice, orgId } = args;
 
   // Need an event_id for the load_documents row (legacy NOT NULL).
@@ -603,6 +644,7 @@ export async function persistInvoicePacket(args: {
   // Build the full packet. If the caller already has one (email-send
   // path), reuse it.
   let packetBuffer = args.prebuilt;
+  let skipped: PacketResult["skipped"] = [];
   if (!packetBuffer) {
     const [extraDocPaths, rateConPath] = await Promise.all([
       resolvePacketDocsForLoad(invoice.loadId, orgId),
@@ -616,6 +658,29 @@ export async function persistInvoicePacket(args: {
       dueDate,
     });
     packetBuffer = built.buffer;
+    skipped = built.skipped;
+
+    // Generate used to discard `skipped` entirely, so a packet could be
+    // persisted — and later mailed — missing documents with nothing
+    // anywhere saying so. Invoice 15643 shipped without its rate
+    // confirmation for that reason and it took a manual byte-level dig
+    // to find out why.
+    //
+    // Send already refuses to ship an incomplete packet (see
+    // POST /:id/send, allowPartialPacket). Generate deliberately does
+    // NOT throw: blocking invoice creation over an unreadable
+    // attachment would strand billing, and send is the gate that
+    // matters. But it must be LOUD, and the rate con gets its own line
+    // because it's the contract page a broker needs to approve payment.
+    if (skipped.length) {
+      const missingRateCon = skipped.some(s => s.path.startsWith("rate-con:"));
+      console.error(
+        `[invoicePacket] invoice ${invoice.invoiceNumber} (load ${invoice.loadId}) ` +
+        `persisted WITHOUT ${skipped.length} document(s)` +
+        (missingRateCon ? " INCLUDING THE RATE CONFIRMATION" : "") + ": " +
+        skipped.map(s => `${s.path} (${s.reason})`).join(", "),
+      );
+    }
   }
 
   const ts = Date.now();
@@ -645,7 +710,7 @@ export async function persistInvoicePacket(args: {
     orgId,
   );
 
-  return packetUpload;
+  return { ...packetUpload, skipped };
 }
 
 /** Upload a single PDF + insert its load_documents row. Used by both

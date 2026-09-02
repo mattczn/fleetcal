@@ -1046,7 +1046,7 @@ invoices.post("/:id/packet", requireCapability("accounting.access"), async (c) =
 
   try {
     const { persistInvoicePacket } = await import("../lib/invoicePacket.js");
-    const { documentId, storagePath } = await persistInvoicePacket({ invoice, orgId });
+    const { documentId, storagePath, skipped } = await persistInvoicePacket({ invoice, orgId });
 
     // Mint a 1-hour signed URL so the client can preview / download
     // the packet directly from Supabase storage without going back
@@ -1059,10 +1059,18 @@ invoices.post("/:id/packet", requireCapability("accounting.access"), async (c) =
       throw new Error(`signed URL mint failed: ${signErr?.message ?? "unknown"}`);
     }
 
+    // Generate still SUCCEEDS with an incomplete packet — blocking
+    // billing over one unreadable attachment is worse than shipping a
+    // short packet, and Send is the gate that refuses to mail it. But
+    // the caller is told, so "Generate" can warn instead of handing
+    // back a packet that quietly lost the rate confirmation.
     const res: GenerateInvoicePacketResponse = {
       documentId,
       storagePath,
       signedUrl: signed.signedUrl,
+      ...(skipped.length
+        ? { skipped: skipped.map(s => ({ path: s.path, reason: s.reason ?? "embed_failed" })) }
+        : {}),
     };
     return c.json(res);
   } catch (err) {

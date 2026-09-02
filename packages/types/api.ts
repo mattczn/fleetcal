@@ -1365,6 +1365,13 @@ export interface GenerateInvoicePacketResponse {
   /** 1-hour signed URL the client can use to download / preview the
    *  packet without round-tripping through the API. */
   signedUrl:   string;
+  /** Attachments that could NOT be embedded, when any. Absent on a
+   *  clean build. Generate succeeds regardless — blocking billing over
+   *  one unreadable file is worse than a short packet, and Send is the
+   *  gate that refuses to mail an incomplete one — so this is how the
+   *  UI knows to warn. A `rate-con:` prefix on `path` means the packet
+   *  went out without the contract page. */
+  skipped?:    Array<{ path: string; reason: string }>;
 }
 
 /**
