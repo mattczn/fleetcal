@@ -2653,6 +2653,19 @@ function InvoicingPanel() {
                   <Input value={form.invoiceFromAddress}
                     onChange={v => updateField('invoiceFromAddress', v.trim())}
                     placeholder="invoices@fleetcal.app" type="email" />
+                  {/* State the EFFECTIVE address, loudly, when the override is
+                      empty. A blank box with grey placeholder text reads as
+                      "not configured" — it does not read as "your brokers are
+                      seeing invoices@fleetcal.app right now". Curzon sent for
+                      a month that way without anyone noticing. */}
+                  {!form.invoiceFromAddress && (
+                    <div className="text-[11.5px] leading-snug rounded-lg px-2.5 py-2"
+                         style={{ background: '#fef7e0', border: '1px solid #fddc9a', color: '#b06000' }}>
+                      <strong>Currently sending as invoices@fleetcal.app.</strong> That is
+                      what brokers see on every invoice today. Enter your own address
+                      above to change it.
+                    </div>
+                  )}
                   <div className="text-[11px] leading-snug mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
                     Brokers always see your <strong>company name</strong> in the &ldquo;From&rdquo; display
                     (e.g. &ldquo;Acme Trucking &lt;{form.invoiceFromAddress || 'invoices@fleetcal.app'}&gt;&rdquo;) — only the
