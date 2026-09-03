@@ -32,6 +32,7 @@ import { deriveSeverity, type SeverityLevel } from "@fleetcal/types";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireTruckHistoryOrg, requireModule, requireCapability } from "../middleware/require.js";
 import { supabase } from "../lib/supabase.js";
+import { suppressedInFilter } from "../lib/motivePerfFilter.js";
 import { sendAutoPushToDriver } from "../lib/push.js";
 import { getOrgMotiveKey } from "../lib/motiveIngest.js";
 
@@ -140,6 +141,13 @@ perf.get("/", async (c) => {
     .from("motive_performance_events")
     .select(`${SELECT_COLS},raw,vehicle_id`)
     .eq("org_id", orgId)
+    // Hide low-signal event types (seatbelt / stop-sign / camera
+    // obstruction). Ingest still writes them; every read surface —
+    // this list, the newCount badge below, the driver-app inbox,
+    // and the safety score — filters them out via the shared
+    // SUPPRESSED_EVENT_TYPES set. Toggle by editing the set in
+    // lib/motivePerfFilter.ts.
+    .not("event_type", "in", suppressedInFilter())
     .order("event_time", { ascending: false })
     .limit(limit);
   if (status !== "all") q = q.eq("dispatch_status", status);
@@ -198,12 +206,16 @@ perf.get("/", async (c) => {
 
   // Unread count — cheap thanks to the partial index; always returned
   // so the bell badge stays fresh even when the panel is filtered.
+  // Same SUPPRESSED_EVENT_TYPES filter as the list above so the badge
+  // count and the drawer contents can't diverge (bell says "8 unread"
+  // while the drawer shows 2 because the other 6 are suppressed types).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { count } = await (supabase as any)
     .from("motive_performance_events")
     .select("id", { count: "exact", head: true })
     .eq("org_id", orgId)
-    .eq("dispatch_status", "new");
+    .eq("dispatch_status", "new")
+    .not("event_type", "in", suppressedInFilter());
 
   return c.json({ events: rows, movements, newCount: count ?? 0 });
 });

@@ -23,6 +23,7 @@ import {
 } from "@fleetcal/types";
 
 import { supabase } from "../lib/supabase.js";
+import { suppressedInFilter, SUPPRESSED_EVENT_TYPES } from "../lib/motivePerfFilter.js";
 import { deriveSeverity } from "@fleetcal/types";
 import { ensureEventRouteCached } from "../lib/routeGeometry.js";
 import { isTruckHistoryOrg } from "../middleware/require.js";
@@ -3457,6 +3458,12 @@ driver.get("/safety-alerts", async (c) => {
   // Fetch raw so we can derive severity server-side. Raw is stripped
   // before responding — we only expose the small severity fields the
   // meter needs, not Motive's multi-KB GPS arrays.
+  //
+  // Suppressed types (seatbelt, stop-sign, cam obstruction) also
+  // filtered out here — belt-and-suspenders on top of the dispatch
+  // side no longer notifying for them (see lib/motivePerfFilter.ts).
+  // Historical notifications for those types stop showing in the
+  // driver's inbox the moment this deploys.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data, error } = await (supabase as any)
     .from("motive_performance_events")
@@ -3470,6 +3477,7 @@ driver.get("/safety-alerts", async (c) => {
     `)
     .eq("org_id", orgId)
     .eq("notified_driver_id", driverId)
+    .not("event_type", "in", suppressedInFilter())
     .order("notified_at", { ascending: false })
     .limit(100);
   if (error) {
@@ -3685,10 +3693,12 @@ driver.get("/safety-score", async (c) => {
     seat_belt_violation: 0.5,
     seatbelt:            0.5,
   };
-  const NON_SCORED_EVENTS = new Set([
-    "camera_obstruction",
-    "driver_facing_cam_obstruction",
-  ]);
+  // Suppressed types don't count toward the driver's own score for
+  // the same reason they don't show in the alert inbox — they're noise.
+  // TYPE_WEIGHT entries above (stop_sign, seat_belt) are kept for the
+  // moment because they don't hurt when the type never gets scored,
+  // but a future cleanup can drop them.
+  const NON_SCORED_EVENTS = SUPPRESSED_EVENT_TYPES;
   const MEDIAN_ANCHOR = 80;
   const MIN_MILES_FOR_MEDIAN = 500;
   const MIN_MILES_FOR_SCORE  = 200;    // below this → score = null ("insufficient data")

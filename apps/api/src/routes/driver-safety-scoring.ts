@@ -45,6 +45,7 @@ import { deriveSeverity } from "@fleetcal/types";
 
 import { supabase } from "../lib/supabase.js";
 import { loadExcludedDrivers } from "../lib/reportExclusions.js";
+import { SUPPRESSED_EVENT_TYPES } from "../lib/motivePerfFilter.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import {
   requireTruckHistoryOrg,
@@ -92,10 +93,11 @@ const DEFAULT_EVENT_TYPE_WEIGHT = 1.0;
  *  Cam obstruction is usually a mount/sun/clothing issue, not a driving
  *  hazard — dispatch still wants to see it so they can tell the driver
  *  to fix the camera, but it shouldn't drag anyone's safety score down. */
-const NON_SCORED_EVENTS = new Set([
-  "camera_obstruction",
-  "driver_facing_cam_obstruction",
-]);
+// Suppressed types (seatbelt / stop-sign / camera obstruction) —
+// same set the dispatch panel + driver-app inbox filter out via
+// lib/motivePerfFilter.ts. Kept as an alias so this file's existing
+// NON_SCORED_EVENTS.has(...) call sites don't need renaming.
+const NON_SCORED_EVENTS = SUPPRESSED_EVENT_TYPES;
 
 // Scoring is FLEET-MEDIAN-normalized so it self-calibrates. The score
 // curve is piecewise linear anchored at the fleet median:
