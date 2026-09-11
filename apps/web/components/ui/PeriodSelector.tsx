@@ -17,7 +17,7 @@
 'use client';
 
 import type { Period } from '@/lib/periodRange';
-import { PERIODS, getPeriodRange, startedWeeksISO, currentWeekStartISO } from '@/lib/periodRange';
+import { PERIODS, getPeriodRange, startedWeeksISO, startedMonthsISO, currentWeekStartISO } from '@/lib/periodRange';
 import DatePicker from '@/components/calendar/DatePicker';
 import { LOAD_ACCENT } from '@/lib/loadAccent';
 import { useMemo } from 'react';
@@ -34,6 +34,10 @@ export interface PeriodSelectorProps {
    *  any started week from the dropdown. */
   weekStart?:        string;
   onWeekStartChange?: (iso: string) => void;
+  /** Selected month's first day for the 'month' period. Pass + handle
+   *  to enable picking any past month from the dropdown. */
+  monthStart?:        string;
+  onMonthStartChange?: (iso: string) => void;
   /** Render the date-range label under the pills (default true).
    *  Set false when the page already shows the range elsewhere. */
   showRangeLabel?: boolean;
@@ -43,6 +47,7 @@ export function PeriodSelector({
   period, onPeriodChange,
   customStart, customEnd, onCustomStartChange, onCustomEndChange,
   weekStart, onWeekStartChange,
+  monthStart, onMonthStartChange,
   showRangeLabel = true,
 }: PeriodSelectorProps) {
   const effectiveWeekStart = weekStart ?? currentWeekStartISO();
@@ -50,8 +55,10 @@ export function PeriodSelector({
     startISO:      customStart,
     endISO:        customEnd,
     weekStartISO:  effectiveWeekStart,
+    monthStartISO: monthStart,
   });
-  const weeks = useMemo(() => startedWeeksISO(12), []);
+  const weeks  = useMemo(() => startedWeeksISO(12), []);
+  const months = useMemo(() => startedMonthsISO(12), []);
 
   return (
     <div className="flex flex-col items-end gap-1.5 shrink-0">
@@ -90,6 +97,21 @@ export function PeriodSelector({
           >
             {weeks.map((w) => (
               <option key={w.weekStart} value={w.weekStart}>{w.label}</option>
+            ))}
+          </select>
+        </div>
+      )}
+      {period === 'month' && onMonthStartChange && (
+        <div className="flex items-center gap-1.5 px-2 py-1 rounded"
+          style={{ border: '1px solid var(--gc-border)', background: 'var(--gc-surface)' }}>
+          <select
+            value={monthStart ?? months[0].monthStart}
+            onChange={(e) => onMonthStartChange(e.target.value)}
+            className="text-[13px] font-semibold bg-transparent border-0 outline-none cursor-pointer"
+            style={{ color: 'var(--gc-text-1)' }}
+          >
+            {months.map((m) => (
+              <option key={m.monthStart} value={m.monthStart}>{m.label}</option>
             ))}
           </select>
         </div>

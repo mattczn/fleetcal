@@ -158,12 +158,14 @@ function ExpensesPageInner() {
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd]     = useState('');
   const [weekStart, setWeekStart]     = useState<string | undefined>(undefined);
+  const [monthStart, setMonthStart]   = useState<string | undefined>(undefined);
   const range = useMemo(() =>
     getPeriodRange(period, {
       startISO: customStart, endISO: customEnd,
       weekStartISO: weekStart ?? currentWeekStartISO(),
+      monthStartISO: monthStart,
     }),
-  [period, customStart, customEnd, weekStart]);
+  [period, customStart, customEnd, weekStart, monthStart]);
   const fromIso = useMemo(() => range.start.toISOString().slice(0, 10), [range]);
   const toIso   = useMemo(() => range.end.toISOString().slice(0, 10),   [range]);
 
@@ -623,6 +625,8 @@ function ExpensesPageInner() {
               onCustomEndChange={setCustomEnd}
               weekStart={weekStart}
               onWeekStartChange={setWeekStart}
+              monthStart={monthStart}
+              onMonthStartChange={setMonthStart}
             />
           </div>
         </div>

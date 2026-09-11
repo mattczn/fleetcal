@@ -70,9 +70,27 @@ export function startedWeeksISO(count = 12): Array<{ weekStart: string; label: s
   return items;
 }
 
+/** Builds the list of started months (current month + N past months),
+ *  newest first, valued by their first day. Mirrors startedWeeksISO so
+ *  a "month picker" UI can jump to any calendar month in one click. */
+export function startedMonthsISO(count = 12): Array<{ monthStart: string; label: string }> {
+  const items: Array<{ monthStart: string; label: string }> = [];
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  for (let i = 0; i < count; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const label = d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    items.push({
+      monthStart: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-01`,
+      label: i === 0 ? `This month (${label})` : label,
+    });
+  }
+  return items;
+}
+
 export function getPeriodRange(
   period: Period,
-  custom?: { startISO: string; endISO: string; weekStartISO?: string },
+  custom?: { startISO: string; endISO: string; weekStartISO?: string; monthStartISO?: string },
 ): PeriodRange {
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -97,11 +115,21 @@ export function getPeriodRange(
       fri.setDate(sat.getDate() + 6);
       return { start: sat, end: fri };
     }
-    case 'month':
+    case 'month': {
+      // Accept an explicit monthStartISO so a "month picker" UI can
+      // jump to any calendar month; defaults to the current month.
+      if (custom?.monthStartISO) {
+        const [y, m] = custom.monthStartISO.split('-').map(Number);
+        return {
+          start: new Date(y, (m ?? 1) - 1, 1),
+          end:   new Date(y, (m ?? 1), 0),
+        };
+      }
       return {
         start: new Date(today.getFullYear(), today.getMonth(), 1),
         end:   new Date(today.getFullYear(), today.getMonth() + 1, 0),
       };
+    }
     case '30d': {
       const s = new Date(today); s.setDate(today.getDate() - 29);
       return { start: s, end: today };
