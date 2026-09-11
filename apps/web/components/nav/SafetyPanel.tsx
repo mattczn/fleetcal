@@ -475,6 +475,20 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
                 // video visible without hitting Motive again.
                 setEvents(prev => prev.map(e => e.id === eventId ? { ...e, raw } : e));
               }}
+              onAdvance={() => {
+                // After an acknowledge/notify/ignore, jump to the next
+                // new alert so the dispatcher doesn't have to click back
+                // to the list. Prefer the next `new` row after the
+                // current position; if none remain, fall back to the
+                // next row in visible order; if the current row was the
+                // last one, clear the selection.
+                const idx = visible.findIndex(e => e.id === selectedId);
+                if (idx === -1) return;
+                const tail = visible.slice(idx + 1);
+                const nextNew = tail.find(e => e.dispatch_status === 'new' && e.id !== selectedId);
+                const next    = nextNew ?? tail.find(e => e.id !== selectedId) ?? null;
+                setSelectedId(next ? next.id : null);
+              }}
             />
           ) : (
             <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--gc-text-3)', fontSize: 13 }}>
@@ -490,7 +504,7 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
 // ── Right pane: map + video + actions ──────────────────────────────────
 
 function SafetyDetail({
-  event, movements, drivers, driverScores7d, onOpenScorecard, onEventUpdated, onRawRefreshed,
+  event, movements, drivers, driverScores7d, onOpenScorecard, onEventUpdated, onRawRefreshed, onAdvance,
 }: {
   event:     PanelEvent;
   movements: PerformanceEventMovement[];
@@ -505,6 +519,9 @@ function SafetyDetail({
   /** Fires when the dispatcher clicks the "See full scorecard" link
    *  next to the 7-day score. Panel navigates to /drivers. */
   onOpenScorecard: () => void;
+  /** Fires after a successful acknowledge / notify / ignore so the
+   *  panel can jump to the next new alert without a manual click. */
+  onAdvance?: () => void;
 }) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<google.maps.Map | null>(null);
@@ -690,6 +707,7 @@ function SafetyDetail({
   async function handleNotify() {
     if (!driverId) return;
     setBusy(true); setActionErr(null);
+    let ok = false;
     try {
       const res = await railway.notifyPerformanceEventDriver(event.id, { driverId, message: message.trim() || undefined });
       // notify-driver returns { event, warning? } — event is null only
@@ -698,36 +716,47 @@ function SafetyDetail({
       if (res.event) onEventUpdated(res.event);
       // Clear the message field so the next event doesn't inherit it.
       setMessage('');
+      ok = true;
     } catch (err) {
       setActionErr(errorMessage(err));
     }
     setBusy(false);
+    if (ok) onAdvance?.();
   }
 
   async function handleDismiss() {
     setBusy(true); setActionErr(null);
+    let ok = false;
     try {
       const res = await railway.updatePerformanceEvent(event.id, { dispatch_status: 'dismissed' });
       onEventUpdated(res.event);
+      ok = true;
     } catch (err) {
       setActionErr(errorMessage(err));
     }
     setBusy(false);
+    // Auto-advance to the next un-acted event so the dispatcher can
+    // bang through a backlog without clicking around. Only on success —
+    // a failed action stays on the row so the error is visible.
+    if (ok) onAdvance?.();
   }
 
   async function handleConfirm() {
     if (!driverId) return;
     setBusy(true); setActionErr(null);
+    let ok = false;
     try {
       const res = await railway.updatePerformanceEvent(event.id, {
         dispatch_status:    'confirmed',
         assigned_driver_id: driverId,
       });
       onEventUpdated(res.event);
+      ok = true;
     } catch (err) {
       setActionErr(errorMessage(err));
     }
     setBusy(false);
+    if (ok) onAdvance?.();
   }
 
   return (

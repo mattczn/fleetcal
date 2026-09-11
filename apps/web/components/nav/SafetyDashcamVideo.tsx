@@ -106,11 +106,11 @@ export default function DashcamVideo({ eventId, raw: initialRaw, onRefreshed }: 
         // Prefer video whenever Motive has one — stitched AI-viz clip
         // first, then per-camera clips side-by-side.
         dual ? (
-          <VideoTile src={dual} label="Front + driver (annotated)" onExpired={doRefresh} />
+          <VideoTile key={dual} src={dual} label="Front + driver (annotated)" onExpired={doRefresh} />
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: front && driver ? '1fr 1fr' : '1fr', gap: 8 }}>
-            {front  && <VideoTile src={front}  label="Forward-facing" onExpired={doRefresh} />}
-            {driver && <VideoTile src={driver} label="Driver-facing"  onExpired={doRefresh} />}
+            {front  && <VideoTile key={front}  src={front}  label="Forward-facing" onExpired={doRefresh} />}
+            {driver && <VideoTile key={driver} src={driver} label="Driver-facing"  onExpired={doRefresh} />}
           </div>
         )
       ) : hasAnyImage ? (
@@ -120,8 +120,8 @@ export default function DashcamVideo({ eventId, raw: initialRaw, onRefreshed }: 
         // what Curzon sees in the Motive coaching app.
         <div>
           <div style={{ display: 'grid', gridTemplateColumns: frontImg && driverImg ? '1fr 1fr' : '1fr', gap: 8 }}>
-            {frontImg  && <ImageTile src={frontImg}  label="Forward-facing" onExpired={doRefresh} />}
-            {driverImg && <ImageTile src={driverImg} label="Driver-facing"  onExpired={doRefresh} />}
+            {frontImg  && <ImageTile key={frontImg}  src={frontImg}  label="Forward-facing" onExpired={doRefresh} />}
+            {driverImg && <ImageTile key={driverImg} src={driverImg} label="Driver-facing"  onExpired={doRefresh} />}
           </div>
           <div style={{ fontSize: 10.5, color: 'var(--gc-text-3)', marginTop: 6 }}>
             Motive didn’t transcode a video clip for this event ({transcodeStatus ?? 'no video'}). Stills above are from the moment of the alert.
@@ -165,6 +165,10 @@ export default function DashcamVideo({ eventId, raw: initialRaw, onRefreshed }: 
   );
 }
 
+// Callers should pass `key={src}` — a fresh signed URL replaces the
+// component instance so the `broken` flag resets naturally. Without
+// that, the flag would latch true after the first expired URL and the
+// placeholder would stay even after "Refresh link" pulled a valid one.
 function ImageTile({ src, label, onExpired }: { src: string; label: string; onExpired?: () => void }) {
   const [broken, setBroken] = useState(false);
   return (
@@ -210,6 +214,7 @@ function ImageTile({ src, label, onExpired }: { src: string; label: string; onEx
   );
 }
 
+// See ImageTile — callers pass `key={src}` to reset the broken flag on refresh.
 function VideoTile({ src, label, onExpired }: { src: string; label: string; onExpired?: () => void }) {
   const [broken, setBroken] = useState(false);
   return (
