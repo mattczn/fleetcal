@@ -17,7 +17,11 @@
  * Returns:
  *   401 — missing / malformed / expired Supabase token
  *   401 — token has no verified phone claim
- *   404 — token is valid but no drivers row matches that phone
+ *   404 — token is valid but no ACTIVE drivers row matches that phone
+ *   409 — the phone matches more than one active drivers row (across
+ *         orgs or a stray dup within an org). Refuses to guess which
+ *         one the caller meant; needs manual cleanup on the drivers
+ *         table before login can succeed.
  */
 import type { MiddlewareHandler } from "hono";
 import { createRemoteJWKSet, jwtVerify } from "jose";
@@ -86,17 +90,22 @@ export const driverAuth: MiddlewareHandler<{ Variables: DriverAuthVariables }> =
       last10,
     ];
     const orFilter = variants.map((v) => `phone.eq.${v}`).join(",");
-    const { data: row, error } = await supabase
+    // active_to IS NULL keeps retired drivers out of the login race —
+    // without this a retired-but-not-deleted row (e.g. a legacy merge
+    // survivor, a former driver still in the drivers table for
+    // reporting) can shadow a real driver with the same phone.
+    // No .limit(1) — we WANT to see every match so an ambiguous phone
+    // hard-fails below instead of silently picking a random org's row.
+    const { data: rows, error } = await supabase
       .from("drivers")
       .select("id, org_id, name, phone")
       .or(orFilter)
-      .limit(1)
-      .maybeSingle();
+      .is("active_to", null);
     if (error) {
       console.error("[driverAuth] drivers lookup failed:", error);
       return c.json({ error: "lookup_failed", detail: error.message }, 500);
     }
-    if (!row) {
+    if (!rows || rows.length === 0) {
       return c.json({
         error:  "not_found",
         reason: "no_driver_for_phone",
@@ -104,7 +113,21 @@ export const driverAuth: MiddlewareHandler<{ Variables: DriverAuthVariables }> =
         triedPhones: variants,
       }, 404);
     }
-    const driver = row as { id: number; org_id: string; name: string; phone: string };
+    if (rows.length > 1) {
+      // Two active drivers share this phone. Never guess which one the
+      // caller meant — a wrong guess is a cross-tenant data leak. Fail
+      // loud and log which rows collided so support can un-dupe.
+      console.error("[driverAuth] ambiguous phone — multiple active drivers", {
+        phone,
+        matched: rows.map((r) => ({ id: (r as { id: number }).id, org_id: (r as { org_id: string }).org_id })),
+      });
+      return c.json({
+        error:  "ambiguous_phone",
+        reason: "multiple_active_drivers_for_phone",
+        detail: "This phone is on more than one active driver record. Contact dispatch.",
+      }, 409);
+    }
+    const driver = rows[0] as { id: number; org_id: string; name: string; phone: string };
 
     c.set("driverId",   driver.id);
     c.set("orgId",      driver.org_id);
