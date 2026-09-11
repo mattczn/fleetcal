@@ -331,7 +331,7 @@ export const railway = {
   },
   listAssets() {
     return req<{
-      assets: { id: number; name: string; unit?: string; truck?: string; color: string; type: string }[];
+      assets: { id: number; name: string; unit?: string; truck?: string; color: string; type: string; mudflapCardLast4?: string }[];
     }>("GET", "/v1/driver/assets");
   },
   suggestedAsset() {

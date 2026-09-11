@@ -26,7 +26,7 @@ import {
 } from "react-native";
 import {
   Truck, Container, ChevronDown, Check, X, ArrowLeft, AlertTriangle,
-  Camera, Plus, Trash2, Search, Wrench, Sparkles, Video, Play,
+  Camera, Plus, Trash2, Search, Wrench, Sparkles, Video, Play, CreditCard,
 } from "lucide-react-native";
 import * as ImagePicker from "expo-image-picker";
 import * as Location from "expo-location";
@@ -45,7 +45,15 @@ const txt = (weight: 500 | 600 | 700 | 800) => ({
                      "PlusJakartaSans_800ExtraBold",
 });
 
-interface AssetOption   { id: number; name: string; unit?: string; }
+interface AssetOption   {
+  id: number;
+  name: string;
+  unit?: string;
+  /** Last 4 of the truck's Mudflap fuel card (Curzon-only). When set,
+   *  the pre-trip inspection asks the driver to confirm the card is
+   *  still in the cab. Absent = truck has no fuel card assigned. */
+  mudflapCardLast4?: string;
+}
 interface TrailerOption { id: number; name: string; trailerNumber?: string; }
 
 // ── Checklist definitions ─────────────────────────────────────────────
@@ -267,6 +275,13 @@ export default function InspectionFormScreen({ initialAssetId, initialTrailerId,
   // off of.
   const [cabClean, setCabClean] = useState(true);
 
+  // ── Mudflap fuel-card presence check (Curzon) ─────────────────────
+  // Only shown when the selected truck has a mudflap_card_last4 on
+  // file. null = unanswered (submit is blocked); true = card is in the
+  // cab (dispatch can eyeball the photo to verify last-4); false =
+  // card is missing (dispatch is notified so they can chase it down).
+  const [cardPresent, setCardPresent] = useState<boolean | null>(null);
+
   // ── Step 3: maintenance reports for failed items ──────────────────
   // After a successful inspection submit, if any item failed we hand off
   // to an inline loop (MaintenanceStep) that walks the driver through
@@ -374,6 +389,15 @@ export default function InspectionFormScreen({ initialAssetId, initialTrailerId,
   const setItemNotes = useCallback((id: string, n: string) => {
     setItems(prev => ({ ...prev, [id]: { status: prev[id]?.status ?? "pass", notes: n } }));
   }, []);
+
+  // Reset the mudflap yes/no + drop any stale photo when the driver
+  // switches trucks. Otherwise a photo taken for truck A's card would
+  // upload against truck B's inspection with the wrong itemId, and the
+  // stale answer would carry over.
+  useEffect(() => {
+    setCardPresent(null);
+    setPhotos(p => p.filter(ph => ph.itemId !== "mudflap_card_present"));
+  }, [assetId]);
 
   // Truck-History flow only: keep the `cleanliness` checklist item in sync
   // with the top card so it rides along in the submitted `items` (server
@@ -583,6 +607,21 @@ export default function InspectionFormScreen({ initialAssetId, initialTrailerId,
     const truckItems   = assetId ? buildItems(TRUCK_CHECKLIST)   : [];
     const trailerItems = includeTrailer && trailerId ? buildItems(TRAILER_CHECKLIST) : [];
 
+    // Mudflap fuel-card presence — only trucks with a card on file are
+    // asked (see MudflapCardCard), and the submit gate below refuses to
+    // proceed with cardPresent still null. `fail` = card missing, which
+    // the server keeps out of hasDefects so it doesn't paint the whole
+    // inspection red. Item id must stay in sync with the server-side
+    // NON_MECHANICAL_ITEM_IDS set in driver.ts.
+    if (assetId && selectedAsset?.mudflapCardLast4 && cardPresent !== null) {
+      truckItems.push({
+        id:      "mudflap_card_present",
+        section: "Fuel card",
+        label:   `Mudflap fuel card in cab (****${selectedAsset.mudflapCardLast4})`,
+        status:  cardPresent ? "pass" : "fail",
+      });
+    }
+
     // Collect the failed rows for step 3 (maintenance reports). Each one
     // remembers whether it's a truck- or trailer-side defect (so the
     // report targets the right equipment) and the first photo the driver
@@ -696,7 +735,7 @@ export default function InspectionFormScreen({ initialAssetId, initialTrailerId,
     } finally {
       setSubmitting(false);
     }
-  }, [assetId, trailerId, includeTrailer, kind, items, notes, driverName, photos, videos, onSubmitted]);
+  }, [assetId, trailerId, includeTrailer, kind, items, notes, driverName, photos, videos, onSubmitted, selectedAsset, cardPresent]);
 
   const failCount = useMemo(
     () => Object.values(items).filter(s => s.status === "fail").length,
@@ -728,6 +767,16 @@ export default function InspectionFormScreen({ initialAssetId, initialTrailerId,
       );
       return;
     }
+    // Mudflap fuel-card presence — answer required for any truck that
+    // has a card on file. Not a photo requirement; a Yes with no photo
+    // is fine (dispatch verifies via the on-file last-4 next time).
+    if (assetId && selectedAsset?.mudflapCardLast4 && cardPresent === null) {
+      Alert.alert(
+        "Fuel card check required",
+        "Answer whether the Mudflap fuel card is in the cab before submitting.",
+      );
+      return;
+    }
     const truckPart   = assetId && selectedAsset ? truckLabel(selectedAsset.name, selectedAsset.unit) : "";
     const trailerPart = includeTrailer && selectedTrailer ? trailerLabel(selectedTrailer.name, selectedTrailer.trailerNumber) : "";
     const equipmentLine = [truckPart, trailerPart].filter(Boolean).join(" + ");
@@ -743,7 +792,7 @@ export default function InspectionFormScreen({ initialAssetId, initialTrailerId,
       ],
       { cancelable: true },
     );
-  }, [assetId, trailerId, includeTrailer, kind, hasCleanlinessPhoto, selectedAsset, selectedTrailer, failCount, performSubmit]);
+  }, [assetId, trailerId, includeTrailer, kind, hasCleanlinessPhoto, selectedAsset, selectedTrailer, failCount, performSubmit, cardPresent]);
 
   return (
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
@@ -828,6 +877,22 @@ export default function InspectionFormScreen({ initialAssetId, initialTrailerId,
               </View>
             )}
           </View>
+        )}
+
+        {/* Mudflap fuel card — Curzon-only standout ABOVE cleanliness.
+            Only rendered when the selected truck has a mudflap_card_last4
+            on file; trucks without one skip the question entirely. Shown
+            in BOTH flows (Truck-History and plain) because Curzon uses
+            both entry points and the ask is truck-scoped, not flow-scoped. */}
+        {assetId && selectedAsset?.mudflapCardLast4 && (
+          <MudflapCardCard
+            cardLast4={selectedAsset.mudflapCardLast4}
+            present={cardPresent}
+            onSetPresent={setCardPresent}
+            photos={photos.filter(p => p.itemId === "mudflap_card_present")}
+            onAddPhoto={() => addPhotoFor("truck", "mudflap_card_present")}
+            onRemovePhoto={removePhoto}
+          />
         )}
 
         {/* Cleanliness — standout colored card ABOVE the checklist, in the
@@ -1349,6 +1414,114 @@ function CleanlinessCard({
             </View>
           )}
         </>
+      )}
+    </View>
+  );
+}
+
+/**
+ * MudflapCardCard — Curzon-only standout card at the top of the pre-trip
+ * that asks the driver to confirm the Mudflap fuel card is in the cab.
+ * Only rendered when the selected truck has a mudflap_card_last4 on
+ * file (dispatch mints these per asset; trucks without one skip the
+ * question entirely).
+ *
+ *   Unanswered → neutral, "Answer required to submit" nudge.
+ *   Yes        → green. Optional photo, so dispatch can eyeball the
+ *                on-file last-4 against what's in the cab.
+ *   No         → red. No photo prompt; the No itself is the flag, and
+ *                dispatch is notified via the inspection detail.
+ *
+ * Photos added here always carry itemId "mudflap_card_present" so the
+ * dispatch view can pull them under the fuel-card section without
+ * scanning general photos.
+ */
+function MudflapCardCard({
+  cardLast4, present, onSetPresent, photos, onAddPhoto, onRemovePhoto,
+}: {
+  cardLast4:     string;
+  present:       boolean | null;
+  onSetPresent:  (v: boolean) => void;
+  photos:        PendingPhoto[];
+  onAddPhoto:    () => void;
+  onRemovePhoto: (key: string) => void;
+}) {
+  const { C, ACCENT } = useTheme();
+  const missing  = present === false;
+  const answered = present !== null;
+  const bg     = missing ? C.redBg    : answered ? C.greenBg  : C.blueBg;
+  const border = missing ? C.red      : answered ? C.green    : C.blue;
+  const ink    = missing ? C.redInk   : answered ? C.greenInk : C.blueInk;
+
+  return (
+    <View style={{ backgroundColor: bg, borderColor: border, borderWidth: 1, borderRadius: 12, padding: 16, marginBottom: 14 }}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 4 }}>
+        <CreditCard size={16} color={ink} />
+        <Text style={[txt(800), { fontSize: 15, color: ink }]}>Mudflap fuel card</Text>
+      </View>
+      <Text style={[txt(600), { fontSize: 13, color: ink, marginBottom: 4 }]}>
+        Card on file for this truck: <Text style={[txt(800), { color: ink }]}>••••{cardLast4}</Text>
+      </Text>
+      <Text style={[txt(600), { fontSize: 14, color: ink, marginBottom: 12 }]}>
+        Is the fuel card in the cab?
+      </Text>
+      <View style={{ flexDirection: "row", gap: 10 }}>
+        <TouchableOpacity
+          onPress={() => onSetPresent(true)}
+          style={{
+            flex: 1, paddingVertical: 12, borderRadius: 10, alignItems: "center",
+            backgroundColor: present === true ? C.green : C.surface,
+            borderWidth: 1, borderColor: present === true ? C.green : C.border,
+          }}
+        >
+          <Text style={[txt(700), { fontSize: 15, color: present === true ? "white" : C.t2 }]}>Yes</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={() => onSetPresent(false)}
+          style={{
+            flex: 1, paddingVertical: 12, borderRadius: 10, alignItems: "center",
+            backgroundColor: present === false ? C.red : C.surface,
+            borderWidth: 1, borderColor: present === false ? C.red : C.border,
+          }}
+        >
+          <Text style={[txt(700), { fontSize: 15, color: present === false ? "white" : C.t2 }]}>No</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Yes → optional photo so dispatch can verify the last-4 matches
+          what's on the physical card. Not required — driver can submit
+          without one, and dispatch just gets the yes/no. */}
+      {present === true && (
+        <View style={{ marginTop: 12 }}>
+          <Text style={[txt(600), { fontSize: 12, color: ink, marginBottom: 8 }]}>
+            Snap a photo of the card so dispatch can double-check the last 4 (optional)
+          </Text>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+            {photos.map(ph => (
+              <PhotoThumb key={ph.key} uri={ph.uri} onRemove={() => onRemovePhoto(ph.key)} />
+            ))}
+            <TouchableOpacity
+              onPress={onAddPhoto}
+              style={{
+                width: 64, height: 64, borderRadius: 10,
+                borderWidth: 1.5, borderColor: border, borderStyle: "dashed",
+                backgroundColor: C.surface,
+                alignItems: "center", justifyContent: "center", gap: 2,
+              }}
+            >
+              <Camera size={18} color={ACCENT} />
+              <Text style={[txt(700), { fontSize: 9, color: ACCENT }]}>PHOTO</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {/* No → surface that dispatch will be notified so the driver
+          understands the answer isn't lost in a checklist. */}
+      {missing && (
+        <Text style={[txt(600), { fontSize: 12, color: ink, marginTop: 10 }]}>
+          Dispatch will be notified. You can still submit the inspection.
+        </Text>
       )}
     </View>
   );

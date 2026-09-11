@@ -2010,7 +2010,7 @@ class RailwayClient {
         driverId: number;
         driver: { name: string | null; phone: string | null } | null;
         assetId: number | null;
-        asset:   { name: string | null; unit: string | null; type: string | null } | null;
+        asset:   { name: string | null; unit: string | null; type: string | null; mudflap_card_last4: string | null } | null;
         trailerId: number | null;
         trailer: { name: string | null; trailer_number: string | null } | null;
         inspectionDate: string;

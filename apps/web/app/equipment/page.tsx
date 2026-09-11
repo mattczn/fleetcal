@@ -26,7 +26,7 @@ import {
   Package, Wrench, ClipboardCheck, Fuel as FuelIcon,
   Camera, Loader2, MapPin, X, Clock, User, Truck, FileText, ExternalLink, Check, Trash2,
   ChevronLeft, ChevronRight, ChevronDown, CalendarDays, List as ListIcon, AlertCircle, CheckCircle2,
-  Calendar, Plus, Info, History as HistoryIcon, Sun, Moon, Flag, EyeOff, Trophy,
+  Calendar, Plus, Info, History as HistoryIcon, Sun, Moon, Flag, EyeOff, Trophy, CreditCard,
 } from 'lucide-react';
 import { isInternalOrg } from '@/lib/internalOrg';
 import { usePermissions } from '@/lib/usePermissions';
@@ -6277,18 +6277,28 @@ function InspectionDetail({
   // one trailer; we group per-equipment so the dispatcher can audit
   // "fix everything on Big Red" vs "fix everything on Trailer 5567"
   // without re-reading the item list.
-  // Cleanliness is its own category (a "received dirty" report / left-dirty
-  // flag), NOT a mechanical defect — keep it out of the DEFECTS section + count.
-  const truckDefects   = data.items.filter(i => i.status === 'fail' && i.id !== 'cleanliness');
-  const trailerDefects = data.trailerItems.filter(i => i.status === 'fail' && i.id !== 'cleanliness');
+  // Cleanliness and the Mudflap fuel-card presence check are their own
+  // categories (dispatch signals, not mechanical defects) — keep them
+  // out of the DEFECTS section + count. Both get their own callouts.
+  const NON_MECHANICAL_ITEM_IDS = new Set(['cleanliness', 'mudflap_card_present']);
+  const truckDefects   = data.items.filter(i => i.status === 'fail' && !NON_MECHANICAL_ITEM_IDS.has(i.id));
+  const trailerDefects = data.trailerItems.filter(i => i.status === 'fail' && !NON_MECHANICAL_ITEM_IDS.has(i.id));
   const cleanlinessFailed = data.cleanlinessFlagged
     || [...data.items, ...data.trailerItems].some(i => i.id === 'cleanliness' && i.status === 'fail');
+  // Mudflap fuel-card check — the driver's answer (present in the cab
+  // or missing) and the on-file last-4 for side-by-side verification.
+  // The item is only ever pushed onto items[] by the driver app when
+  // the truck has a card on file, so its absence here means the truck
+  // has no card (or a legacy inspection filed before this feature).
+  const mudflapItem   = data.items.find(i => i.id === 'mudflap_card_present') ?? null;
+  const mudflapOnFile = data.asset?.mudflap_card_last4 ?? null;
   // Split off videos so the per-defect/section grouping below only
   // operates on images. Videos are always general (no per-item) and
   // rendered in their own block under the photo grid.
   const inspectionVideos = data.photos.filter(p => p.mediaKind === 'video');
   const inspectionImages = data.photos.filter(p => p.mediaKind !== 'video');
   const cleanlinessPhotos = inspectionImages.filter(p => p.itemId === 'cleanliness');
+  const mudflapPhotos     = inspectionImages.filter(p => p.itemId === 'mudflap_card_present');
   const totalDefects   = truckDefects.length + trailerDefects.length;
   const totalItems     = data.items.length + data.trailerItems.length;
   const passCount      = totalItems - totalDefects;
@@ -6325,6 +6335,15 @@ function InspectionDetail({
     mediaSections.push({
       label: `${truckLabel} · Cab cleanliness`,
       photos: cleanlinessPhotos.map(p => ({ id: p.id, signedUrl: p.signedUrl, caption: p.caption ?? 'Cab & interior' })),
+    });
+  }
+  // Mudflap fuel-card photo(s) — same treatment as cleanliness: its own
+  // labeled section in the media gallery so dispatch can eyeball the
+  // last-4 against what's on file.
+  if (mudflapPhotos.length > 0) {
+    mediaSections.push({
+      label: `${truckLabel} · Mudflap fuel card`,
+      photos: mudflapPhotos.map(p => ({ id: p.id, signedUrl: p.signedUrl, caption: p.caption ?? 'Fuel card' })),
     });
   }
   const truckGeneral   = inspectionImages.filter(p => p.itemId == null && p.target === 'truck');
@@ -6428,6 +6447,45 @@ function InspectionDetail({
             </span>
           </div>
         )}
+        {/* Mudflap fuel-card check — only rendered when the driver
+            answered (item present on the inspection). Green when the
+            card is in the cab; red when missing so dispatch knows to
+            chase. The on-file last-4 is printed so a photo (opened
+            from the Media grid) can be cross-checked at a glance. */}
+        {mudflapItem && (() => {
+          const missing = mudflapItem.status === 'fail';
+          const bg     = missing ? '#fef2f2' : '#f0fdf4';
+          const border = missing ? '#dc2626' : '#16a34a';
+          const ink    = missing ? '#991b1b' : '#166534';
+          const sub    = missing ? '#7f1d1d' : '#15803d';
+          return (
+            <div className="rounded-xl px-4 py-3 flex items-start gap-3 mt-3"
+              style={{ background: bg, border: `1px solid ${border}` }}>
+              <CreditCard size={16} style={{ color: ink, marginTop: 2, flexShrink: 0 }} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div className="text-[13px] font-semibold" style={{ color: ink }}>
+                  {missing
+                    ? 'Mudflap fuel card missing from cab'
+                    : 'Mudflap fuel card confirmed in cab'}
+                </div>
+                <div className="text-[12px] mt-1" style={{ color: sub }}>
+                  {mudflapOnFile ? (
+                    <>
+                      On file: <span className="font-mono font-bold">••••{mudflapOnFile}</span>
+                      {mudflapPhotos.length > 0
+                        ? <> · {mudflapPhotos.length} photo{mudflapPhotos.length === 1 ? '' : 's'} in Media — verify last 4 matches</>
+                        : missing
+                          ? ' · follow up with the driver'
+                          : ' · no photo attached — verify verbally next time'}
+                    </>
+                  ) : (
+                    <>No card on file for this truck</>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
         {totalDefects === 0 && <AllPassedBadge passCount={passCount} />}
       </div>
 

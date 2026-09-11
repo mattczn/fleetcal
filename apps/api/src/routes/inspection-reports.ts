@@ -227,7 +227,7 @@ inspectionReports.get("/:id", async (c) => {
       notes, has_defects, signed_by, submitted_at,
       duration_seconds, location_lat, location_lon,
       driver:drivers(name, phone),
-      asset:assets(name, unit, type),
+      asset:assets(name, unit, type, mudflap_card_last4),
       trailer:trailers(name, trailer_number)
     `)
     .eq("id", id)

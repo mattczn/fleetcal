@@ -1020,9 +1020,14 @@ driver.get("/assets", async (c) => {
   // them in pickers for fuel reports, inspections, or maintenance.
   // hidden=false covers admin-hidden trucks; active_to IS NULL covers
   // ones that have been formally retired via the lifecycle flow.
-  const { data, error } = await supabase
+  // `(supabase as any)` here because the generated DB types don't yet
+  // know about assets.mudflap_card_last4 (migration 20260616 ran but
+  // types haven't been regenerated). Matches the pattern used for
+  // inspection_reports below and elsewhere in this file.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (supabase as any)
     .from("assets")
-    .select("id, name, unit, truck, color, type, sort_order")
+    .select("id, name, unit, truck, color, type, sort_order, mudflap_card_last4")
     .eq("org_id", orgId)
     .eq("hidden", false)
     .is("active_to", null)
@@ -1031,15 +1036,20 @@ driver.get("/assets", async (c) => {
     console.error("[GET /v1/driver/assets] failed:", error);
     return c.json({ error: "fetch_failed", detail: error.message }, 500);
   }
-  const assets = (data ?? []).map((a) => {
-    const r = a as { id: number; name: string; unit: string | null; truck: string | null; color: string; type: string };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const assets = (data ?? []).map((a: any) => {
+    const r = a as { id: number; name: string; unit: string | null; truck: string | null; color: string; type: string; mudflap_card_last4: string | null };
     return {
-      id:    r.id,
-      name:  r.name,
-      unit:  r.unit  ?? undefined,
-      truck: r.truck ?? undefined,
-      color: r.color,
-      type:  r.type,
+      id:                r.id,
+      name:              r.name,
+      unit:              r.unit  ?? undefined,
+      truck:             r.truck ?? undefined,
+      color:             r.color,
+      type:              r.type,
+      // Last-4 of the Mudflap fuel card assigned to this truck (Curzon-
+      // only feature). Surfaced in the pre-trip inspection so the driver
+      // can verify the card in the cab matches what dispatch has on file.
+      mudflapCardLast4:  r.mudflap_card_last4 ?? undefined,
     };
   });
   return c.json({ assets });
@@ -3198,10 +3208,12 @@ driver.post("/inspections", async (c) => {
   }
 
   const allItems = [...(body.items ?? []), ...(body.trailerItems ?? [])];
-  // Cleanliness is its own category (tracked via cleanliness_flagged), not a
-  // mechanical defect — a dirty cab alone must NOT mark the inspection as
-  // having defects (which would flag it red in the grid + defect lists).
-  const hasDefects = allItems.some(i => i.id !== "cleanliness" && i.status === "fail");
+  // Cleanliness and the Mudflap fuel-card presence check are their own
+  // categories — a dirty cab or a missing fuel card is a dispatch issue,
+  // not a mechanical defect, so neither should flip the inspection red
+  // in the grid + defect lists.
+  const NON_MECHANICAL_ITEM_IDS = new Set(["cleanliness", "mudflap_card_present"]);
+  const hasDefects = allItems.some(i => !NON_MECHANICAL_ITEM_IDS.has(i.id) && i.status === "fail");
   const kind = body.kind === "post_trip" ? "post_trip" : "pre_trip";
   // Denormalized cleanliness flag — set when the "cleanliness" checklist item
   // (Condition section) is failed. Keep this id in sync with the driver app's
