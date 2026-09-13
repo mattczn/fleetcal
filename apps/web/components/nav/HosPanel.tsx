@@ -189,9 +189,15 @@ export default function HosPanel({ onClose }: { onClose: () => void }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  // Bumped on every board load so the detail pane refetches its shift
+  // list too. Without it, Refresh updated the left rail while the
+  // right pane kept showing whatever it fetched when the driver was
+  // first selected — new shifts never appeared.
+  const [refreshKey, setRefreshKey] = useState(0);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
+    setRefreshKey(k => k + 1);
     try {
       const res = await railway.getHosBoard();
       setDrivers(res.drivers);
@@ -211,6 +217,19 @@ export default function HosPanel({ onClose }: { onClose: () => void }) {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+
+  // Keep the board live while it's open. Every number here counts down
+  // in real time — window remaining, time until a reset completes — so
+  // a panel left open on a second monitor goes quietly stale, and a
+  // dispatcher reading it has no cue that it should be refreshed.
+  // Paused when the tab is hidden so a backgrounded board isn't polling
+  // all afternoon.
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (document.visibilityState === 'visible') void load();
+    }, 60_000);
+    return () => clearInterval(id);
+  }, [load]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -382,6 +401,7 @@ export default function HosPanel({ onClose }: { onClose: () => void }) {
             <DriverDetail
               driver={selected}
               timeZone={config.timeZone}
+              refreshKey={refreshKey}
               onChanged={() => void load()}
             />
           ) : (
@@ -496,8 +516,13 @@ function DriverRow({ driver, timeZone, selected, onSelect }: {
 
 // ── Right-pane detail ────────────────────────────────────────────────
 
-function DriverDetail({ driver, timeZone, onChanged }: {
-  driver: HosBoardDriver; timeZone: string; onChanged: () => void;
+function DriverDetail({ driver, timeZone, refreshKey, onChanged }: {
+  driver: HosBoardDriver;
+  timeZone: string;
+  /** Changes whenever the board reloads, so Refresh pulls new shifts
+   *  into this pane as well as updating the rail. */
+  refreshKey: number;
+  onChanged: () => void;
 }) {
   const [shifts, setShifts] = useState<HosBoardShift[]>([]);
   const [events, setEvents] = useState<HosDutyEvent[]>([]);
@@ -516,7 +541,8 @@ function DriverDetail({ driver, timeZone, onChanged }: {
       setErr((e as Error).message ?? 'Could not load shifts');
     }
     setLoading(false);
-  }, [driver.driverId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [driver.driverId, refreshKey]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -687,7 +713,10 @@ function DriverDetail({ driver, timeZone, onChanged }: {
             />
           </div>
         )}
-        {loading ? (
+        {/* Spinner only on the FIRST load. The board polls every 60s,
+            and swapping the list for a spinner on each tick would make
+            it flicker under a dispatcher who is trying to read it. */}
+        {loading && shifts.length === 0 ? (
           <div style={{ padding: 20, display: 'flex', justifyContent: 'center' }}>
             <Loader2 size={18} className="animate-spin" style={{ color: 'var(--gc-text-3)' }} />
           </div>
