@@ -387,11 +387,13 @@ export const railway = {
     return req<HosStatusResponse>("GET", "/v1/driver/hos/status");
   },
   /** Location is best-effort; omit it rather than blocking a clock-in
-   *  when GPS is unavailable. */
-  hosClockIn(body: { latitude?: number; longitude?: number } = {}) {
+   *  when GPS is unavailable. `occurredAt` backdates the shift start
+   *  for a driver who began work before reaching their phone — server
+   *  bounds it to 36 hours and rejects future times. */
+  hosClockIn(body: { latitude?: number; longitude?: number; occurredAt?: string } = {}) {
     return req<HosStatusResponse>("POST", "/v1/driver/hos/clock-in", body);
   },
-  hosClockOut(body: { latitude?: number; longitude?: number } = {}) {
+  hosClockOut(body: { latitude?: number; longitude?: number; occurredAt?: string } = {}) {
     return req<HosStatusResponse>("POST", "/v1/driver/hos/clock-out", body);
   },
   /** Answers "you were still clocked in — when did you finish?" */

@@ -26,7 +26,8 @@
  * as good as today. Fragile numbers stay where dispatch can check them.
  */
 import React, { useEffect, useMemo, useState } from "react";
-import { View, Text, TouchableOpacity, ActivityIndicator } from "react-native";
+import { View, Text, TouchableOpacity, ActivityIndicator, Modal, Platform } from "react-native";
+import DateTimePicker from "@react-native-community/datetimepicker";
 import { Play, Square, Clock, AlertTriangle, Moon, FileText } from "lucide-react-native";
 import { useTheme } from "@/lib/ThemeProvider";
 import type { HosStatusResponse } from "@/lib/railway";
@@ -67,14 +68,100 @@ function fmtDayAndClock(iso: string): string {
   return `${day}${fmtClock(iso)}`;
 }
 
+// ── Time adjustment ──────────────────────────────────────────────────
+//
+// The picker only asks for a time of day, never a date. A driver
+// correcting a missed punch is always talking about the last day or so,
+// and "which date" is a question they shouldn't have to answer. We
+// resolve the calendar day ourselves from context.
+
+/** Resolve a picked time-of-day to a moment in the recent past.
+ *  Used for clock-in: if the chosen time hasn't happened yet today,
+ *  they mean yesterday (a driver starting at 11pm, fixing it at 1am). */
+function resolveRecentPast(picked: Date, now: Date): Date {
+  const at = new Date(now);
+  at.setHours(picked.getHours(), picked.getMinutes(), 0, 0);
+  if (at.getTime() > now.getTime()) at.setTime(at.getTime() - 86400_000);
+  return at;
+}
+
+/** Resolve a picked time-of-day to the first such moment AFTER `after`.
+ *  Used for clock-out and stale corrections, where the answer has to
+ *  land between the shift start and now. Returns null when no such
+ *  moment exists in the past — the driver picked something impossible. */
+function resolveAfter(picked: Date, after: Date, now: Date): Date | null {
+  const at = new Date(after);
+  at.setHours(picked.getHours(), picked.getMinutes(), 0, 0);
+  if (at.getTime() <= after.getTime()) at.setTime(at.getTime() + 86400_000);
+  return at.getTime() > now.getTime() ? null : at;
+}
+
+/** Time-of-day picker. iOS gets a spinner in a sheet (matching the
+ *  profile screen's date picker); Android uses its native dialog. */
+function TimePickerSheet({ initial, onCancel, onConfirm }: {
+  initial: Date;
+  onCancel: () => void;
+  onConfirm: (picked: Date) => void;
+}) {
+  const { C, ACCENT } = useTheme();
+  const [value, setValue] = useState(initial);
+
+  if (Platform.OS !== "ios") {
+    return (
+      <DateTimePicker
+        value={value}
+        mode="time"
+        display="default"
+        onChange={(event, picked) => {
+          if (event.type === "dismissed" || !picked) { onCancel(); return; }
+          onConfirm(picked);
+        }}
+      />
+    );
+  }
+
+  return (
+    <Modal transparent animationType="slide" visible onRequestClose={onCancel}>
+      <TouchableOpacity
+        style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.35)", justifyContent: "flex-end" }}
+        activeOpacity={1}
+        onPress={onCancel}
+      >
+        <TouchableOpacity activeOpacity={1} style={{ backgroundColor: C.surface, paddingBottom: 28 }}>
+          <View style={{
+            flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+            paddingHorizontal: 16, paddingVertical: 12,
+            borderBottomWidth: 1, borderBottomColor: C.border,
+          }}>
+            <TouchableOpacity onPress={onCancel}>
+              <Text style={[txt(600), { fontSize: 14, color: C.t2 }]}>Cancel</Text>
+            </TouchableOpacity>
+            <Text style={[txt(800), { fontSize: 14, color: C.t1 }]}>Select a time</Text>
+            <TouchableOpacity onPress={() => onConfirm(value)}>
+              <Text style={[txt(800), { fontSize: 14, color: ACCENT }]}>Done</Text>
+            </TouchableOpacity>
+          </View>
+          <DateTimePicker
+            value={value}
+            mode="time"
+            display="spinner"
+            onChange={(_e, picked) => { if (picked) setValue(picked); }}
+          />
+        </TouchableOpacity>
+      </TouchableOpacity>
+    </Modal>
+  );
+}
+
 interface Props {
   data:    HosStatusResponse | null;
   loading: boolean;
   busy:    boolean;
-  onClockIn:  () => void;
-  onClockOut: () => void;
-  /** Driver answering the stale prompt. `endedAt` is an absolute ISO
-   *  timestamp derived from a quick-pick offset off the shift start. */
+  /** `occurredAt` (ISO) backdates the punch when the driver set a
+   *  specific time; omitted means "now". */
+  onClockIn:  (occurredAt?: string) => void;
+  onClockOut: (occurredAt?: string) => void;
+  /** Driver answering the stale prompt with the time they finished. */
   onCorrectEnd: (shiftId: string, endedAt: string) => void;
   /** Dismisses the stale prompt for this session when the driver really
    *  has been on duty this long. */
@@ -123,6 +210,13 @@ export default function HosCard({
   // than an empty shell.
   if (!data?.enabled) return null;
 
+  // A previous shift that got auto-closed on an estimate. The driver is
+  // the only one who knows the real end time, so give them a way to fix
+  // it from here — otherwise the alert we show at clock-in points at an
+  // edit path that doesn't exist.
+  const last = data.lastShift ?? null;
+  const unresolved = last && last.autoClosed && last.needsReview ? last : null;
+
   if (onDuty && shift) {
     if (expired && !staleDismissed) {
       return (
@@ -137,25 +231,103 @@ export default function HosCard({
       );
     }
     return (
-      <OnDutyCard
-        shift={shift}
-        elapsed={elapsed}
-        remaining={remaining}
-        busy={busy}
-        onClockOut={onClockOut}
-      />
+      <>
+        {unresolved && (
+          <PreviousShiftBanner shift={unresolved} busy={busy} onCorrectEnd={onCorrectEnd} />
+        )}
+        <OnDutyCard
+          shift={shift}
+          elapsed={elapsed}
+          remaining={remaining}
+          busy={busy}
+          onClockOut={onClockOut}
+        />
+      </>
     );
   }
 
-  return <OffDutyCard data={data} busy={busy} onClockIn={onClockIn} />;
+  return (
+    <>
+      {unresolved && (
+        <PreviousShiftBanner shift={unresolved} busy={busy} onCorrectEnd={onCorrectEnd} />
+      )}
+      <OffDutyCard data={data} busy={busy} onClockIn={onClockIn} />
+    </>
+  );
+}
+
+// ── Previous shift left on an estimated end time ─────────────────────
+
+function PreviousShiftBanner({ shift, busy, onCorrectEnd }: {
+  shift: NonNullable<HosStatusResponse["lastShift"]>;
+  busy: boolean;
+  onCorrectEnd: (shiftId: string, endedAt: string) => void;
+}) {
+  const { C } = useTheme();
+  const [picking, setPicking] = useState(false);
+  const [pickError, setPickError] = useState<string | null>(null);
+
+  return (
+    <View style={[cardBase, {
+      backgroundColor: C.amberBg, borderColor: C.amber, marginBottom: 10,
+    }]}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 6 }}>
+        <AlertTriangle size={15} color={C.amberInk} />
+        <Text style={[txt(800), { fontSize: 14, color: C.amberInk }]}>
+          Previous shift needs an end time
+        </Text>
+      </View>
+      <Text style={[txt(600), { fontSize: 12.5, color: C.amberInk, lineHeight: 18 }]}>
+        Your shift from {fmtDayAndClock(shift.startedAt)} was closed with an estimated time
+        of {shift.endedAt ? fmtDayAndClock(shift.endedAt) : "unknown"}. Set the time you
+        actually finished.
+      </Text>
+
+      <TouchableOpacity
+        disabled={busy}
+        onPress={() => { setPickError(null); setPicking(true); }}
+        activeOpacity={0.85}
+        style={{
+          alignItems: "center", marginTop: 12,
+          backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
+          paddingVertical: 12, borderRadius: 11,
+        }}
+      >
+        <Text style={[txt(700), { fontSize: 14, color: C.t1 }]}>Edit the end time</Text>
+      </TouchableOpacity>
+
+      {pickError && (
+        <Text style={[txt(600), { fontSize: 12, color: C.redInk, marginTop: 8 }]}>
+          {pickError}
+        </Text>
+      )}
+
+      {picking && (
+        <TimePickerSheet
+          initial={shift.endedAt ? new Date(shift.endedAt) : new Date()}
+          onCancel={() => setPicking(false)}
+          onConfirm={(picked) => {
+            setPicking(false);
+            const at = resolveAfter(picked, new Date(shift.startedAt), new Date());
+            if (!at) {
+              setPickError("That time is either before that shift started or still in the future.");
+              return;
+            }
+            onCorrectEnd(shift.id, at.toISOString());
+          }}
+        />
+      )}
+    </View>
+  );
 }
 
 // ── Off duty ─────────────────────────────────────────────────────────
 
 function OffDutyCard({ data, busy, onClockIn }: {
-  data: HosStatusResponse; busy: boolean; onClockIn: () => void;
+  data: HosStatusResponse; busy: boolean; onClockIn: (occurredAt?: string) => void;
 }) {
   const { C } = useTheme();
+  const [picking, setPicking] = useState(false);
   const rest = data.rest ?? null;
   const last = data.lastShift ?? null;
   // Inside the 10-hour reset: warn, don't block.
@@ -191,18 +363,19 @@ function OffDutyCard({ data, busy, onClockIn }: {
 
       {resting && rest && (
         <View style={{
-          flexDirection: "row", alignItems: "center", gap: 8,
-          backgroundColor: C.amberBg, borderRadius: 10, padding: 10, marginBottom: 12,
+          flexDirection: "row", alignItems: "flex-start", gap: 8,
+          backgroundColor: C.amberBg, borderRadius: 10, padding: 11, marginBottom: 12,
         }}>
-          <Clock size={14} color={C.amberInk} />
-          <Text style={[txt(600), { fontSize: 12.5, color: C.amberInk, flex: 1 }]}>
-            {fmtDuration(rest.restSeconds)} off so far — you&apos;re clear at {fmtClock(rest.clearAt)}
+          <Clock size={14} color={C.amberInk} style={{ marginTop: 2 }} />
+          <Text style={[txt(600), { fontSize: 12.5, color: C.amberInk, flex: 1, lineHeight: 18 }]}>
+            You need 10 hours off between shifts. You have had {fmtDuration(rest.restSeconds)} so
+            far, and will reach 10 hours at {fmtClock(rest.clearAt)}.
           </Text>
         </View>
       )}
 
       <TouchableOpacity
-        onPress={onClockIn}
+        onPress={() => onClockIn()}
         disabled={busy}
         activeOpacity={0.85}
         style={{
@@ -218,6 +391,28 @@ function OffDutyCard({ data, busy, onClockIn }: {
           {busy ? "Starting…" : "Clock In"}
         </Text>
       </TouchableOpacity>
+
+      {/* For a driver who started work before they got to their phone. */}
+      <TouchableOpacity
+        onPress={() => setPicking(true)}
+        disabled={busy}
+        style={{ paddingVertical: 11, alignItems: "center" }}
+      >
+        <Text style={[txt(600), { fontSize: 13, color: C.t2 }]}>
+          Set a different start time
+        </Text>
+      </TouchableOpacity>
+
+      {picking && (
+        <TimePickerSheet
+          initial={new Date()}
+          onCancel={() => setPicking(false)}
+          onConfirm={(picked) => {
+            setPicking(false);
+            onClockIn(resolveRecentPast(picked, new Date()).toISOString());
+          }}
+        />
+      )}
     </View>
   );
 }
@@ -226,9 +421,12 @@ function OffDutyCard({ data, busy, onClockIn }: {
 
 function OnDutyCard({ shift, elapsed, remaining, busy, onClockOut }: {
   shift: NonNullable<HosStatusResponse["currentShift"]>;
-  elapsed: number; remaining: number; busy: boolean; onClockOut: () => void;
+  elapsed: number; remaining: number; busy: boolean;
+  onClockOut: (occurredAt?: string) => void;
 }) {
   const { C } = useTheme();
+  const [picking, setPicking] = useState(false);
+  const [pickError, setPickError] = useState<string | null>(null);
   const pct = Math.min(1, elapsed / SHIFT_WINDOW_SECONDS);
   // Escalate as the window closes. 10h and 13h are judgement calls, not
   // regulatory thresholds — they exist to give a driver warning before
@@ -247,7 +445,7 @@ function OnDutyCard({ shift, elapsed, remaining, busy, onClockOut }: {
         }}>
           <FileText size={14} color={C.blueInk} />
           <Text style={[txt(700), { fontSize: 12.5, color: C.blueInk, flex: 1 }]}>
-            OTR run today — make sure your log is going
+            OTR run today
           </Text>
         </View>
       )}
@@ -276,13 +474,13 @@ function OnDutyCard({ shift, elapsed, remaining, busy, onClockOut }: {
           </View>
           <Text style={[txt(600), { fontSize: 12, color: C.t2, marginTop: 7 }]}>
             {remaining > 0
-              ? `${fmtDuration(remaining)} left in your 14`
-              : "14-hour window is up"}
+              ? `${fmtDuration(remaining)} left in your 14 hour window`
+              : "Your 14 hour window has ended"}
           </Text>
         </View>
 
         <TouchableOpacity
-          onPress={onClockOut}
+          onPress={() => onClockOut()}
           disabled={busy}
           activeOpacity={0.85}
           style={{
@@ -299,6 +497,39 @@ function OnDutyCard({ shift, elapsed, remaining, busy, onClockOut }: {
             {busy ? "Saving…" : "Clock Out"}
           </Text>
         </TouchableOpacity>
+
+        {/* For a driver who finished earlier than they got to their phone. */}
+        <TouchableOpacity
+          onPress={() => { setPickError(null); setPicking(true); }}
+          disabled={busy}
+          style={{ paddingVertical: 11, alignItems: "center" }}
+        >
+          <Text style={[txt(600), { fontSize: 13, color: C.t2 }]}>
+            Set a different end time
+          </Text>
+        </TouchableOpacity>
+
+        {pickError && (
+          <Text style={[txt(600), { fontSize: 12, color: C.redInk, textAlign: "center", marginTop: -4 }]}>
+            {pickError}
+          </Text>
+        )}
+
+        {picking && (
+          <TimePickerSheet
+            initial={new Date()}
+            onCancel={() => setPicking(false)}
+            onConfirm={(picked) => {
+              setPicking(false);
+              const at = resolveAfter(picked, new Date(shift.startedAt), new Date());
+              if (!at) {
+                setPickError("That time is either before your shift started or still in the future.");
+                return;
+              }
+              onClockOut(at.toISOString());
+            }}
+          />
+        )}
       </View>
     </View>
   );
@@ -312,6 +543,8 @@ function StalePrompt({ shiftId, startedAt, elapsed, busy, onCorrectEnd, onKeepRu
   onKeepRunning: () => void;
 }) {
   const { C } = useTheme();
+  const [picking, setPicking] = useState(false);
+  const [pickError, setPickError] = useState<string | null>(null);
   const startMs = new Date(startedAt).getTime();
 
   // Offsets from the shift start rather than absolute times: the driver
@@ -329,11 +562,14 @@ function StalePrompt({ shiftId, startedAt, elapsed, busy, onCorrectEnd, onKeepRu
     <View style={[cardBase, { backgroundColor: C.amberBg, borderColor: C.amber }]}>
       <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 6 }}>
         <AlertTriangle size={16} color={C.amberInk} />
-        <Text style={[txt(800), { fontSize: 15, color: C.amberInk }]}>Still clocked in</Text>
+        <Text style={[txt(800), { fontSize: 15, color: C.amberInk }]}>
+          Your shift is still open
+        </Text>
       </View>
       <Text style={[txt(600), { fontSize: 13, color: C.amberInk, marginBottom: 14, lineHeight: 19 }]}>
-        You&apos;ve been on duty {fmtDuration(elapsed)}, since {fmtDayAndClock(startedAt)}.
-        When did you actually finish?
+        This shift started {fmtDayAndClock(startedAt)} and has been running for {fmtDuration(elapsed)},
+        which is longer than a 14 hour window allows. Select the time you finished so your hours
+        are recorded correctly.
       </Text>
 
       <View style={{ gap: 8 }}>
@@ -357,7 +593,29 @@ function StalePrompt({ shiftId, startedAt, elapsed, busy, onCorrectEnd, onKeepRu
             </Text>
           </TouchableOpacity>
         ))}
+
+        {/* None of the presets fit — pick the exact time instead. */}
+        <TouchableOpacity
+          disabled={busy}
+          onPress={() => { setPickError(null); setPicking(true); }}
+          activeOpacity={0.85}
+          style={{
+            alignItems: "center",
+            backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
+            paddingVertical: 13, paddingHorizontal: 14, borderRadius: 11,
+          }}
+        >
+          <Text style={[txt(700), { fontSize: 14.5, color: C.t1 }]}>
+            Select a specific time
+          </Text>
+        </TouchableOpacity>
       </View>
+
+      {pickError && (
+        <Text style={[txt(600), { fontSize: 12, color: C.redInk, marginTop: 10 }]}>
+          {pickError}
+        </Text>
+      )}
 
       <TouchableOpacity
         onPress={onKeepRunning}
@@ -365,9 +623,25 @@ function StalePrompt({ shiftId, startedAt, elapsed, busy, onCorrectEnd, onKeepRu
         style={{ paddingVertical: 12, alignItems: "center", marginTop: 4 }}
       >
         <Text style={[txt(700), { fontSize: 13.5, color: C.amberInk }]}>
-          I&apos;m still on duty
+          I am still on duty
         </Text>
       </TouchableOpacity>
+
+      {picking && (
+        <TimePickerSheet
+          initial={new Date()}
+          onCancel={() => setPicking(false)}
+          onConfirm={(picked) => {
+            setPicking(false);
+            const at = resolveAfter(picked, new Date(startedAt), new Date());
+            if (!at) {
+              setPickError("That time is either before your shift started or still in the future.");
+              return;
+            }
+            onCorrectEnd(shiftId, at.toISOString());
+          }}
+        />
+      )}
     </View>
   );
 }

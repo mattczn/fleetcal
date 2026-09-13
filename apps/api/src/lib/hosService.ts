@@ -217,6 +217,11 @@ export async function clockIn(opts: {
   driverId: number;
   orgId: string;
   now: Date;
+  /** Backdated shift start, for a driver who began work before they got
+   *  to their phone. Defaults to `now`. Kept separate from `now` on
+   *  purpose: staleness checks below must reason about real elapsed
+   *  time, not the time the driver claims they started. */
+  startedAt?: Date;
   lat?: number | null;
   lon?: number | null;
   classification: Classification;
@@ -224,6 +229,7 @@ export async function clockIn(opts: {
   actor: Actor;
 }): Promise<ClockInResult> {
   const { driverId, orgId, now } = opts;
+  const startedAt = opts.startedAt ?? now;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: openRows } = await (supabase as any)
@@ -259,9 +265,10 @@ export async function clockIn(opts: {
   }
 
   const startEvent = await insertDutyEvent({
-    orgId, driverId, status: "on_duty", occurredAt: now,
+    orgId, driverId, status: "on_duty", occurredAt: startedAt,
     source: opts.actor.kind === "dispatch" ? "dispatch_edit" : "driver_app",
     lat: opts.lat, lon: opts.lon, actor: opts.actor,
+    note: opts.startedAt ? "Start time set by the driver at clock-in." : null,
   });
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -270,7 +277,7 @@ export async function clockIn(opts: {
     .insert({
       org_id: orgId,
       driver_id: driverId,
-      started_at: now.toISOString(),
+      started_at: startedAt.toISOString(),
       start_event_id: startEvent.id,
       classification: opts.classification,
       classification_source: opts.classificationSource ?? "default",
@@ -294,6 +301,10 @@ export async function clockOut(opts: {
   driverId: number;
   orgId: string;
   now: Date;
+  /** Backdated shift end, for a driver who finished before they got to
+   *  their phone. Defaults to `now`. Caller validates it sits after the
+   *  shift start and isn't in the future. */
+  endedAt?: Date;
   lat?: number | null;
   lon?: number | null;
   actor: Actor;
@@ -309,12 +320,14 @@ export async function clockOut(opts: {
   const open = ((openRows ?? []) as ShiftRow[])[0] ?? null;
   if (!open) return null;
 
+  const endedAt = opts.endedAt ?? now;
   const endEvent = await insertDutyEvent({
-    orgId, driverId, status: "off_duty", occurredAt: now,
+    orgId, driverId, status: "off_duty", occurredAt: endedAt,
     source: opts.actor.kind === "dispatch" ? "dispatch_edit" : "driver_app",
     lat: opts.lat, lon: opts.lon, actor: opts.actor,
+    note: opts.endedAt ? "End time set by the driver at clock-out." : null,
   });
-  await closeShift(open, now, endEvent.id, false);
+  await closeShift(open, endedAt, endEvent.id, false);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: fresh } = await (supabase as any)

@@ -192,10 +192,10 @@ export default function LoadsScreen() {
     }
   };
 
-  const handleClockIn = async () => {
+  const handleClockIn = async (occurredAt?: string) => {
     setHosBusy(true);
     try {
-      const res = await railway.hosClockIn(await captureLocation());
+      const res = await railway.hosClockIn({ ...(await captureLocation()), occurredAt });
       await refetchHos();
       setStaleDismissed(false);
 
@@ -204,8 +204,8 @@ export default function LoadsScreen() {
       // it while they still remember yesterday.
       if (res.autoClosedShiftId) {
         Alert.alert(
-          "Your last shift was left open",
-          "We closed it out with an estimated time. Check the card at the top and set when you actually finished.",
+          "Your previous shift was never closed",
+          "It has been closed with an estimated end time, which may be wrong. Edit the end time to show when you actually finished.",
         );
         return;
       }
@@ -217,24 +217,29 @@ export default function LoadsScreen() {
       if (reporting && !alreadyInspected && !res.alreadyOpen) {
         Alert.alert(
           "Pre-trip inspection",
-          "Run your pre-trip inspection before you roll.",
+          "Complete your pre-trip inspection before you begin driving.",
           [
-            { text: "In a minute", style: "cancel" },
+            { text: "Later", style: "cancel" },
             { text: "Start now", style: "default", onPress: () => startInspection("pre_trip") },
           ],
         );
       }
     } catch (err) {
-      Alert.alert("Couldn't clock in", err instanceof Error ? err.message : "Please try again.");
+      Alert.alert("Could not clock in", err instanceof Error ? err.message : "Please try again.");
     } finally {
       setHosBusy(false);
     }
   };
 
-  const handleClockOut = () => {
+  const handleClockOut = (occurredAt?: string) => {
+    const when = occurredAt
+      ? new Date(occurredAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+      : null;
     Alert.alert(
-      "Clock out?",
-      "This ends your shift and starts your 10-hour reset.",
+      "End your shift?",
+      when
+        ? `Your shift will be recorded as ending at ${when}. Your 10 hours off duty start from that time.`
+        : "Your shift will be recorded as ending now, and your 10 hours off duty start from this time.",
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -243,10 +248,10 @@ export default function LoadsScreen() {
           onPress: async () => {
             setHosBusy(true);
             try {
-              await railway.hosClockOut(await captureLocation());
+              await railway.hosClockOut({ ...(await captureLocation()), occurredAt });
               await refetchHos();
             } catch (err) {
-              Alert.alert("Couldn't clock out", err instanceof Error ? err.message : "Please try again.");
+              Alert.alert("Could not clock out", err instanceof Error ? err.message : "Please try again.");
             } finally {
               setHosBusy(false);
             }
@@ -259,10 +264,10 @@ export default function LoadsScreen() {
   const handleCorrectEnd = async (shiftId: string, endedAt: string) => {
     setHosBusy(true);
     try {
-      await railway.hosCorrectShiftEnd(shiftId, endedAt, "Corrected by driver after a missed clock-out.");
+      await railway.hosCorrectShiftEnd(shiftId, endedAt, "End time set by the driver after a missed clock-out.");
       await refetchHos();
     } catch (err) {
-      Alert.alert("Couldn't save that", err instanceof Error ? err.message : "Please try again.");
+      Alert.alert("Could not update your shift", err instanceof Error ? err.message : "Please try again.");
     } finally {
       setHosBusy(false);
     }
@@ -461,8 +466,8 @@ export default function LoadsScreen() {
                     data={hosData ?? null}
                     loading={hosLoading}
                     busy={hosBusy}
-                    onClockIn={() => void handleClockIn()}
-                    onClockOut={handleClockOut}
+                    onClockIn={(occurredAt) => void handleClockIn(occurredAt)}
+                    onClockOut={(occurredAt) => handleClockOut(occurredAt)}
                     onCorrectEnd={(shiftId, endedAt) => void handleCorrectEnd(shiftId, endedAt)}
                     onKeepRunning={() => setStaleDismissed(true)}
                     staleDismissed={staleDismissed}

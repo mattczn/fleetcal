@@ -34,6 +34,36 @@ function coord(v: unknown, max: number): number | null {
   return Number.isFinite(n) && Math.abs(n) <= max ? n : null;
 }
 
+/** Clock skew allowance — a phone a few seconds ahead of the server
+ *  shouldn't have its clock-in rejected as "in the future". */
+const FUTURE_GRACE_MS = 60_000;
+
+/** How far back a driver may backdate their own clock in/out. Beyond
+ *  this it stops being "I forgot for a couple of hours" and becomes a
+ *  records edit, which is dispatch's call, not the driver's. */
+const MAX_BACKDATE_MS = 36 * 3600 * 1000;
+
+type TimeCheck = { ok: true; at: Date } | { ok: false; error: string };
+
+/** Parses and bounds a driver-supplied timestamp. `notBefore` is the
+ *  shift start when closing a shift; omitted when opening one. */
+function parseAdjustedTime(raw: unknown, now: Date, notBefore?: Date): TimeCheck {
+  if (raw == null) return { ok: true, at: now };
+  if (typeof raw !== "string") return { ok: false, error: "Time must be a timestamp." };
+  const at = new Date(raw);
+  if (Number.isNaN(at.getTime())) return { ok: false, error: "That isn't a valid time." };
+  if (at.getTime() > now.getTime() + FUTURE_GRACE_MS) {
+    return { ok: false, error: "That time is in the future." };
+  }
+  if (now.getTime() - at.getTime() > MAX_BACKDATE_MS) {
+    return { ok: false, error: "That time is more than 36 hours ago. Ask dispatch to fix it." };
+  }
+  if (notBefore && at.getTime() <= notBefore.getTime()) {
+    return { ok: false, error: "That time is before your shift started." };
+  }
+  return { ok: true, at };
+}
+
 async function driverConfig(driverId: number): Promise<{
   enabled: boolean; defaultClassification: Classification; name: string;
 }> {
@@ -105,13 +135,19 @@ driverHos.post("/clock-in", async (c) => {
     return c.json({ error: "hos_disabled", detail: "HOS tracking is off for this driver." }, 403);
   }
 
-  let body: { latitude?: unknown; longitude?: unknown } = {};
+  let body: { latitude?: unknown; longitude?: unknown; occurredAt?: unknown } = {};
   try { body = await c.req.json(); } catch { /* body is optional */ }
 
   const now = new Date();
+  // occurredAt lets a driver who started before reaching their phone
+  // set the real start time. Absent = clock in now.
+  const when = parseAdjustedTime(body.occurredAt, now);
+  if (!when.ok) return c.json({ error: "validation_failed", errors: [when.error] }, 400);
+
   try {
     const result = await clockIn({
       driverId, orgId, now,
+      startedAt: when.at,
       lat: coord(body.latitude, 90),
       lon: coord(body.longitude, 180),
       classification: cfg.defaultClassification,
@@ -138,13 +174,27 @@ driverHos.post("/clock-out", async (c) => {
   const orgId    = c.get("orgId");
   const name     = c.get("driverName");
 
-  let body: { latitude?: unknown; longitude?: unknown } = {};
+  let body: { latitude?: unknown; longitude?: unknown; occurredAt?: unknown } = {};
   try { body = await c.req.json(); } catch { /* body is optional */ }
 
   const now = new Date();
+
+  // Bound a backdated end against this shift's start, so a driver can't
+  // close a shift before it began.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: openRow } = await (supabase as any)
+    .from("hos_shifts").select("started_at")
+    .eq("driver_id", driverId).is("ended_at", null).limit(1).maybeSingle();
+  if (!openRow) {
+    return c.json({ error: "not_clocked_in", detail: "No open shift to close." }, 409);
+  }
+  const when = parseAdjustedTime(body.occurredAt, now, new Date((openRow as { started_at: string }).started_at));
+  if (!when.ok) return c.json({ error: "validation_failed", errors: [when.error] }, 400);
+
   try {
     const closed = await clockOut({
       driverId, orgId, now,
+      endedAt: when.at,
       lat: coord(body.latitude, 90),
       lon: coord(body.longitude, 180),
       actor: { kind: "driver", driverId, name },
