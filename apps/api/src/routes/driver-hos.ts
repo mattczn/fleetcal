@@ -315,16 +315,28 @@ driverHos.post("/shifts/:id/correct", async (c) => {
   let startedAt: Date | undefined;
   let endedAt:   Date | undefined;
 
-  if (body.startedAt) {
-    const parsed = parseAdjustedTime(body.startedAt, now);
-    if (!parsed.ok) errors.push(parsed.error);
-    else startedAt = parsed.at;
-  }
-  if (body.endedAt) {
-    const parsed = parseAdjustedTime(body.endedAt, now);
-    if (!parsed.ok) errors.push(parsed.error);
-    else endedAt = parsed.at;
-  }
+  // Corrections are bounded relative to the SHIFT, not to now. The
+  // 36-hour rule that governs live punches would make a Friday shift
+  // uncorrectable by Monday — which is exactly the shift most likely
+  // to need correcting, since forgetting over a weekend is how these
+  // go wrong in the first place. The real constraints are that a
+  // correction can't invent future time and can't reach back past the
+  // window we load shifts from.
+  const EDITABLE_WINDOW_MS = 14 * 24 * 3600 * 1000;
+  const parseCorrection = (raw: string, label: string): Date | undefined => {
+    const at = new Date(raw);
+    if (Number.isNaN(at.getTime())) { errors.push(`That ${label} isn't a valid time.`); return; }
+    if (at.getTime() > now.getTime() + FUTURE_GRACE_MS) {
+      errors.push(`That ${label} is in the future.`); return;
+    }
+    if (now.getTime() - at.getTime() > EDITABLE_WINDOW_MS) {
+      errors.push(`That ${label} is more than two weeks ago. Ask dispatch to fix it.`); return;
+    }
+    return at;
+  };
+
+  if (body.startedAt) startedAt = parseCorrection(body.startedAt, "start time");
+  if (body.endedAt)   endedAt   = parseCorrection(body.endedAt, "end time");
 
   // Validate the resulting pair, not just each field: moving a start
   // past an untouched end (or vice versa) would invert the shift.

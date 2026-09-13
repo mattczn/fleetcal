@@ -79,44 +79,6 @@ function fmtDayAndClock(iso: string): string {
   return `${day}${fmtClock(iso)}`;
 }
 
-// ── Resolving a picked time to a moment ──────────────────────────────
-//
-// The picker only ever asks for a time of day, never a date. A driver
-// fixing a punch is always talking about the last day or so, and "which
-// date" is a question they shouldn't have to answer. We infer the
-// calendar day from context instead — differently per field, which is
-// why there are three of these rather than one.
-
-/** Most recent occurrence of this time of day, at or before `now`.
- *  For a clock-in: a time that hasn't happened yet today means
- *  yesterday (started 11pm, fixing it at 1am). */
-function resolveRecentPast(picked: Date, now: Date): Date {
-  const at = new Date(now);
-  at.setHours(picked.getHours(), picked.getMinutes(), 0, 0);
-  if (at.getTime() > now.getTime()) at.setTime(at.getTime() - 86400_000);
-  return at;
-}
-
-/** First occurrence of this time of day strictly after `after`, or null
- *  if that lands in the future. For end times, which must sit between
- *  the shift's start and now — this is what makes an overnight shift
- *  resolve to the following morning rather than before its own start. */
-function resolveAfter(picked: Date, after: Date, now: Date): Date | null {
-  const at = new Date(after);
-  at.setHours(picked.getHours(), picked.getMinutes(), 0, 0);
-  if (at.getTime() <= after.getTime()) at.setTime(at.getTime() + 86400_000);
-  return at.getTime() > now.getTime() ? null : at;
-}
-
-/** This time of day on the same calendar date as `anchor`. For editing
- *  a start time, where the driver is nudging an existing timestamp
- *  rather than naming a fresh one. */
-function resolveOnSameDay(picked: Date, anchor: Date): Date {
-  const at = new Date(anchor);
-  at.setHours(picked.getHours(), picked.getMinutes(), 0, 0);
-  return at;
-}
-
 /** Offers "now" vs "pick a time" vs cancel. Used by both punch buttons
  *  so a driver can correct at the moment of the punch, not only after. */
 function offerPunchOptions(opts: {
@@ -133,17 +95,89 @@ function offerPunchOptions(opts: {
   ]);
 }
 
-/** Time-of-day picker. iOS gets a spinner in a sheet (matching the
- *  profile screen's date picker); Android uses its native dialog. */
-function TimePickerSheet({ initial, onCancel, onConfirm }: {
-  initial: Date;
+function startOfDay(d: Date): Date {
+  const c = new Date(d);
+  c.setHours(0, 0, 0, 0);
+  return c;
+}
+
+/** Selectable days between two bounds, most recent last. Capped so a
+ *  wide range doesn't produce an unusable row of chips; the cap keeps
+ *  the days nearest `max`, which are the ones actually likely. */
+function dayRange(min: Date, max: Date, cap = 5): Date[] {
+  const out: Date[] = [];
+  const cursor = startOfDay(max);
+  const floor  = startOfDay(min);
+  while (cursor.getTime() >= floor.getTime() && out.length < cap) {
+    out.unshift(new Date(cursor));
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  return out;
+}
+
+function dayLabel(d: Date): string {
+  const today = startOfDay(new Date());
+  const diff = Math.round((startOfDay(d).getTime() - today.getTime()) / 86400_000);
+  if (diff === 0)  return "Today";
+  if (diff === -1) return "Yesterday";
+  return d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+}
+
+/** Combine a calendar day with a time of day. */
+function withTimeOfDay(day: Date, time: Date): Date {
+  const c = new Date(day);
+  c.setHours(time.getHours(), time.getMinutes(), 0, 0);
+  return c;
+}
+
+/**
+ * Date + time picker, bounded to [minDate, maxDate].
+ *
+ * Returns a full timestamp, which is the point: an earlier version
+ * asked only for a time of day and inferred the date from context.
+ * That worked for same-day fixes and quietly failed everywhere else —
+ * a shift forgotten on Friday and corrected on Monday could not be
+ * expressed at all, and that is precisely the shift most likely to
+ * need fixing, since forgetting over a weekend is how these go wrong.
+ *
+ * The day row hides itself when the bounds only permit one day, so the
+ * common same-day correction stays a single spinner.
+ */
+function TimePickerSheet({ initial, minDate, maxDate, onCancel, onConfirm }: {
+  initial:  Date;
+  minDate:  Date;
+  maxDate:  Date;
   onCancel: () => void;
   onConfirm: (picked: Date) => void;
 }) {
   const { C, ACCENT } = useTheme();
-  const [value, setValue] = useState(initial);
+  const clamp = (d: Date) => new Date(
+    Math.min(Math.max(d.getTime(), minDate.getTime()), maxDate.getTime()),
+  );
+  const [value, setValue] = useState(() => clamp(initial));
+  // Android has no combined datetime mode, so it walks date then time
+  // through two native dialogs — the platform-idiomatic flow anyway.
+  const [androidStep, setAndroidStep] = useState<"date" | "time">("date");
+
+  const days = useMemo(() => dayRange(minDate, maxDate), [minDate, maxDate]);
 
   if (Platform.OS !== "ios") {
+    if (androidStep === "date") {
+      return (
+        <DateTimePicker
+          value={value}
+          mode="date"
+          display="default"
+          minimumDate={startOfDay(minDate)}
+          maximumDate={maxDate}
+          onChange={(event, picked) => {
+            if (event.type === "dismissed" || !picked) { onCancel(); return; }
+            setValue(withTimeOfDay(picked, value));
+            setAndroidStep("time");
+          }}
+        />
+      );
+    }
     return (
       <DateTimePicker
         value={value}
@@ -151,7 +185,7 @@ function TimePickerSheet({ initial, onCancel, onConfirm }: {
         display="default"
         onChange={(event, picked) => {
           if (event.type === "dismissed" || !picked) { onCancel(); return; }
-          onConfirm(picked);
+          onConfirm(clamp(withTimeOfDay(value, picked)));
         }}
       />
     );
@@ -173,16 +207,45 @@ function TimePickerSheet({ initial, onCancel, onConfirm }: {
             <TouchableOpacity onPress={onCancel}>
               <Text style={[txt(600), { fontSize: 14, color: C.t2 }]}>Cancel</Text>
             </TouchableOpacity>
-            <Text style={[txt(800), { fontSize: 14, color: C.t1 }]}>Select a time</Text>
-            <TouchableOpacity onPress={() => onConfirm(value)}>
+            <Text style={[txt(800), { fontSize: 14, color: C.t1 }]}>
+              {days.length > 1 ? "Select date and time" : "Select a time"}
+            </Text>
+            <TouchableOpacity onPress={() => onConfirm(clamp(value))}>
               <Text style={[txt(800), { fontSize: 14, color: ACCENT }]}>Done</Text>
             </TouchableOpacity>
           </View>
+
+          {days.length > 1 && (
+            <View style={{
+              flexDirection: "row", flexWrap: "wrap", gap: 8,
+              paddingHorizontal: 16, paddingTop: 12,
+            }}>
+              {days.map(day => {
+                const active = startOfDay(value).getTime() === day.getTime();
+                return (
+                  <TouchableOpacity
+                    key={day.toISOString()}
+                    onPress={() => setValue(clamp(withTimeOfDay(day, value)))}
+                    style={{
+                      paddingVertical: 8, paddingHorizontal: 13, borderRadius: 999,
+                      backgroundColor: active ? ACCENT : C.surface2,
+                      borderWidth: 1, borderColor: active ? ACCENT : C.border,
+                    }}
+                  >
+                    <Text style={[txt(700), { fontSize: 12.5, color: active ? "white" : C.t2 }]}>
+                      {dayLabel(day)}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          )}
+
           <DateTimePicker
             value={value}
             mode="time"
             display="spinner"
-            onChange={(_e, picked) => { if (picked) setValue(picked); }}
+            onChange={(_e, picked) => { if (picked) setValue(withTimeOfDay(value, picked)); }}
           />
         </TouchableOpacity>
       </TouchableOpacity>
@@ -338,7 +401,6 @@ function OffDutyCard({ data, busy, onClockIn, onCorrectShift }: {
 }) {
   const { C } = useTheme();
   const [picking, setPicking] = useState<null | "clock-in" | "last-start" | "last-end">(null);
-  const [pickError, setPickError] = useState<string | null>(null);
   const rest = data.rest ?? null;
   const last = data.lastShift ?? null;
   // Inside the 10-hour reset: warn, don't block.
@@ -350,7 +412,6 @@ function OffDutyCard({ data, busy, onClockIn, onCorrectShift }: {
 
   const editLastShift = () => {
     if (!last) return;
-    setPickError(null);
     Alert.alert(
       "Edit last shift",
       `${fmtDayAndClock(last.startedAt)} to ${last.endedAt ? fmtDayAndClock(last.endedAt) : "unknown"}. Which time do you want to change?`,
@@ -395,11 +456,6 @@ function OffDutyCard({ data, busy, onClockIn, onCorrectShift }: {
         />
       )}
 
-      {pickError && (
-        <Text style={[txt(600), { fontSize: 12, color: C.redInk, marginBottom: 10 }]}>
-          {pickError}
-        </Text>
-      )}
 
       <TouchableOpacity
         onPress={() => offerPunchOptions({
@@ -407,7 +463,7 @@ function OffDutyCard({ data, busy, onClockIn, onCorrectShift }: {
           message: "Start your shift now, or set the time you actually started.",
           nowLabel: "Clock in now",
           onNow: () => onClockIn(),
-          onPickTime: () => { setPickError(null); setPicking("clock-in"); },
+          onPickTime: () => { setPicking("clock-in"); },
         })}
         disabled={busy}
         activeOpacity={0.85}
@@ -425,48 +481,52 @@ function OffDutyCard({ data, busy, onClockIn, onCorrectShift }: {
         </Text>
       </TouchableOpacity>
 
-      {picking && (
-        <TimePickerSheet
-          initial={
-            picking === "clock-in" ? new Date()
-            : picking === "last-start" && last ? new Date(last.startedAt)
-            : last?.endedAt ? new Date(last.endedAt) : new Date()
-          }
-          onCancel={() => setPicking(null)}
-          onConfirm={(picked) => {
-            const mode = picking;
-            setPicking(null);
-            const now = new Date();
+      {picking && (() => {
+        const now = new Date();
+        // Bounds per field. The picker enforces them, so a driver can't
+        // land on an impossible timestamp in the first place — the
+        // error strings below only catch the gaps a clamp can't (a
+        // start pinned against an end that is itself the boundary).
+        const cfg =
+          picking === "clock-in"
+            ? {
+                initial: now,
+                // Mirrors the server's 36-hour cap on live punches.
+                min: new Date(now.getTime() - 36 * 3600_000),
+                max: now,
+              }
+            : picking === "last-start" && last
+            ? {
+                initial: new Date(last.startedAt),
+                min: new Date(now.getTime() - 14 * 24 * 3600_000),
+                max: last.endedAt ? new Date(new Date(last.endedAt).getTime() - 60_000) : now,
+              }
+            : {
+                initial: last?.endedAt ? new Date(last.endedAt) : now,
+                min: last ? new Date(new Date(last.startedAt).getTime() + 60_000) : now,
+                max: now,
+              };
 
-            if (mode === "clock-in") {
-              onClockIn(resolveRecentPast(picked, now).toISOString());
-              return;
-            }
-            if (!last) return;
-
-            if (mode === "last-start") {
-              const at = resolveOnSameDay(picked, new Date(last.startedAt));
-              if (last.endedAt && at.getTime() >= new Date(last.endedAt).getTime()) {
-                setPickError("That start time is after the shift ended.");
+        return (
+          <TimePickerSheet
+            initial={cfg.initial}
+            minDate={cfg.min}
+            maxDate={cfg.max}
+            onCancel={() => setPicking(null)}
+            onConfirm={(picked) => {
+              const mode = picking;
+              setPicking(null);
+              if (mode === "clock-in") { onClockIn(picked.toISOString()); return; }
+              if (!last) return;
+              if (mode === "last-start") {
+                onCorrectShift(last.id, { startedAt: picked.toISOString() });
                 return;
               }
-              if (at.getTime() > now.getTime()) {
-                setPickError("That start time is in the future.");
-                return;
-              }
-              onCorrectShift(last.id, { startedAt: at.toISOString() });
-              return;
-            }
-
-            const at = resolveAfter(picked, new Date(last.startedAt), now);
-            if (!at) {
-              setPickError("That end time is either before the shift started or still in the future.");
-              return;
-            }
-            onCorrectShift(last.id, { endedAt: at.toISOString() });
-          }}
-        />
-      )}
+              onCorrectShift(last.id, { endedAt: picked.toISOString() });
+            }}
+          />
+        );
+      })()}
     </View>
   );
 }
@@ -547,7 +607,6 @@ function OnDutyCard({
 }) {
   const { C } = useTheme();
   const [picking, setPicking] = useState<null | "clock-out" | "edit-start">(null);
-  const [pickError, setPickError] = useState<string | null>(null);
   const pct = Math.min(1, windowElapsed / SHIFT_WINDOW_SECONDS);
   // Escalate as the window closes. 10h and 13h are judgement calls, not
   // regulatory thresholds — they exist to give a driver warning before
@@ -588,7 +647,7 @@ function OnDutyCard({
         <View style={{ marginTop: 4 }}>
           <EditButton
             label="Edit clock in time"
-            onPress={() => { setPickError(null); setPicking("edit-start"); }}
+            onPress={() => { setPicking("edit-start"); }}
             disabled={busy}
           />
         </View>
@@ -604,11 +663,6 @@ function OnDutyCard({
           </Text>
         </View>
 
-        {pickError && (
-          <Text style={[txt(600), { fontSize: 12, color: C.redInk, marginTop: 8 }]}>
-            {pickError}
-          </Text>
-        )}
 
         <TouchableOpacity
           onPress={() => offerPunchOptions({
@@ -616,7 +670,7 @@ function OnDutyCard({
             message: "End your shift now, or set the time you actually finished. Your 10 hours off duty run from that time.",
             nowLabel: "Clock out now",
             onNow: () => onClockOut(),
-            onPickTime: () => { setPickError(null); setPicking("clock-out"); },
+            onPickTime: () => { setPicking("clock-out"); },
           })}
           disabled={busy}
           activeOpacity={0.85}
@@ -635,34 +689,40 @@ function OnDutyCard({
           </Text>
         </TouchableOpacity>
 
-        {picking && (
-          <TimePickerSheet
-            initial={picking === "edit-start" ? new Date(shift.startedAt) : new Date()}
-            onCancel={() => setPicking(null)}
-            onConfirm={(picked) => {
-              const mode = picking;
-              setPicking(null);
-              const now = new Date();
-
-              if (mode === "edit-start") {
-                const at = resolveOnSameDay(picked, new Date(shift.startedAt));
-                if (at.getTime() > now.getTime()) {
-                  setPickError("That start time is in the future.");
+        {picking && (() => {
+          const now = new Date();
+          const cfg = picking === "edit-start"
+            ? {
+                initial: new Date(shift.startedAt),
+                min: new Date(now.getTime() - 14 * 24 * 3600_000),
+                max: now,
+              }
+            : {
+                initial: now,
+                // An end can't precede its own start, so the shift start
+                // is the floor — this is what lets an overnight shift
+                // close on the following morning.
+                min: new Date(new Date(shift.startedAt).getTime() + 60_000),
+                max: now,
+              };
+          return (
+            <TimePickerSheet
+              initial={cfg.initial}
+              minDate={cfg.min}
+              maxDate={cfg.max}
+              onCancel={() => setPicking(null)}
+              onConfirm={(picked) => {
+                const mode = picking;
+                setPicking(null);
+                if (mode === "edit-start") {
+                  onCorrectShift(shift.id, { startedAt: picked.toISOString() });
                   return;
                 }
-                onCorrectShift(shift.id, { startedAt: at.toISOString() });
-                return;
-              }
-
-              const at = resolveAfter(picked, new Date(shift.startedAt), now);
-              if (!at) {
-                setPickError("That time is either before your shift started or still in the future.");
-                return;
-              }
-              onClockOut(at.toISOString());
-            }}
-          />
-        )}
+                onClockOut(picked.toISOString());
+              }}
+            />
+          );
+        })()}
       </View>
     </View>
   );
@@ -677,7 +737,6 @@ function PreviousShiftBanner({ shift, busy, onCorrectShift }: {
 }) {
   const { C } = useTheme();
   const [picking, setPicking] = useState(false);
-  const [pickError, setPickError] = useState<string | null>(null);
 
   return (
     <View style={[cardBase, {
@@ -697,7 +756,7 @@ function PreviousShiftBanner({ shift, busy, onCorrectShift }: {
 
       <TouchableOpacity
         disabled={busy}
-        onPress={() => { setPickError(null); setPicking(true); }}
+        onPress={() => { setPicking(true); }}
         activeOpacity={0.85}
         style={{
           alignItems: "center", marginTop: 12,
@@ -708,24 +767,16 @@ function PreviousShiftBanner({ shift, busy, onCorrectShift }: {
         <Text style={[txt(700), { fontSize: 14, color: C.t1 }]}>Edit the end time</Text>
       </TouchableOpacity>
 
-      {pickError && (
-        <Text style={[txt(600), { fontSize: 12, color: C.redInk, marginTop: 8 }]}>
-          {pickError}
-        </Text>
-      )}
 
       {picking && (
         <TimePickerSheet
           initial={shift.endedAt ? new Date(shift.endedAt) : new Date()}
+          minDate={new Date(new Date(shift.startedAt).getTime() + 60_000)}
+          maxDate={new Date()}
           onCancel={() => setPicking(false)}
           onConfirm={(picked) => {
             setPicking(false);
-            const at = resolveAfter(picked, new Date(shift.startedAt), new Date());
-            if (!at) {
-              setPickError("That time is either before that shift started or still in the future.");
-              return;
-            }
-            onCorrectShift(shift.id, { endedAt: at.toISOString() });
+            onCorrectShift(shift.id, { endedAt: picked.toISOString() });
           }}
         />
       )}
@@ -742,7 +793,6 @@ function StalePrompt({ shiftId, startedAt, elapsed, busy, onCorrectShift, onKeep
 }) {
   const { C } = useTheme();
   const [picking, setPicking] = useState(false);
-  const [pickError, setPickError] = useState<string | null>(null);
   const startMs = new Date(startedAt).getTime();
 
   // Offsets from the shift start rather than absolute times: the driver
@@ -794,7 +844,7 @@ function StalePrompt({ shiftId, startedAt, elapsed, busy, onCorrectShift, onKeep
 
         <TouchableOpacity
           disabled={busy}
-          onPress={() => { setPickError(null); setPicking(true); }}
+          onPress={() => { setPicking(true); }}
           activeOpacity={0.85}
           style={{
             alignItems: "center",
@@ -808,11 +858,6 @@ function StalePrompt({ shiftId, startedAt, elapsed, busy, onCorrectShift, onKeep
         </TouchableOpacity>
       </View>
 
-      {pickError && (
-        <Text style={[txt(600), { fontSize: 12, color: C.redInk, marginTop: 10 }]}>
-          {pickError}
-        </Text>
-      )}
 
       <TouchableOpacity
         onPress={onKeepRunning}
@@ -826,16 +871,17 @@ function StalePrompt({ shiftId, startedAt, elapsed, busy, onCorrectShift, onKeep
 
       {picking && (
         <TimePickerSheet
-          initial={new Date()}
+          // Defaults to the 14-hour mark rather than "now": a shift
+          // this stale is one the driver finished long ago, so the
+          // spinner should open nearer the plausible answer than the
+          // current time, which is never it.
+          initial={new Date(Math.min(startMs + SHIFT_WINDOW_SECONDS * 1000, Date.now()))}
+          minDate={new Date(startMs + 60_000)}
+          maxDate={new Date()}
           onCancel={() => setPicking(false)}
           onConfirm={(picked) => {
             setPicking(false);
-            const at = resolveAfter(picked, new Date(startedAt), new Date());
-            if (!at) {
-              setPickError("That time is either before your shift started or still in the future.");
-              return;
-            }
-            onCorrectShift(shiftId, { endedAt: at.toISOString() });
+            onCorrectShift(shiftId, { endedAt: picked.toISOString() });
           }}
         />
       )}
