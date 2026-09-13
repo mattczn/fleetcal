@@ -29,10 +29,16 @@ import { ensureEventRouteCached } from "../lib/routeGeometry.js";
 import { isTruckHistoryOrg } from "../middleware/require.js";
 import { driverAuth, type DriverAuthVariables } from "../middleware/driverAuth.js";
 import { convertIfHeicAtUpload as convertIfHeic, HEIC_DECODE_FAILED } from "../lib/heicToJpeg.js";
+import driverHosRoute from "./driver-hos.js";
 
 const driver = new Hono<{ Variables: DriverAuthVariables }>();
 
 driver.use("*", driverAuth);
+
+// HOS clock in/out lives in its own file to keep this one from growing
+// further. Mounted here (rather than as a sibling under /v1/driver in
+// index.ts) so it inherits the driverAuth above exactly once.
+driver.route("/hos", driverHosRoute);
 
 // ─────────────────────────────────────────────────────────────────────────
 // Column lists + row converters (mirror loads.ts; duplicated here so the

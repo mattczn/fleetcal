@@ -1,0 +1,217 @@
+/**
+ * Driver-app HOS endpoints. Mounted at /v1/driver/hos behind the same
+ * driverAuth middleware as the rest of the driver surface, so every
+ * handler can trust c.get("driverId") / c.get("orgId").
+ *
+ * Deliberate design choices:
+ *   * Location is best-effort. A clock-in must never fail because GPS
+ *     is unavailable — a driver in a dead zone still starts their day.
+ *   * Clock-in is forgiving. A double-tap returns the open shift, and
+ *     a forgotten clock-out auto-closes rather than blocking the new
+ *     shift. Blocking would cost us today's data on top of yesterday's.
+ *   * The driver sees today, not the cycle. The 70/8 number is only as
+ *     good as a full week of clean clock-ins; today's timer is only as
+ *     good as today. Fragile math belongs where dispatch can sanity
+ *     check it, so it's omitted from this response.
+ */
+import { Hono } from "hono";
+import { supabase } from "../lib/supabase.js";
+import { type DriverAuthVariables } from "../middleware/driverAuth.js";
+import {
+  getDriverHosView, clockIn, clockOut, correctShiftTimes,
+  type Classification,
+} from "../lib/hosService.js";
+
+// Mounted as a sub-router of driver.ts (`driver.route("/hos", …)`), so
+// driverAuth is already applied upstream — don't re-apply it here or the
+// JWT gets verified and the drivers row fetched twice per request.
+const driverHos = new Hono<{ Variables: DriverAuthVariables }>();
+
+/** Coerce a client-supplied coordinate; anything out of range or
+ *  non-finite becomes null rather than poisoning the row. */
+function coord(v: unknown, max: number): number | null {
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) && Math.abs(n) <= max ? n : null;
+}
+
+async function driverConfig(driverId: number): Promise<{
+  enabled: boolean; defaultClassification: Classification; name: string;
+}> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data } = await (supabase as any)
+    .from("drivers")
+    .select("name, hos_enabled, hos_default_classification")
+    .eq("id", driverId)
+    .maybeSingle();
+  const d = (data ?? {}) as { name?: string; hos_enabled?: boolean; hos_default_classification?: string };
+  return {
+    enabled: d.hos_enabled !== false,
+    defaultClassification: d.hos_default_classification === "otr" ? "otr" : "local",
+    name: d.name ?? "Driver",
+  };
+}
+
+/** Shape the driver card renders from. Cycle numbers are intentionally
+ *  absent — see the header note. */
+function statusPayload(view: Awaited<ReturnType<typeof getDriverHosView>>) {
+  const { snapshot, openShift, lastClosedShift } = view;
+  return {
+    status: snapshot.status,
+    stale:  snapshot.stale,
+    onDutySecondsToday: Math.round(snapshot.onDutySecondsToday),
+    currentShift: openShift ? {
+      id:             openShift.id,
+      startedAt:      openShift.started_at,
+      classification: openShift.classification,
+      elapsedSeconds:   Math.round(snapshot.window?.elapsedSeconds ?? 0),
+      remainingSeconds: Math.round(snapshot.window?.remainingSeconds ?? 0),
+      windowExpiresAt:  snapshot.window?.expiresAt.toISOString() ?? null,
+      windowExpired:    snapshot.window?.expired ?? false,
+    } : null,
+    lastShift: lastClosedShift ? {
+      id:        lastClosedShift.id,
+      startedAt: lastClosedShift.started_at,
+      endedAt:   lastClosedShift.ended_at,
+      onDutySeconds: lastClosedShift.on_duty_seconds,
+      autoClosed:    lastClosedShift.auto_closed,
+      needsReview:   lastClosedShift.needs_review,
+    } : null,
+    rest: snapshot.rest ? {
+      restSeconds: Math.round(snapshot.rest.restSeconds),
+      satisfied:   snapshot.rest.satisfied,
+      clearAt:     snapshot.rest.clearAt.toISOString(),
+    } : null,
+  };
+}
+
+// ── GET /v1/driver/hos/status ────────────────────────────────────────
+driverHos.get("/status", async (c) => {
+  const driverId = c.get("driverId");
+  const orgId    = c.get("orgId");
+  const cfg = await driverConfig(driverId);
+  if (!cfg.enabled) return c.json({ enabled: false });
+  const view = await getDriverHosView(driverId, orgId, new Date());
+  return c.json({ enabled: true, ...statusPayload(view) });
+});
+
+// ── POST /v1/driver/hos/clock-in ─────────────────────────────────────
+driverHos.post("/clock-in", async (c) => {
+  const driverId = c.get("driverId");
+  const orgId    = c.get("orgId");
+  const name     = c.get("driverName");
+
+  const cfg = await driverConfig(driverId);
+  if (!cfg.enabled) {
+    return c.json({ error: "hos_disabled", detail: "HOS tracking is off for this driver." }, 403);
+  }
+
+  let body: { latitude?: unknown; longitude?: unknown } = {};
+  try { body = await c.req.json(); } catch { /* body is optional */ }
+
+  const now = new Date();
+  try {
+    const result = await clockIn({
+      driverId, orgId, now,
+      lat: coord(body.latitude, 90),
+      lon: coord(body.longitude, 180),
+      classification: cfg.defaultClassification,
+      classificationSource: "default",
+      actor: { kind: "driver", driverId, name },
+    });
+    const view = await getDriverHosView(driverId, orgId, now);
+    return c.json({
+      ...statusPayload(view),
+      alreadyOpen: result.alreadyOpen,
+      // Non-null means we closed a forgotten shift to make room. The
+      // app turns this into the "when did you actually finish?" prompt.
+      autoClosedShiftId: result.autoClosedShiftId,
+    });
+  } catch (err) {
+    console.error("[POST /v1/driver/hos/clock-in] failed:", err);
+    return c.json({ error: "clock_in_failed", detail: (err as Error).message }, 500);
+  }
+});
+
+// ── POST /v1/driver/hos/clock-out ────────────────────────────────────
+driverHos.post("/clock-out", async (c) => {
+  const driverId = c.get("driverId");
+  const orgId    = c.get("orgId");
+  const name     = c.get("driverName");
+
+  let body: { latitude?: unknown; longitude?: unknown } = {};
+  try { body = await c.req.json(); } catch { /* body is optional */ }
+
+  const now = new Date();
+  try {
+    const closed = await clockOut({
+      driverId, orgId, now,
+      lat: coord(body.latitude, 90),
+      lon: coord(body.longitude, 180),
+      actor: { kind: "driver", driverId, name },
+    });
+    if (!closed) {
+      return c.json({ error: "not_clocked_in", detail: "No open shift to close." }, 409);
+    }
+    const view = await getDriverHosView(driverId, orgId, now);
+    return c.json(statusPayload(view));
+  } catch (err) {
+    console.error("[POST /v1/driver/hos/clock-out] failed:", err);
+    return c.json({ error: "clock_out_failed", detail: (err as Error).message }, 500);
+  }
+});
+
+// ── POST /v1/driver/hos/shifts/:id/correct-end ───────────────────────
+//
+// The driver answering "you were still clocked in — when did you
+// finish?". Scoped to their OWN shifts, end time only: a driver can
+// tell us when they stopped, but moving a start time is a dispatch
+// action so the two can't be quietly rewritten from the same screen.
+driverHos.post("/shifts/:id/correct-end", async (c) => {
+  const driverId = c.get("driverId");
+  const orgId    = c.get("orgId");
+  const name     = c.get("driverName");
+  const shiftId  = c.req.param("id");
+
+  let body: { endedAt?: string; note?: string };
+  try { body = await c.req.json(); } catch { return c.json({ error: "invalid_json" }, 400); }
+  if (!body.endedAt) {
+    return c.json({ error: "validation_failed", errors: ["endedAt required"] }, 400);
+  }
+  const endedAt = new Date(body.endedAt);
+  if (Number.isNaN(endedAt.getTime())) {
+    return c.json({ error: "validation_failed", errors: ["endedAt is not a valid timestamp"] }, 400);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: owned } = await (supabase as any)
+    .from("hos_shifts")
+    .select("id, driver_id, started_at")
+    .eq("id", shiftId).eq("org_id", orgId)
+    .maybeSingle();
+  const shift = owned as { id: string; driver_id: number; started_at: string } | null;
+  if (!shift) return c.json({ error: "not_found" }, 404);
+  if (shift.driver_id !== driverId) return c.json({ error: "not_authorized" }, 403);
+
+  const startedAt = new Date(shift.started_at);
+  if (endedAt.getTime() <= startedAt.getTime()) {
+    return c.json({ error: "validation_failed", errors: ["End time must be after the shift start."] }, 400);
+  }
+  if (endedAt.getTime() > Date.now() + 60_000) {
+    return c.json({ error: "validation_failed", errors: ["End time can't be in the future."] }, 400);
+  }
+
+  try {
+    await correctShiftTimes({
+      shiftId, orgId, endedAt,
+      note: body.note ?? "Corrected by driver after a missed clock-out.",
+      actor: { kind: "driver", driverId, name },
+    });
+    const view = await getDriverHosView(driverId, orgId, new Date());
+    return c.json(statusPayload(view));
+  } catch (err) {
+    console.error("[POST /v1/driver/hos/shifts/:id/correct-end] failed:", err);
+    return c.json({ error: "correction_failed", detail: (err as Error).message }, 500);
+  }
+});
+
+export default driverHos;
