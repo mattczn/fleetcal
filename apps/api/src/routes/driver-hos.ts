@@ -227,7 +227,7 @@ driverHos.post("/clock-out", async (c) => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: openRow } = await (supabase as any)
     .from("hos_shifts").select("started_at")
-    .eq("driver_id", driverId).is("ended_at", null).limit(1).maybeSingle();
+    .eq("driver_id", driverId).is("ended_at", null).is("deleted_at", null).limit(1).maybeSingle();
   if (!openRow) {
     return c.json({ error: "not_clocked_in", detail: "No open shift to close." }, 409);
   }
@@ -279,7 +279,7 @@ driverHos.post("/shifts/:id/correct-end", async (c) => {
   const { data: owned } = await (supabase as any)
     .from("hos_shifts")
     .select("id, driver_id, started_at")
-    .eq("id", shiftId).eq("org_id", orgId)
+    .eq("id", shiftId).eq("org_id", orgId).is("deleted_at", null)
     .maybeSingle();
   const shift = owned as { id: string; driver_id: number; started_at: string } | null;
   if (!shift) return c.json({ error: "not_found" }, 404);
@@ -333,7 +333,7 @@ driverHos.post("/shifts/:id/correct", async (c) => {
   const { data: owned } = await (supabase as any)
     .from("hos_shifts")
     .select("id, driver_id, started_at, ended_at")
-    .eq("id", shiftId).eq("org_id", orgId)
+    .eq("id", shiftId).eq("org_id", orgId).is("deleted_at", null)
     .maybeSingle();
   const shift = owned as
     { id: string; driver_id: number; started_at: string; ended_at: string | null } | null;

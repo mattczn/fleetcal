@@ -81,6 +81,7 @@ export async function loadRecentShifts(driverId: number, now: Date): Promise<Shi
     .from("hos_shifts")
     .select("*")
     .eq("driver_id", driverId)
+    .is("deleted_at", null)
     .or(`started_at.gte.${since},ended_at.is.null`)
     .order("started_at", { ascending: true });
   if (error) throw new Error(`hos_shifts read failed: ${error.message}`);
@@ -122,6 +123,7 @@ export async function findOverlappingShift(
     .from("hos_shifts")
     .select("*")
     .eq("driver_id", driverId)
+    .is("deleted_at", null)
     .or(`started_at.gte.${since},ended_at.is.null`);
 
   const startMs = start.getTime();
@@ -278,6 +280,7 @@ export async function clockIn(opts: {
     .select("*")
     .eq("driver_id", driverId)
     .is("ended_at", null)
+    .is("deleted_at", null)
     .limit(1);
   const open = ((openRows ?? []) as ShiftRow[])[0] ?? null;
 
@@ -357,6 +360,7 @@ export async function clockOut(opts: {
     .select("*")
     .eq("driver_id", driverId)
     .is("ended_at", null)
+    .is("deleted_at", null)
     .limit(1);
   const open = ((openRows ?? []) as ShiftRow[])[0] ?? null;
   if (!open) return null;

@@ -27,6 +27,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   X, Loader2, Clock, AlertTriangle, Check, RefreshCw, CircleAlert, Pencil,
+  Plus, Trash2,
 } from 'lucide-react';
 import { railway, type HosBoardDriver, type HosBoardShift, type HosDutyEvent } from '@/lib/railway';
 
@@ -67,6 +68,98 @@ function cycleTone(used: number, limit: number): { bar: string; text: string } {
   if (pct >= 0.85) return { bar: '#d97706', text: '#92400e' };
   return { bar: '#16a34a', text: '#166534' };
 }
+
+const SHIFT_WINDOW_SECONDS = 14 * 3600;
+
+type DayState = {
+  headline: string;
+  sub: string | null;
+  tone: 'green' | 'amber' | 'red' | 'neutral';
+  /** Fraction of the 14-hour window consumed, for the bar. */
+  windowPct: number | null;
+  /**
+   * Both paths available to an off-duty driver mid-window. Present ONLY
+   * when both genuinely exist — a dispatcher shown "resets at 1am" alone
+   * will park a driver who could legally be working right now, and one
+   * shown "can work until 8pm" alone won't notice the alternative gets
+   * them a full fresh 14.
+   */
+  choice: { workUntil: string; workLeft: string; resetAt: string; resetIn: string } | null;
+};
+
+/**
+ * What this driver's day looks like right now.
+ *
+ * Deliberately daily, not weekly. The 70/8 cycle is a planning number
+ * for later in the week; the question at dispatch time is "how much has
+ * this driver got left today", and that's the 14-hour window and the
+ * 10-hour reset.
+ */
+function dayState(d: HosBoardDriver, timeZone: string): DayState {
+  if (d.status === 'on_duty') {
+    if (d.stale) {
+      return {
+        headline: 'Shift open past 14 hours',
+        sub: 'Almost certainly a missed clock-out — needs correcting',
+        tone: 'red', windowPct: 1, choice: null,
+      };
+    }
+    const left = d.windowRemainingSeconds ?? 0;
+    return {
+      headline: `${fmtHours(left)} left on duty`,
+      sub: d.windowExpiresAt ? `14 hour window ends ${fmtClock(d.windowExpiresAt, timeZone)}` : null,
+      tone: left <= 3600 ? 'red' : left <= 3 * 3600 ? 'amber' : 'green',
+      windowPct: Math.min(1, 1 - left / SHIFT_WINDOW_SECONDS),
+      choice: null,
+    };
+  }
+
+  // Off duty, but the window is still running — the two-option case.
+  if (d.canResumeWithinWindow && d.windowExpiresAt) {
+    const workLeft = Math.max(0, (new Date(d.windowExpiresAt).getTime() - Date.now()) / 1000);
+    return {
+      headline: `Can work ${fmtHours(workLeft)} more today`,
+      sub: d.availableAt ? `or reset by ${fmtDayClock(d.availableAt, timeZone)}` : null,
+      tone: workLeft <= 2 * 3600 ? 'amber' : 'green',
+      windowPct: Math.min(1, 1 - workLeft / SHIFT_WINDOW_SECONDS),
+      choice: {
+        workUntil: fmtClock(d.windowExpiresAt, timeZone),
+        workLeft: fmtHours(workLeft),
+        resetAt: d.availableAt ? fmtDayClock(d.availableAt, timeZone) : '—',
+        resetIn: fmtHours(d.restRemainingSeconds),
+      },
+    };
+  }
+
+  // Window expired, reset incomplete — one path only.
+  if (d.availableAt) {
+    return {
+      headline: `Available ${fmtDayClock(d.availableAt, timeZone)}`,
+      sub: `${fmtHours(d.restRemainingSeconds)} left of the 10 hour reset`,
+      tone: 'amber', windowPct: null, choice: null,
+    };
+  }
+
+  if (d.restartInProgressCompletesAt) {
+    return {
+      headline: 'Rested — full 14 hours available',
+      sub: `34 hour cycle reset completes ${fmtDayClock(d.restartInProgressCompletesAt, timeZone)}`,
+      tone: 'green', windowPct: null, choice: null,
+    };
+  }
+
+  return {
+    headline: 'Rested — full 14 hours available',
+    sub: null, tone: 'green', windowPct: null, choice: null,
+  };
+}
+
+const TONE = {
+  green:   { bar: '#16a34a', text: '#166534', bg: '#f0fdf4', border: '#bbf7d0' },
+  amber:   { bar: '#d97706', text: '#92400e', bg: '#fffbeb', border: '#fde68a' },
+  red:     { bar: '#dc2626', text: '#991b1b', bg: '#fef2f2', border: '#fecaca' },
+  neutral: { bar: 'var(--gc-border-light)', text: 'var(--gc-text-2)', bg: 'var(--gc-bg)', border: 'var(--gc-border-light)' },
+} as const;
 
 // ── sorting ──────────────────────────────────────────────────────────
 
@@ -307,23 +400,10 @@ export default function HosPanel({ onClose }: { onClose: () => void }) {
 function DriverRow({ driver, timeZone, selected, onSelect }: {
   driver: HosBoardDriver; timeZone: string; selected: boolean; onSelect: () => void;
 }) {
-  const tone = cycleTone(driver.cycleUsedSeconds, driver.cycleLimitSeconds);
-  const pct = driver.cycleLimitSeconds > 0
-    ? Math.min(1, driver.cycleUsedSeconds / driver.cycleLimitSeconds)
-    : 0;
-
-  // One line of "what do I need to know about this driver right now".
-  const note = driver.status === 'on_duty'
-    ? driver.stale
-      ? 'Shift open past 14h — needs a correction'
-      : `${fmtHours(driver.windowRemainingSeconds)} left in window`
-    : driver.canResumeWithinWindow
-      ? `Can resume until ${fmtClock(driver.windowExpiresAt, timeZone)}`
-      : driver.availableAt
-        ? `Available ${fmtDayClock(driver.availableAt, timeZone)}`
-        : driver.restartInProgressCompletesAt
-          ? `Restarts ${fmtDayClock(driver.restartInProgressCompletesAt, timeZone)}`
-          : 'Rested';
+  // The headline is the DAY, not the week. What dispatch needs first is
+  // "how much has this driver got left right now" — the 70/8 cycle is a
+  // planning number for later in the week and is demoted to a footnote.
+  const day = dayState(driver, timeZone);
 
   return (
     <button
@@ -376,22 +456,39 @@ function DriverRow({ driver, timeZone, selected, onSelect }: {
         )}
       </div>
 
-      <div style={{ fontSize: 11, color: 'var(--gc-text-3)', marginTop: 3 }}>
-        {note}
+      {/* Headline is the day: hours left on shift, or when they're
+          back. The week is a footnote at the bottom. */}
+      <div style={{
+        fontSize: 13, fontWeight: 700, marginTop: 4,
+        color: TONE[day.tone].text, fontVariantNumeric: 'tabular-nums',
+      }}>
+        {day.headline}
       </div>
+      {day.sub && (
+        <div style={{ fontSize: 11, color: 'var(--gc-text-3)', marginTop: 1 }}>
+          {day.sub}
+        </div>
+      )}
 
-      {/* Cycle bar. The denominator matters — "58h" alone doesn't get
-          read, "58 / 70" does. */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 6 }}>
+      {/* 14-hour window consumed. Only drawn when a window is actually
+          running — a rested driver has nothing to show here. */}
+      {day.windowPct != null && (
         <div style={{
-          flex: 1, height: 4, borderRadius: 2,
+          height: 4, borderRadius: 2, marginTop: 6,
           background: 'var(--gc-border-light)', overflow: 'hidden',
         }}>
-          <div style={{ width: `${pct * 100}%`, height: '100%', background: tone.bar }} />
+          <div style={{ width: `${day.windowPct * 100}%`, height: '100%', background: TONE[day.tone].bar }} />
         </div>
-        <span style={{ fontSize: 10.5, fontWeight: 600, color: tone.text, fontVariantNumeric: 'tabular-nums' }}>
-          {Math.round(driver.cycleUsedSeconds / 360) / 10}/{Math.round(driver.cycleLimitSeconds / 3600)}h
-        </span>
+      )}
+
+      {/* The week, deliberately small. Useful context for planning a
+          few days out, never the thing to read first. */}
+      <div style={{
+        fontSize: 10, color: 'var(--gc-text-3)', marginTop: 5,
+        fontVariantNumeric: 'tabular-nums',
+      }}>
+        Week {Math.round(driver.cycleUsedSeconds / 360) / 10}/{Math.round(driver.cycleLimitSeconds / 3600)}h
+        {driver.onDutySecondsToday > 0 ? ` · today ${fmtHours(driver.onDutySecondsToday)}` : ''}
       </div>
     </button>
   );
@@ -406,6 +503,7 @@ function DriverDetail({ driver, timeZone, onChanged }: {
   const [events, setEvents] = useState<HosDutyEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -434,36 +532,105 @@ function DriverDetail({ driver, timeZone, onChanged }: {
     setBusyId(null);
   };
 
+  const removeShift = async (shiftId: string) => {
+    if (!window.confirm('Remove this shift? It stops counting toward hours immediately, but stays recoverable in the database.')) return;
+    setBusyId(shiftId); setErr(null);
+    try {
+      await railway.deleteHosShift(shiftId);
+      await load();
+      onChanged();
+    } catch (e) {
+      setErr((e as Error).message ?? 'Could not remove that shift');
+    }
+    setBusyId(null);
+  };
+
+  const addShift = async (body: { startedAt: string; endedAt: string | null; classification: 'local' | 'otr' }) => {
+    setErr(null);
+    try {
+      await railway.createHosShift({ driverId: driver.driverId, ...body });
+      setAdding(false);
+      await load();
+      onChanged();
+    } catch (e) {
+      setErr((e as Error).message ?? 'Could not add that shift');
+    }
+  };
+
   const tone = cycleTone(driver.cycleUsedSeconds, driver.cycleLimitSeconds);
+  const day = dayState(driver, timeZone);
 
   return (
     <div style={{ flex: 1, overflowY: 'auto', background: 'var(--gc-bg)' }}>
-      {/* KPI strip */}
+      {/* Today, in words. This is the block a dispatcher reads before
+          deciding whether to give someone a run. */}
       <div style={{
-        padding: '14px 16px', display: 'grid', gap: 10,
-        gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
-        background: 'var(--gc-surface)', borderBottom: '1px solid var(--gc-border-light)',
+        padding: '14px 16px', background: 'var(--gc-surface)',
+        borderBottom: '1px solid var(--gc-border-light)',
       }}>
-        <Kpi label="On duty today" value={fmtHours(driver.onDutySecondsToday)} />
-        <Kpi
-          label={`Cycle (${Math.round(driver.cycleLimitSeconds / 3600)}h / 8 day)`}
-          value={fmtHours(driver.cycleUsedSeconds)}
-          suffix={<span style={{ color: tone.text, fontWeight: 700 }}> · {fmtHours(driver.cycleRemainingSeconds)} left</span>}
-        />
-        <Kpi
-          label="14h window"
-          value={driver.status === 'on_duty' ? fmtHours(driver.windowRemainingSeconds) : '—'}
-          suffix={driver.windowExpiresAt && driver.status === 'on_duty'
-            ? <span style={{ color: 'var(--gc-text-3)' }}> · to {fmtClock(driver.windowExpiresAt, timeZone)}</span>
-            : undefined}
-        />
-        <Kpi
-          label="Paper log days (30d)"
-          value={`${driver.paperLogDays} / ${driver.paperLogLimit}`}
-          suffix={driver.paperLogWarning
-            ? <span style={{ color: '#92400e', fontWeight: 700 }}> · near limit</span>
-            : undefined}
-        />
+        <div style={{
+          padding: '12px 14px', borderRadius: 8,
+          background: TONE[day.tone].bg, border: `1px solid ${TONE[day.tone].border}`,
+        }}>
+          <div style={{ fontSize: 16, fontWeight: 800, color: TONE[day.tone].text }}>
+            {day.headline}
+          </div>
+
+          {day.choice ? (
+            // The two-option case: off duty, but the 14-hour window is
+            // still open. Both paths are spelled out because picking
+            // between them IS the dispatch decision — send them back out
+            // on what's left of today, or park them for a fresh 14.
+            <div style={{ display: 'grid', gap: 10, gridTemplateColumns: '1fr 1fr', marginTop: 10 }}>
+              <div style={{ padding: '9px 11px', borderRadius: 7, background: 'var(--gc-surface)', border: '1px solid var(--gc-border-light)' }}>
+                <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 0.3, textTransform: 'uppercase', color: 'var(--gc-text-3)' }}>
+                  Send out now
+                </div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--gc-text-1)', marginTop: 3, fontVariantNumeric: 'tabular-nums' }}>
+                  {day.choice.workLeft} left
+                </div>
+                <div style={{ fontSize: 11.5, color: 'var(--gc-text-2)', marginTop: 2, lineHeight: 1.4 }}>
+                  Must be done by {day.choice.workUntil}. A short break does not
+                  extend the window, so this is what remains of today.
+                </div>
+              </div>
+              <div style={{ padding: '9px 11px', borderRadius: 7, background: 'var(--gc-surface)', border: '1px solid var(--gc-border-light)' }}>
+                <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 0.3, textTransform: 'uppercase', color: 'var(--gc-text-3)' }}>
+                  Or reset first
+                </div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--gc-text-1)', marginTop: 3, fontVariantNumeric: 'tabular-nums' }}>
+                  Ready {day.choice.resetAt}
+                </div>
+                <div style={{ fontSize: 11.5, color: 'var(--gc-text-2)', marginTop: 2, lineHeight: 1.4 }}>
+                  {day.choice.resetIn} more off duty buys a fresh 14 hour window.
+                </div>
+              </div>
+            </div>
+          ) : day.sub ? (
+            <div style={{ fontSize: 12.5, color: TONE[day.tone].text, marginTop: 4, opacity: 0.9 }}>
+              {day.sub}
+            </div>
+          ) : null}
+        </div>
+
+        <div style={{
+          marginTop: 10, display: 'grid', gap: 10,
+          gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+        }}>
+          <Kpi label="On duty today" value={fmtHours(driver.onDutySecondsToday)} />
+          <Kpi
+            label="Paper log days (30d)"
+            value={`${driver.paperLogDays} / ${driver.paperLogLimit}`}
+            suffix={driver.paperLogWarning
+              ? <span style={{ color: '#92400e', fontWeight: 700 }}> · near limit</span>
+              : undefined}
+          />
+          <Kpi
+            label={`Week (${Math.round(driver.cycleLimitSeconds / 3600)}h / 8 day)`}
+            value={fmtHours(driver.cycleUsedSeconds)}
+            suffix={<span style={{ color: tone.text, fontWeight: 700 }}> · {fmtHours(driver.cycleRemainingSeconds)} left</span>}
+          />
+        </div>
       </div>
 
       {/* Restart status. With slow weekends most drivers reset without
@@ -493,9 +660,33 @@ function DriverDetail({ driver, timeZone, onChanged }: {
 
       {/* Shift list */}
       <div style={{ padding: 16 }}>
-        <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: 'var(--gc-text-3)', marginBottom: 8 }}>
-          Shifts (last 14 days)
+        <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
+          <div style={{ flex: 1, fontSize: 10.5, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: 'var(--gc-text-3)' }}>
+            Shifts (last 14 days)
+          </div>
+          <button
+            type="button"
+            onClick={() => setAdding(v => !v)}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 4,
+              padding: '4px 9px', borderRadius: 6, fontSize: 11.5, fontWeight: 600,
+              border: '1px solid var(--gc-border-light)', background: 'var(--gc-surface)',
+              color: 'var(--gc-text-2)', cursor: 'pointer',
+            }}
+          >
+            <Plus size={11} /> Add shift
+          </button>
         </div>
+        {adding && (
+          <div style={{ marginBottom: 8 }}>
+            <NewShiftForm
+              timeZone={timeZone}
+              defaultClassification={driver.defaultClassification}
+              onCancel={() => setAdding(false)}
+              onSave={(body) => void addShift(body)}
+            />
+          </div>
+        )}
         {loading ? (
           <div style={{ padding: 20, display: 'flex', justifyContent: 'center' }}>
             <Loader2 size={18} className="animate-spin" style={{ color: 'var(--gc-text-3)' }} />
@@ -513,6 +704,7 @@ function DriverDetail({ driver, timeZone, onChanged }: {
                 timeZone={timeZone}
                 busy={busyId === s.id}
                 onPatch={(body) => void patch(s.id, body)}
+                onDelete={() => void removeShift(s.id)}
                 events={events.filter(e =>
                   // Trail entries whose timestamps sit inside this shift.
                   new Date(e.occurred_at).getTime() >= new Date(s.startedAt).getTime() - 3600_000 &&
@@ -566,12 +758,13 @@ function Callout({ tone, icon, children }: {
 
 // ── One shift ────────────────────────────────────────────────────────
 
-function ShiftCard({ shift, timeZone, busy, events, onPatch }: {
+function ShiftCard({ shift, timeZone, busy, events, onPatch, onDelete }: {
   shift: HosBoardShift;
   timeZone: string;
   busy: boolean;
   events: HosDutyEvent[];
   onPatch: (body: Parameters<typeof railway.updateHosShift>[1]) => void;
+  onDelete: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [showTrail, setShowTrail] = useState(false);
@@ -663,6 +856,24 @@ function ShiftCard({ shift, timeZone, busy, events, onPatch }: {
           }}
         >
           <Pencil size={11} /> Times
+        </button>
+
+        {/* Soft delete — for a shift recorded wrongly rather than a
+            shift that didn't happen. The row survives in the database. */}
+        <button
+          type="button"
+          onClick={onDelete}
+          disabled={busy}
+          title="Remove this shift"
+          aria-label="Remove this shift"
+          style={{
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            width: 27, height: 27, borderRadius: 6,
+            border: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)',
+            color: '#b8261d', cursor: busy ? 'not-allowed' : 'pointer',
+          }}
+        >
+          <Trash2 size={12} />
         </button>
       </div>
 
@@ -771,6 +982,113 @@ function SegToggle({ value, options, disabled, onChange }: {
   );
 }
 
+/**
+ * Manually record a shift a driver never clocked.
+ *
+ * Leaving the end blank opens the shift — for a driver working right
+ * now who forgot to clock in. The server's exclusion constraint treats
+ * an open shift as running to infinity, so that correctly refuses if
+ * anything is already recorded after the start.
+ */
+function NewShiftForm({ timeZone, defaultClassification, onCancel, onSave }: {
+  timeZone: string;
+  defaultClassification: 'local' | 'otr';
+  onCancel: () => void;
+  onSave: (body: { startedAt: string; endedAt: string | null; classification: 'local' | 'otr' }) => void;
+}) {
+  const [start, setStart] = useState('');
+  const [end, setEnd] = useState('');
+  const [cls, setCls] = useState<'local' | 'otr'>(defaultClassification);
+
+  const inputStyle: React.CSSProperties = {
+    padding: '5px 8px', borderRadius: 6, fontSize: 12,
+    border: '1px solid var(--gc-border-light)',
+    background: 'var(--gc-surface)', color: 'var(--gc-text-1)',
+  };
+
+  return (
+    <div style={{
+      padding: '11px 12px', borderRadius: 8,
+      background: 'var(--gc-surface)', border: '1px solid var(--gc-blue, #1a73e8)',
+    }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--gc-text-1)', marginBottom: 9 }}>
+        Add a shift
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <label style={{ fontSize: 11, color: 'var(--gc-text-3)' }}>
+          Start
+          <input type="datetime-local" value={start} onChange={e => setStart(e.target.value)}
+            style={{ ...inputStyle, marginLeft: 6 }} />
+        </label>
+        <label style={{ fontSize: 11, color: 'var(--gc-text-3)' }}>
+          End
+          <input type="datetime-local" value={end} onChange={e => setEnd(e.target.value)}
+            style={{ ...inputStyle, marginLeft: 6 }} />
+        </label>
+        <SegToggle
+          value={cls}
+          options={[{ v: 'local', label: 'Local' }, { v: 'otr', label: 'OTR' }]}
+          onChange={(v) => setCls(v as 'local' | 'otr')}
+        />
+        <span style={{ fontSize: 10.5, color: 'var(--gc-text-3)' }}>
+          {timeZone.replace('_', ' ')} · leave End blank to open the shift
+        </span>
+        <div style={{ flex: 1 }} />
+        <button type="button" onClick={onCancel}
+          style={{ padding: '5px 10px', borderRadius: 6, fontSize: 11.5, border: '1px solid var(--gc-border-light)', background: 'var(--gc-surface)', color: 'var(--gc-text-2)', cursor: 'pointer' }}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          disabled={!start}
+          onClick={() => {
+            const s = zonedInputToIso(start, timeZone);
+            if (!s) return;
+            onSave({ startedAt: s, endedAt: zonedInputToIso(end, timeZone) ?? null, classification: cls });
+          }}
+          style={{
+            padding: '5px 12px', borderRadius: 6, fontSize: 11.5, fontWeight: 700,
+            border: 'none', background: start ? 'var(--gc-blue, #1a73e8)' : 'var(--gc-border-light)',
+            color: '#fff', cursor: start ? 'pointer' : 'not-allowed',
+          }}
+        >
+          Add
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Interpret a `datetime-local` value as a wall-clock time in `timeZone`.
+ *
+ * The browser's own zone is NOT the right frame: a dispatcher working
+ * remotely from a Denver fleet must be entering Denver times, or every
+ * shift they record is wrong by the offset. Applies the offset twice so
+ * a value straddling a DST change resolves to the offset actually in
+ * force at the answer rather than at the guess.
+ */
+function zonedInputToIso(value: string, timeZone: string): string | undefined {
+  if (!value) return undefined;
+  const [datePart, timePart] = value.split('T');
+  if (!datePart || !timePart) return undefined;
+  const [y, mo, d] = datePart.split('-').map(Number);
+  const [hh, mm] = timePart.split(':').map(Number);
+  const guess = Date.UTC(y, mo - 1, d, hh, mm);
+  const offsetAt = (ms: number) => {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+    }).formatToParts(new Date(ms));
+    const f: Record<string, number> = {};
+    for (const p of parts) if (p.type !== 'literal') f[p.type] = Number(p.value);
+    const hour = f.hour === 24 ? 0 : f.hour;
+    return Date.UTC(f.year, f.month - 1, f.day, hour, f.minute, f.second) - ms;
+  };
+  const first = guess - offsetAt(guess);
+  return new Date(guess - offsetAt(first)).toISOString();
+}
+
 /** datetime-local inputs, pre-filled in the ORG's timezone rather than
  *  the browser's — a dispatcher in a different zone editing a Denver
  *  fleet's hours must be entering Denver times, or the correction is
@@ -791,29 +1109,7 @@ function TimeEditor({ shift, timeZone, busy, onCancel, onSave }: {
     return `${date}T${time}`;
   };
 
-  /** Interpret a wall-clock string as a moment in `timeZone`. Applies
-   *  the offset twice so a value straddling a DST change resolves to
-   *  the offset actually in force at the answer. */
-  const fromLocalInput = (value: string): string | undefined => {
-    if (!value) return undefined;
-    const [datePart, timePart] = value.split('T');
-    if (!datePart || !timePart) return undefined;
-    const [y, mo, d] = datePart.split('-').map(Number);
-    const [hh, mm] = timePart.split(':').map(Number);
-    const guess = Date.UTC(y, mo - 1, d, hh, mm);
-    const offsetAt = (ms: number) => {
-      const parts = new Intl.DateTimeFormat('en-US', {
-        timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
-        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
-      }).formatToParts(new Date(ms));
-      const f: Record<string, number> = {};
-      for (const p of parts) if (p.type !== 'literal') f[p.type] = Number(p.value);
-      const hour = f.hour === 24 ? 0 : f.hour;
-      return Date.UTC(f.year, f.month - 1, f.day, hour, f.minute, f.second) - ms;
-    };
-    const first = guess - offsetAt(guess);
-    return new Date(guess - offsetAt(first)).toISOString();
-  };
+  const fromLocalInput = (value: string) => zonedInputToIso(value, timeZone);
 
   const [start, setStart] = useState(() => toLocalInput(shift.startedAt));
   const [end, setEnd] = useState(() => toLocalInput(shift.endedAt));

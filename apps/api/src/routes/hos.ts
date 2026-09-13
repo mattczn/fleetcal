@@ -77,6 +77,7 @@ hos.get("/board", async (c) => {
     .from("hos_shifts")
     .select("*")
     .eq("org_id", orgId)
+    .is("deleted_at", null)
     .or(`started_at.gte.${since},ended_at.is.null`)
     .order("started_at", { ascending: true });
   if (shiftErr) {
@@ -100,6 +101,7 @@ hos.get("/board", async (c) => {
     .eq("org_id", orgId)
     .eq("classification", "otr")
     .eq("log_method", "paper")
+    .is("deleted_at", null)
     .gte("started_at", paperSince);
   // Count DAYS, not shifts — two OTR runs on one paper log is one day
   // against the limit.
@@ -155,9 +157,18 @@ hos.get("/board", async (c) => {
       // open shift — a break under 10 hours does not open a new one.
       dutyPeriodStart: snapshot.dutyPeriodStart?.toISOString() ?? null,
       windowRemainingSeconds: snapshot.window ? Math.round(snapshot.window.remainingSeconds) : null,
-      windowExpiresAt: snapshot.window?.expiresAt.toISOString() ?? null,
+      // snapshot.window only exists while ON duty, but an off-duty
+      // driver's window keeps running — that's the whole point of
+      // canResumeWithinWindow. Take the end from options, which is
+      // computed either way, or the board renders a blank "resume
+      // until —" for exactly the drivers who need the number.
+      windowExpiresAt: snapshot.options.windowEndsAt?.toISOString()
+        ?? snapshot.window?.expiresAt.toISOString() ?? null,
 
       restSeconds: snapshot.rest ? Math.round(snapshot.rest.restSeconds) : null,
+      restRemainingSeconds: snapshot.rest && !snapshot.rest.satisfied
+        ? Math.round((snapshot.rest.clearAt.getTime() - now.getTime()) / 1000)
+        : null,
       availableAt: snapshot.rest && !snapshot.rest.satisfied
         ? snapshot.rest.clearAt.toISOString()
         : null,
@@ -207,6 +218,7 @@ hos.get("/drivers/:id/shifts", async (c) => {
     .select("*")
     .eq("org_id", orgId)
     .eq("driver_id", driverId)
+    .is("deleted_at", null)
     .or(`started_at.gte.${since},ended_at.is.null`)
     .order("started_at", { ascending: false });
   if (error) {
@@ -377,6 +389,159 @@ hos.patch("/shifts/:id", requireCapability("drivers.edit"), async (c) => {
   const { data: fresh } = await (supabase as any)
     .from("hos_shifts").select("*").eq("id", shiftId).maybeSingle();
   return c.json({ shift: fresh });
+});
+
+// ── POST /v1/hos/shifts ──────────────────────────────────────────────
+//
+// Manually record a shift a driver never clocked. Leaving `endedAt` off
+// opens the shift, for a driver who is working right now but forgot to
+// clock in — the DB's exclusion constraint treats an open shift as
+// running to infinity, so that will correctly refuse if anything is
+// already recorded after the start.
+hos.post("/shifts", requireCapability("drivers.edit"), async (c) => {
+  const orgId = c.get("orgId");
+  const userId = c.get("userId");
+  const userName = (await getUserDisplayName(userId)) ?? "Dispatch";
+
+  let body: {
+    driverId?: number;
+    startedAt?: string;
+    endedAt?: string | null;
+    classification?: Classification;
+    note?: string;
+  };
+  try { body = await c.req.json(); } catch { return c.json({ error: "invalid_json" }, 400); }
+
+  const errors: string[] = [];
+  const driverId = Number(body.driverId);
+  if (!Number.isFinite(driverId)) errors.push("Pick a driver.");
+
+  const now = new Date();
+  const startedAt = body.startedAt ? new Date(body.startedAt) : null;
+  const endedAt = body.endedAt ? new Date(body.endedAt) : null;
+  if (!startedAt || Number.isNaN(startedAt.getTime())) errors.push("Start time is required.");
+  if (body.endedAt && (!endedAt || Number.isNaN(endedAt.getTime()))) errors.push("That end time isn't valid.");
+  if (startedAt && startedAt.getTime() > now.getTime() + 60_000) errors.push("The start time is in the future.");
+  if (endedAt && endedAt.getTime() > now.getTime() + 60_000) errors.push("The end time is in the future.");
+  if (startedAt && endedAt && endedAt.getTime() <= startedAt.getTime()) {
+    errors.push("The end time has to be after the start time.");
+  }
+  if (errors.length > 0) return c.json({ error: "validation_failed", errors }, 400);
+
+  // Confirm the driver belongs to this org before writing anything
+  // against their record.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: driver } = await (supabase as any)
+    .from("drivers").select("id, hos_default_classification")
+    .eq("id", driverId).eq("org_id", orgId).maybeSingle();
+  if (!driver) return c.json({ error: "not_found", detail: "No such driver in this org." }, 404);
+
+  const clash = await findOverlappingShift(driverId, startedAt!, endedAt);
+  if (clash) {
+    const { timeZone } = await getHosConfig(orgId);
+    const fmt = (iso: string) => new Date(iso).toLocaleString("en-US", {
+      timeZone, weekday: "short", hour: "numeric", minute: "2-digit",
+    });
+    return c.json({
+      error: "validation_failed",
+      errors: [`That overlaps a shift already recorded for this driver (${fmt(clash.started_at)} to ${clash.ended_at ? fmt(clash.ended_at) : "now"}).`],
+    }, 400);
+  }
+
+  const classification: Classification =
+    body.classification === "otr" ? "otr"
+      : body.classification === "local" ? "local"
+        : (driver as { hos_default_classification?: string }).hos_default_classification === "otr" ? "otr" : "local";
+
+  // Events first, so the shift's FKs point at a real trail — a manually
+  // created shift is still auditable as having come from dispatch.
+  const note = body.note ?? `Shift added manually by ${userName}.`;
+  const actor = { kind: "dispatch" as const, userId, name: userName };
+  const mkEvent = async (status: "on_duty" | "off_duty", at: Date) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data, error } = await (supabase as any)
+      .from("hos_duty_events")
+      .insert({
+        org_id: orgId, driver_id: driverId, status,
+        occurred_at: at.toISOString(), source: "dispatch_edit", note,
+        created_by_user_id: actor.userId, created_by_name: actor.name,
+      })
+      .select("id").single();
+    if (error) throw new Error(`hos_duty_events insert failed: ${error.message}`);
+    return (data as { id: string }).id;
+  };
+
+  try {
+    const startEventId = await mkEvent("on_duty", startedAt!);
+    const endEventId = endedAt ? await mkEvent("off_duty", endedAt) : null;
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: created, error } = await (supabase as any)
+      .from("hos_shifts")
+      .insert({
+        org_id: orgId,
+        driver_id: driverId,
+        started_at: startedAt!.toISOString(),
+        ended_at: endedAt?.toISOString() ?? null,
+        start_event_id: startEventId,
+        end_event_id: endEventId,
+        on_duty_seconds: endedAt
+          ? Math.round((endedAt.getTime() - startedAt!.getTime()) / 1000)
+          : null,
+        classification,
+        classification_source: "dispatch",
+      })
+      .select("*").single();
+    if (error) {
+      // 23P01 is the exclusion-constraint violation — the DB catching an
+      // overlap the check above raced past.
+      const msg = (error as { code?: string }).code === "23P01"
+        ? "That overlaps a shift already recorded for this driver."
+        : error.message;
+      return c.json({ error: "validation_failed", errors: [msg] }, 400);
+    }
+    return c.json({ shift: created });
+  } catch (err) {
+    console.error("[POST /v1/hos/shifts] failed:", err);
+    return c.json({ error: "create_failed", detail: (err as Error).message }, 500);
+  }
+});
+
+// ── DELETE /v1/hos/shifts/:id ────────────────────────────────────────
+//
+// Soft delete. For short-haul drivers these rows are the employer time
+// record required by 49 CFR 395.1(e)(1)(v), which carries a 6-month
+// retention duty — so a shift recorded wrongly is marked invisible to
+// every read path rather than destroyed, and stays recoverable.
+hos.delete("/shifts/:id", requireCapability("drivers.edit"), async (c) => {
+  const orgId = c.get("orgId");
+  const userId = c.get("userId");
+  const shiftId = c.req.param("id");
+  const userName = (await getUserDisplayName(userId)) ?? "Dispatch";
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: existing } = await (supabase as any)
+    .from("hos_shifts").select("id, deleted_at")
+    .eq("id", shiftId).eq("org_id", orgId).maybeSingle();
+  if (!existing) return c.json({ error: "not_found" }, 404);
+  if ((existing as { deleted_at: string | null }).deleted_at) {
+    return c.json({ ok: true, alreadyDeleted: true });
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { error } = await (supabase as any)
+    .from("hos_shifts")
+    .update({
+      deleted_at: new Date().toISOString(),
+      deleted_by: userName,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", shiftId).eq("org_id", orgId);
+  if (error) {
+    console.error("[DELETE /v1/hos/shifts/:id] failed:", error);
+    return c.json({ error: "delete_failed", detail: error.message }, 500);
+  }
+  return c.json({ ok: true });
 });
 
 export default hos;

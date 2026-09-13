@@ -148,6 +148,8 @@ export interface HosBoardDriver {
   windowExpiresAt: string | null;
 
   restSeconds: number | null;
+  /** Seconds still owed on the 10-hour reset. Null once rested. */
+  restRemainingSeconds: number | null;
   /** When 10 consecutive hours off completes. Null once rested. */
   availableAt: string | null;
   /** Off duty but still inside an open window — can be sent back out
@@ -2151,6 +2153,22 @@ class RailwayClient {
       };
       config: { cycle: '70_8' | '60_7'; timeZone: string };
     }>('GET', `/v1/hos/drivers/${driverId}/shifts?days=${days}`);
+  }
+  createHosShift(body: {
+    driverId: number;
+    startedAt: string;
+    /** Omit to leave the shift open — for a driver working right now
+     *  who never clocked in. */
+    endedAt?: string | null;
+    classification?: 'local' | 'otr';
+    note?: string;
+  }) {
+    return this.req<{ shift: HosBoardShift }>('POST', '/v1/hos/shifts', body);
+  }
+  /** Soft delete — the row stays recoverable, since for short-haul
+   *  drivers it is the 395.1(e)(1)(v) employer time record. */
+  deleteHosShift(shiftId: string) {
+    return this.req<{ ok: true }>('DELETE', `/v1/hos/shifts/${shiftId}`);
   }
   updateHosShift(shiftId: string, body: {
     classification?: 'local' | 'otr';
