@@ -55,19 +55,52 @@ export interface Actor {
 
 // ── Config ───────────────────────────────────────────────────────────
 
-/** Falls back to Denver because that's the operating zone; a wrong
- *  guess here shifts which calendar day a shift lands on, so orgs
- *  should always have org_settings.timezone set. */
+/**
+ * Org HOS config: which cycle applies and which timezone decides what
+ * calendar day a shift lands on.
+ *
+ * The timezone is NOT a top-level column — it lives in
+ * rate_con_settings.promptVariables.timezone, the same place
+ * GET /v1/driver/org-settings reads it from. An earlier version of this
+ * selected a `timezone` column that doesn't exist; because the error
+ * went unchecked, every caller silently got the Denver fallback. That
+ * was invisible here (Curzon *is* Denver) and would have quietly put
+ * shifts on the wrong day for any org that isn't.
+ */
 export async function getHosConfig(orgId: string): Promise<HosConfig> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data } = await (supabase as any)
+  const { data, error } = await (supabase as any)
     .from("org_settings")
-    .select("timezone, hos_settings")
+    .select("rate_con_settings, hos_settings")
     .eq("org_id", orgId)
     .maybeSingle();
-  const raw = (data ?? {}) as { timezone?: string | null; hos_settings?: { cycle?: string } | null };
+  if (error) {
+    // Surfaced rather than swallowed: a bad read here means every
+    // downstream day boundary is a guess.
+    console.error("[getHosConfig] org_settings read failed:", error.message);
+  }
+  const raw = (data ?? {}) as {
+    rate_con_settings?: { promptVariables?: { timezone?: string } } | null;
+    hos_settings?: { cycle?: string } | null;
+  };
   const cycle: HosCycle = raw.hos_settings?.cycle === "60_7" ? "60_7" : "70_8";
-  return { cycle, timeZone: raw.timezone || "America/Denver" };
+  // Stored values are sometimes display labels rather than IANA ids —
+  // Curzon's is literally "Mountain Time (America/Denver)". Pull the
+  // id out of the parentheses when present, then validate: an unknown
+  // zone makes Intl throw deep inside the day-split math rather than
+  // here, where it can fall back.
+  const rawTz = raw.rate_con_settings?.promptVariables?.timezone ?? null;
+  const candidate = rawTz?.match(/\(([^)]+)\)/)?.[1] ?? rawTz;
+  let timeZone = "America/Denver";
+  if (candidate) {
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: candidate });
+      timeZone = candidate;
+    } catch {
+      console.warn("[getHosConfig] ignoring unusable timezone:", rawTz);
+    }
+  }
+  return { cycle, timeZone };
 }
 
 // ── Reads ────────────────────────────────────────────────────────────
