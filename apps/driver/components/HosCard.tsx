@@ -3,23 +3,28 @@
  *
  * Three states, in order of how often a driver sees them:
  *
- *   OFF DUTY  Clock In, plus last shift's hours. If they're inside the
- *             10-hour rest the button goes amber and shows when they're
- *             clear — a warning, never a block. There are legitimate
- *             reasons to start early, and a hard block just means the
- *             driver doesn't clock in at all and we lose the day.
+ *   OFF DUTY  Clock In, plus last shift's hours. Inside the 10-hour
+ *             rest the button goes amber — a warning, never a block.
+ *             There are legitimate reasons to start early, and a hard
+ *             block just means the driver doesn't clock in at all and
+ *             we lose the day. See DutyOptionsBox for why this state
+ *             shows two options rather than one.
  *
  *   ON DUTY   Live shift timer as the hero, with the 14-hour window as
  *             a progress bar. The visible running clock is the point:
  *             it's the cheapest defense we have against forgotten
  *             clock-outs, because a driver who sees "13h 40m" fixes it
- *             themselves.
+ *             themselves. Note the timer counts the SHIFT while the bar
+ *             tracks the WINDOW — after a short break those differ, and
+ *             the window is the one with legal teeth.
  *
- *   STALE     Past 14 hours. The timer stops being a timer and becomes
- *             "when did you actually finish?" with quick picks. The
- *             driver is the only person who knows the real answer, so
- *             this belongs on their phone rather than in a dispatch
- *             cleanup queue.
+ *   STALE     The open shift itself has run past 14 hours, which is
+ *             nearly always a missed clock-out. The timer becomes a
+ *             "when did you finish?" prompt. Keyed off shift length,
+ *             not the duty window: a driver two hours into a fresh
+ *             shift but sixteen hours into a window has forgotten
+ *             nothing and shouldn't be asked to correct a time that's
+ *             already right.
  *
  * The 70/8 cycle total is deliberately absent. It's only as good as a
  * week of clean clock-ins across the whole fleet; today's timer is only
@@ -30,7 +35,7 @@ import { View, Text, TouchableOpacity, ActivityIndicator, Modal, Platform } from
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { Play, Square, Clock, AlertTriangle, Moon, FileText } from "lucide-react-native";
 import { useTheme } from "@/lib/ThemeProvider";
-import type { HosStatusResponse } from "@/lib/railway";
+import type { HosStatusResponse, HosDutyOptions } from "@/lib/railway";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
   fontFamily:
@@ -362,16 +367,11 @@ function OffDutyCard({ data, busy, onClockIn }: {
       </View>
 
       {resting && rest && (
-        <View style={{
-          flexDirection: "row", alignItems: "flex-start", gap: 8,
-          backgroundColor: C.amberBg, borderRadius: 10, padding: 11, marginBottom: 12,
-        }}>
-          <Clock size={14} color={C.amberInk} style={{ marginTop: 2 }} />
-          <Text style={[txt(600), { fontSize: 12.5, color: C.amberInk, flex: 1, lineHeight: 18 }]}>
-            You need 10 hours off between shifts. You have had {fmtDuration(rest.restSeconds)} so
-            far, and will reach 10 hours at {fmtClock(rest.clearAt)}.
-          </Text>
-        </View>
+        <DutyOptionsBox
+          rest={rest}
+          options={data.options ?? null}
+          dutyPeriodStart={data.dutyPeriodStart ?? null}
+        />
       )}
 
       <TouchableOpacity
@@ -412,6 +412,70 @@ function OffDutyCard({ data, busy, onClockIn }: {
             onClockIn(resolveRecentPast(picked, new Date()).toISOString());
           }}
         />
+      )}
+    </View>
+  );
+}
+
+/**
+ * What an off-duty driver can do next.
+ *
+ * The 14-hour window keeps running while a driver is off duty — only a
+ * full 10 hours off resets it. So a driver who clocked out mid-window
+ * has two genuinely different options, and showing only the 10-hour
+ * reset (as this box originally did) tells them they're stuck until
+ * tomorrow when they could legally be working right now.
+ *
+ * Once the window has expired there's only one option left, and the box
+ * collapses to it rather than listing a choice that isn't available.
+ */
+function DutyOptionsBox({ rest, options, dutyPeriodStart }: {
+  rest: NonNullable<HosStatusResponse["rest"]>;
+  options: HosDutyOptions | null;
+  dutyPeriodStart: string | null;
+}) {
+  const { C } = useTheme();
+  const canResume = options?.canResumeWithinWindow === true && options.windowEndsAt != null;
+
+  return (
+    <View style={{
+      backgroundColor: C.amberBg, borderRadius: 10, padding: 12, marginBottom: 12,
+    }}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 7, marginBottom: canResume ? 10 : 6 }}>
+        <Clock size={14} color={C.amberInk} />
+        <Text style={[txt(800), { fontSize: 12.5, color: C.amberInk }]}>
+          {canResume ? "You have two options" : "Before your next shift"}
+        </Text>
+      </View>
+
+      {canResume && options?.windowEndsAt ? (
+        <>
+          <Text style={[txt(700), { fontSize: 13, color: C.amberInk, marginBottom: 2 }]}>
+            Keep working until {fmtClock(options.windowEndsAt)}
+          </Text>
+          <Text style={[txt(500), { fontSize: 12.5, color: C.amberInk, lineHeight: 18, marginBottom: 11 }]}>
+            Your 14 hour window started
+            {dutyPeriodStart ? ` at ${fmtClock(dutyPeriodStart)}` : ""} and runs
+            until {fmtClock(options.windowEndsAt)}. Going off duty for a short break does not
+            extend it, so you can go back on duty and finish out that window.
+          </Text>
+
+          <Text style={[txt(700), { fontSize: 13, color: C.amberInk, marginBottom: 2 }]}>
+            Or take 10 hours off, ending {fmtClock(rest.clearAt)}
+          </Text>
+          <Text style={[txt(500), { fontSize: 12.5, color: C.amberInk, lineHeight: 18 }]}>
+            10 hours off in a row starts a new 14 hour window. You have had
+            {" "}{fmtDuration(rest.restSeconds)} so far.
+          </Text>
+        </>
+      ) : (
+        <Text style={[txt(500), { fontSize: 12.5, color: C.amberInk, lineHeight: 18 }]}>
+          {options?.windowEndsAt
+            ? "Your 14 hour window has ended, so you need 10 hours off in a row before you can start again. "
+            : "You need 10 hours off in a row between shifts. "}
+          You have had {fmtDuration(rest.restSeconds)} and will reach 10 hours
+          at {fmtClock(rest.clearAt)}.
+        </Text>
       )}
     </View>
   );

@@ -111,6 +111,19 @@ function statusPayload(view: Awaited<ReturnType<typeof getDriverHosView>>) {
       satisfied:   snapshot.rest.satisfied,
       clearAt:     snapshot.rest.clearAt.toISOString(),
     } : null,
+    // What an off-duty driver can do next. Two genuinely different
+    // options exist while the 14-hour window is still open, and a
+    // driver shown only the 10-hour reset will sit out hours they were
+    // entitled to work.
+    options: {
+      windowEndsAt:          snapshot.options.windowEndsAt?.toISOString() ?? null,
+      canResumeWithinWindow: snapshot.options.canResumeWithinWindow,
+      resetCompleteAt:       snapshot.options.resetCompleteAt?.toISOString() ?? null,
+      fullyRested:           snapshot.options.fullyRested,
+    },
+    /** Where the active 14-hour window began. Differs from the open
+     *  shift's start whenever the driver took a break under 10 hours. */
+    dutyPeriodStart: snapshot.dutyPeriodStart?.toISOString() ?? null,
   };
 }
 

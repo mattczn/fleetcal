@@ -94,6 +94,18 @@ export interface HosRest {
   clearAt:     string;
 }
 
+export interface HosDutyOptions {
+  /** End of the 14-hour window currently in force. Null when a full
+   *  10-hour break has already reset it. */
+  windowEndsAt: string | null;
+  /** The driver could go back on duty right now and still be inside
+   *  that window — i.e. they are NOT stuck waiting out the reset. */
+  canResumeWithinWindow: boolean;
+  /** When 10 consecutive hours off will be complete. */
+  resetCompleteAt: string | null;
+  fullyRested: boolean;
+}
+
 export interface HosStatusResponse {
   /** False when HOS is switched off for this driver — the card hides
    *  entirely rather than rendering an empty shell. */
@@ -104,6 +116,10 @@ export interface HosStatusResponse {
   currentShift?: HosCurrentShift | null;
   lastShift?:    HosLastShift | null;
   rest?:         HosRest | null;
+  options?:      HosDutyOptions;
+  /** Start of the active 14-hour window. Differs from the open shift's
+   *  start whenever the driver took a break shorter than 10 hours. */
+  dutyPeriodStart?: string | null;
   /** Clock-in only: the tap matched an already-open shift. */
   alreadyOpen?:  boolean;
   /** Clock-in only: a forgotten shift was auto-closed to make room.

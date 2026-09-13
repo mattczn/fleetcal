@@ -14,6 +14,7 @@
 import {
   shiftWindow, restStatus, findRestart, cycleStatus,
   splitAcrossLocalDays, driverHosSnapshot, localDateString,
+  findDutyPeriodStart, dutyOptions,
   type ShiftInterval,
 } from "./hos.js";
 
@@ -216,6 +217,78 @@ section("snapshot");
   const shifts = [shift("2026-09-11T00:00:00Z", "2026-09-11T10:00:00Z")]; // 18:00 Thu → 04:00 Fri
   const s = driverHosSnapshot(shifts, t("2026-09-11T15:00:00Z"), TZ);     // Fri 09:00 MDT
   near("only the post-midnight portion counts toward today", s.onDutySecondsToday, 4 * H);
+}
+
+// ── Duty period (the 14h window across split shifts) ─────────────────
+section("duty period");
+{
+  // Out at 3pm, back in at 4pm. A 1-hour break does NOT reset the
+  // window — it still runs from the 6am start, ending 8pm.
+  const shifts = [
+    shift("2026-09-11T12:00:00Z", "2026-09-11T21:00:00Z"), // 06:00–15:00 MDT
+    shift("2026-09-11T22:00:00Z", null),                   // back on at 16:00
+  ];
+  const now = t("2026-09-11T23:00:00Z");                   // 17:00 MDT
+  const start = findDutyPeriodStart(shifts, now);
+  check("short break does not open a new window",
+    start?.toISOString(), "2026-09-11T12:00:00.000Z");
+
+  const s = driverHosSnapshot(shifts, now, TZ);
+  near("window measured from the 6am start, not the 4pm one",
+    s.window?.elapsedSeconds ?? -1, 11 * H);
+  near("3h left, not 13h", s.window?.remainingSeconds ?? -1, 3 * H);
+  check("second shift is only 1h old, so not stale", s.stale, false);
+}
+{
+  // 11-hour break DOES reset. New window opens at the later shift.
+  const shifts = [
+    shift("2026-09-10T12:00:00Z", "2026-09-10T21:00:00Z"),
+    shift("2026-09-11T08:00:00Z", null),                   // 11h later
+  ];
+  const start = findDutyPeriodStart(shifts, t("2026-09-11T10:00:00Z"));
+  check("qualifying break opens a new window",
+    start?.toISOString(), "2026-09-11T08:00:00.000Z");
+}
+{
+  // Off duty 12 hours with nothing open — no window running at all.
+  const shifts = [shift("2026-09-10T12:00:00Z", "2026-09-10T21:00:00Z")];
+  const now = t("2026-09-11T09:00:00Z");
+  check("fully rested → no active window", findDutyPeriodStart(shifts, now), null);
+  const o = dutyOptions(shifts, now);
+  check("fully rested flag", o.fullyRested, true);
+  check("no window to resume into", o.canResumeWithinWindow, false);
+}
+{
+  // THE CASE THIS WAS BUILT FOR: off duty at 3pm, window open till 8pm.
+  // Driver has two real options and must be told about both.
+  const shifts = [shift("2026-09-11T12:00:00Z", "2026-09-11T21:00:00Z")];
+  const now = t("2026-09-11T22:00:00Z");                   // 16:00 MDT, 1h off
+  const o = dutyOptions(shifts, now);
+  check("can still resume inside the window", o.canResumeWithinWindow, true);
+  check("window ends 14h after the 6am start",
+    o.windowEndsAt?.toISOString(), "2026-09-12T02:00:00.000Z");
+  check("reset completes 10h after clocking out",
+    o.resetCompleteAt?.toISOString(), "2026-09-12T07:00:00.000Z");
+  check("not yet rested", o.fullyRested, false);
+}
+{
+  // Window expired but rest incomplete — only one option left.
+  const shifts = [shift("2026-09-11T00:00:00Z", "2026-09-11T12:00:00Z")];
+  const now = t("2026-09-11T16:00:00Z");                   // window died at 14:00Z
+  const o = dutyOptions(shifts, now);
+  check("expired window cannot be resumed", o.canResumeWithinWindow, false);
+  check("reset is the only path", o.resetCompleteAt?.toISOString(), "2026-09-11T22:00:00.000Z");
+}
+{
+  // Staleness must track the SHIFT, not the duty period. 16h into a
+  // period but 2h into a fresh shift is not a forgotten clock-out.
+  const shifts = [
+    shift("2026-09-11T06:00:00Z", "2026-09-11T18:00:00Z"),
+    shift("2026-09-11T20:00:00Z", null),
+  ];
+  const s = driverHosSnapshot(shifts, t("2026-09-11T22:00:00Z"), TZ);
+  check("window expired", s.window?.expired, true);
+  check("but shift is not stale", s.stale, false);
 }
 
 // ── tz sanity ────────────────────────────────────────────────────────

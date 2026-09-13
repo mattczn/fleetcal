@@ -123,6 +123,86 @@ function sortedByStart(shifts: ShiftInterval[]): ShiftInterval[] {
   return [...shifts].sort((a, b) => a.startedAt.getTime() - b.startedAt.getTime());
 }
 
+// ── Duty period ──────────────────────────────────────────────────────
+
+/**
+ * Start of the 14-hour window currently in force, or null when the
+ * driver has taken a qualifying break and no window is running.
+ *
+ * This is NOT the current shift's start. §395.3(a)(2) runs the window
+ * from the moment a driver comes on duty after 10+ consecutive hours
+ * off, and it keeps running through any shorter break. A driver who
+ * clocks out at 3pm and back in at 4pm is still inside the window that
+ * opened this morning — they have not bought themselves a fresh 14
+ * hours. Computing from the current shift would hand them an extra
+ * window they aren't entitled to, which is the dangerous direction to
+ * be wrong in.
+ */
+export function findDutyPeriodStart(shifts: ShiftInterval[], now: Date): Date | null {
+  const sorted = sortedByStart(shifts);
+  if (sorted.length === 0) return null;
+
+  // A qualifying break since the last shift closed means no window is
+  // running at all — the driver is reset and starts fresh next time.
+  const last = sorted[sorted.length - 1];
+  if (last.endedAt) {
+    const sinceEnd = (now.getTime() - last.endedAt.getTime()) / 1000;
+    if (sinceEnd >= REQUIRED_REST_SECONDS) return null;
+  }
+
+  // Walk back through shifts joined by breaks shorter than 10 hours.
+  let periodStart = sorted[sorted.length - 1].startedAt;
+  for (let i = sorted.length - 1; i > 0; i--) {
+    const prev = sorted[i - 1];
+    if (!prev.endedAt) break;                       // malformed overlap; stop here
+    const gap = (sorted[i].startedAt.getTime() - prev.endedAt.getTime()) / 1000;
+    if (gap >= REQUIRED_REST_SECONDS) break;        // qualifying break: window opened at sorted[i]
+    periodStart = prev.startedAt;
+  }
+  return periodStart;
+}
+
+/**
+ * What a driver who is currently off duty can actually do next.
+ *
+ * Two genuinely different options exist while a window is still open,
+ * and a driver told only about the 10-hour reset will sit idle through
+ * hours they were entitled to work.
+ */
+export interface DutyOptions {
+  /** End of the window currently in force, null when none is running. */
+  windowEndsAt: Date | null;
+  /** They could return to duty now and still be inside the window. */
+  canResumeWithinWindow: boolean;
+  /** When 10 consecutive hours off will be complete. */
+  resetCompleteAt: Date | null;
+  /** 10 consecutive hours already taken — fully reset. */
+  fullyRested: boolean;
+}
+
+export function dutyOptions(
+  shifts: ShiftInterval[], now: Date,
+): DutyOptions {
+  const sorted = sortedByStart(shifts);
+  const last = [...sorted].reverse().find(s => s.endedAt != null) ?? null;
+  const periodStart = findDutyPeriodStart(sorted, now);
+
+  const resetCompleteAt = last?.endedAt
+    ? new Date(last.endedAt.getTime() + REQUIRED_REST_SECONDS * 1000)
+    : null;
+  const fullyRested = periodStart === null && last != null;
+  const windowEndsAt = periodStart
+    ? new Date(periodStart.getTime() + SHIFT_WINDOW_SECONDS * 1000)
+    : null;
+
+  return {
+    windowEndsAt,
+    canResumeWithinWindow: windowEndsAt != null && now.getTime() < windowEndsAt.getTime(),
+    resetCompleteAt,
+    fullyRested,
+  };
+}
+
 // ── 14-hour window ───────────────────────────────────────────────────
 
 export interface ShiftWindow {
@@ -324,16 +404,28 @@ export function splitAcrossLocalDays(
 
 export interface HosSnapshot {
   status: "on_duty" | "off_duty";
-  /** Open shift's 14-hour window. Present only while on duty. */
+  /**
+   * The 14-hour window in force, measured from the duty-period start
+   * rather than the current shift — a short break doesn't buy a fresh
+   * window. Present only while on duty.
+   */
   window: ShiftWindow | null;
+  /** Where the window actually started, which may predate the open
+   *  shift when the driver took a sub-10-hour break. */
+  dutyPeriodStart: Date | null;
   /** Rest accrued since the last close. Present only while off duty. */
   rest: RestStatus | null;
+  /** What an off-duty driver can do next — resume inside the open
+   *  window, or reset. Meaningless while on duty. */
+  options: DutyOptions;
   cycle: CycleStatus;
   restart: RestartState;
   /**
-   * On duty past the 14-hour window — almost always a forgotten
-   * clock-out rather than a real 19-hour shift. Drives the driver-app
-   * correction prompt and the dispatch review worklist.
+   * The open SHIFT has been running absurdly long — a forgotten
+   * clock-out. Deliberately measured from the shift start, not the
+   * duty period: a driver legitimately inside hour 16 of a duty period
+   * but only 2 hours into a fresh shift hasn't forgotten anything, and
+   * shouldn't be nagged to correct a time that's right.
    */
   stale: boolean;
   currentShiftId: string | null;
@@ -350,8 +442,13 @@ export function driverHosSnapshot(
   const open = sorted.find(s => s.endedAt == null) ?? null;
   const lastClosed = [...sorted].reverse().find(s => s.endedAt != null) ?? null;
 
-  const window = open ? shiftWindow(open.startedAt, now) : null;
+  // Window runs from the duty-period start, which is the open shift's
+  // start only when it followed a full 10-hour break.
+  const dutyPeriodStart = findDutyPeriodStart(sorted, now);
+  const window = open ? shiftWindow(dutyPeriodStart ?? open.startedAt, now) : null;
   const rest = !open && lastClosed?.endedAt ? restStatus(lastClosed.endedAt, now) : null;
+  // Staleness is about the SHIFT, not the window — see the interface.
+  const stale = open ? (now.getTime() - open.startedAt.getTime()) / 1000 >= SHIFT_WINDOW_SECONDS : false;
 
   const today = localDateString(now, timeZone);
   let onDutySecondsToday = 0;
@@ -365,10 +462,12 @@ export function driverHosSnapshot(
   return {
     status: open ? "on_duty" : "off_duty",
     window,
+    dutyPeriodStart,
     rest,
+    options: dutyOptions(sorted, now),
     cycle:   cycleStatus(sorted, now, timeZone, cycle),
     restart: findRestart(sorted, now),
-    stale:   window?.expired ?? false,
+    stale,
     currentShiftId: open?.id ?? null,
     onDutySecondsToday,
   };
