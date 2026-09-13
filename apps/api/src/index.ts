@@ -42,6 +42,7 @@ import paymentsRoute from "./routes/payments.js";
 import checkCallsRoute from "./routes/check-calls.js";
 import stopsRoute from "./routes/stops.js";
 import driverRoute from "./routes/driver.js";
+import hosRoute from "./routes/hos.js";
 import fuelReportsRoute from "./routes/fuel-reports.js";
 import { fuelTxApiKey, fuelTxClerk } from "./routes/fuel-transactions.js";
 import { odoApiKey, odoClerk } from "./routes/odometer-readings.js";
@@ -247,6 +248,9 @@ authed.route("/documents", documentsRoute);
 authed.route("/notifications", notificationsRoute);
 authed.route("/assets", assetsRoute);
 authed.route("/drivers", driversRoute);
+// HOS dispatch board + shift editing (driver-app side lives under
+// /v1/driver/hos with its own Supabase-JWT auth).
+authed.route("/hos", hosRoute);
 authed.route("/customers", customersRoute);
 authed.route("/trailers", trailersRoute);
 authed.route("/dispatchers", dispatchersRoute);

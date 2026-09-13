@@ -26,6 +26,7 @@ import { Search } from 'lucide-react';
 import { OrganizationSwitcher, UserButton } from '@clerk/nextjs';
 import GlobalSearchDropdown from './GlobalSearchDropdown';
 import SafetyEventsBell from './SafetyEventsBell';
+import HosDutyButton from './HosDutyButton';
 
 interface Props {
   /** Page title rendered on the left. Optional — some pages will
@@ -191,6 +192,7 @@ export default function AppTopBar({ title, icon: Icon, rightSlot }: Props) {
           + v2 dashcam events). Only renders when the org has Motive
           integration + the role has safety.access. */}
       <SafetyEventsBell />
+        <HosDutyButton />
 
       {/* Right-side global controls — org switcher + user button. */}
       <div className="flex items-center gap-2" style={{ borderLeft: '1px solid var(--gc-border-light)', paddingLeft: 12, marginLeft: 4 }}>

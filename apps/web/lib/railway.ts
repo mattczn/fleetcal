@@ -119,6 +119,90 @@ import type {
   PerformanceEventRow, MotivePerfRaw, PerformanceEventMovement,
 } from '@fleetcal/types';
 
+// ── HOS duty board ─────────────────────────────────────────────────────
+
+export interface HosBoardDriver {
+  driverId: number;
+  name: string;
+  defaultClassification: 'local' | 'otr';
+  status: 'on_duty' | 'off_duty';
+  classification: 'local' | 'otr';
+
+  currentShift: {
+    id: string;
+    startedAt: string;
+    classification: 'local' | 'otr';
+    logMethod: 'none' | 'motive' | 'paper';
+    logVerifiedAt: string | null;
+    logVerifiedBy: string | null;
+    elapsedSeconds: number;
+  } | null;
+  lastShift: {
+    id: string; startedAt: string; endedAt: string | null; onDutySeconds: number | null;
+  } | null;
+
+  /** Where the active 14-hour window opened — not the same as the open
+   *  shift's start when the driver took a break under 10 hours. */
+  dutyPeriodStart: string | null;
+  windowRemainingSeconds: number | null;
+  windowExpiresAt: string | null;
+
+  restSeconds: number | null;
+  /** When 10 consecutive hours off completes. Null once rested. */
+  availableAt: string | null;
+  /** Off duty but still inside an open window — can be sent back out
+   *  now rather than waiting out the reset. */
+  canResumeWithinWindow: boolean;
+  fullyRested: boolean;
+
+  onDutySecondsToday: number;
+  cycleUsedSeconds: number;
+  cycleLimitSeconds: number;
+  cycleRemainingSeconds: number;
+
+  lastRestartAt: string | null;
+  restartInProgressCompletesAt: string | null;
+
+  /** OTR shifts in the last week nobody has confirmed a log for. The
+   *  number this whole feature exists to drive to zero. */
+  unverifiedOtrCount: number;
+  needsReviewCount: number;
+  /** Rolling 30-day count of days logged on paper. Past 8 the driver
+   *  legally needs an ELD (§395.8(a)(1)(iii)(A)(1)). */
+  paperLogDays: number;
+  paperLogLimit: number;
+  paperLogWarning: boolean;
+  stale: boolean;
+}
+
+export interface HosBoardShift {
+  id: string;
+  startedAt: string;
+  endedAt: string | null;
+  onDutySeconds: number | null;
+  classification: 'local' | 'otr';
+  classificationSource: string;
+  logMethod: 'none' | 'motive' | 'paper';
+  logVerifiedBy: string | null;
+  logVerifiedAt: string | null;
+  autoClosed: boolean;
+  needsReview: boolean;
+  reviewReason: string | null;
+  dayLabel: string;
+}
+
+export interface HosDutyEvent {
+  id: string;
+  status: 'on_duty' | 'off_duty';
+  occurred_at: string;
+  source: string;
+  voided_at: string | null;
+  corrects_event_id: string | null;
+  note: string | null;
+  created_by_name: string | null;
+  created_at: string;
+}
+
 export interface HiringApplicant {
   id: string;
   first_name: string;
@@ -2044,6 +2128,40 @@ class RailwayClient {
   }
   deleteInspectionReport(id: string) {
     return this.req<{ ok: true }>('DELETE', `/v1/inspection-reports/${id}`);
+  }
+
+  // ── HOS duty board ────────────────────────────────────────────────────
+  // Unlike the driver payload this carries cycle totals: the 70/8 number
+  // is only as trustworthy as a week of clean clock-ins, which is exactly
+  // why it belongs here — dispatch can see the shifts behind it.
+  getHosBoard() {
+    return this.req<{
+      drivers: HosBoardDriver[];
+      config: { cycle: '70_8' | '60_7'; timeZone: string };
+      generatedAt: string;
+    }>('GET', '/v1/hos/board');
+  }
+  getHosDriverShifts(driverId: number, days = 14) {
+    return this.req<{
+      shifts: HosBoardShift[];
+      events: HosDutyEvent[];
+      cycle: {
+        usedSeconds: number; limitSeconds: number; remainingSeconds: number;
+        windowStart: string; restartAt: string | null;
+      };
+      config: { cycle: '70_8' | '60_7'; timeZone: string };
+    }>('GET', `/v1/hos/drivers/${driverId}/shifts?days=${days}`);
+  }
+  updateHosShift(shiftId: string, body: {
+    classification?: 'local' | 'otr';
+    logMethod?: 'none' | 'motive' | 'paper';
+    verifyLog?: boolean;
+    startedAt?: string;
+    endedAt?: string;
+    clearReview?: boolean;
+    note?: string;
+  }) {
+    return this.req<{ shift: HosBoardShift }>('PATCH', `/v1/hos/shifts/${shiftId}`, body);
   }
 
   // ── Maintenance reports ───────────────────────────────────────────────

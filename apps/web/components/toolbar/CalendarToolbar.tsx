@@ -16,6 +16,7 @@ import TruckFleetPanel from '@/components/calendar/TruckFleetPanel';
 import AssetsModal from '@/components/sidebar/AssetsModal';
 import RecentlyDeletedDetailModal from '@/components/calendar/RecentlyDeletedDetailModal';
 import SafetyEventsBell from '@/components/nav/SafetyEventsBell';
+import HosDutyButton from '@/components/nav/HosDutyButton';
 import type { CalendarEvent } from '@/lib/types';
 import { legPositionFor } from '@/lib/legDisplay';
 import { legLabel } from '@fleetcal/types';
@@ -1038,6 +1039,7 @@ export default function CalendarToolbar() {
             hard-corner + v2 dashcam events. Only renders when the org
             has Motive integration + the role has safety.access. */}
         <SafetyEventsBell />
+        <HosDutyButton />
 
         {/* Org + User — icon-only avatars to save toolbar space */}
         <div className="flex items-center gap-1.5 pl-3" style={{ borderLeft: '1px solid var(--gc-border-light)' }}>
