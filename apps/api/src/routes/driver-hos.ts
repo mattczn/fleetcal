@@ -277,4 +277,76 @@ driverHos.post("/shifts/:id/correct-end", async (c) => {
   }
 });
 
+// ── POST /v1/driver/hos/shifts/:id/correct ───────────────────────────
+//
+// General correction of a driver's own shift: start, end, or both.
+// Supersedes the end-only /correct-end below, which stays mounted so
+// older app builds keep working through an OTA rollout.
+//
+// Drivers may now move a start time as well as an end. The earlier
+// restriction (end-only, on the theory that starts were dispatch's
+// business) just meant a driver who clocked in late had no way to say
+// so, and the resulting shift was wrong in a way nobody would catch.
+driverHos.post("/shifts/:id/correct", async (c) => {
+  const driverId = c.get("driverId");
+  const orgId    = c.get("orgId");
+  const name     = c.get("driverName");
+  const shiftId  = c.req.param("id");
+
+  let body: { startedAt?: string; endedAt?: string; note?: string };
+  try { body = await c.req.json(); } catch { return c.json({ error: "invalid_json" }, 400); }
+  if (!body.startedAt && !body.endedAt) {
+    return c.json({ error: "validation_failed", errors: ["Nothing to change."] }, 400);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: owned } = await (supabase as any)
+    .from("hos_shifts")
+    .select("id, driver_id, started_at, ended_at")
+    .eq("id", shiftId).eq("org_id", orgId)
+    .maybeSingle();
+  const shift = owned as
+    { id: string; driver_id: number; started_at: string; ended_at: string | null } | null;
+  if (!shift) return c.json({ error: "not_found" }, 404);
+  if (shift.driver_id !== driverId) return c.json({ error: "not_authorized" }, 403);
+
+  const now = new Date();
+  const errors: string[] = [];
+  let startedAt: Date | undefined;
+  let endedAt:   Date | undefined;
+
+  if (body.startedAt) {
+    const parsed = parseAdjustedTime(body.startedAt, now);
+    if (!parsed.ok) errors.push(parsed.error);
+    else startedAt = parsed.at;
+  }
+  if (body.endedAt) {
+    const parsed = parseAdjustedTime(body.endedAt, now);
+    if (!parsed.ok) errors.push(parsed.error);
+    else endedAt = parsed.at;
+  }
+
+  // Validate the resulting pair, not just each field: moving a start
+  // past an untouched end (or vice versa) would invert the shift.
+  const finalStart = startedAt ?? new Date(shift.started_at);
+  const finalEnd   = endedAt ?? (shift.ended_at ? new Date(shift.ended_at) : null);
+  if (finalEnd && finalEnd.getTime() <= finalStart.getTime()) {
+    errors.push("The end time has to be after the start time.");
+  }
+  if (errors.length > 0) return c.json({ error: "validation_failed", errors }, 400);
+
+  try {
+    await correctShiftTimes({
+      shiftId, orgId, startedAt, endedAt,
+      note: body.note ?? "Times corrected by the driver.",
+      actor: { kind: "driver", driverId, name },
+    });
+    const view = await getDriverHosView(driverId, orgId, new Date());
+    return c.json(statusPayload(view));
+  } catch (err) {
+    console.error("[POST /v1/driver/hos/shifts/:id/correct] failed:", err);
+    return c.json({ error: "correction_failed", detail: (err as Error).message }, 500);
+  }
+});
+
 export default driverHos;

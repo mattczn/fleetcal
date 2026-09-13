@@ -3,12 +3,12 @@
  *
  * Three states, in order of how often a driver sees them:
  *
- *   OFF DUTY  Clock In, plus last shift's hours. Inside the 10-hour
- *             rest the button goes amber — a warning, never a block.
- *             There are legitimate reasons to start early, and a hard
- *             block just means the driver doesn't clock in at all and
- *             we lose the day. See DutyOptionsBox for why this state
- *             shows two options rather than one.
+ *   OFF DUTY  Clock In, plus last shift's hours with an edit affordance.
+ *             Inside the 10-hour rest the button goes amber — a warning,
+ *             never a block. There are legitimate reasons to start early,
+ *             and a hard block just means the driver doesn't clock in at
+ *             all and we lose the day. See DutyOptionsBox for why this
+ *             state shows two options rather than one.
  *
  *   ON DUTY   Live shift timer as the hero, with the 14-hour window as
  *             a progress bar. The visible running clock is the point:
@@ -26,14 +26,20 @@
  *             nothing and shouldn't be asked to correct a time that's
  *             already right.
  *
+ * Every punch is correctable, both at the moment it's made (the Clock
+ * In / Clock Out buttons offer "set a different time") and afterwards
+ * (edit the running shift's start, or either end of the last one). A
+ * driver whose only option is "now" will simply punch at the wrong time
+ * and leave it wrong.
+ *
  * The 70/8 cycle total is deliberately absent. It's only as good as a
  * week of clean clock-ins across the whole fleet; today's timer is only
  * as good as today. Fragile numbers stay where dispatch can check them.
  */
 import React, { useEffect, useMemo, useState } from "react";
-import { View, Text, TouchableOpacity, ActivityIndicator, Modal, Platform } from "react-native";
+import { View, Text, TouchableOpacity, ActivityIndicator, Modal, Platform, Alert } from "react-native";
 import DateTimePicker from "@react-native-community/datetimepicker";
-import { Play, Square, Clock, AlertTriangle, Moon, FileText } from "lucide-react-native";
+import { Play, Square, Clock, AlertTriangle, Moon, FileText, Pencil } from "lucide-react-native";
 import { useTheme } from "@/lib/ThemeProvider";
 import type { HosStatusResponse, HosDutyOptions } from "@/lib/railway";
 
@@ -73,16 +79,17 @@ function fmtDayAndClock(iso: string): string {
   return `${day}${fmtClock(iso)}`;
 }
 
-// ── Time adjustment ──────────────────────────────────────────────────
+// ── Resolving a picked time to a moment ──────────────────────────────
 //
-// The picker only asks for a time of day, never a date. A driver
-// correcting a missed punch is always talking about the last day or so,
-// and "which date" is a question they shouldn't have to answer. We
-// resolve the calendar day ourselves from context.
+// The picker only ever asks for a time of day, never a date. A driver
+// fixing a punch is always talking about the last day or so, and "which
+// date" is a question they shouldn't have to answer. We infer the
+// calendar day from context instead — differently per field, which is
+// why there are three of these rather than one.
 
-/** Resolve a picked time-of-day to a moment in the recent past.
- *  Used for clock-in: if the chosen time hasn't happened yet today,
- *  they mean yesterday (a driver starting at 11pm, fixing it at 1am). */
+/** Most recent occurrence of this time of day, at or before `now`.
+ *  For a clock-in: a time that hasn't happened yet today means
+ *  yesterday (started 11pm, fixing it at 1am). */
 function resolveRecentPast(picked: Date, now: Date): Date {
   const at = new Date(now);
   at.setHours(picked.getHours(), picked.getMinutes(), 0, 0);
@@ -90,15 +97,40 @@ function resolveRecentPast(picked: Date, now: Date): Date {
   return at;
 }
 
-/** Resolve a picked time-of-day to the first such moment AFTER `after`.
- *  Used for clock-out and stale corrections, where the answer has to
- *  land between the shift start and now. Returns null when no such
- *  moment exists in the past — the driver picked something impossible. */
+/** First occurrence of this time of day strictly after `after`, or null
+ *  if that lands in the future. For end times, which must sit between
+ *  the shift's start and now — this is what makes an overnight shift
+ *  resolve to the following morning rather than before its own start. */
 function resolveAfter(picked: Date, after: Date, now: Date): Date | null {
   const at = new Date(after);
   at.setHours(picked.getHours(), picked.getMinutes(), 0, 0);
   if (at.getTime() <= after.getTime()) at.setTime(at.getTime() + 86400_000);
   return at.getTime() > now.getTime() ? null : at;
+}
+
+/** This time of day on the same calendar date as `anchor`. For editing
+ *  a start time, where the driver is nudging an existing timestamp
+ *  rather than naming a fresh one. */
+function resolveOnSameDay(picked: Date, anchor: Date): Date {
+  const at = new Date(anchor);
+  at.setHours(picked.getHours(), picked.getMinutes(), 0, 0);
+  return at;
+}
+
+/** Offers "now" vs "pick a time" vs cancel. Used by both punch buttons
+ *  so a driver can correct at the moment of the punch, not only after. */
+function offerPunchOptions(opts: {
+  title: string;
+  message: string;
+  nowLabel: string;
+  onNow: () => void;
+  onPickTime: () => void;
+}): void {
+  Alert.alert(opts.title, opts.message, [
+    { text: opts.nowLabel, onPress: opts.onNow },
+    { text: "Set a different time", onPress: opts.onPickTime },
+    { text: "Cancel", style: "cancel" },
+  ]);
 }
 
 /** Time-of-day picker. iOS gets a spinner in a sheet (matching the
@@ -158,16 +190,40 @@ function TimePickerSheet({ initial, onCancel, onConfirm }: {
   );
 }
 
+/** Small pencil affordance, used wherever a recorded time can be
+ *  changed. Hit area is padded well past the icon — this gets tapped
+ *  with gloves on. */
+function EditButton({ label, onPress, disabled }: {
+  label: string; onPress: () => void; disabled?: boolean;
+}) {
+  const { C } = useTheme();
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      disabled={disabled}
+      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+      style={{
+        flexDirection: "row", alignItems: "center", gap: 5,
+        paddingVertical: 6, paddingHorizontal: 10,
+        borderRadius: 8, borderWidth: 1, borderColor: C.border,
+        backgroundColor: C.surface2,
+      }}
+    >
+      <Pencil size={12} color={C.t2} />
+      <Text style={[txt(700), { fontSize: 11.5, color: C.t2 }]}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
 interface Props {
   data:    HosStatusResponse | null;
   loading: boolean;
   busy:    boolean;
-  /** `occurredAt` (ISO) backdates the punch when the driver set a
-   *  specific time; omitted means "now". */
+  /** `occurredAt` (ISO) backdates the punch; omitted means "now". */
   onClockIn:  (occurredAt?: string) => void;
   onClockOut: (occurredAt?: string) => void;
-  /** Driver answering the stale prompt with the time they finished. */
-  onCorrectEnd: (shiftId: string, endedAt: string) => void;
+  /** Correct either end of any of this driver's shifts. */
+  onCorrectShift: (shiftId: string, times: { startedAt?: string; endedAt?: string }) => void;
   /** Dismisses the stale prompt for this session when the driver really
    *  has been on duty this long. */
   onKeepRunning: () => void;
@@ -175,7 +231,7 @@ interface Props {
 }
 
 export default function HosCard({
-  data, loading, busy, onClockIn, onClockOut, onCorrectEnd, onKeepRunning, staleDismissed,
+  data, loading, busy, onClockIn, onClockOut, onCorrectShift, onKeepRunning, staleDismissed,
 }: Props) {
   const { C } = useTheme();
 
@@ -197,8 +253,14 @@ export default function HosCard({
     if (!shift) return 0;
     return Math.max(0, (now - new Date(shift.startedAt).getTime()) / 1000);
   }, [shift, now]);
-  const remaining = Math.max(0, SHIFT_WINDOW_SECONDS - elapsed);
-  const expired = elapsed >= SHIFT_WINDOW_SECONDS;
+
+  // The bar tracks the 14-hour WINDOW, which may have opened before
+  // this shift did if the driver took a break under 10 hours.
+  const windowStart = data?.dutyPeriodStart ?? shift?.startedAt ?? null;
+  const windowElapsed = windowStart
+    ? Math.max(0, (now - new Date(windowStart).getTime()) / 1000)
+    : 0;
+  const windowRemaining = Math.max(0, SHIFT_WINDOW_SECONDS - windowElapsed);
 
   if (loading && !data) {
     return (
@@ -215,22 +277,20 @@ export default function HosCard({
   // than an empty shell.
   if (!data?.enabled) return null;
 
-  // A previous shift that got auto-closed on an estimate. The driver is
-  // the only one who knows the real end time, so give them a way to fix
-  // it from here — otherwise the alert we show at clock-in points at an
-  // edit path that doesn't exist.
+  // A previous shift auto-closed on an estimate. The driver is the only
+  // one who knows the real end time, so give them a path to it here.
   const last = data.lastShift ?? null;
   const unresolved = last && last.autoClosed && last.needsReview ? last : null;
 
   if (onDuty && shift) {
-    if (expired && !staleDismissed) {
+    if (elapsed >= SHIFT_WINDOW_SECONDS && !staleDismissed) {
       return (
         <StalePrompt
           shiftId={shift.id}
           startedAt={shift.startedAt}
           elapsed={elapsed}
           busy={busy}
-          onCorrectEnd={onCorrectEnd}
+          onCorrectShift={onCorrectShift}
           onKeepRunning={onKeepRunning}
         />
       );
@@ -238,14 +298,16 @@ export default function HosCard({
     return (
       <>
         {unresolved && (
-          <PreviousShiftBanner shift={unresolved} busy={busy} onCorrectEnd={onCorrectEnd} />
+          <PreviousShiftBanner shift={unresolved} busy={busy} onCorrectShift={onCorrectShift} />
         )}
         <OnDutyCard
           shift={shift}
           elapsed={elapsed}
-          remaining={remaining}
+          windowElapsed={windowElapsed}
+          windowRemaining={windowRemaining}
           busy={busy}
           onClockOut={onClockOut}
+          onCorrectShift={onCorrectShift}
         />
       </>
     );
@@ -254,85 +316,29 @@ export default function HosCard({
   return (
     <>
       {unresolved && (
-        <PreviousShiftBanner shift={unresolved} busy={busy} onCorrectEnd={onCorrectEnd} />
+        <PreviousShiftBanner shift={unresolved} busy={busy} onCorrectShift={onCorrectShift} />
       )}
-      <OffDutyCard data={data} busy={busy} onClockIn={onClockIn} />
+      <OffDutyCard
+        data={data}
+        busy={busy}
+        onClockIn={onClockIn}
+        onCorrectShift={onCorrectShift}
+      />
     </>
-  );
-}
-
-// ── Previous shift left on an estimated end time ─────────────────────
-
-function PreviousShiftBanner({ shift, busy, onCorrectEnd }: {
-  shift: NonNullable<HosStatusResponse["lastShift"]>;
-  busy: boolean;
-  onCorrectEnd: (shiftId: string, endedAt: string) => void;
-}) {
-  const { C } = useTheme();
-  const [picking, setPicking] = useState(false);
-  const [pickError, setPickError] = useState<string | null>(null);
-
-  return (
-    <View style={[cardBase, {
-      backgroundColor: C.amberBg, borderColor: C.amber, marginBottom: 10,
-    }]}>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 6 }}>
-        <AlertTriangle size={15} color={C.amberInk} />
-        <Text style={[txt(800), { fontSize: 14, color: C.amberInk }]}>
-          Previous shift needs an end time
-        </Text>
-      </View>
-      <Text style={[txt(600), { fontSize: 12.5, color: C.amberInk, lineHeight: 18 }]}>
-        Your shift from {fmtDayAndClock(shift.startedAt)} was closed with an estimated time
-        of {shift.endedAt ? fmtDayAndClock(shift.endedAt) : "unknown"}. Set the time you
-        actually finished.
-      </Text>
-
-      <TouchableOpacity
-        disabled={busy}
-        onPress={() => { setPickError(null); setPicking(true); }}
-        activeOpacity={0.85}
-        style={{
-          alignItems: "center", marginTop: 12,
-          backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
-          paddingVertical: 12, borderRadius: 11,
-        }}
-      >
-        <Text style={[txt(700), { fontSize: 14, color: C.t1 }]}>Edit the end time</Text>
-      </TouchableOpacity>
-
-      {pickError && (
-        <Text style={[txt(600), { fontSize: 12, color: C.redInk, marginTop: 8 }]}>
-          {pickError}
-        </Text>
-      )}
-
-      {picking && (
-        <TimePickerSheet
-          initial={shift.endedAt ? new Date(shift.endedAt) : new Date()}
-          onCancel={() => setPicking(false)}
-          onConfirm={(picked) => {
-            setPicking(false);
-            const at = resolveAfter(picked, new Date(shift.startedAt), new Date());
-            if (!at) {
-              setPickError("That time is either before that shift started or still in the future.");
-              return;
-            }
-            onCorrectEnd(shift.id, at.toISOString());
-          }}
-        />
-      )}
-    </View>
   );
 }
 
 // ── Off duty ─────────────────────────────────────────────────────────
 
-function OffDutyCard({ data, busy, onClockIn }: {
-  data: HosStatusResponse; busy: boolean; onClockIn: (occurredAt?: string) => void;
+function OffDutyCard({ data, busy, onClockIn, onCorrectShift }: {
+  data: HosStatusResponse;
+  busy: boolean;
+  onClockIn: (occurredAt?: string) => void;
+  onCorrectShift: (shiftId: string, times: { startedAt?: string; endedAt?: string }) => void;
 }) {
   const { C } = useTheme();
-  const [picking, setPicking] = useState(false);
+  const [picking, setPicking] = useState<null | "clock-in" | "last-start" | "last-end">(null);
+  const [pickError, setPickError] = useState<string | null>(null);
   const rest = data.rest ?? null;
   const last = data.lastShift ?? null;
   // Inside the 10-hour reset: warn, don't block.
@@ -341,6 +347,20 @@ function OffDutyCard({ data, busy, onClockIn }: {
   const accent   = resting ? C.amber   : C.green;
   const accentBg = resting ? C.amberBg : C.greenBg;
   const ink      = resting ? C.amberInk : C.greenInk;
+
+  const editLastShift = () => {
+    if (!last) return;
+    setPickError(null);
+    Alert.alert(
+      "Edit last shift",
+      `${fmtDayAndClock(last.startedAt)} to ${last.endedAt ? fmtDayAndClock(last.endedAt) : "unknown"}. Which time do you want to change?`,
+      [
+        { text: "Start time", onPress: () => setPicking("last-start") },
+        { text: "End time",   onPress: () => setPicking("last-end") },
+        { text: "Cancel", style: "cancel" },
+      ],
+    );
+  };
 
   return (
     <View style={[cardBase, { backgroundColor: C.surface, borderColor: C.border }]}>
@@ -364,6 +384,7 @@ function OffDutyCard({ data, busy, onClockIn }: {
             </Text>
           )}
         </View>
+        {last?.endedAt && <EditButton label="Edit" onPress={editLastShift} disabled={busy} />}
       </View>
 
       {resting && rest && (
@@ -374,8 +395,20 @@ function OffDutyCard({ data, busy, onClockIn }: {
         />
       )}
 
+      {pickError && (
+        <Text style={[txt(600), { fontSize: 12, color: C.redInk, marginBottom: 10 }]}>
+          {pickError}
+        </Text>
+      )}
+
       <TouchableOpacity
-        onPress={() => onClockIn()}
+        onPress={() => offerPunchOptions({
+          title: "Clock in",
+          message: "Start your shift now, or set the time you actually started.",
+          nowLabel: "Clock in now",
+          onNow: () => onClockIn(),
+          onPickTime: () => { setPickError(null); setPicking("clock-in"); },
+        })}
         disabled={busy}
         activeOpacity={0.85}
         style={{
@@ -392,24 +425,45 @@ function OffDutyCard({ data, busy, onClockIn }: {
         </Text>
       </TouchableOpacity>
 
-      {/* For a driver who started work before they got to their phone. */}
-      <TouchableOpacity
-        onPress={() => setPicking(true)}
-        disabled={busy}
-        style={{ paddingVertical: 11, alignItems: "center" }}
-      >
-        <Text style={[txt(600), { fontSize: 13, color: C.t2 }]}>
-          Set a different start time
-        </Text>
-      </TouchableOpacity>
-
       {picking && (
         <TimePickerSheet
-          initial={new Date()}
-          onCancel={() => setPicking(false)}
+          initial={
+            picking === "clock-in" ? new Date()
+            : picking === "last-start" && last ? new Date(last.startedAt)
+            : last?.endedAt ? new Date(last.endedAt) : new Date()
+          }
+          onCancel={() => setPicking(null)}
           onConfirm={(picked) => {
-            setPicking(false);
-            onClockIn(resolveRecentPast(picked, new Date()).toISOString());
+            const mode = picking;
+            setPicking(null);
+            const now = new Date();
+
+            if (mode === "clock-in") {
+              onClockIn(resolveRecentPast(picked, now).toISOString());
+              return;
+            }
+            if (!last) return;
+
+            if (mode === "last-start") {
+              const at = resolveOnSameDay(picked, new Date(last.startedAt));
+              if (last.endedAt && at.getTime() >= new Date(last.endedAt).getTime()) {
+                setPickError("That start time is after the shift ended.");
+                return;
+              }
+              if (at.getTime() > now.getTime()) {
+                setPickError("That start time is in the future.");
+                return;
+              }
+              onCorrectShift(last.id, { startedAt: at.toISOString() });
+              return;
+            }
+
+            const at = resolveAfter(picked, new Date(last.startedAt), now);
+            if (!at) {
+              setPickError("That end time is either before the shift started or still in the future.");
+              return;
+            }
+            onCorrectShift(last.id, { endedAt: at.toISOString() });
           }}
         />
       )}
@@ -483,25 +537,26 @@ function DutyOptionsBox({ rest, options, dutyPeriodStart }: {
 
 // ── On duty ──────────────────────────────────────────────────────────
 
-function OnDutyCard({ shift, elapsed, remaining, busy, onClockOut }: {
+function OnDutyCard({
+  shift, elapsed, windowElapsed, windowRemaining, busy, onClockOut, onCorrectShift,
+}: {
   shift: NonNullable<HosStatusResponse["currentShift"]>;
-  elapsed: number; remaining: number; busy: boolean;
+  elapsed: number; windowElapsed: number; windowRemaining: number; busy: boolean;
   onClockOut: (occurredAt?: string) => void;
+  onCorrectShift: (shiftId: string, times: { startedAt?: string; endedAt?: string }) => void;
 }) {
   const { C } = useTheme();
-  const [picking, setPicking] = useState(false);
+  const [picking, setPicking] = useState<null | "clock-out" | "edit-start">(null);
   const [pickError, setPickError] = useState<string | null>(null);
-  const pct = Math.min(1, elapsed / SHIFT_WINDOW_SECONDS);
+  const pct = Math.min(1, windowElapsed / SHIFT_WINDOW_SECONDS);
   // Escalate as the window closes. 10h and 13h are judgement calls, not
   // regulatory thresholds — they exist to give a driver warning before
   // the number turns into a problem.
-  const barColor = elapsed >= 13 * 3600 ? C.red : elapsed >= 10 * 3600 ? C.amber : C.green;
+  const barColor = windowElapsed >= 13 * 3600 ? C.red : windowElapsed >= 10 * 3600 ? C.amber : C.green;
   const isOtr = shift.classification === "otr";
 
   return (
     <View style={[cardBase, { backgroundColor: C.surface, borderColor: C.border, padding: 0, overflow: "hidden" }]}>
-      {/* OTR strip — phrased as an instruction, because the label "OTR"
-          on its own tells a driver nothing they can act on. */}
       {isOtr && (
         <View style={{
           flexDirection: "row", alignItems: "center", gap: 8,
@@ -516,9 +571,7 @@ function OnDutyCard({ shift, elapsed, remaining, busy, onClockOut }: {
 
       <View style={{ padding: 16 }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-          <View style={{
-            width: 10, height: 10, borderRadius: 5, backgroundColor: C.green,
-          }} />
+          <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: C.green }} />
           <Text style={[txt(700), { fontSize: 12, color: C.greenInk, letterSpacing: 0.5 }]}>
             ON DUTY
           </Text>
@@ -532,19 +585,39 @@ function OnDutyCard({ shift, elapsed, remaining, busy, onClockOut }: {
           {fmtDuration(elapsed)}
         </Text>
 
-        <View style={{ marginTop: 12, marginBottom: 4 }}>
+        <View style={{ marginTop: 4 }}>
+          <EditButton
+            label="Edit clock in time"
+            onPress={() => { setPickError(null); setPicking("edit-start"); }}
+            disabled={busy}
+          />
+        </View>
+
+        <View style={{ marginTop: 14, marginBottom: 4 }}>
           <View style={{ height: 6, borderRadius: 3, backgroundColor: C.surfaceSunk, overflow: "hidden" }}>
             <View style={{ width: `${pct * 100}%`, height: "100%", backgroundColor: barColor }} />
           </View>
           <Text style={[txt(600), { fontSize: 12, color: C.t2, marginTop: 7 }]}>
-            {remaining > 0
-              ? `${fmtDuration(remaining)} left in your 14 hour window`
+            {windowRemaining > 0
+              ? `${fmtDuration(windowRemaining)} left in your 14 hour window`
               : "Your 14 hour window has ended"}
           </Text>
         </View>
 
+        {pickError && (
+          <Text style={[txt(600), { fontSize: 12, color: C.redInk, marginTop: 8 }]}>
+            {pickError}
+          </Text>
+        )}
+
         <TouchableOpacity
-          onPress={() => onClockOut()}
+          onPress={() => offerPunchOptions({
+            title: "Clock out",
+            message: "End your shift now, or set the time you actually finished. Your 10 hours off duty run from that time.",
+            nowLabel: "Clock out now",
+            onNow: () => onClockOut(),
+            onPickTime: () => { setPickError(null); setPicking("clock-out"); },
+          })}
           disabled={busy}
           activeOpacity={0.85}
           style={{
@@ -562,30 +635,26 @@ function OnDutyCard({ shift, elapsed, remaining, busy, onClockOut }: {
           </Text>
         </TouchableOpacity>
 
-        {/* For a driver who finished earlier than they got to their phone. */}
-        <TouchableOpacity
-          onPress={() => { setPickError(null); setPicking(true); }}
-          disabled={busy}
-          style={{ paddingVertical: 11, alignItems: "center" }}
-        >
-          <Text style={[txt(600), { fontSize: 13, color: C.t2 }]}>
-            Set a different end time
-          </Text>
-        </TouchableOpacity>
-
-        {pickError && (
-          <Text style={[txt(600), { fontSize: 12, color: C.redInk, textAlign: "center", marginTop: -4 }]}>
-            {pickError}
-          </Text>
-        )}
-
         {picking && (
           <TimePickerSheet
-            initial={new Date()}
-            onCancel={() => setPicking(false)}
+            initial={picking === "edit-start" ? new Date(shift.startedAt) : new Date()}
+            onCancel={() => setPicking(null)}
             onConfirm={(picked) => {
-              setPicking(false);
-              const at = resolveAfter(picked, new Date(shift.startedAt), new Date());
+              const mode = picking;
+              setPicking(null);
+              const now = new Date();
+
+              if (mode === "edit-start") {
+                const at = resolveOnSameDay(picked, new Date(shift.startedAt));
+                if (at.getTime() > now.getTime()) {
+                  setPickError("That start time is in the future.");
+                  return;
+                }
+                onCorrectShift(shift.id, { startedAt: at.toISOString() });
+                return;
+              }
+
+              const at = resolveAfter(picked, new Date(shift.startedAt), now);
               if (!at) {
                 setPickError("That time is either before your shift started or still in the future.");
                 return;
@@ -599,11 +668,76 @@ function OnDutyCard({ shift, elapsed, remaining, busy, onClockOut }: {
   );
 }
 
+// ── Previous shift left on an estimated end time ─────────────────────
+
+function PreviousShiftBanner({ shift, busy, onCorrectShift }: {
+  shift: NonNullable<HosStatusResponse["lastShift"]>;
+  busy: boolean;
+  onCorrectShift: (shiftId: string, times: { startedAt?: string; endedAt?: string }) => void;
+}) {
+  const { C } = useTheme();
+  const [picking, setPicking] = useState(false);
+  const [pickError, setPickError] = useState<string | null>(null);
+
+  return (
+    <View style={[cardBase, {
+      backgroundColor: C.amberBg, borderColor: C.amber, marginBottom: 10,
+    }]}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 6 }}>
+        <AlertTriangle size={15} color={C.amberInk} />
+        <Text style={[txt(800), { fontSize: 14, color: C.amberInk }]}>
+          Previous shift needs an end time
+        </Text>
+      </View>
+      <Text style={[txt(600), { fontSize: 12.5, color: C.amberInk, lineHeight: 18 }]}>
+        Your shift from {fmtDayAndClock(shift.startedAt)} was closed with an estimated time
+        of {shift.endedAt ? fmtDayAndClock(shift.endedAt) : "unknown"}. Set the time you
+        actually finished.
+      </Text>
+
+      <TouchableOpacity
+        disabled={busy}
+        onPress={() => { setPickError(null); setPicking(true); }}
+        activeOpacity={0.85}
+        style={{
+          alignItems: "center", marginTop: 12,
+          backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
+          paddingVertical: 12, borderRadius: 11,
+        }}
+      >
+        <Text style={[txt(700), { fontSize: 14, color: C.t1 }]}>Edit the end time</Text>
+      </TouchableOpacity>
+
+      {pickError && (
+        <Text style={[txt(600), { fontSize: 12, color: C.redInk, marginTop: 8 }]}>
+          {pickError}
+        </Text>
+      )}
+
+      {picking && (
+        <TimePickerSheet
+          initial={shift.endedAt ? new Date(shift.endedAt) : new Date()}
+          onCancel={() => setPicking(false)}
+          onConfirm={(picked) => {
+            setPicking(false);
+            const at = resolveAfter(picked, new Date(shift.startedAt), new Date());
+            if (!at) {
+              setPickError("That time is either before that shift started or still in the future.");
+              return;
+            }
+            onCorrectShift(shift.id, { endedAt: at.toISOString() });
+          }}
+        />
+      )}
+    </View>
+  );
+}
+
 // ── Stale (missed clock-out) ─────────────────────────────────────────
 
-function StalePrompt({ shiftId, startedAt, elapsed, busy, onCorrectEnd, onKeepRunning }: {
+function StalePrompt({ shiftId, startedAt, elapsed, busy, onCorrectShift, onKeepRunning }: {
   shiftId: string; startedAt: string; elapsed: number; busy: boolean;
-  onCorrectEnd: (shiftId: string, endedAt: string) => void;
+  onCorrectShift: (shiftId: string, times: { startedAt?: string; endedAt?: string }) => void;
   onKeepRunning: () => void;
 }) {
   const { C } = useTheme();
@@ -641,7 +775,7 @@ function StalePrompt({ shiftId, startedAt, elapsed, busy, onCorrectEnd, onKeepRu
           <TouchableOpacity
             key={p.hours}
             disabled={busy}
-            onPress={() => onCorrectEnd(shiftId, p.at.toISOString())}
+            onPress={() => onCorrectShift(shiftId, { endedAt: p.at.toISOString() })}
             activeOpacity={0.85}
             style={{
               flexDirection: "row", alignItems: "center", justifyContent: "space-between",
@@ -658,7 +792,6 @@ function StalePrompt({ shiftId, startedAt, elapsed, busy, onCorrectEnd, onKeepRu
           </TouchableOpacity>
         ))}
 
-        {/* None of the presets fit — pick the exact time instead. */}
         <TouchableOpacity
           disabled={busy}
           onPress={() => { setPickError(null); setPicking(true); }}
@@ -702,7 +835,7 @@ function StalePrompt({ shiftId, startedAt, elapsed, busy, onCorrectEnd, onKeepRu
               setPickError("That time is either before your shift started or still in the future.");
               return;
             }
-            onCorrectEnd(shiftId, at.toISOString());
+            onCorrectShift(shiftId, { endedAt: at.toISOString() });
           }}
         />
       )}

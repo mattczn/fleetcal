@@ -412,10 +412,16 @@ export const railway = {
   hosClockOut(body: { latitude?: number; longitude?: number; occurredAt?: string } = {}) {
     return req<HosStatusResponse>("POST", "/v1/driver/hos/clock-out", body);
   },
-  /** Answers "you were still clocked in — when did you finish?" */
-  hosCorrectShiftEnd(shiftId: string, endedAt: string, note?: string) {
+  /** Correct a shift's start, end, or both. Server validates the
+   *  resulting pair (end after start, neither in the future, within
+   *  36 hours) and rejects rather than storing an inverted shift. */
+  hosCorrectShift(
+    shiftId: string,
+    times: { startedAt?: string; endedAt?: string },
+    note?: string,
+  ) {
     return req<HosStatusResponse>(
-      "POST", `/v1/driver/hos/shifts/${shiftId}/correct-end`, { endedAt, note },
+      "POST", `/v1/driver/hos/shifts/${shiftId}/correct`, { ...times, note },
     );
   },
 

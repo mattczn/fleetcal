@@ -231,40 +231,28 @@ export default function LoadsScreen() {
     }
   };
 
-  const handleClockOut = (occurredAt?: string) => {
-    const when = occurredAt
-      ? new Date(occurredAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
-      : null;
-    Alert.alert(
-      "End your shift?",
-      when
-        ? `Your shift will be recorded as ending at ${when}. Your 10 hours off duty start from that time.`
-        : "Your shift will be recorded as ending now, and your 10 hours off duty start from this time.",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Clock Out",
-          style: "default",
-          onPress: async () => {
-            setHosBusy(true);
-            try {
-              await railway.hosClockOut({ ...(await captureLocation()), occurredAt });
-              await refetchHos();
-            } catch (err) {
-              Alert.alert("Could not clock out", err instanceof Error ? err.message : "Please try again.");
-            } finally {
-              setHosBusy(false);
-            }
-          },
-        },
-      ],
-    );
-  };
-
-  const handleCorrectEnd = async (shiftId: string, endedAt: string) => {
+  // No confirmation dialog here — the card's Clock Out button already
+  // opens a chooser ("Clock out now / Set a different time / Cancel"),
+  // so a second confirm would be two taps asking the same question.
+  const handleClockOut = async (occurredAt?: string) => {
     setHosBusy(true);
     try {
-      await railway.hosCorrectShiftEnd(shiftId, endedAt, "End time set by the driver after a missed clock-out.");
+      await railway.hosClockOut({ ...(await captureLocation()), occurredAt });
+      await refetchHos();
+    } catch (err) {
+      Alert.alert("Could not clock out", err instanceof Error ? err.message : "Please try again.");
+    } finally {
+      setHosBusy(false);
+    }
+  };
+
+  const handleCorrectShift = async (
+    shiftId: string,
+    times: { startedAt?: string; endedAt?: string },
+  ) => {
+    setHosBusy(true);
+    try {
+      await railway.hosCorrectShift(shiftId, times, "Times corrected by the driver.");
       await refetchHos();
     } catch (err) {
       Alert.alert("Could not update your shift", err instanceof Error ? err.message : "Please try again.");
@@ -467,8 +455,8 @@ export default function LoadsScreen() {
                     loading={hosLoading}
                     busy={hosBusy}
                     onClockIn={(occurredAt) => void handleClockIn(occurredAt)}
-                    onClockOut={(occurredAt) => handleClockOut(occurredAt)}
-                    onCorrectEnd={(shiftId, endedAt) => void handleCorrectEnd(shiftId, endedAt)}
+                    onClockOut={(occurredAt) => void handleClockOut(occurredAt)}
+                    onCorrectShift={(shiftId, times) => void handleCorrectShift(shiftId, times)}
                     onKeepRunning={() => setStaleDismissed(true)}
                     staleDismissed={staleDismissed}
                   />
