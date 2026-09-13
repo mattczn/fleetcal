@@ -95,6 +95,47 @@ export function toIntervals(rows: ShiftRow[]): ShiftInterval[] {
   }));
 }
 
+/**
+ * A shift for this driver that would overlap [start, end), or null.
+ *
+ * The partial unique index only prevents two OPEN shifts. Nothing stops
+ * a backdated clock-in or a corrected start from being dragged back
+ * across a shift that already exists, and overlapping shifts are not a
+ * cosmetic problem: cycleStatus sums each shift's overlap with the
+ * rolling window, so the same wall-clock hour gets counted twice and a
+ * driver's 70/8 total silently inflates.
+ *
+ * `end` of null means "still open", which overlaps everything after
+ * its start.
+ */
+export async function findOverlappingShift(
+  driverId: number,
+  start: Date,
+  end: Date | null,
+  excludeShiftId?: string,
+): Promise<ShiftRow | null> {
+  // Look slightly wider than the edit window so a long shift starting
+  // just outside it is still caught.
+  const since = new Date(start.getTime() - 3 * 24 * 3600 * 1000).toISOString();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data } = await (supabase as any)
+    .from("hos_shifts")
+    .select("*")
+    .eq("driver_id", driverId)
+    .or(`started_at.gte.${since},ended_at.is.null`);
+
+  const startMs = start.getTime();
+  const endMs   = end ? end.getTime() : Number.POSITIVE_INFINITY;
+  for (const row of ((data ?? []) as ShiftRow[])) {
+    if (excludeShiftId && row.id === excludeShiftId) continue;
+    const otherStart = new Date(row.started_at).getTime();
+    const otherEnd   = row.ended_at ? new Date(row.ended_at).getTime() : Number.POSITIVE_INFINITY;
+    // Touching end-to-end is fine; strictly crossing is not.
+    if (otherStart < endMs && startMs < otherEnd) return row;
+  }
+  return null;
+}
+
 export interface DriverHosView {
   snapshot: HosSnapshot;
   openShift: ShiftRow | null;

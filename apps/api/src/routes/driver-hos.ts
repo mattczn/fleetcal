@@ -18,7 +18,7 @@ import { Hono } from "hono";
 import { supabase } from "../lib/supabase.js";
 import { type DriverAuthVariables } from "../middleware/driverAuth.js";
 import {
-  getDriverHosView, clockIn, clockOut, correctShiftTimes,
+  getDriverHosView, clockIn, clockOut, correctShiftTimes, findOverlappingShift,
   type Classification,
 } from "../lib/hosService.js";
 
@@ -156,6 +156,21 @@ driverHos.post("/clock-in", async (c) => {
   // set the real start time. Absent = clock in now.
   const when = parseAdjustedTime(body.occurredAt, now);
   if (!when.ok) return c.json({ error: "validation_failed", errors: [when.error] }, 400);
+
+  // A backdated start must not reach back over a shift already on
+  // record. Only checked when a time was supplied — clocking in "now"
+  // can only clash with an open shift, which clockIn handles by
+  // auto-closing it.
+  if (body.occurredAt) {
+    const clash = await findOverlappingShift(driverId, when.at, null);
+    if (clash) {
+      const from = new Date(clash.started_at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+      return c.json({
+        error: "validation_failed",
+        errors: [`You already have a shift recorded starting ${from}. Pick a later time, or edit that shift instead.`],
+      }, 400);
+    }
+  }
 
   try {
     const result = await clockIn({
@@ -337,6 +352,22 @@ driverHos.post("/shifts/:id/correct", async (c) => {
 
   if (body.startedAt) startedAt = parseCorrection(body.startedAt, "start time");
   if (body.endedAt)   endedAt   = parseCorrection(body.endedAt, "end time");
+
+  // Nothing may be dragged across a neighbouring shift. Overlapping
+  // shifts double-count in the rolling-cycle sum, so an unguarded
+  // correction silently inflates the driver's on-duty total.
+  if (errors.length === 0) {
+    const proposedStart = startedAt ?? new Date(shift.started_at);
+    const proposedEnd   = endedAt ?? (shift.ended_at ? new Date(shift.ended_at) : null);
+    const clash = await findOverlappingShift(driverId, proposedStart, proposedEnd, shiftId);
+    if (clash) {
+      const from = new Date(clash.started_at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+      const to   = clash.ended_at
+        ? new Date(clash.ended_at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
+        : "now";
+      errors.push(`That overlaps another shift you already recorded (${from} to ${to}).`);
+    }
+  }
 
   // Validate the resulting pair, not just each field: moving a start
   // past an untouched end (or vice versa) would invert the shift.
