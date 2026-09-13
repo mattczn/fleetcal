@@ -29,11 +29,17 @@ export default function HosDutyButton() {
       setAttention(res.drivers.reduce(
         (n, d) => n + d.unverifiedOtrCount + d.needsReviewCount, 0,
       ));
-      setAvailable(true);
-    } catch {
-      // HOS may not be enabled for this org, or the endpoint may not be
-      // deployed yet. Hide rather than showing a button that errors.
-      setAvailable(false);
+      // An org with no HOS-enabled drivers has nothing to show.
+      setAvailable(res.drivers.length > 0);
+    } catch (err) {
+      // Only hide when the feature genuinely isn't available to this
+      // user. A server error must NOT hide the button: an earlier
+      // version hid on any failure, so a broken endpoint was
+      // indistinguishable from "not enabled" and the whole feature
+      // appeared to vanish with nothing to click for an explanation.
+      const status = (err as { status?: number }).status;
+      setAvailable(status !== 403 && status !== 404);
+      setAttention(0);
     }
   }, []);
 
