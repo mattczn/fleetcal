@@ -63,6 +63,55 @@ async function req<T>(
   return (await res.text()) as T;
 }
 
+// ── HOS duty tracking ──────────────────────────────────────────────────
+
+export interface HosCurrentShift {
+  id:               string;
+  startedAt:        string;
+  classification:   "local" | "otr";
+  elapsedSeconds:   number;
+  remainingSeconds: number;
+  windowExpiresAt:  string | null;
+  /** Past the 14-hour window. Nearly always a missed clock-out rather
+   *  than a genuine 19-hour shift, so the card switches to a correction
+   *  prompt when this is true. */
+  windowExpired:    boolean;
+}
+
+export interface HosLastShift {
+  id:            string;
+  startedAt:     string;
+  endedAt:       string | null;
+  onDutySeconds: number | null;
+  autoClosed:    boolean;
+  needsReview:   boolean;
+}
+
+export interface HosRest {
+  restSeconds: number;
+  satisfied:   boolean;
+  /** When 10 consecutive hours off will have elapsed. */
+  clearAt:     string;
+}
+
+export interface HosStatusResponse {
+  /** False when HOS is switched off for this driver — the card hides
+   *  entirely rather than rendering an empty shell. */
+  enabled:  boolean;
+  status?:  "on_duty" | "off_duty";
+  stale?:   boolean;
+  onDutySecondsToday?: number;
+  currentShift?: HosCurrentShift | null;
+  lastShift?:    HosLastShift | null;
+  rest?:         HosRest | null;
+  /** Clock-in only: the tap matched an already-open shift. */
+  alreadyOpen?:  boolean;
+  /** Clock-in only: a forgotten shift was auto-closed to make room.
+   *  Non-null means the driver should be asked when they really
+   *  finished. */
+  autoClosedShiftId?: string | null;
+}
+
 // ── Driver identity ────────────────────────────────────────────────────
 
 export interface DriverMeResponse {
@@ -329,6 +378,29 @@ export const railway = {
       "POST", `/v1/driver/safety-alerts/${id}/dispute`, { reason },
     );
   },
+  // ── HOS duty tracking ──────────────────────────────────────────────
+  // Cycle totals (70/8) are deliberately NOT in this payload — they're
+  // only as reliable as a full week of clean clock-ins, so they live on
+  // the dispatch board where they can be sanity-checked. The driver
+  // sees today.
+  hosStatus() {
+    return req<HosStatusResponse>("GET", "/v1/driver/hos/status");
+  },
+  /** Location is best-effort; omit it rather than blocking a clock-in
+   *  when GPS is unavailable. */
+  hosClockIn(body: { latitude?: number; longitude?: number } = {}) {
+    return req<HosStatusResponse>("POST", "/v1/driver/hos/clock-in", body);
+  },
+  hosClockOut(body: { latitude?: number; longitude?: number } = {}) {
+    return req<HosStatusResponse>("POST", "/v1/driver/hos/clock-out", body);
+  },
+  /** Answers "you were still clocked in — when did you finish?" */
+  hosCorrectShiftEnd(shiftId: string, endedAt: string, note?: string) {
+    return req<HosStatusResponse>(
+      "POST", `/v1/driver/hos/shifts/${shiftId}/correct-end`, { endedAt, note },
+    );
+  },
+
   listAssets() {
     return req<{
       assets: { id: number; name: string; unit?: string; truck?: string; color: string; type: string; mudflapCardLast4?: string }[];

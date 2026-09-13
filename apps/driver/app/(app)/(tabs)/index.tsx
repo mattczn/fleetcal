@@ -9,7 +9,9 @@ import {
   TouchableOpacity,
   Dimensions,
   Modal,
+  Alert,
 } from "react-native";
+import * as Location from "expo-location";
 import { SafeAreaView, SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -17,6 +19,7 @@ import { Inbox, AlertTriangle, Moon, Sun, Bell } from "lucide-react-native";
 import { useRouter } from "expo-router";
 import { SyncStatusPill } from "@/components/SyncStatusPill";
 import InspectionCard from "@/components/InspectionCard";
+import HosCard from "@/components/HosCard";
 import InspectionFormScreen from "@/components/InspectionFormScreen";
 import InspectionStep1Screen from "@/components/InspectionStep1Screen";
 import type { EquipmentHistory } from "@/lib/railway";
@@ -152,6 +155,118 @@ export default function LoadsScreen() {
   };
   const closeInspection    = () => setFlow(null);
   const finishInspection   = () => { setFlow(null); void refetchInspections(); };
+
+  // ── HOS clock in / out ────────────────────────────────────────────
+  const {
+    data: hosData,
+    isLoading: hosLoading,
+    refetch: refetchHos,
+  } = useQuery({
+    queryKey: ["hos", "status", driver?.driverId],
+    queryFn:  () => railway.hosStatus(),
+    enabled:  !!driver,
+    // Short window so a shift opened on another device shows up here
+    // without a manual pull-to-refresh.
+    staleTime: 30_000,
+  });
+  const [hosBusy, setHosBusy] = useState(false);
+  // Session-scoped dismissal of the "still clocked in" prompt, for the
+  // driver who genuinely has been on duty past 14 hours. Deliberately
+  // not persisted — it should come back next launch if still unresolved.
+  const [staleDismissed, setStaleDismissed] = useState(false);
+
+  /** Best-effort GPS. Never blocks the clock action — a driver in a
+   *  dead zone still needs to start their shift, and a null location
+   *  is a perfectly valid duty event. */
+  const captureLocation = async (): Promise<{ latitude?: number; longitude?: number }> => {
+    try {
+      const perm = await Location.getForegroundPermissionsAsync();
+      if (!perm.granted) {
+        const asked = await Location.requestForegroundPermissionsAsync();
+        if (!asked.granted) return {};
+      }
+      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      return { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
+    } catch {
+      return {};
+    }
+  };
+
+  const handleClockIn = async () => {
+    setHosBusy(true);
+    try {
+      const res = await railway.hosClockIn(await captureLocation());
+      await refetchHos();
+      setStaleDismissed(false);
+
+      // A forgotten shift was closed on an estimate to make room for
+      // this one — surface it before anything else so the driver fixes
+      // it while they still remember yesterday.
+      if (res.autoClosedShiftId) {
+        Alert.alert(
+          "Your last shift was left open",
+          "We closed it out with an estimated time. Check the card at the top and set when you actually finished.",
+        );
+        return;
+      }
+
+      // Prompt hard for the pre-trip, but never gate the clock-in on it.
+      // Clock-in has already succeeded here, so a dismissal costs the
+      // inspection, not the hours data.
+      const alreadyInspected = todaysInspections.some(i => i.kind === "pre_trip");
+      if (reporting && !alreadyInspected && !res.alreadyOpen) {
+        Alert.alert(
+          "Pre-trip inspection",
+          "Run your pre-trip inspection before you roll.",
+          [
+            { text: "In a minute", style: "cancel" },
+            { text: "Start now", style: "default", onPress: () => startInspection("pre_trip") },
+          ],
+        );
+      }
+    } catch (err) {
+      Alert.alert("Couldn't clock in", err instanceof Error ? err.message : "Please try again.");
+    } finally {
+      setHosBusy(false);
+    }
+  };
+
+  const handleClockOut = () => {
+    Alert.alert(
+      "Clock out?",
+      "This ends your shift and starts your 10-hour reset.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Clock Out",
+          style: "default",
+          onPress: async () => {
+            setHosBusy(true);
+            try {
+              await railway.hosClockOut(await captureLocation());
+              await refetchHos();
+            } catch (err) {
+              Alert.alert("Couldn't clock out", err instanceof Error ? err.message : "Please try again.");
+            } finally {
+              setHosBusy(false);
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const handleCorrectEnd = async (shiftId: string, endedAt: string) => {
+    setHosBusy(true);
+    try {
+      await railway.hosCorrectShiftEnd(shiftId, endedAt, "Corrected by driver after a missed clock-out.");
+      await refetchHos();
+    } catch (err) {
+      Alert.alert("Couldn't save that", err instanceof Error ? err.message : "Please try again.");
+    } finally {
+      setHosBusy(false);
+    }
+  };
 
   // Time-based bucketing — string-compare naive YYYY-MM-DDTHH:mm
   // timestamps against ±6h / ±24h offsets from now.
@@ -336,14 +451,31 @@ export default function LoadsScreen() {
               refreshControl={
                 <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={ACCENT} />
               }
-              // Inspection card pinned to the top of the Active tab only.
-              ListHeaderComponent={tabIdx === 0 && reporting ? (
-                <InspectionCard
-                  loading={inspectionLoading}
-                  inspections={todaysInspections}
-                  truckHistoryEnabled={truckHistory}
-                  onStart={(kind) => startInspection(kind ?? "pre_trip")}
-                />
+              // Duty clock + inspection card pinned to the top of the
+              // Active tab only. HOS sits above the inspection prompt —
+              // clocking in is the first thing a driver does, and the
+              // clock-in flow is what prompts the pre-trip.
+              ListHeaderComponent={tabIdx === 0 ? (
+                <>
+                  <HosCard
+                    data={hosData ?? null}
+                    loading={hosLoading}
+                    busy={hosBusy}
+                    onClockIn={() => void handleClockIn()}
+                    onClockOut={handleClockOut}
+                    onCorrectEnd={(shiftId, endedAt) => void handleCorrectEnd(shiftId, endedAt)}
+                    onKeepRunning={() => setStaleDismissed(true)}
+                    staleDismissed={staleDismissed}
+                  />
+                  {reporting && (
+                    <InspectionCard
+                      loading={inspectionLoading}
+                      inspections={todaysInspections}
+                      truckHistoryEnabled={truckHistory}
+                      onStart={(kind) => startInspection(kind ?? "pre_trip")}
+                    />
+                  )}
+                </>
               ) : null}
               renderItem={({ item }) => (
                 <View style={{ paddingHorizontal: SP.screenPx }}>
