@@ -30,7 +30,7 @@ import { useDriverSession } from "@/lib/useDriverSession";
 import { useLoadsRealtime } from "@/lib/useLoadsRealtime";
 import { usePushRegistration } from "@/lib/usePushRegistration";
 import { useReportDevicePermissions } from "@/lib/useReportDevicePermissions";
-import { railway } from "@/lib/railway";
+import { railway, userFacingError } from "@/lib/railway";
 import type { Load } from "@/lib/types";
 import { Glass } from "@/components/Glass";
 import { f, SP, RADIUS } from "@/lib/theme";
@@ -225,7 +225,7 @@ export default function LoadsScreen() {
         );
       }
     } catch (err) {
-      Alert.alert("Could not clock in", err instanceof Error ? err.message : "Please try again.");
+      Alert.alert("Could not clock in", userFacingError(err));
     } finally {
       setHosBusy(false);
     }
@@ -240,7 +240,7 @@ export default function LoadsScreen() {
       await railway.hosClockOut({ ...(await captureLocation()), occurredAt });
       await refetchHos();
     } catch (err) {
-      Alert.alert("Could not clock out", err instanceof Error ? err.message : "Please try again.");
+      Alert.alert("Could not clock out", userFacingError(err));
     } finally {
       setHosBusy(false);
     }
@@ -255,7 +255,7 @@ export default function LoadsScreen() {
       await railway.hosCorrectShift(shiftId, times, "Times corrected by the driver.");
       await refetchHos();
     } catch (err) {
-      Alert.alert("Could not update your shift", err instanceof Error ? err.message : "Please try again.");
+      Alert.alert("Could not update your shift", userFacingError(err));
     } finally {
       setHosBusy(false);
     }

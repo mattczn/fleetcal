@@ -23,6 +23,37 @@ class ApiError extends Error {
   }
 }
 
+/**
+ * The message to actually put in front of a driver.
+ *
+ * ApiError.message is deliberately diagnostic — status code plus the
+ * raw JSON body — which is right for a console and badly wrong for an
+ * Alert. Validation failures from this API carry prose written for the
+ * driver in `errors[]`; everything else gets the caller's fallback,
+ * because a driver can do nothing useful with "insert_failed".
+ */
+export function userFacingError(err: unknown, fallback = "Please try again."): string {
+  if (err instanceof ApiError && err.detail && typeof err.detail === "object") {
+    const d = err.detail as { errors?: unknown; detail?: unknown };
+    if (Array.isArray(d.errors)) {
+      const messages = d.errors.filter((m): m is string => typeof m === "string" && m.length > 0);
+      if (messages.length > 0) return messages.join("\n");
+    }
+    // `detail` is usually an internal message (a Postgres error, say),
+    // so only surface it when it reads like a sentence rather than a
+    // stack trace or a bare error code.
+    if (typeof d.detail === "string" && /^[A-Z].*[.!?]$/.test(d.detail.trim())) {
+      return d.detail.trim();
+    }
+  }
+  // Network failures surface as plain Errors and their messages are
+  // usually intelligible ("Network request failed").
+  if (err instanceof Error && !(err instanceof ApiError) && err.message) {
+    return err.message;
+  }
+  return fallback;
+}
+
 async function getToken(): Promise<string | null> {
   const { data } = await supabase.auth.getSession();
   return data.session?.access_token ?? null;

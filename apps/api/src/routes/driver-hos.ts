@@ -18,7 +18,7 @@ import { Hono } from "hono";
 import { supabase } from "../lib/supabase.js";
 import { type DriverAuthVariables } from "../middleware/driverAuth.js";
 import {
-  getDriverHosView, clockIn, clockOut, correctShiftTimes, findOverlappingShift,
+  getDriverHosView, clockIn, clockOut, correctShiftTimes, findOverlappingShift, getHosConfig,
   type Classification,
 } from "../lib/hosService.js";
 
@@ -37,6 +37,21 @@ function coord(v: unknown, max: number): number | null {
 /** Clock skew allowance — a phone a few seconds ahead of the server
  *  shouldn't have its clock-in rejected as "in the future". */
 const FUTURE_GRACE_MS = 60_000;
+
+/**
+ * Format a timestamp for a message a driver will read.
+ *
+ * The timeZone argument is not optional in practice: Railway runs in
+ * UTC, so a bare toLocaleTimeString renders six hours off for a Denver
+ * fleet and the driver is told their shift clashes with one at a time
+ * they never worked. Weekday is included because a clash is often on a
+ * different day, and "4:18 PM" alone gives no way to tell which.
+ */
+function fmtForDriver(iso: string, timeZone: string): string {
+  return new Date(iso).toLocaleString("en-US", {
+    timeZone, weekday: "short", hour: "numeric", minute: "2-digit",
+  });
+}
 
 /** How far back a driver may backdate their own clock in/out. Beyond
  *  this it stops being "I forgot for a couple of hours" and becomes a
@@ -164,10 +179,10 @@ driverHos.post("/clock-in", async (c) => {
   if (body.occurredAt) {
     const clash = await findOverlappingShift(driverId, when.at, null);
     if (clash) {
-      const from = new Date(clash.started_at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+      const { timeZone } = await getHosConfig(orgId);
       return c.json({
         error: "validation_failed",
-        errors: [`You already have a shift recorded starting ${from}. Pick a later time, or edit that shift instead.`],
+        errors: [`You already have a shift recorded starting ${fmtForDriver(clash.started_at, timeZone)}. Pick a later time, or edit that shift instead.`],
       }, 400);
     }
   }
@@ -361,11 +376,9 @@ driverHos.post("/shifts/:id/correct", async (c) => {
     const proposedEnd   = endedAt ?? (shift.ended_at ? new Date(shift.ended_at) : null);
     const clash = await findOverlappingShift(driverId, proposedStart, proposedEnd, shiftId);
     if (clash) {
-      const from = new Date(clash.started_at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
-      const to   = clash.ended_at
-        ? new Date(clash.ended_at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
-        : "now";
-      errors.push(`That overlaps another shift you already recorded (${from} to ${to}).`);
+      const { timeZone } = await getHosConfig(orgId);
+      const to = clash.ended_at ? fmtForDriver(clash.ended_at, timeZone) : "now";
+      errors.push(`That overlaps another shift you already recorded (${fmtForDriver(clash.started_at, timeZone)} to ${to}).`);
     }
   }
 
