@@ -205,6 +205,35 @@ export interface HosDutyEvent {
   created_at: string;
 }
 
+export interface HosAssetDriver {
+  assetId: number;
+  assetName: string;
+  driverId: number | null;
+  driverName: string | null;
+  /** How the driver was determined: override | calendar_active |
+   *  calendar_recent | asset_default | none. */
+  source: string;
+  /** Null when the driver has HOS switched off, or none resolved. */
+  hos: {
+    status: 'on_duty' | 'off_duty';
+    windowRemainingSeconds: number | null;
+    windowExpiresAt: string | null;
+    availableAt: string | null;
+    canResumeWithinWindow: boolean;
+    fullyRested: boolean;
+    stale: boolean;
+    onDutySecondsToday: number;
+  } | null;
+}
+
+export interface HosDriverOption {
+  driverId: number;
+  name: string;
+  /** primary | secondary | recent | other — why they're ranked here. */
+  relation: string;
+  lastUsedAt: string | null;
+}
+
 export interface HiringApplicant {
   id: string;
   first_name: string;
@@ -2128,6 +2157,27 @@ class RailwayClient {
       };
     }>('GET', `/v1/inspection-reports/${id}`);
   }
+  /** Who is in each truck today, with their hours. One call for the
+   *  whole calendar — never per column. */
+  getHosByAsset(date?: string) {
+    return this.req<{
+      date: string;
+      config: { cycle: '70_8' | '60_7'; timeZone: string };
+      assets: HosAssetDriver[];
+    }>('GET', `/v1/hos/by-asset${date ? `?date=${date}` : ''}`);
+  }
+  /** Drivers ranked by their tie to this truck, closest first. */
+  getAssetDriverOptions(assetId: number) {
+    return this.req<{ drivers: HosDriverOption[] }>(
+      'GET', `/v1/hos/assets/${assetId}/driver-options`);
+  }
+  /** driverId null clears the override and hands the truck back to the
+   *  automatic resolution. */
+  setAssetDriver(assetId: number, driverId: number | null, date?: string) {
+    return this.req<{ ok: true; cleared?: boolean }>(
+      'PUT', `/v1/hos/assets/${assetId}/driver`, { driverId, date });
+  }
+
   deleteInspectionReport(id: string) {
     return this.req<{ ok: true }>('DELETE', `/v1/inspection-reports/${id}`);
   }

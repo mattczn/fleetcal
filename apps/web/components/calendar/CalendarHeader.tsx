@@ -1,6 +1,8 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { railway, type HosAssetDriver } from '@/lib/railway';
+import AssetDriverChip from './AssetDriverChip';
 import { MapPin, Loader2, RefreshCw, Truck, Activity } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { useModules } from '@/lib/useModules';
@@ -33,6 +35,31 @@ function staleness(locatedAt: string): 'fresh' | 'stale' | 'old' {
 }
 
 const STALENESS_COLOR = { fresh: '#16a34a', stale: '#b45309', old: '#9ca3af' };
+
+/** Who is in each truck today, fetched ONCE for the whole header rather
+ *  than per column — this renders across every asset, so a per-column
+ *  fetch would be one request per truck on every calendar render. */
+function useHosByAsset() {
+  const [byAsset, setByAsset] = useState<Map<number, HosAssetDriver>>(new Map());
+  const load = useCallback(async () => {
+    try {
+      const res = await railway.getHosByAsset();
+      setByAsset(new Map(res.assets.map(a => [a.assetId, a])));
+    } catch {
+      // HOS may be off for this org, or the endpoint not deployed. The
+      // chip simply doesn't render; the rest of the header is unaffected.
+      setByAsset(new Map());
+    }
+  }, []);
+  useEffect(() => {
+    void load();
+    const id = setInterval(() => {
+      if (document.visibilityState === 'visible') void load();
+    }, 120_000);
+    return () => clearInterval(id);
+  }, [load]);
+  return { byAsset, reload: load };
+}
 
 /**
  * Thin selector over the store's centralized Motive-locations slice.
@@ -70,6 +97,7 @@ function useMotiveLocations() {
 }
 
 export default function CalendarHeader() {
+  const { byAsset: hosByAsset, reload: reloadHos } = useHosByAsset();
   const { assets: allAssets, resourceWidth: rw, activeCategoryFilter, showUnassigned, unassignedAssetId, calendarTimezone, currentDate, viewMode, calendarMode, setCalendarMode, movementsLoading, movementsError, fetchMovements } = useCalendarStore();
   const unassignedAsset = showUnassigned && unassignedAssetId !== null ? allAssets.find(a => a.id === unassignedAssetId) ?? null : null;
   // Date range that matches the calendar grid below — same logic +
@@ -275,6 +303,15 @@ export default function CalendarHeader() {
                 </button>
               );
             })()}
+
+            {/* Driver + hours. Sits above the ELD location line: who is
+                in the truck is the first thing a dispatcher wants after
+                knowing which truck it is. */}
+            <AssetDriverChip
+              entry={hosByAsset.get(asset.id) ?? null}
+              width={rw}
+              onChanged={reloadHos}
+            />
 
             {loc && age ? (
               <button
