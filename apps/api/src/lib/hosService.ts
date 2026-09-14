@@ -11,6 +11,7 @@ import {
   driverHosSnapshot, SHIFT_WINDOW_SECONDS,
   type HosSnapshot, type HosCycle, type ShiftInterval,
 } from "./hos.js";
+import { classifyByAirMiles, parseTerminal } from "./airMiles.js";
 
 /** How far back to pull shifts. The 8-day cycle needs 8; restart
  *  detection needs to see the gap *before* the window opens, so pad. */
@@ -101,6 +102,98 @@ export async function getHosConfig(orgId: string): Promise<HosConfig> {
     }
   }
   return { cycle, timeZone };
+}
+
+// ── Short-haul classification from assigned loads ────────────────────
+
+export interface AutoClassification {
+  classification: Classification;
+  maxAirMiles: number | null;
+  furthestLabel: string | null;
+  ungeocodedCount: number;
+  /** False when nothing measurable was found. Callers must not persist
+   *  an undecided result — see classifyByAirMiles for why. */
+  decided: boolean;
+}
+
+/**
+ * Classify a driver's day against the 150 air-mile short-haul radius,
+ * using the stops on whatever loads they're assigned for that day.
+ *
+ * Looks at loads overlapping the shift's LOCAL calendar day rather than
+ * the shift's own hours: a driver clocking in at 6am for a run that
+ * starts at 2pm is going out of range today, and dispatch needs the
+ * flag at 6am, not at 2pm.
+ *
+ * Returns decided:false when the terminal isn't configured, no loads
+ * are assigned, or nothing is geocoded — "nothing found" and "stayed
+ * local" must not be confused, since persisting the former as `local`
+ * would silently clear an OTR flag.
+ */
+export async function classifyShiftByLoads(opts: {
+  driverId: number;
+  orgId: string;
+  localDate: string;   // YYYY-MM-DD in the org's zone
+}): Promise<AutoClassification> {
+  const none: AutoClassification = {
+    classification: "local", maxAirMiles: null, furthestLabel: null,
+    ungeocodedCount: 0, decided: false,
+  };
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: settings } = await (supabase as any)
+    .from("org_settings").select("hos_settings").eq("org_id", opts.orgId).maybeSingle();
+  const terminal = parseTerminal((settings as { hos_settings?: Record<string, unknown> } | null)?.hos_settings);
+  // No terminal configured: skip rather than measure from a guessed
+  // origin, which would be worse than not measuring at all.
+  if (!terminal) return none;
+
+  // events.start / .end are naive local "YYYY-MM-DDTHH:mm" strings, so
+  // plain lexicographic comparison against day bounds is correct and
+  // avoids a timezone round-trip.
+  const dayStart = `${opts.localDate}T00:00`;
+  const dayEnd   = `${opts.localDate}T23:59`;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: events, error: evErr } = await (supabase as any)
+    .from("events")
+    .select("id")
+    .eq("org_id", opts.orgId)
+    .eq("driver_id", opts.driverId)
+    .lte("start", dayEnd)
+    .gte("end", dayStart)
+    .is("deleted_at", null);
+  if (evErr) {
+    console.warn("[classifyShiftByLoads] events read failed:", evErr.message);
+    return none;
+  }
+  const eventIds = ((events ?? []) as Array<{ id: number }>).map(e => e.id);
+  if (eventIds.length === 0) return none;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: stops, error: stopErr } = await (supabase as any)
+    .from("stops")
+    .select("lat, lng, facility_name, city, state")
+    .in("event_id", eventIds);
+  if (stopErr) {
+    console.warn("[classifyShiftByLoads] stops read failed:", stopErr.message);
+    return none;
+  }
+
+  type StopRow = { lat: number | null; lng: number | null; facility_name: string | null; city: string | null; state: string | null };
+  const points = ((stops ?? []) as StopRow[]).map(s => ({
+    lat: s.lat as number,
+    lon: s.lng as number,
+    label: s.facility_name || [s.city, s.state].filter(Boolean).join(", ") || null,
+  }));
+
+  const result = classifyByAirMiles(terminal, points);
+  return {
+    classification: result.classification,
+    maxAirMiles: result.maxAirMiles,
+    furthestLabel: result.furthestStop?.label ?? null,
+    ungeocodedCount: result.ungeocodedCount,
+    decided: result.decided,
+  };
 }
 
 // ── Reads ────────────────────────────────────────────────────────────

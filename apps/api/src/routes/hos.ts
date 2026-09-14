@@ -19,7 +19,7 @@ import { getUserDisplayName } from "../lib/clerk.js";
 import { requireCapability } from "../middleware/require.js";
 import {
   getHosConfig, loadRecentShifts, toIntervals, correctShiftTimes,
-  findOverlappingShift,
+  findOverlappingShift, classifyShiftByLoads,
   type ShiftRow, type Classification, type LogMethod,
 } from "../lib/hosService.js";
 import { driverHosSnapshot, localDateString } from "../lib/hos.js";
@@ -91,6 +91,41 @@ hos.get("/board", async (c) => {
     list.push(row);
     byDriver.set(row.driver_id, list);
   }
+
+  // Re-classify OPEN shifts against the 150 air-mile radius. A driver
+  // clocks in before dispatch has finished assigning the day, so the
+  // classification made at clock-in goes stale the moment a load is
+  // added — and an out-of-range load added at 10am is exactly the one
+  // that needs flagging. Only open shifts (a handful at a time), and
+  // never over a dispatcher's explicit call.
+  const openShifts = ((shiftRows ?? []) as ShiftRow[])
+    .filter(s => s.ended_at == null && s.classification_source !== "dispatch");
+  await Promise.all(openShifts.map(async (s) => {
+    try {
+      const auto = await classifyShiftByLoads({
+        driverId: s.driver_id, orgId,
+        localDate: localDateString(new Date(s.started_at), config.timeZone),
+      });
+      if (!auto.decided || auto.classification === s.classification) return;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (supabase as any).from("hos_shifts").update({
+        classification: auto.classification,
+        classification_source: "computed",
+        // Turning local → OTR invalidates any verification: nobody
+        // confirmed a log for a shift that wasn't OTR when they looked.
+        ...(auto.classification === "otr"
+          ? { log_verified_at: null, log_verified_by: null }
+          : {}),
+        updated_at: new Date().toISOString(),
+      }).eq("id", s.id);
+      s.classification = auto.classification;
+      s.classification_source = "computed";
+      if (auto.classification === "otr") s.log_verified_at = null;
+    } catch (err) {
+      // Never let classification failure take the board down with it.
+      console.warn("[hos/board] reclassify failed for shift", s.id, err);
+    }
+  }));
 
   // Paper-log counter needs a wider window than the cycle does.
   const paperSince = new Date(now.getTime() - PAPER_LOG_WINDOW_DAYS * 24 * 3600 * 1000).toISOString();

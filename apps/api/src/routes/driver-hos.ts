@@ -17,8 +17,10 @@
 import { Hono } from "hono";
 import { supabase } from "../lib/supabase.js";
 import { type DriverAuthVariables } from "../middleware/driverAuth.js";
+import { localDateString } from "../lib/hos.js";
 import {
   getDriverHosView, clockIn, clockOut, correctShiftTimes, findOverlappingShift, getHosConfig,
+  classifyShiftByLoads,
   type Classification,
 } from "../lib/hosService.js";
 
@@ -187,14 +189,24 @@ driverHos.post("/clock-in", async (c) => {
     }
   }
 
+  // Classify the day against the 150 air-mile short-haul radius using
+  // whatever loads are already assigned. Falls back to the driver's
+  // default when nothing measurable is found — a driver with no loads
+  // yet must not be silently marked local, since that would clear an
+  // OTR obligation nobody has evaluated.
+  const { timeZone } = await getHosConfig(orgId);
+  const auto = await classifyShiftByLoads({
+    driverId, orgId, localDate: localDateString(when.at, timeZone),
+  });
+
   try {
     const result = await clockIn({
       driverId, orgId, now,
       startedAt: when.at,
       lat: coord(body.latitude, 90),
       lon: coord(body.longitude, 180),
-      classification: cfg.defaultClassification,
-      classificationSource: "default",
+      classification: auto.decided ? auto.classification : cfg.defaultClassification,
+      classificationSource: auto.decided ? "computed" : "default",
       actor: { kind: "driver", driverId, name },
     });
     const view = await getDriverHosView(driverId, orgId, now);
