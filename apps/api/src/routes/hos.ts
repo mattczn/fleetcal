@@ -579,4 +579,257 @@ hos.delete("/shifts/:id", requireCapability("drivers.edit"), async (c) => {
   return c.json({ ok: true });
 });
 
+// ── GET /v1/hos/by-asset ─────────────────────────────────────────────
+//
+// Who is in each truck today, and what their hours look like. Feeds the
+// driver chip in the calendar column header.
+//
+// Resolution waterfall, highest priority first:
+//   1. asset_driver_day  — an explicit "Luis is in 0809 today" from
+//                          dispatch. Always wins; a human said so.
+//   2. calendar_active   — the load whose window contains now. On a
+//                          relay overlap prefer the one ending soonest,
+//                          matching the safety-alert resolver so the
+//                          two surfaces never disagree about who's
+//                          driving a given truck.
+//   3. calendar_recent   — most recent load that ended before now.
+//   4. driver_asset_prefs — the truck's standing primary driver.
+hos.get("/by-asset", async (c) => {
+  const orgId = c.get("orgId");
+  const now = new Date();
+  const config = await getHosConfig(orgId);
+  const today = localDateString(now, config.timeZone);
+  const url = new URL(c.req.url);
+  const date = url.searchParams.get("date") || today;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sb = supabase as any;
+
+  const [assetsRes, eventsRes, prefsRes, driversRes] = await Promise.all([
+    sb.from("assets").select("id, name, unit").eq("org_id", orgId)
+      .eq("hidden", false).is("active_to", null),
+    sb.from("events").select("id, asset_id, driver_id, driver_name, start, end")
+      .eq("org_id", orgId).is("deleted_at", null)
+      .lte("start", `${date}T23:59`).gte("end", `${date}T00:00`),
+    sb.from("driver_asset_prefs").select("asset_id, driver_id").eq("org_id", orgId),
+    sb.from("drivers").select("id, name, hos_enabled").eq("org_id", orgId).is("active_to", null),
+  ]);
+
+  // Overrides are read separately and tolerantly: if migration
+  // 20260914 hasn't run, fall through to the waterfall rather than
+  // failing the whole endpoint. Shipping a read of a column before its
+  // migration already took this feature down once.
+  let overrides: Array<{ asset_id: number; driver_id: number }> = [];
+  {
+    const { data, error } = await sb.from("asset_driver_day")
+      .select("asset_id, driver_id").eq("org_id", orgId).eq("duty_date", date);
+    if (error) console.warn("[hos/by-asset] override table unavailable:", error.message);
+    else overrides = data ?? [];
+  }
+
+  const overrideByAsset = new Map(overrides.map(o => [o.asset_id, o.driver_id]));
+  const prefByAsset = new Map(
+    ((prefsRes.data ?? []) as Array<{ asset_id: number; driver_id: number | null }>)
+      .filter(p => p.driver_id != null).map(p => [p.asset_id, p.driver_id as number]),
+  );
+  const driverName = new Map(
+    ((driversRes.data ?? []) as Array<{ id: number; name: string | null }>)
+      .map(d => [d.id, d.name ?? `Driver ${d.id}`]),
+  );
+
+  type Ev = { asset_id: number | null; driver_id: number | null; driver_name: string | null; start: string; end: string };
+  const evByAsset = new Map<number, Ev[]>();
+  for (const e of ((eventsRes.data ?? []) as Ev[])) {
+    if (e.asset_id == null) continue;
+    const l = evByAsset.get(e.asset_id) ?? []; l.push(e); evByAsset.set(e.asset_id, l);
+  }
+
+  // Naive local "YYYY-MM-DDTHH:mm", the shape events store — compared
+  // lexicographically, as the rest of the codebase does.
+  const nowNaive = new Date(now.toLocaleString("en-US", { timeZone: config.timeZone }));
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const nowLocal = `${nowNaive.getFullYear()}-${pad(nowNaive.getMonth() + 1)}-${pad(nowNaive.getDate())}T${pad(nowNaive.getHours())}:${pad(nowNaive.getMinutes())}`;
+
+  const resolve = (assetId: number): { driverId: number | null; source: string } => {
+    const ov = overrideByAsset.get(assetId);
+    if (ov != null) return { driverId: ov, source: "override" };
+
+    const candidates = evByAsset.get(assetId) ?? [];
+    let best: Ev | null = null;
+    for (const e of candidates) {
+      if (e.start <= nowLocal && e.end >= nowLocal) {
+        if (!best || e.end < best.end) best = e;   // relay: soonest-ending leg wins
+      }
+    }
+    if (best?.driver_id != null) return { driverId: best.driver_id, source: "calendar_active" };
+
+    best = null;
+    for (const e of candidates) {
+      if (e.end <= nowLocal) { if (!best || e.end > best.end) best = e; }
+    }
+    if (best?.driver_id != null) return { driverId: best.driver_id, source: "calendar_recent" };
+
+    const pref = prefByAsset.get(assetId);
+    if (pref != null) return { driverId: pref, source: "asset_default" };
+    return { driverId: null, source: "none" };
+  };
+
+  // Hours for every driver that resolved to a truck — reuse the same
+  // snapshot the board renders so the two can't disagree.
+  const assets = (assetsRes.data ?? []) as Array<{ id: number; name: string; unit: string | null }>;
+  const resolved = assets.map(a => ({ asset: a, ...resolve(a.id) }));
+  const driverIds = Array.from(new Set(
+    resolved.map(r => r.driverId).filter((x): x is number => x != null),
+  ));
+
+  const snapshots = new Map<number, ReturnType<typeof driverHosSnapshot>>();
+  if (driverIds.length > 0) {
+    const since = new Date(now.getTime() - 16 * 24 * 3600 * 1000).toISOString();
+    const { data: shifts } = await sb.from("hos_shifts").select("*")
+      .eq("org_id", orgId).in("driver_id", driverIds).is("deleted_at", null)
+      .or(`started_at.gte.${since},ended_at.is.null`);
+    const byDriver = new Map<number, ShiftRow[]>();
+    for (const s of ((shifts ?? []) as ShiftRow[])) {
+      const l = byDriver.get(s.driver_id) ?? []; l.push(s); byDriver.set(s.driver_id, l);
+    }
+    for (const id of driverIds) {
+      snapshots.set(id, driverHosSnapshot(
+        toIntervals(byDriver.get(id) ?? []), now, config.timeZone, config.cycle,
+      ));
+    }
+  }
+
+  const hosEnabled = new Set(
+    ((driversRes.data ?? []) as Array<{ id: number; hos_enabled: boolean | null }>)
+      .filter(d => d.hos_enabled !== false).map(d => d.id),
+  );
+
+  return c.json({
+    date,
+    config,
+    assets: resolved.map(({ asset, driverId, source }) => {
+      const snap = driverId != null ? snapshots.get(driverId) : null;
+      return {
+        assetId: asset.id,
+        assetName: asset.name,
+        driverId,
+        driverName: driverId != null ? driverName.get(driverId) ?? null : null,
+        source,
+        hos: snap && driverId != null && hosEnabled.has(driverId) ? {
+          status: snap.status,
+          windowRemainingSeconds: snap.window ? Math.round(snap.window.remainingSeconds) : null,
+          windowExpiresAt: snap.options.windowEndsAt?.toISOString() ?? null,
+          availableAt: snap.rest && !snap.rest.satisfied ? snap.rest.clearAt.toISOString() : null,
+          canResumeWithinWindow: snap.options.canResumeWithinWindow,
+          fullyRested: snap.options.fullyRested,
+          stale: snap.stale,
+          onDutySecondsToday: Math.round(snap.onDutySecondsToday),
+        } : null,
+      };
+    }),
+  });
+});
+
+// ── GET /v1/hos/assets/:id/driver-options ────────────────────────────
+//
+// Drivers ordered by how closely they're tied to THIS truck, so the
+// picker opens on the likely answer instead of an alphabetical fleet
+// list. Ranked: the truck's standing primary, then its secondary, then
+// whoever has actually driven it recently (by recency), then everyone
+// else alphabetically.
+hos.get("/assets/:id/driver-options", async (c) => {
+  const orgId = c.get("orgId");
+  const assetId = Number(c.req.param("id"));
+  if (!Number.isFinite(assetId)) return c.json({ error: "bad_request" }, 400);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sb = supabase as any;
+
+  const lookback = new Date(Date.now() - 60 * 24 * 3600 * 1000);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const since = `${lookback.getFullYear()}-${pad(lookback.getMonth() + 1)}-${pad(lookback.getDate())}T00:00`;
+
+  const [driversRes, prefRes, recentRes] = await Promise.all([
+    sb.from("drivers").select("id, name").eq("org_id", orgId).is("active_to", null).order("name"),
+    sb.from("driver_asset_prefs").select("driver_id, secondary_driver_id")
+      .eq("org_id", orgId).eq("asset_id", assetId).maybeSingle(),
+    sb.from("events").select("driver_id, end")
+      .eq("org_id", orgId).eq("asset_id", assetId).is("deleted_at", null)
+      .gte("end", since).order("end", { ascending: false }).limit(200),
+  ]);
+
+  const primary = (prefRes.data as { driver_id: number | null } | null)?.driver_id ?? null;
+  const secondary = (prefRes.data as { secondary_driver_id: number | null } | null)?.secondary_driver_id ?? null;
+
+  // Most recent use of this truck per driver — the ordering signal.
+  const lastUse = new Map<number, string>();
+  for (const e of ((recentRes.data ?? []) as Array<{ driver_id: number | null; end: string }>)) {
+    if (e.driver_id == null) continue;
+    if (!lastUse.has(e.driver_id)) lastUse.set(e.driver_id, e.end);
+  }
+
+  const drivers = (driversRes.data ?? []) as Array<{ id: number; name: string | null }>;
+  const ranked = drivers.map(d => {
+    const rank =
+      d.id === primary ? 0
+      : d.id === secondary ? 1
+      : lastUse.has(d.id) ? 2
+      : 3;
+    return {
+      driverId: d.id,
+      name: d.name ?? `Driver ${d.id}`,
+      rank,
+      lastUsedAt: lastUse.get(d.id) ?? null,
+      relation: rank === 0 ? "primary" : rank === 1 ? "secondary" : rank === 2 ? "recent" : "other",
+    };
+  }).sort((a, b) =>
+    a.rank - b.rank ||
+    (b.lastUsedAt ?? "").localeCompare(a.lastUsedAt ?? "") ||
+    a.name.localeCompare(b.name),
+  );
+
+  return c.json({ drivers: ranked });
+});
+
+// ── PUT /v1/hos/assets/:id/driver ────────────────────────────────────
+//
+// Record who is actually in this truck today. driverId null clears the
+// override and hands the truck back to the automatic waterfall.
+hos.put("/assets/:id/driver", requireCapability("loads.edit"), async (c) => {
+  const orgId = c.get("orgId");
+  const userId = c.get("userId");
+  const assetId = Number(c.req.param("id"));
+  if (!Number.isFinite(assetId)) return c.json({ error: "bad_request" }, 400);
+
+  let body: { driverId?: number | null; date?: string };
+  try { body = await c.req.json(); } catch { return c.json({ error: "invalid_json" }, 400); }
+
+  const config = await getHosConfig(orgId);
+  const date = body.date || localDateString(new Date(), config.timeZone);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sb = supabase as any;
+
+  if (body.driverId == null) {
+    const { error } = await sb.from("asset_driver_day").delete()
+      .eq("org_id", orgId).eq("asset_id", assetId).eq("duty_date", date);
+    if (error) return c.json({ error: "update_failed", detail: error.message }, 500);
+    return c.json({ ok: true, cleared: true });
+  }
+
+  const { data: driver } = await sb.from("drivers")
+    .select("id").eq("id", body.driverId).eq("org_id", orgId).maybeSingle();
+  if (!driver) return c.json({ error: "not_found", detail: "No such driver in this org." }, 404);
+
+  const userName = (await getUserDisplayName(userId)) ?? "Dispatch";
+  const { error } = await sb.from("asset_driver_day")
+    .upsert({
+      org_id: orgId, asset_id: assetId, duty_date: date,
+      driver_id: body.driverId, set_by: userName, set_at: new Date().toISOString(),
+    }, { onConflict: "org_id,asset_id,duty_date" });
+  if (error) {
+    console.error("[PUT /v1/hos/assets/:id/driver] failed:", error);
+    return c.json({ error: "update_failed", detail: error.message }, 500);
+  }
+  return c.json({ ok: true });
+});
+
 export default hos;
