@@ -194,6 +194,10 @@ export default function HosPanel({ onClose }: { onClose: () => void }) {
   // right pane kept showing whatever it fetched when the driver was
   // first selected — new shifts never appeared.
   const [refreshKey, setRefreshKey] = useState(0);
+  // Banner click-through. The counts named a problem but gave no way to
+  // reach it — with 31 drivers in the rail, "3 shifts need a log" meant
+  // scrolling and guessing which three.
+  const [filter, setFilter] = useState<null | 'unverified' | 'review' | 'paper'>(null);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -237,10 +241,17 @@ export default function HosPanel({ onClose }: { onClose: () => void }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const sorted = useMemo(() => [...drivers].sort((a, b) => {
-    const ka = sortKey(a), kb = sortKey(b);
-    return ka[0] - kb[0] || ka[1] - kb[1] || ka[2].localeCompare(kb[2]);
-  }), [drivers]);
+  const sorted = useMemo(() => {
+    const matches = (d: HosBoardDriver) =>
+      filter === 'unverified' ? d.unverifiedOtrCount > 0
+      : filter === 'review'   ? d.needsReviewCount > 0
+      : filter === 'paper'    ? d.paperLogWarning
+      : true;
+    return drivers.filter(matches).sort((a, b) => {
+      const ka = sortKey(a), kb = sortKey(b);
+      return ka[0] - kb[0] || ka[1] - kb[1] || ka[2].localeCompare(kb[2]);
+    });
+  }, [drivers, filter]);
 
   const selected = sorted.find(d => d.driverId === selectedId) ?? null;
 
@@ -282,7 +293,9 @@ export default function HosPanel({ onClose }: { onClose: () => void }) {
               <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--gc-text-1)' }}>
                 Driver hours
                 <span style={{ fontSize: 11, fontWeight: 500, color: 'var(--gc-text-3)', marginLeft: 6 }}>
-                  {totals.onDuty} on duty · {drivers.length} total
+                  {filter
+                    ? `${sorted.length} shown · ${drivers.length} total`
+                    : `${totals.onDuty} on duty · ${drivers.length} total`}
                 </span>
               </div>
               <button
@@ -297,31 +310,49 @@ export default function HosPanel({ onClose }: { onClose: () => void }) {
             {/* The two actionable fleet numbers. Rendered only when
                 non-zero so an empty board stays quiet. */}
             {totals.unverifiedOtr > 0 && (
-              <div style={{
-                padding: '8px 10px', borderRadius: 6,
-                background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b',
-                fontSize: 11.5, lineHeight: 1.4, fontWeight: 600,
-              }}>
+              <button
+                type="button"
+                onClick={() => setFilter(f => f === 'unverified' ? null : 'unverified')}
+                style={{
+                  width: '100%', textAlign: 'left', cursor: 'pointer',
+                  padding: '8px 10px', borderRadius: 6,
+                  background: '#fef2f2',
+                  border: `1px solid ${filter === 'unverified' ? '#dc2626' : '#fecaca'}`,
+                  color: '#991b1b', fontSize: 11.5, lineHeight: 1.4, fontWeight: 600,
+                }}>
                 {totals.unverifiedOtr} OTR shift{totals.unverifiedOtr === 1 ? '' : 's'} with no log confirmed
-              </div>
+                {filter === 'unverified' && ' · showing only these'}
+              </button>
             )}
             {totals.paperWarning > 0 && (
-              <div style={{
-                padding: '8px 10px', borderRadius: 6,
-                background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e',
-                fontSize: 11.5, lineHeight: 1.4, fontWeight: 600,
-              }}>
+              <button
+                type="button"
+                onClick={() => setFilter(f => f === 'paper' ? null : 'paper')}
+                style={{
+                  width: '100%', textAlign: 'left', cursor: 'pointer',
+                  padding: '8px 10px', borderRadius: 6,
+                  background: '#fffbeb',
+                  border: `1px solid ${filter === 'paper' ? '#d97706' : '#fde68a'}`,
+                  color: '#92400e', fontSize: 11.5, lineHeight: 1.4, fontWeight: 600,
+                }}>
                 {totals.paperWarning} driver{totals.paperWarning === 1 ? '' : 's'} near the 8-day paper log limit
-              </div>
+                {filter === 'paper' && ' · showing only these'}
+              </button>
             )}
             {totals.needsReview > 0 && (
-              <div style={{
-                padding: '8px 10px', borderRadius: 6,
-                background: 'var(--gc-bg)', border: '1px solid var(--gc-border-light)',
-                color: 'var(--gc-text-2)', fontSize: 11.5, fontWeight: 600,
-              }}>
+              <button
+                type="button"
+                onClick={() => setFilter(f => f === 'review' ? null : 'review')}
+                style={{
+                  width: '100%', textAlign: 'left', cursor: 'pointer',
+                  padding: '8px 10px', borderRadius: 6,
+                  background: 'var(--gc-bg)',
+                  border: `1px solid ${filter === 'review' ? 'var(--gc-text-3)' : 'var(--gc-border-light)'}`,
+                  color: 'var(--gc-text-2)', fontSize: 11.5, fontWeight: 600,
+                }}>
                 {totals.needsReview} shift{totals.needsReview === 1 ? '' : 's'} need a time corrected
-              </div>
+                {filter === 'review' && ' · showing only these'}
+              </button>
             )}
           </div>
 
@@ -828,16 +859,18 @@ function ShiftCard({ shift, timeZone, busy, events, onPatch, onDelete }: {
           onChange={(v) => onPatch({ classification: v as 'local' | 'otr' })}
         />
 
-        {isOtr && (
+        {/* Only shown once verified — before that, the verify buttons
+            below capture the method, so offering it twice invites
+            setting a method without confirming anything. */}
+        {isOtr && shift.logVerifiedAt && (
           <SegToggle
             value={shift.logMethod}
             options={[
-              { v: 'none', label: 'No log' },
               { v: 'motive', label: 'Motive' },
               { v: 'paper', label: 'Paper' },
             ]}
             disabled={busy}
-            onChange={(v) => onPatch({ logMethod: v as 'none' | 'motive' | 'paper' })}
+            onChange={(v) => onPatch({ logMethod: v as 'motive' | 'paper' })}
           />
         )}
 
@@ -855,21 +888,40 @@ function ShiftCard({ shift, timeZone, busy, events, onPatch, onDelete }: {
               <Check size={13} /> Log verified
             </span>
           ) : (
-            <button
-              type="button"
-              disabled={busy || shift.logMethod === 'none'}
-              onClick={() => onPatch({ verifyLog: true })}
-              title={shift.logMethod === 'none' ? 'Pick how this driver is logging first' : undefined}
-              style={{
-                padding: '5px 10px', borderRadius: 6, fontSize: 11.5, fontWeight: 700,
-                border: '1px solid #dc2626',
-                background: shift.logMethod === 'none' ? 'var(--gc-bg)' : '#dc2626',
-                color: shift.logMethod === 'none' ? 'var(--gc-text-3)' : '#fff',
-                cursor: busy || shift.logMethod === 'none' ? 'not-allowed' : 'pointer',
-              }}
-            >
-              Verify log
-            </button>
+            // One click records HOW they're logging and that it was
+            // checked. An earlier version disabled this until a method
+            // was picked from the toggle above, which rendered a grey
+            // unclickable button by default and read as broken — the
+            // method is the answer to the question, so ask it here.
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: '#991b1b' }}>
+                Log not confirmed —
+              </span>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => onPatch({ logMethod: 'motive', verifyLog: true })}
+                style={{
+                  padding: '5px 10px', borderRadius: 6, fontSize: 11.5, fontWeight: 700,
+                  border: 'none', background: '#dc2626', color: '#fff',
+                  cursor: busy ? 'not-allowed' : 'pointer',
+                }}
+              >
+                On Motive
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => onPatch({ logMethod: 'paper', verifyLog: true })}
+                style={{
+                  padding: '5px 10px', borderRadius: 6, fontSize: 11.5, fontWeight: 700,
+                  border: '1px solid #dc2626', background: 'var(--gc-surface)',
+                  color: '#991b1b', cursor: busy ? 'not-allowed' : 'pointer',
+                }}
+              >
+                On paper
+              </button>
+            </div>
           )
         )}
 
