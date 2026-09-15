@@ -987,6 +987,17 @@ function ShiftCard({ shift, timeZone, busy, events, onPatch, onDelete }: {
         </div>
       )}
 
+      {/* Open shifts get the quick-adjust; a closed shift is history and
+          should go through the full editor where both ends are visible. */}
+      {!shift.endedAt && (
+        <QuickAdjustStart
+          shift={shift}
+          timeZone={timeZone}
+          busy={busy}
+          onApply={(startedAt, note) => onPatch({ startedAt, note })}
+        />
+      )}
+
       {editing && (
         <TimeEditor
           shift={shift}
@@ -1021,6 +1032,13 @@ function ShiftCard({ shift, timeZone, busy, events, onPatch, onDelete }: {
                   {e.status === 'on_duty' ? 'Start' : 'End'} {fmtDayClock(e.occurred_at, timeZone)}
                   {' · '}{e.source === 'dispatch_edit' ? 'dispatch' : e.source === 'auto_close' ? 'auto' : 'driver'}
                   {e.created_by_name ? ` (${e.created_by_name})` : ''}
+                  {/* The stated reason is the whole point of requiring
+                      one — show it where the trail is actually read. */}
+                  {e.note && (
+                    <div style={{ paddingLeft: 12, opacity: 0.85, fontStyle: 'italic' }}>
+                      {e.note}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -1059,6 +1077,118 @@ function SegToggle({ value, options, disabled, onChange }: {
           </button>
         );
       })}
+    </div>
+  );
+}
+
+/**
+ * Shift the recorded START time forward in fixed steps.
+ *
+ * The case this exists for: a driver clocks in when they reach the yard
+ * rather than when they actually go on duty, so the recorded start runs
+ * early and every downstream number — window remaining, hours today —
+ * is wrong by the same amount.
+ *
+ * A reason is REQUIRED rather than optional. These rows are the
+ * 395.1(e)(1)(v) employer time record for short-haul drivers, and
+ * hos_duty_events keeps the original value alongside the correction
+ * permanently. An edit with a stated reason is a correction; the same
+ * edit with no reason is just an unexplained change to a duty record,
+ * and the difference only matters when someone is reading it back
+ * months later.
+ */
+function QuickAdjustStart({ shift, timeZone, busy, onApply }: {
+  shift: HosBoardShift;
+  timeZone: string;
+  busy: boolean;
+  onApply: (startedAt: string, note: string) => void;
+}) {
+  const [hours, setHours] = useState<number | null>(null);
+  const [note, setNote] = useState('');
+
+  const proposed = hours == null
+    ? null
+    : new Date(new Date(shift.startedAt).getTime() + hours * 3600_000);
+  // Never past the end of the shift it belongs to, and never in the
+  // future — either would invert or invent the record.
+  const ceiling = shift.endedAt ? new Date(shift.endedAt).getTime() : Date.now();
+  const invalid = proposed != null && proposed.getTime() >= ceiling;
+
+  return (
+    <div style={{
+      padding: '9px 12px', borderTop: '1px solid var(--gc-border-light)',
+      background: 'var(--gc-bg)',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 11.5, color: 'var(--gc-text-2)', fontWeight: 600 }}>
+          Start recorded {fmtDayClock(shift.startedAt, timeZone)} — move it later by
+        </span>
+        {[1, 2, 3].map(h => (
+          <button
+            key={h}
+            type="button"
+            disabled={busy}
+            onClick={() => setHours(hours === h ? null : h)}
+            style={{
+              padding: '4px 10px', borderRadius: 6, fontSize: 11.5, fontWeight: 700,
+              border: `1px solid ${hours === h ? 'var(--gc-blue, #1a73e8)' : 'var(--gc-border-light)'}`,
+              background: hours === h ? 'var(--gc-blue, #1a73e8)' : 'var(--gc-surface)',
+              color: hours === h ? '#fff' : 'var(--gc-text-2)',
+              cursor: busy ? 'not-allowed' : 'pointer',
+            }}
+          >
+            +{h}h
+          </button>
+        ))}
+      </div>
+
+      {proposed && (
+        <div style={{ marginTop: 9 }}>
+          <div style={{ fontSize: 12, color: 'var(--gc-text-1)', fontWeight: 600 }}>
+            New start: {fmtDayClock(proposed.toISOString(), timeZone)}
+            {invalid && (
+              <span style={{ color: '#991b1b', fontWeight: 700 }}>
+                {' '}— that is after the shift ended
+              </span>
+            )}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 7 }}>
+            <input
+              value={note}
+              onChange={e => setNote(e.target.value)}
+              placeholder="Reason — e.g. clocked in at the yard, started driving at 7:00"
+              style={{
+                flex: 1, padding: '6px 9px', borderRadius: 6, fontSize: 12,
+                border: '1px solid var(--gc-border-light)',
+                background: 'var(--gc-surface)', color: 'var(--gc-text-1)',
+              }}
+            />
+            <button
+              type="button"
+              disabled={busy || invalid || note.trim().length < 3}
+              onClick={() => {
+                if (!proposed) return;
+                onApply(proposed.toISOString(), note.trim());
+                setHours(null); setNote('');
+              }}
+              title={note.trim().length < 3 ? 'A reason is required' : undefined}
+              style={{
+                padding: '6px 12px', borderRadius: 6, fontSize: 11.5, fontWeight: 700,
+                border: 'none', flexShrink: 0,
+                background: (invalid || note.trim().length < 3)
+                  ? 'var(--gc-border-light)' : 'var(--gc-blue, #1a73e8)',
+                color: '#fff',
+                cursor: (busy || invalid || note.trim().length < 3) ? 'not-allowed' : 'pointer',
+              }}
+            >
+              Save correction
+            </button>
+          </div>
+          <div style={{ fontSize: 10.5, color: 'var(--gc-text-3)', marginTop: 5 }}>
+            The original time and this reason are both kept on the record.
+          </div>
+        </div>
+      )}
     </div>
   );
 }

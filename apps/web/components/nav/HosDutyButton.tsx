@@ -131,16 +131,16 @@ export default function HosDutyButton() {
         )}
       </button>
 
-      {/* Hours warning. Fixed under the top bar rather than inside it:
-          a driver running out of hours is the one HOS event that should
-          interrupt whatever a dispatcher is doing, and a badge on an
-          icon does not. Per-driver dismissal so silencing one doesn't
-          hide the next. */}
+      {/* Hours warning, stacked in the top-right. A driver running out
+          is the one HOS event that should interrupt whatever a
+          dispatcher is doing, and a badge on an icon does not — but it
+          sits out of the way of the calendar grid rather than over it.
+          Per-driver dismissal so silencing one doesn't hide the next. */}
       {visible.length > 0 && (
         <div style={{
-          position: 'fixed', top: 58, left: '50%', transform: 'translateX(-50%)',
-          zIndex: 55, display: 'flex', flexDirection: 'column', gap: 6,
-          maxWidth: 560, width: 'calc(100% - 48px)',
+          position: 'fixed', top: 64, right: 16,
+          zIndex: 55, display: 'flex', flexDirection: 'column', gap: 8,
+          width: 380, maxWidth: 'calc(100vw - 32px)',
         }}>
           {visible.map(d => {
             const left = d.windowRemainingSeconds ?? 0;
