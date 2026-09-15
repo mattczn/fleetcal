@@ -21,6 +21,21 @@ import RailwayClientProvider from "@/components/RailwayClientProvider";
 import CachePrefetcher from "@/components/CachePrefetcher";
 import OfflineBanner from "@/components/OfflineBanner";
 import RealtimeSync from "@/components/RealtimeSync";
+/**
+ * Side-effect import, and it has to stay one.
+ *
+ * lib/shiftTracking calls TaskManager.defineTask at module scope. When
+ * iOS relaunches the app in the BACKGROUND to deliver a location
+ * update, no screen mounts and no navigation happens — the task has to
+ * already be registered by the time the JS bundle finishes evaluating,
+ * or the OS finds nothing to call and the sample is dropped silently.
+ * Importing it from the root layout is what guarantees that ordering.
+ *
+ * Do not move this into the timesheet screen, and do not make it
+ * conditional on a permission or a role: a background relaunch reaches
+ * none of that code.
+ */
+import "@/lib/shiftTracking";
 
 /* ============================================================
  * Bypass switch — when the Clerk SDK hangs on init and we can't

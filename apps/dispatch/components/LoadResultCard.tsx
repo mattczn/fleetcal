@@ -4,6 +4,7 @@ import { useRouter } from "expo-router";
 import { ChevronRight } from "lucide-react-native";
 import type { Load } from "@/lib/types";
 import { txt } from "@/lib/font";
+import { usePermissions } from "@/lib/usePermissions";
 import {
   STATUS_TINT, STATUS_LABEL, showStatusPill,
   fmtTimeRange, fmtCardDate, loadNumLabel, RelayChip, DiagonalStripes, NonRevChip,
@@ -15,13 +16,19 @@ import {
  */
 export function LoadResultCard({ load }: { load: Load }) {
   const router = useRouter();
+  const { can } = usePermissions();
+  // Roles without loads.view_detail (Maintenance) read the card but
+  // can't open the load behind it. The chevron goes too — an affordance
+  // that does nothing is worse than no affordance.
+  const canOpen = can("loads.view_detail");
   const tint   = STATUS_TINT[load.status] ?? STATUS_TINT.scheduled;
   const isNonRev = load.eventKind === "non_revenue";
 
   return (
     <TouchableOpacity
-      onPress={() => router.push({ pathname: "/load/[id]", params: { id: load.id } })}
-      activeOpacity={0.85}
+      onPress={canOpen ? () => router.push({ pathname: "/load/[id]", params: { id: load.id } }) : undefined}
+      disabled={!canOpen}
+      activeOpacity={canOpen ? 0.85 : 1}
       style={{
         backgroundColor: "#ffffff",
         borderRadius: 14,
@@ -65,7 +72,7 @@ export function LoadResultCard({ load }: { load: Load }) {
             </Text>
           </View>
         ) : null}
-        <ChevronRight size={14} color="#9aa0a6" strokeWidth={2.2} />
+        {canOpen ? <ChevronRight size={14} color="#9aa0a6" strokeWidth={2.2} /> : null}
       </View>
     </TouchableOpacity>
   );

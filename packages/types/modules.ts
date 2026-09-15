@@ -56,6 +56,8 @@ export type OrgModule =
   // ── Collections (2026-07-30) ────────────────────────────────────────
   // ── Hiring & onboarding (2026-08-06) ────────────────────────────────
   | "hiring"             // Applicant pipeline + driver onboarding documents (independent contractor agreement e-signing). DEFAULT-OFF for every org including Curzon — the agreement template is carrier-specific today, so this stays dark until a carrier's own documents are loaded.
+  // ── Shop timesheets (2026-09-15) ────────────────────────────────────
+  | "timesheets"         // clock in/out + location pings for non-driver staff (shop/maintenance). Separate from `payroll`, which pays DRIVERS per load: this is hours-worked for people who aren't paid by the mile, and separate from driver HOS, which is a compliance record rather than a pay record.
   | "receivables";       // /receivables — open AR by customer, aging, and the payment-proof ledger. Split from `accounting` deliberately: Billing is "did we invoice it", Receivables is "did they pay and how do we know". A carrier can run the invoice pipeline without wanting a collections desk, and the payment evidence surface is where custom bank/remittance integrations will land.
 
 export const ORG_MODULES: readonly OrgModule[] = [
@@ -76,6 +78,7 @@ export const ORG_MODULES: readonly OrgModule[] = [
   "invoicing_advanced",
   "crm",
   "expenses",
+  "timesheets",
   "receivables",
   "hiring",
 ] as const;
@@ -102,6 +105,7 @@ export const ORG_MODULE_LABEL: Record<OrgModule, string> = {
   expenses:           "Expenses dashboard",
   receivables:        "Receivables",
   hiring:             "Hiring & onboarding",
+  timesheets:         "Shop timesheets",
 };
 
 /** Short description for the Settings → Modules toggle UI. */
@@ -125,6 +129,7 @@ export const ORG_MODULE_BLURB: Record<OrgModule, string> = {
   expenses:           "Cross-source expenses dashboard (fuel + payroll + card spend) with per-bucket rollups and the Ramp card-transaction board.",
   hiring:             "Applicant pipeline and driver onboarding paperwork — send a contractor agreement by link, collect a signature on any device, and file the signed PDF against the driver. Off until your own agreement template is loaded.",
   receivables:        "Collections desk — open AR by customer, aging buckets, and recording payments with the remittance or bank line that proves them. Billing sends the invoice; this tracks getting paid for it.",
+  timesheets:         "Clock in / clock out for shop and maintenance staff, with an optional location stamp on each punch. For people paid by the hour rather than by the load — drivers keep using Payroll and HOS.",
 };
 
 // ── Check API ─────────────────────────────────────────────────────
@@ -253,6 +258,13 @@ export const MVP_LAUNCH_DEFAULTS: Readonly<Record<OrgModule, boolean>> = {
   // turning it on later loses no payment history: every payment already
   // recorded shows up the moment the page appears.
   receivables:        false,
+  // Timesheets: OFF for MVP. Hourly shop staff are a thing a carrier
+  // grows into — a 1-3 truck operation is usually the owner plus
+  // drivers, and drivers are paid per load through Payroll, not
+  // clocked in. Also the only module that asks for background
+  // location, which is not something to switch on for an org that
+  // never opted into it.
+  timesheets:         false,
   // Hiring: OFF, and also in DEFAULT_OFF_MODULES so absent flags read as
   // disabled rather than enabled. The contractor agreement is one carrier's
   // document; until templates are per-org data this must not light up for

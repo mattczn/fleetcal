@@ -2354,3 +2354,54 @@ export interface LoadNotification {
    *  set the row is "pending" and counts toward the driver's badge. */
   acknowledgedAt?: string;
 }
+
+// ── Timesheets (shop clock in / out) ────────────────────────────────────
+
+/**
+ * One clocked shift for a non-driver employee.
+ *
+ * Distinct from `HosShift`, which is a DOT compliance record for a
+ * driver keyed by driver_id and fed into the 70/8 cycle. This is a pay
+ * record keyed by Clerk user id with no cycle math behind it — see the
+ * header of migration 20260915_timesheets.sql for why they are not the
+ * same table.
+ */
+export interface TimesheetShift {
+  id:        string;
+  /** Clerk user id — NOT a drivers.id. */
+  userId:    string;
+  /** Denormalized display name so a timesheet renders without a
+   *  per-row Clerk lookup, and stays readable after someone leaves. */
+  userName?: string;
+  startedAt: string;
+  /** Absent while the clock is still running. */
+  endedAt?:  string;
+  startLat?: number;
+  startLng?: number;
+  endLat?:   number;
+  endLng?:   number;
+  notes?:    string;
+  /** Set when the client detected that background location stopped
+   *  delivering mid-shift (permission downgraded or revoked). Lets a
+   *  reviewer tell "tracking was off" apart from "he didn't move",
+   *  which otherwise look identical: no pings either way. */
+  trackingStoppedAt?: string;
+  /** Stamped whenever someone corrects the recorded times. */
+  editedBy?: string;
+  editedAt?: string;
+  /** Server-computed from the span. Null while the shift is open —
+   *  a running duration is a render concern, not a stored value. */
+  durationMinutes: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** One background location sample taken while a shift was open. */
+export interface TimesheetPing {
+  id:  number;
+  at:  string;
+  lat: number;
+  lng: number;
+  /** Horizontal accuracy in metres, when the OS reported one. */
+  accuracy?: number;
+}

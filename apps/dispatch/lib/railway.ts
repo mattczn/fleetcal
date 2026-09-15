@@ -55,6 +55,10 @@ import type {
   CreateMaintenanceActionItemRequest, CreateMaintenanceActionItemResponse,
   UpdateMaintenanceActionItemRequest, UpdateMaintenanceActionItemResponse,
   UploadMaintenanceActionItemPhotoResponse, DeleteMaintenanceActionItemPhotoResponse,
+  TimesheetPunchRequest, TimesheetShiftResponse, ActiveTimesheetShiftResponse,
+  ListTimesheetShiftsQuery, ListTimesheetShiftsResponse,
+  UploadTimesheetPingsRequest, UploadTimesheetPingsResponse,
+  ListTimesheetPingsResponse, UpdateTimesheetShiftRequest,
 } from "@fleetcal/types";
 
 import { env } from "./env";
@@ -308,6 +312,36 @@ class RailwayClient {
   }
   convertMaintenanceReport(id: string, body: ConvertMaintenanceReportRequest = {}) {
     return this.req<ConvertMaintenanceReportResponse>("POST", `/v1/maintenance-reports/${id}/convert`, body);
+  }
+
+  // ── Timesheets (shop clock in / out) ─────────────────────────────────
+  getActiveTimesheetShift() {
+    return this.req<ActiveTimesheetShiftResponse>("GET", "/v1/timesheets/active");
+  }
+  clockIn(body: TimesheetPunchRequest = {}) {
+    return this.req<TimesheetShiftResponse>("POST", "/v1/timesheets/clock-in", body);
+  }
+  clockOut(shiftId: string, body: TimesheetPunchRequest = {}) {
+    return this.req<TimesheetShiftResponse>("POST", `/v1/timesheets/${shiftId}/clock-out`, body);
+  }
+  listTimesheetShifts(query: ListTimesheetShiftsQuery = {}) {
+    const p = new URLSearchParams();
+    if (query.userId) p.set("userId", query.userId);
+    if (query.all)    p.set("all", "1");
+    if (query.from)   p.set("from", query.from);
+    if (query.to)     p.set("to", query.to);
+    if (query.limit)  p.set("limit", String(query.limit));
+    const s = p.toString();
+    return this.req<ListTimesheetShiftsResponse>("GET", `/v1/timesheets${s ? `?${s}` : ""}`);
+  }
+  uploadTimesheetPings(shiftId: string, body: UploadTimesheetPingsRequest) {
+    return this.req<UploadTimesheetPingsResponse>("POST", `/v1/timesheets/${shiftId}/pings`, body);
+  }
+  listTimesheetPings(shiftId: string) {
+    return this.req<ListTimesheetPingsResponse>("GET", `/v1/timesheets/${shiftId}/pings`);
+  }
+  updateTimesheetShift(shiftId: string, body: UpdateTimesheetShiftRequest) {
+    return this.req<TimesheetShiftResponse>("PATCH", `/v1/timesheets/${shiftId}`, body);
   }
 
   // ── Maintenance action items (work orders) ───────────────────────────

@@ -4,16 +4,29 @@
  * Mobile-first take on the web's /equipment → Maintenance tab. Single
  * scrolling surface (no sub-tabs):
  *
- *   1. Day-nav bar (< [Today · Fri May 29] > [Today]) — the primary
- *      scheduling surface. Shows ONLY items whose scheduledDate matches
- *      the selected day, regardless of status.
- *   2. Scheduled list — simple work-order cards for that day. Empty
- *      state when the day is clear.
- *   3. Quick links — four buttons that each open a focused sheet:
- *        · View backlog (FilteredOrdersSheet, status: open)
- *        · Filter (FilteredOrdersSheet, user touches chips)
- *        · By asset (asset picker → FilteredOrdersSheet for that asset)
- *        · Driver reports (MaintenanceReportsListSheet, pending badge)
+ *   1. Open work — the landing surface. Every open / in-progress work
+ *      order across the fleet, urgent first, capped with a "view all"
+ *      escape into the backlog sheet.
+ *   2. Scheduled — the day-nav bar and the items dated to that day.
+ *   3. Quick links — focused sheets: backlog, filter, per-asset
+ *      history, and the driver-report inbox (pending badge).
+ *
+ * ── Why "Open work" leads and the day-nav doesn't ─────────────────────
+ *
+ * This screen used to OPEN on the day-nav, showing only work orders
+ * whose scheduledDate matched today. Measured against real usage
+ * (Curzon prod, 193 work orders, Mar–Sep 2026) that lands the shop on
+ * an empty screen most mornings: 26 of Jordy's 37 completions were
+ * closed under an hour after he created them — median five minutes —
+ * because he records work AFTER doing it rather than scheduling it
+ * ahead. He does set scheduledDate on 60 of 63, but backdated to the
+ * day the work actually happened, so "scheduled for today" describes
+ * almost nothing he is about to do.
+ *
+ * What he actually needs on open is "what is still wrong with the
+ * fleet" plus a fast way to write down what he just finished — hence
+ * the open-work list and the LOG button. The day view is still here,
+ * one section down, for whoever is planning rather than recording.
  */
 import React, { useMemo, useState } from "react";
 import {
@@ -27,7 +40,7 @@ import {
   Plus, Truck, Container, Wrench, ChevronLeft, ChevronRight,
   CalendarCheck, Calendar as CalendarIcon,
   Archive, Filter as FilterIcon, ChevronRight as ChevronRightSm,
-  Inbox,
+  Inbox, CheckCircle2,
 } from "lucide-react-native";
 import type {
   MaintenanceActionItem, MaintenanceReport,
@@ -48,6 +61,7 @@ import { MaintenanceReportsListSheet } from "@/components/MaintenanceReportsList
 import { FilteredOrdersSheet, OrdersFilter } from "@/components/FilteredOrdersSheet";
 import { DatePickerModal } from "@/components/DatePickerModal";
 import { AssetPickerSheet } from "@/components/AssetPickerSheet";
+import { AssetHistorySheet, type HistoryTarget } from "@/components/AssetHistorySheet";
 
 // ── Helpers ───────────────────────────────────────────────────────────
 
@@ -93,6 +107,31 @@ function itemsForDay(
 
 function backlogCount(items: MaintenanceActionItem[]): number {
   return items.filter((i) => i.status === "open").length;
+}
+
+/** Max open work orders rendered on the landing screen. Curzon carries
+ *  ~95 open at a time — a flat list that long is neither scannable nor
+ *  cheap to render in a ScrollView, so we show the most urgent slice and
+ *  hand the rest to the backlog sheet (which paginates properly). */
+const OPEN_PREVIEW_LIMIT = 12;
+
+/** Everything still outstanding across the fleet, most-urgent first.
+ *  in_progress sorts above open at equal priority — work someone has
+ *  already started is the work most likely to be picked back up. */
+function openWork(items: MaintenanceActionItem[]): MaintenanceActionItem[] {
+  const priorityRank: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
+  const statusRank: Record<string, number> = { in_progress: 0, open: 1, done: 2 };
+  return items
+    .filter((i) => i.status === "open" || i.status === "in_progress")
+    .sort((a, b) => {
+      const p = priorityRank[a.priority] - priorityRank[b.priority];
+      if (p !== 0) return p;
+      const s = statusRank[a.status] - statusRank[b.status];
+      if (s !== 0) return s;
+      // Oldest first within a band — the thing that has been waiting
+      // longest should not sink to the bottom of the list.
+      return (a.createdAt ?? "").localeCompare(b.createdAt ?? "");
+    });
 }
 
 function reportsRank(a: MaintenanceReport, b: MaintenanceReport): number {
@@ -320,8 +359,9 @@ export default function MaintenanceScreen() {
     title:   string;
     filter:  OrdersFilter;
   } | null>(null);
-  // "By asset" intermediate picker
+  // "By asset" intermediate picker → AssetHistorySheet
   const [byAssetPickerOpen, setByAssetPickerOpen] = useState(false);
+  const [historyTarget, setHistoryTarget] = useState<HistoryTarget | null>(null);
   // Reports-list sheet — opened by the fourth quick-link button.
   const [reportsListOpen, setReportsListOpen] = useState(false);
 
@@ -355,6 +395,8 @@ export default function MaintenanceScreen() {
 
   // ── Derived ─────────────────────────────────────────────────────────
   const allItems      = ordersQ.data ?? [];
+  const openList      = useMemo(() => openWork(allItems), [allItems]);
+  const openPreview   = useMemo(() => openList.slice(0, OPEN_PREVIEW_LIMIT), [openList]);
   const scheduledList = useMemo(() => itemsForDay(allItems, dateKey), [allItems, dateKey]);
   const backlogN      = useMemo(() => backlogCount(allItems), [allItems]);
   const reports       = useMemo(() => [...(reportsQ.data ?? [])].sort(reportsRank), [reportsQ.data]);
@@ -384,6 +426,24 @@ export default function MaintenanceScreen() {
           <Text style={[txt(800), { fontSize: 22, color: "#ffffff", flex: 1, letterSpacing: -0.3 }]}>
             Maintenance
           </Text>
+          {/* LOG is the primary action, not NEW — the shop records
+              finished work far more often than it opens a ticket for
+              future work. It gets the solid button. */}
+          <TouchableOpacity
+            onPress={() => setItemSheetMode({ kind: "log", todayKey: todayK })}
+            activeOpacity={0.85}
+            style={{
+              flexDirection: "row", alignItems: "center", gap: 4,
+              paddingHorizontal: 12, paddingVertical: 7,
+              backgroundColor: "#ffffff", borderRadius: 999,
+              marginRight: 8,
+            }}
+          >
+            <CheckCircle2 size={14} color="#1a73e8" strokeWidth={2.6} />
+            <Text style={[txt(800), { fontSize: 12, color: "#1a73e8", letterSpacing: 0.3 }]}>
+              LOG
+            </Text>
+          </TouchableOpacity>
           <TouchableOpacity
             onPress={() => setItemSheetMode({ kind: "create" })}
             activeOpacity={0.85}
@@ -409,44 +469,93 @@ export default function MaintenanceScreen() {
         </View>
       ) : (
         <>
-          <DayNav
-            dateKey={dateKey}
-            todayKey={todayK}
-            onShift={shiftDate}
-            onJumpToday={() => setDateKey(todayK)}
-            onOpenPicker={() => setDatePickerOpen(true)}
-          />
           <ScrollView
             contentContainerStyle={{ paddingTop: 12, paddingBottom: 120 }}
             refreshControl={
               <RefreshControl refreshing={ordersQ.isFetching} onRefresh={refresh} tintColor="#1a73e8" />
             }
           >
-            {/* Scheduled list */}
-            <SectionLabel>
-              {dateKey === todayK ? "TODAY" : "SCHEDULED"} · {scheduledList.length}
-            </SectionLabel>
-            {scheduledList.length === 0 ? (
+            {/* Open work — the landing surface. See the file header for
+                why this leads instead of the day view. */}
+            <SectionLabel>OPEN WORK · {openList.length}</SectionLabel>
+            {openList.length === 0 ? (
               <View style={{ paddingVertical: 28, alignItems: "center", paddingHorizontal: 32 }}>
                 <Text style={[txt(700), { fontSize: 13, color: "#5f6368" }]}>
-                  Nothing scheduled.
+                  Nothing open.
                 </Text>
                 <Text style={[txt(500), { fontSize: 12, color: "#9aa0a6", marginTop: 4, textAlign: "center" }]}>
-                  {dateKey === todayK
-                    ? "Browse the backlog below or step forward to plan."
-                    : "Step back to Today or jump via the calendar."}
+                  The whole fleet is clear. Tap LOG to record work you already finished.
                 </Text>
               </View>
             ) : (
-              scheduledList.map((it) => (
-                <OrderRow
-                  key={it.id}
-                  item={it}
-                  assets={assets}
-                  trailers={trailers}
-                  onPress={() => setItemSheetMode({ kind: "edit", item: it })}
-                />
-              ))
+              <>
+                {openPreview.map((it) => (
+                  <OrderRow
+                    key={it.id}
+                    item={it}
+                    assets={assets}
+                    trailers={trailers}
+                    onPress={() => setItemSheetMode({ kind: "edit", item: it })}
+                  />
+                ))}
+                {openList.length > openPreview.length ? (
+                  <TouchableOpacity
+                    onPress={() => setFilteredSheet({ title: "Backlog", filter: { status: "open" } })}
+                    activeOpacity={0.75}
+                    style={{
+                      marginHorizontal: 14, marginBottom: 8,
+                      paddingVertical: 12, borderRadius: 10,
+                      alignItems: "center",
+                      backgroundColor: "#ffffff",
+                      borderWidth: 1, borderColor: "#eef0f2",
+                    }}
+                  >
+                    {/* No count here on purpose. This section counts open
+                        + in_progress, but OrdersFilter.status is single-
+                        valued, so the backlog sheet can only show one of
+                        them — a number here would promise more rows than
+                        the sheet delivers. In-progress work sorts to the
+                        top of each priority band and is therefore already
+                        in the preview above. */}
+                    <Text style={[txt(800), { fontSize: 13, color: "#1a73e8" }]}>
+                      View full backlog
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
+              </>
+            )}
+
+            {/* Scheduled — the planning view, demoted below open work. */}
+            <SectionLabel style={{ marginTop: 14 }}>
+              SCHEDULED · {scheduledList.length}
+            </SectionLabel>
+            <DayNav
+              dateKey={dateKey}
+              todayKey={todayK}
+              onShift={shiftDate}
+              onJumpToday={() => setDateKey(todayK)}
+              onOpenPicker={() => setDatePickerOpen(true)}
+            />
+            {scheduledList.length === 0 ? (
+              <View style={{ paddingVertical: 20, alignItems: "center", paddingHorizontal: 32 }}>
+                <Text style={[txt(500), { fontSize: 12, color: "#9aa0a6", textAlign: "center" }]}>
+                  {dateKey === todayK
+                    ? "Nothing dated today."
+                    : "Nothing dated this day."}
+                </Text>
+              </View>
+            ) : (
+              <View style={{ paddingTop: 8 }}>
+                {scheduledList.map((it) => (
+                  <OrderRow
+                    key={it.id}
+                    item={it}
+                    assets={assets}
+                    trailers={trailers}
+                    onPress={() => setItemSheetMode({ kind: "edit", item: it })}
+                  />
+                ))}
+              </View>
             )}
 
             {/* Quick links */}
@@ -470,7 +579,7 @@ export default function MaintenanceScreen() {
             />
             <QuickLinkRow
               icon={<Truck size={18} color="#1967d2" strokeWidth={2.2} />}
-              label="View by asset"
+              label="Asset history"
               onPress={() => setByAssetPickerOpen(true)}
             />
             <QuickLinkRow
@@ -523,15 +632,35 @@ export default function MaintenanceScreen() {
       <AssetPickerSheet
         visible={byAssetPickerOpen}
         title="Which asset?"
-        hint="Show all work orders for this truck."
+        hint="Open work, completed history, and driver reports for this truck."
         assets={assets}
         onClose={() => setByAssetPickerOpen(false)}
         onSelect={(a) => {
           setByAssetPickerOpen(false);
-          setTimeout(() => setFilteredSheet({
-            title: a.name,
-            filter: { assetId: a.id, status: "open" },
-          }), 200);
+          setTimeout(() => setHistoryTarget({ kind: "asset", asset: a }), 200);
+        }}
+      />
+      <AssetHistorySheet
+        visible={historyTarget != null}
+        target={historyTarget}
+        items={allItems}
+        reports={reports}
+        drivers={drivers}
+        onClose={() => setHistoryTarget(null)}
+        onOpenItem={(item) => {
+          setHistoryTarget(null);
+          setTimeout(() => setItemSheetMode({ kind: "edit", item }), 200);
+        }}
+        onOpenReport={(r) => {
+          setHistoryTarget(null);
+          setTimeout(() => setActiveReport(r), 200);
+        }}
+        onNewForTarget={() => {
+          // The item sheet has no "preselect equipment" mode yet, so this
+          // opens a blank work order and the user picks the truck. Worth
+          // seeding once the sheet grows a defaults param.
+          setHistoryTarget(null);
+          setTimeout(() => setItemSheetMode({ kind: "create" }), 200);
         }}
       />
       <DatePickerModal

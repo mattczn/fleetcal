@@ -33,6 +33,7 @@ import { AccessorialSheet } from "@/components/AccessorialSheet";
 import { Toast } from "@/components/Toast";
 import type { Accessorial, Load, LoadStatus, Stop, StopType } from "@/lib/types";
 import { txt } from "@/lib/font";
+import { usePermissions } from "@/lib/usePermissions";
 
 const STOP_TINT: Record<StopType, { bg: string; fg: string; mark: string; label: string }> = {
   pickup:    { bg: "#dcfce7", fg: "#15803d", mark: "#16a34a", label: "Pickup" },
@@ -1201,15 +1202,30 @@ function DetailsTab({
   onEditAccessorial:   (acc: Accessorial) => void;
   customers:           import("@/lib/api").Customer[];
 }) {
+  // Sensitive-field gates, mirroring the web's EventModal / CalendarEvent.
+  // Dispatcher has loads.view_price but NOT loads.view_driver_pay, so on
+  // a default Curzon setup this hides pay from Bruno and Jorge exactly
+  // as the web does — and, because these read through effectiveCan, any
+  // per-org override in the Role Permissions matrix applies here too.
+  const { can } = usePermissions();
+  const canViewPrice     = can("loads.view_price");
+  const canViewDriverPay = can("loads.view_driver_pay");
+
   const refs   = load.refNums?.filter((r) => r.value) ?? [];
   const hasRef = !!load.loadNum || refs.length > 0;
-  const hasFin = load.loadPrice != null || load.driverPay != null;
+  // A role that can't see a figure shouldn't get a Financial section
+  // rendered for it — otherwise an empty card advertises that there is
+  // something there to see.
+  const hasFin = (canViewPrice && load.loadPrice != null)
+              || (canViewDriverPay && load.driverPay != null);
   const hasNotes = !!load.notes || !!load.specialInstructions;
   const totalBillable = useMemo(
     () => accessorials.filter((a) => a.billable).reduce((sum, a) => sum + (a.amount || 0), 0),
     [accessorials],
   );
-  const ratePerMile = (load.loadPrice != null && loadedMiles != null && loadedMiles > 0)
+  // Rate-per-mile is load price divided by miles — deriving it from a
+  // figure the role can't see would leak that figure back.
+  const ratePerMile = (canViewPrice && load.loadPrice != null && loadedMiles != null && loadedMiles > 0)
     ? load.loadPrice / loadedMiles
     : null;
 
@@ -1366,8 +1382,9 @@ function DetailsTab({
         />
       </Card>
 
-      {/* Financial */}
-      {hasFin || loadedMiles != null || editMode || accessorials.length > 0 ? (
+      {/* Financial — accessorials are billing figures, so they follow
+          loads.view_price along with the price itself. */}
+      {hasFin || loadedMiles != null || (editMode && (canViewPrice || canViewDriverPay)) || (canViewPrice && accessorials.length > 0) ? (
         <>
           <View style={{
             flexDirection: "row", alignItems: "center",
@@ -1379,34 +1396,39 @@ function DetailsTab({
             }]}>
               Financial
             </Text>
-            <TouchableOpacity
-              onPress={onAddAccessorial}
-              activeOpacity={0.7}
-              hitSlop={6}
-              style={{
-                flexDirection: "row", alignItems: "center", gap: 4,
-                paddingHorizontal: 10, paddingVertical: 6,
-                borderRadius: 999,
-                backgroundColor: "#e8f0fe",
-              }}
-            >
-              <Plus size={12} color="#1a73e8" strokeWidth={2.6} />
-              <Text style={[txt(800), { fontSize: 11, color: "#1a73e8", letterSpacing: 0.3 }]}>
-                Accessorial
-              </Text>
-            </TouchableOpacity>
+            {canViewPrice ? (
+              <TouchableOpacity
+                onPress={onAddAccessorial}
+                activeOpacity={0.7}
+                hitSlop={6}
+                style={{
+                  flexDirection: "row", alignItems: "center", gap: 4,
+                  paddingHorizontal: 10, paddingVertical: 6,
+                  borderRadius: 999,
+                  backgroundColor: "#e8f0fe",
+                }}
+              >
+                <Plus size={12} color="#1a73e8" strokeWidth={2.6} />
+                <Text style={[txt(800), { fontSize: 11, color: "#1a73e8", letterSpacing: 0.3 }]}>
+                  Accessorial
+                </Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
 
-          {hasFin || editMode ? (
+          {hasFin || (editMode && (canViewPrice || canViewDriverPay)) ? (
             <Card>
-              <EditableRow
-                Icon={DollarSign} label="Load Price"
-                value={load.loadPrice != null ? fmtMoney(load.loadPrice) : null}
-                color="#15803d"
-                editing={editMode} modified={dirty.has("load_price")}
-                onEdit={editLoadPrice}
-              />
-              {load.relayRole ? (() => {
+              {canViewPrice ? (
+                <EditableRow
+                  Icon={DollarSign} label="Load Price"
+                  value={load.loadPrice != null ? fmtMoney(load.loadPrice) : null}
+                  color="#15803d"
+                  editing={editMode} modified={dirty.has("load_price")}
+                  onEdit={editLoadPrice}
+                  last={!canViewDriverPay}
+                />
+              ) : null}
+              {!canViewDriverPay ? null : load.relayRole ? (() => {
                 // Relay context: one pay row per leg ("Leg 1 · Pickup Pay",
                 // …), total = Σ. Only THIS leg's pay is editable here — the
                 // other legs live on their own load detail pages.
@@ -1502,7 +1524,7 @@ function DetailsTab({
             </View>
           ) : null}
 
-          {accessorials.length > 0 ? (
+          {canViewPrice && accessorials.length > 0 ? (
             <View style={{ marginTop: 10, gap: 8 }}>
               {accessorials.map((a) => (
                 <AccessorialCard
@@ -1514,7 +1536,7 @@ function DetailsTab({
             </View>
           ) : null}
 
-          {totalBillable > 0 && load.loadPrice != null ? (
+          {canViewPrice && totalBillable > 0 && load.loadPrice != null ? (
             <View style={{
               marginTop: 10,
               paddingHorizontal: 12, paddingVertical: 10,
@@ -1657,6 +1679,10 @@ export default function LoadDetail() {
   const queryClient = useQueryClient();
   const { organization } = useOrganization();
   const { getToken } = useAuth();
+  // The rate con carries pricing and broker terms, so it follows its own
+  // capability — same audience as the web's View PDF gate.
+  const { can } = usePermissions();
+  const canViewRateCon = can("loads.view_rate_con");
   const orgId = organization?.id;
   const insets = useSafeAreaInsets();
   const SCREEN_W = Dimensions.get("window").width;
@@ -2500,7 +2526,7 @@ export default function LoadDetail() {
             orgId={orgId}
             loadId={load.loadId}
             loadNum={load.loadNum ?? undefined}
-            rateConPath={load.rateConPdf ?? undefined}
+            rateConPath={canViewRateCon ? (load.rateConPdf ?? undefined) : undefined}
             width={SCREEN_W}
           />
         ) : (

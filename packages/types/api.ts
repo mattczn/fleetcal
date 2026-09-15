@@ -3030,3 +3030,63 @@ export interface ApiErrorResponse {
   detail?: string;
   errors?: string[];
 }
+
+// ── Timesheets ──────────────────────────────────────────────────────────
+
+/** Coordinates are optional on every punch: a missing or denied fix must
+ *  never block recording the hour. */
+export interface TimesheetPunchRequest {
+  lat?:   number;
+  lng?:   number;
+  notes?: string;
+  /** Sent on clock-out when the client saw background updates stop. */
+  trackingStoppedAt?: string;
+}
+
+export interface TimesheetShiftResponse {
+  shift: import("./domain").TimesheetShift;
+}
+
+export interface ActiveTimesheetShiftResponse {
+  /** Null when the caller has no running clock. */
+  shift: import("./domain").TimesheetShift | null;
+}
+
+export interface ListTimesheetShiftsQuery {
+  /** Reviewer-only; ignored without timesheet.view_all. */
+  userId?: string;
+  /** Reviewer-only: everyone's shifts rather than just the caller's. */
+  all?:    boolean;
+  from?:   string;
+  to?:     string;
+  limit?:  number;
+}
+
+export interface ListTimesheetShiftsResponse {
+  shifts: import("./domain").TimesheetShift[];
+  /** Which set actually came back. "self" means the server narrowed the
+   *  request because the caller lacks timesheet.view_all — the client
+   *  renders the same screen either way rather than branching on caps. */
+  scope:  "self" | "org";
+}
+
+export interface UploadTimesheetPingsRequest {
+  pings: Array<{ at: string; lat: number; lng: number; accuracy?: number }>;
+}
+
+export interface UploadTimesheetPingsResponse {
+  /** Rows actually written. Lower than `received` when a retried batch
+   *  hit the (shift_id, at) uniqueness guard — that is success, not loss. */
+  inserted: number;
+  received: number;
+}
+
+export interface ListTimesheetPingsResponse {
+  pings: import("./domain").TimesheetPing[];
+}
+
+export interface UpdateTimesheetShiftRequest {
+  startedAt?: string;
+  endedAt?:   string | null;
+  notes?:     string | null;
+}

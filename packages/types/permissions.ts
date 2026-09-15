@@ -91,6 +91,14 @@ export type Capability =
 
   // Calendar / loads — Dispatcher full; Maintenance read-only
   | "loads.view"
+  // Drill-down gate, one level below loads.view. `loads.view` puts the
+  // load on the calendar (which truck is booked, when, for how long);
+  // `loads.view_detail` opens the load itself — stops, broker, driver,
+  // documents, financials. Split because a Maintenance user needs to
+  // read the schedule to know when a truck is free for a repair, but
+  // has no reason to open the load behind it. Admin + Dispatcher have
+  // both; Maintenance has only `loads.view`.
+  | "loads.view_detail"
   | "loads.create"
   | "loads.edit"
   | "loads.delete"
@@ -182,6 +190,18 @@ export type Capability =
   | "fuel.access"
   | "fuel.edit"
 
+  // Timesheets — shop/maintenance clock in-out. Split three ways on
+  // purpose. `timesheet.self` is "punch my own clock and see my own
+  // hours" and is the only one a mechanic needs; `view_all` is the
+  // reviewer's read across everybody; `edit` is correcting someone's
+  // times (a forgotten clock-out is the common case). Keeping self
+  // separate from view_all is what lets Jordy use the feature without
+  // being able to read Michael's hours — the same split the rest of
+  // this matrix can't express through a single access cap.
+  | "timesheet.self"
+  | "timesheet.view_all"
+  | "timesheet.edit"
+
   // Expenses dashboard — federated view over fuel/payroll/card spend.
   // Same reader-only stance as dashboard.access: viewing rollups doesn't
   // grant edit rights on the underlying tables. Reassigning a card
@@ -217,29 +237,42 @@ export type Capability =
 // Anything not in a role's list is forbidden. Admin receives every
 // capability so a typo in this list can't accidentally lock them out
 // of a screen they need.
+//
+// EVERY_CAP is a TOTAL map over Capability rather than a plain array,
+// so the compiler — not review — enforces that admin actually gets
+// everything. Adding a member to the union above without adding it
+// here is a build error ("property is missing"), and a stale entry
+// left behind after a capability is removed is also a build error.
+// It used to be a hand-maintained `Capability[]`, where an omission
+// compiled clean and silently denied admin the new capability, which
+// is the exact failure the comment above claims is impossible.
 
-const ALL_CAPS: Capability[] = [
-  "org.settings.edit", "org.members.manage",
-  "loads.view", "loads.create", "loads.edit", "loads.delete", "loads.view_driver_pay", "loads.view_price", "loads.view_rate_con",
-  "nonRevenueEvents.create", "nonRevenueEvents.edit", "nonRevenueEvents.delete",
-  "customers.view", "customers.create", "customers.edit", "customers.delete",
-  "drivers.view", "drivers.create", "drivers.edit", "drivers.delete",
-  "assets.view", "assets.create", "assets.edit", "assets.delete",
-  "trailers.view", "trailers.create", "trailers.edit", "trailers.delete",
-  "savedLocations.create", "savedLocations.edit", "savedLocations.delete",
-  "dispatchers.view", "dispatchers.create", "dispatchers.edit", "dispatchers.delete",
-  "closeout.access", "closeout.release", "closeout.flag",
-  "accounting.access", "accounting.send_invoice",
-  "receivables.access",
-  "hiring.access",
-  "payroll.access", "payroll.adjust", "payroll.finalize",
-  "maintenance.access", "maintenance.edit", "inspections.access",
-  "fuel.access", "fuel.edit",
-  "expenses.access",
-  "dashboard.access", "reports.access", "scorecard.access",
-  "safety.access",
-  "crm.access", "crm.manage",
-];
+const EVERY_CAP: Record<Capability, true> = {
+  "org.settings.edit": true, "org.members.manage": true,
+  "loads.view": true, "loads.view_detail": true, "loads.create": true, "loads.edit": true, "loads.delete": true,
+  "loads.view_driver_pay": true, "loads.view_price": true, "loads.view_rate_con": true,
+  "nonRevenueEvents.create": true, "nonRevenueEvents.edit": true, "nonRevenueEvents.delete": true,
+  "customers.view": true, "customers.create": true, "customers.edit": true, "customers.delete": true,
+  "drivers.view": true, "drivers.create": true, "drivers.edit": true, "drivers.delete": true,
+  "assets.view": true, "assets.create": true, "assets.edit": true, "assets.delete": true,
+  "trailers.view": true, "trailers.create": true, "trailers.edit": true, "trailers.delete": true,
+  "savedLocations.create": true, "savedLocations.edit": true, "savedLocations.delete": true,
+  "dispatchers.view": true, "dispatchers.create": true, "dispatchers.edit": true, "dispatchers.delete": true,
+  "closeout.access": true, "closeout.release": true, "closeout.flag": true,
+  "accounting.access": true, "accounting.send_invoice": true,
+  "receivables.access": true,
+  "hiring.access": true,
+  "payroll.access": true, "payroll.adjust": true, "payroll.finalize": true,
+  "maintenance.access": true, "maintenance.edit": true, "inspections.access": true,
+  "fuel.access": true, "fuel.edit": true,
+  "timesheet.self": true, "timesheet.view_all": true, "timesheet.edit": true,
+  "expenses.access": true,
+  "dashboard.access": true, "reports.access": true, "scorecard.access": true,
+  "safety.access": true,
+  "crm.access": true, "crm.manage": true,
+};
+
+const ALL_CAPS = Object.keys(EVERY_CAP) as Capability[];
 
 export const ROLE_CAPABILITIES: Record<OrgRole, ReadonlySet<Capability>> = {
   admin: new Set(ALL_CAPS),
@@ -254,7 +287,7 @@ export const ROLE_CAPABILITIES: Record<OrgRole, ReadonlySet<Capability>> = {
   // needing a separate role (we dropped the dedicated maintenance role
   // when consolidating to Clerk free-tier's 2 built-in slugs).
   dispatcher: new Set<Capability>([
-    "loads.view", "loads.create", "loads.edit", "loads.view_price", "loads.view_rate_con",
+    "loads.view", "loads.view_detail", "loads.create", "loads.edit", "loads.view_price", "loads.view_rate_con",
     "nonRevenueEvents.create", "nonRevenueEvents.edit", "nonRevenueEvents.delete",
     "customers.view", "customers.create", "customers.edit",
     "drivers.view", "drivers.create", "drivers.edit",
@@ -274,7 +307,10 @@ export const ROLE_CAPABILITIES: Record<OrgRole, ReadonlySet<Capability>> = {
   // (maintenance reports + inspections + asset history) and Fuel, plus
   // read access to assets/trailers. Gets a READ-ONLY calendar
   // (loads.view) to see the schedule — but WITHOUT pricing, driver pay,
-  // or the rate con, and without create/edit/delete on loads. NOT given
+  // or the rate con, and without create/edit/delete on loads. Also
+  // WITHOUT loads.view_detail: the calendar answers "is truck 2027 busy
+  // Thursday", which is all a mechanic scheduling a repair needs, and
+  // the load behind it stays closed. NOT given
   // drivers.view (that unlocks the Drivers performance page); equipment
   // history still shows driver names, which come from the server. No
   // payroll, accounting, dashboard, closeout, or org settings. Everything
@@ -286,6 +322,10 @@ export const ROLE_CAPABILITIES: Record<OrgRole, ReadonlySet<Capability>> = {
     "inspections.access",
     "fuel.access", "fuel.edit",
     "expenses.access",
+    // Own clock only. NOT timesheet.view_all / timesheet.edit — a
+    // mechanic punches in and reads back his own week; reviewing
+    // everyone's hours is an admin job.
+    "timesheet.self",
     // NOT scorecard.access — maintenance manages equipment but doesn't
     // grade drivers. Admin can grant it per-org in the matrix.
   ]),
@@ -363,6 +403,7 @@ export interface CapabilityInfo {
 export const CAPABILITY_CATALOG: CapabilityInfo[] = [
   // Module access — top-nav visibility.
   { cap: "loads.view",        label: "Calendar",      group: "Module access", hint: "See the load calendar (read-only for roles without create/edit). Turn off to hide the schedule entirely from a role." },
+  { cap: "loads.view_detail", label: "Open a load",   group: "Module access", hint: "Open the load behind a calendar block (stops, broker, driver, documents). Turn off to leave the schedule visible but the loads themselves closed — what a maintenance user needs to find a free truck." },
   { cap: "dashboard.access",  label: "Dashboard",     group: "Module access", hint: "Top-line KPIs, revenue + driver pay totals." },
   { cap: "closeout.access",   label: "Paperwork",     group: "Module access", hint: "POD verification + flag queue." },
   { cap: "accounting.access", label: "Billing",       group: "Module access", hint: "Invoice list, send/void, payment status." },
@@ -424,6 +465,9 @@ export const CAPABILITY_CATALOG: CapabilityInfo[] = [
   { cap: "fuel.edit",        label: "Edit fuel reports",        group: "Maintenance / Fuel" },
 
   // Sensitive fields.
+  { cap: "timesheet.self",     label: "Own timesheet",      group: "Module access", hint: "Clock in / clock out and read back your own hours. The only timesheet capability a shop employee needs." },
+  { cap: "timesheet.view_all", label: "All timesheets",     group: "Module access", hint: "Read every person's hours, not just your own. Reviewer-level." },
+  { cap: "timesheet.edit",     label: "Correct timesheets", group: "Maintenance / Fuel", hint: "Fix someone's clock-in / clock-out times. Corrections are stamped with who made them." },
   { cap: "loads.view_driver_pay", label: "View driver pay", group: "Sensitive fields", hint: "Hides the Driver Pay column / field across reports, modals, and exports." },
   { cap: "loads.view_price",      label: "View load price", group: "Sensitive fields", hint: "Hides the load rate / revenue / total across the load modal, cards, dashboard, and reports." },
   { cap: "loads.view_rate_con",   label: "View rate confirmation", group: "Sensitive fields", hint: "Hides the rate confirmation PDF and the View PDF buttons on the load modal." },

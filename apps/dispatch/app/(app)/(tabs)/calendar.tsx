@@ -15,6 +15,7 @@ import { txt } from "@/lib/font";
 import { lighten, readableOn } from "@/lib/color";
 import { useAssetPrefs } from "@/lib/useAssetPrefs";
 import { useDebounce } from "@/lib/useDebounce";
+import { usePermissions } from "@/lib/usePermissions";
 import {
   useOrgTimezone,
   todayKeyInTz,
@@ -185,11 +186,13 @@ function LoadBlock({
   pageWidth: number;
 }) {
   const router = useRouter();
+  const { can } = usePermissions();
+  const canOpen  = can("loads.view_detail");
   const stripe   = assetColor ?? "#1a73e8";
   const bg       = lighten(assetColor ?? "#1a73e8", 0.82);
   const titleFg  = readableOn(assetColor);
   const spans    = p.spansBefore || p.spansAfter;
-  const price    = fmtPrice(p.load.loadPrice);
+  const price    = can("loads.view_price") ? fmtPrice(p.load.loadPrice) : "";
   const isNonRev = p.load.eventKind === "non_revenue";
 
   // Lay loads out across the available canvas. With one lane we just use
@@ -204,8 +207,9 @@ function LoadBlock({
 
   return (
     <TouchableOpacity
-      onPress={() => router.push({ pathname: "/load/[id]", params: { id: p.load.id } })}
-      activeOpacity={0.85}
+      onPress={canOpen ? () => router.push({ pathname: "/load/[id]", params: { id: p.load.id } }) : undefined}
+      disabled={!canOpen}
+      activeOpacity={canOpen ? 0.85 : 1}
       style={{
         position: "absolute", top: p.top, height: p.height,
         left, width: laneWidth,
@@ -260,16 +264,19 @@ function LoadBlock({
  */
 function ScheduleCard({ load, assetColor }: { load: Load; assetColor?: string }) {
   const router = useRouter();
+  const { can } = usePermissions();
+  const canOpen = can("loads.view_detail");
   const stripe = assetColor ?? "#1a73e8";
   const bg     = lighten(assetColor ?? "#1a73e8", 0.82);
   const titleFg = readableOn(assetColor);
   const tint   = STATUS_TINT[load.status];
-  const price  = fmtPrice(load.loadPrice);
+  const price  = can("loads.view_price") ? fmtPrice(load.loadPrice) : "";
   const isNonRev = load.eventKind === "non_revenue";
   return (
     <TouchableOpacity
-      onPress={() => router.push({ pathname: "/load/[id]", params: { id: load.id } })}
-      activeOpacity={0.85}
+      onPress={canOpen ? () => router.push({ pathname: "/load/[id]", params: { id: load.id } }) : undefined}
+      disabled={!canOpen}
+      activeOpacity={canOpen ? 0.85 : 1}
       style={{
         backgroundColor: bg,
         borderLeftWidth: 4, borderLeftColor: stripe,
@@ -557,10 +564,12 @@ function TimelineLoadBlock({
   assetColor?: string;
 }) {
   const router  = useRouter();
+  const { can } = usePermissions();
+  const canOpen = can("loads.view_detail");
   const stripe  = assetColor ?? "#1a73e8";
   const bg      = lighten(assetColor ?? "#1a73e8", 0.82);
   const titleFg = readableOn(assetColor);
-  const price   = fmtPrice(p.load.loadPrice);
+  const price   = can("loads.view_price") ? fmtPrice(p.load.loadPrice) : "";
   const isNonRev = p.load.eventKind === "non_revenue";
 
   // Each card sits in its own lane row. Row height per lane = base; the
@@ -571,8 +580,9 @@ function TimelineLoadBlock({
 
   return (
     <TouchableOpacity
-      onPress={() => router.push({ pathname: "/load/[id]", params: { id: p.load.id } })}
-      activeOpacity={0.85}
+      onPress={canOpen ? () => router.push({ pathname: "/load/[id]", params: { id: p.load.id } }) : undefined}
+      disabled={!canOpen}
+      activeOpacity={canOpen ? 0.85 : 1}
       style={{
         position: "absolute",
         left: p.left + 2, width: Math.max(p.width - 4, 36),

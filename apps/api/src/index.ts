@@ -49,6 +49,7 @@ import { odoApiKey, odoClerk } from "./routes/odometer-readings.js";
 import maintenanceReportsRoute from "./routes/maintenance-reports.js";
 import inspectionReportsRoute from "./routes/inspection-reports.js";
 import maintenanceActionItemsRoute from "./routes/maintenance-action-items.js";
+import timesheetsRoute from "./routes/timesheets.js";
 import rampTransactionsRoute from "./routes/ramp-transactions.js";
 import expensesRoute from "./routes/expenses.js";
 import recurringExpensesRoute from "./routes/recurring-expenses.js";
@@ -251,6 +252,7 @@ authed.route("/drivers", driversRoute);
 // HOS dispatch board + shift editing (driver-app side lives under
 // /v1/driver/hos with its own Supabase-JWT auth).
 authed.route("/hos", hosRoute);
+authed.route("/timesheets", timesheetsRoute);
 authed.route("/customers", customersRoute);
 authed.route("/trailers", trailersRoute);
 authed.route("/dispatchers", dispatchersRoute);

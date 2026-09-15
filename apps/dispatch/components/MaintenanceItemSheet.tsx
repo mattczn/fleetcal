@@ -41,6 +41,16 @@ import { TrailerPickerSheet } from "./TrailerPickerSheet";
 
 export type ItemSheetMode =
   | { kind: "create" }
+  /** "Log completed work" — the same POST as create, but the form opens
+   *  already marked done and dated, because that is how the shop
+   *  actually records work. Measured on Curzon prod: 26 of Jordy's 37
+   *  completions were closed under an hour after being created (median
+   *  5 minutes), and he backdates scheduledDate to the day the work
+   *  really happened. Making him open a blank form, type it, save,
+   *  reopen it and flip the status was asking for four steps to record
+   *  one past event. `todayKey` is the org-timezone today, supplied by
+   *  the parent (this sheet has no TZ of its own). */
+  | { kind: "log";     todayKey: string }
   | { kind: "edit";    item: MaintenanceActionItem }
   | { kind: "convert"; report: MaintenanceReport };
 
@@ -102,6 +112,21 @@ export function MaintenanceItemSheet({
         actualCost:    "",
       };
     }
+    if (mode.kind === "log") {
+      return {
+        title:         "",
+        description:   "",
+        status:        "done" as MaintenanceActionStatus,
+        priority:      "normal" as MaintenancePriority,
+        assetId:       null as number | null,
+        trailerId:     null as number | null,
+        // Defaults to today and stays editable — backdating to the day
+        // the work actually happened is the common case, not the edge.
+        scheduledDate: mode.todayKey as string | null,
+        vendor:        "",
+        actualCost:    "",
+      };
+    }
     return {
       title:         "",
       description:   "",
@@ -137,10 +162,17 @@ export function MaintenanceItemSheet({
     setScheduledDate(initial.scheduledDate);
     setVendor(initial.vendor);
     setActualCost(initial.actualCost);
+    setShowAdvanced(!!initial.vendor || !!initial.actualCost);
   }, [visible, initial]);
 
   // ── Sub-sheet state ─────────────────────────────────────────────────
   const [dateOpen, setDateOpen] = useState(false);
+  /** Vendor + cost start folded away. Measured on Curzon prod: vendor is
+   *  set on 2 of 193 work orders and actual_cost on 0 of 193, so giving
+   *  them prime real estate above the fold cost two taps of scrolling on
+   *  every single entry to serve ~1% of them. Auto-expanded when the
+   *  record already has one, so editing never hides existing data. */
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [truckPickerOpen,   setTruckPickerOpen]   = useState(false);
   const [trailerPickerOpen, setTrailerPickerOpen] = useState(false);
   const [calendarBlockOpen, setCalendarBlockOpen] = useState(false);
@@ -205,6 +237,8 @@ export function MaintenanceItemSheet({
       } else if (mode.kind === "convert") {
         await railway.convertMaintenanceReport(mode.report.id, payload);
       } else {
+        // "create" and "log" are the same POST — they differ only in the
+        // status/date the form opened with, which is already in payload.
         await railway.createMaintenanceActionItem(payload);
       }
       onMutated();
@@ -360,10 +394,12 @@ export function MaintenanceItemSheet({
   // ── Render ──────────────────────────────────────────────────────────
   const headerTitle =
     mode.kind === "create"  ? "New Work Order" :
+    mode.kind === "log"     ? "Log Completed Work" :
     mode.kind === "convert" ? "Convert to Work Order" :
                               "Work Order";
   const submitLabel =
     mode.kind === "create"  ? "Create" :
+    mode.kind === "log"     ? "Log It" :
     mode.kind === "convert" ? "Create Work Order" :
                               "Save";
 
@@ -516,7 +552,18 @@ export function MaintenanceItemSheet({
               })}
             </View>
 
-            {/* Vendor + Total cost — side by side, the on-the-go priority fields */}
+            {/* Vendor + Total cost — folded by default, see showAdvanced. */}
+            {!showAdvanced ? (
+              <TouchableOpacity
+                onPress={() => setShowAdvanced(true)}
+                activeOpacity={0.7}
+                style={{ paddingVertical: 8, alignSelf: "flex-start" }}
+              >
+                <Text style={[txt(700), { fontSize: 12, color: "#1a73e8", letterSpacing: 0.2 }]}>
+                  + Add vendor or cost
+                </Text>
+              </TouchableOpacity>
+            ) : (
             <View style={{ flexDirection: "row", gap: 10 }}>
               <View style={{ flex: 2 }}>
                 <Label>Vendor / Shop</Label>
@@ -540,9 +587,11 @@ export function MaintenanceItemSheet({
                 />
               </View>
             </View>
+            )}
 
-            {/* Scheduled date */}
-            <Label>Scheduled for</Label>
+            {/* Scheduled date. In "log" mode this is the day the work was
+                actually performed, not a plan — label it that way. */}
+            <Label>{mode.kind === "log" ? "Work performed on" : "Scheduled for"}</Label>
             <TouchableOpacity
               onPress={() => setDateOpen(true)}
               activeOpacity={0.8}
