@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import {
   View, Text, ScrollView, TouchableOpacity, TextInput,
 } from "react-native";
@@ -16,6 +16,8 @@ import { LoadResultCard } from "@/components/LoadResultCard";
 import { TrucksMap } from "@/components/TrucksMap";
 import { AssetPickerSheet } from "@/components/AssetPickerSheet";
 import { txt } from "@/lib/font";
+import { pickableOn } from "@fleetcal/types";
+import { todayKeyDeviceLocal } from "@/lib/timezone";
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -36,7 +38,12 @@ export default function HomeScreen() {
     enabled:  !!orgId,
     staleTime: 5 * 60 * 1000,
   });
-  const visibleAssets = assets.filter((a) => !a.hidden);
+  // `hidden` alone left retired trucks in the truck picker and on the
+  // home map. pickableOn also drops anything with activeTo in the past.
+  const visibleAssets = useMemo(
+    () => pickableOn(assets, todayKeyDeviceLocal()),
+    [assets],
+  );
   const debouncedQuery = useDebounce(searchQuery.trim(), 250);
   const isSearching = debouncedQuery.length > 0;
 

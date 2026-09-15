@@ -112,6 +112,7 @@ export * from "./notifications";
 // ── Org-level module toggles (SaaS billing axis) ────────────────────────
 
 export * from "./modules";
+export * from "./lifecycle";
 
 // ── Invoice-packet document selection (single source of truth) ──────────
 

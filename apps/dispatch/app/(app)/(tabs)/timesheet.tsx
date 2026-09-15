@@ -43,6 +43,7 @@ import type { TimesheetShift } from "@fleetcal/types";
 import { txt } from "@/lib/font";
 import { railway } from "@/lib/railway";
 import { usePermissions } from "@/lib/usePermissions";
+import { ShiftMapSheet } from "@/components/ShiftMapSheet";
 import {
   startShiftTracking, stopShiftTracking, flushPings,
   verifyTrackingAlive, getTrackingHealth, bufferedPingCount,
@@ -95,6 +96,11 @@ export default function TimesheetScreen() {
   // Ticks once a minute so the running clock advances without a refetch.
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [trackingStoppedAt, setTrackingStoppedAt] = useState<string | null>(null);
+  // Tapping a shift opens its location trail. Reviewer-only — the API
+  // refuses another person's pings without timesheet.view_all, so
+  // offering the tap to someone who can't use it would just produce a
+  // 403 they can do nothing about.
+  const [mapShift, setMapShift] = useState<TimesheetShift | null>(null);
   const [buffered, setBuffered] = useState(0);
 
   useEffect(() => {
@@ -311,7 +317,7 @@ export default function TimesheetScreen() {
                 <>
                   <MapPin size={13} color="#1e8e3e" strokeWidth={2.4} />
                   <Text style={[txt(600), { fontSize: 11, color: "#1e8e3e", flex: 1 }]}>
-                    Location recording about every 10 minutes
+                    Location recording about every 30 minutes
                   </Text>
                 </>
               )}
@@ -371,10 +377,17 @@ export default function TimesheetScreen() {
               showName={scope === "org"}
               isMe={s.userId === user?.id}
               nowMs={nowMs}
+              onPress={canViewAll ? () => setMapShift(s) : undefined}
             />
           ))
         )}
       </ScrollView>
+
+      <ShiftMapSheet
+        visible={mapShift != null}
+        shift={mapShift}
+        onClose={() => setMapShift(null)}
+      />
     </View>
   );
 }
@@ -407,25 +420,35 @@ function ScopeTab({
 }
 
 function ShiftRow({
-  shift, showName, isMe, nowMs,
+  shift, showName, isMe, nowMs, onPress,
 }: {
   shift: TimesheetShift;
   showName: boolean;
   isMe: boolean;
   nowMs: number;
+  /** Opens the location trail. Undefined for viewers who can't read
+   *  it, in which case the row renders as a plain, untappable card. */
+  onPress?: () => void;
 }) {
   const running = !shift.endedAt;
   // durationMinutes is null while open — compute the live value rather
   // than rendering a blank for the shift someone is standing in.
   const minutes = shift.durationMinutes ?? elapsedMinutes(shift.startedAt, nowMs);
 
+  const hasTrail = shift.startLat != null || shift.endLat != null;
+
+  const Container: React.ComponentType<Record<string, unknown>> = onPress ? TouchableOpacity : View;
+
   return (
-    <View style={{
-      backgroundColor: "#ffffff",
-      marginHorizontal: 14, marginBottom: 8,
-      padding: 12, borderRadius: 10,
-      borderWidth: 1, borderColor: running ? "#bfdbfe" : "#eef0f2",
-    }}>
+    <Container
+      {...(onPress ? { onPress, activeOpacity: 0.75 } : {})}
+      style={{
+        backgroundColor: "#ffffff",
+        marginHorizontal: 14, marginBottom: 8,
+        padding: 12, borderRadius: 10,
+        borderWidth: 1, borderColor: running ? "#bfdbfe" : "#eef0f2",
+      }}
+    >
       <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
         <Text style={[txt(800), { fontSize: 13, color: "#202124", flex: 1 }]} numberOfLines={1}>
           {showName ? (shift.userName ?? (isMe ? "You" : "Unknown")) : fmtDay(shift.startedAt)}
@@ -450,7 +473,10 @@ function ShiftRow({
         {shift.editedBy ? (
           <Text style={[txt(700), { fontSize: 10, color: "#9aa0a6" }]}>EDITED</Text>
         ) : null}
+        {onPress && hasTrail ? (
+          <MapPin size={12} color="#1a73e8" strokeWidth={2.4} />
+        ) : null}
       </View>
-    </View>
+    </Container>
   );
 }

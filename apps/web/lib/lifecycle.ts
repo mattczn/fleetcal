@@ -14,27 +14,14 @@
  * tz issues entirely.
  */
 
-interface Lifecycle {
-  activeFrom?: string;        // YYYY-MM-DD
-  activeTo?: string | null;   // YYYY-MM-DD or null
-}
-
-/** True if the entity is active on `dateKey` (a YYYY-MM-DD string). */
-export function isActiveOn(item: Lifecycle, dateKey: string): boolean {
-  const from = item.activeFrom ?? "0000-01-01";
-  const to   = item.activeTo   ?? "9999-12-31";
-  return from <= dateKey && dateKey <= to;
-}
-
-/** True if the entity is active for ANY day in [rangeStart, rangeEnd]
- *  inclusive. Used by week/month calendar views — a truck retired
- *  mid-week still shows that week so its loads stay visible. */
-export function isActiveInRange(item: Lifecycle, rangeStart: string, rangeEnd: string): boolean {
-  const from = item.activeFrom ?? "0000-01-01";
-  const to   = item.activeTo   ?? "9999-12-31";
-  // Overlap test: [from,to] ∩ [rangeStart,rangeEnd] ≠ ∅
-  return from <= rangeEnd && to >= rangeStart;
-}
+/**
+ * isActiveOn / isActiveInRange now live in @fleetcal/types so the
+ * mobile apps share the exact same rule — FleetCal Go's calendar was
+ * showing retired trucks because this logic was web-only. Re-exported
+ * here so the twelve existing `@/lib/lifecycle` importers keep working
+ * unchanged.
+ */
+export { isActiveOn, isActiveInRange, isVisibleOn, type Lifecycle } from "@fleetcal/types";
 
 /** YYYY-MM-DD for a Date in the browser's local tz. */
 export function dateKeyOf(d: Date): string {

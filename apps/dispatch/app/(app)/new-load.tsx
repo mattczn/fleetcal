@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Alert, TextInput,
 } from "react-native";
@@ -28,6 +28,8 @@ import { DateTimePickerSheet } from "@/components/DateTimePickerSheet";
 import { StopEditSheet } from "@/components/StopEditSheet";
 import { EditableStopCard } from "@/components/EditableStopCard";
 import { txt } from "@/lib/font";
+import { pickableOn } from "@fleetcal/types";
+import { todayKeyDeviceLocal } from "@/lib/timezone";
 import type { Stop, StopType } from "@/lib/types";
 
 type Stage = "pick" | "parsing" | "step1" | "step2" | "saving";
@@ -90,7 +92,9 @@ export default function NewLoadScreen() {
     enabled:  !!orgId,
     staleTime: 5 * 60 * 1000,
   });
-  const visibleAssets = assets.filter((a) => !a.hidden);
+  // Retired equipment must not be assignable — `hidden` alone missed
+  // trucks with an activeTo in the past. See pickableOn.
+  const visibleAssets = useMemo(() => pickableOn(assets, todayKeyDeviceLocal()), [assets]);
 
   // Default to the org's "Unassigned" asset (matches web's convention) once
   // assets have loaded — saves the dispatcher a tap when the rate-con doesn't

@@ -1,8 +1,10 @@
-import React from "react";
+import React, { useMemo } from "react";
 import { Modal, View, Text, TouchableOpacity, Pressable, FlatList } from "react-native";
 import { X, Truck } from "lucide-react-native";
 import { txt } from "@/lib/font";
 import type { Asset } from "@/lib/types";
+import { pickableOn } from "@fleetcal/types";
+import { todayKeyDeviceLocal } from "@/lib/timezone";
 
 interface Props {
   visible: boolean;
@@ -14,6 +16,22 @@ interface Props {
 }
 
 export function AssetPickerSheet({ visible, title, hint, assets, onClose, onSelect }: Props) {
+  // THE place equipment gets filtered for "what can I choose".
+  //
+  // Callers pass whatever list they hold — usually the full roster,
+  // because they also need it to resolve names on existing records.
+  // Picking is a different question from displaying: offering a truck
+  // that left the fleet in May is how a load or work order ends up
+  // assigned to equipment that no longer exists. Curzon had three
+  // retired units (WS-140692, P-E431985, P- Swap) still selectable
+  // here because nothing on the phone read activeTo.
+  //
+  // Scoped to TODAY, unlike the calendar, which scopes to the day being
+  // viewed so history still renders under its own column.
+  const pickable = useMemo(
+    () => pickableOn(assets, todayKeyDeviceLocal()),
+    [assets],
+  );
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <Pressable
@@ -47,15 +65,17 @@ export function AssetPickerSheet({ visible, title, hint, assets, onClose, onSele
             </TouchableOpacity>
           </View>
 
-          {assets.length === 0 ? (
+          {pickable.length === 0 ? (
             <View style={{ paddingVertical: 50, alignItems: "center" }}>
               <Text style={[txt(600), { fontSize: 13, color: "#9aa0a6" }]}>
-                No assets in this org.
+                {assets.length === 0
+                  ? "No assets in this org."
+                  : "No active trucks."}
               </Text>
             </View>
           ) : (
             <FlatList
-              data={assets}
+              data={pickable}
               keyExtractor={(a) => String(a.id)}
               keyboardShouldPersistTaps="handled"
               renderItem={({ item }) => (

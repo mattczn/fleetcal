@@ -1,7 +1,7 @@
 /**
  * Background location tracking for an open timesheet shift.
  *
- * While someone is clocked in, the OS wakes us roughly every 10 minutes
+ * While someone is clocked in, the OS wakes us roughly every 30 minutes
  * with a position. Samples are buffered on disk and flushed to
  * /v1/timesheets/:id/pings; the buffer is what makes this survive a
  * shop with no signal, which is the normal case rather than the edge.
@@ -42,18 +42,29 @@ import { railway } from "./railway";
 
 export const SHIFT_LOCATION_TASK = "fleetcal-shift-location";
 
-/** ~10 minutes between samples, per the spec for this feature. iOS
- *  treats these as hints and may coalesce or delay them — the interval
- *  is a floor on battery cost, not a promise about spacing. */
-const PING_INTERVAL_MS  = 10 * 60 * 1000;
-const PING_DISTANCE_M   = 50;
+/** ~30 minutes between samples. iOS treats these as hints and may
+ *  coalesce or delay them — the interval is a floor on battery cost,
+ *  not a promise about spacing, and a moving phone can deliver more
+ *  often via distanceInterval below.
+ *
+ *  Was 10 minutes originally. 30 is the better trade for this use: the
+ *  question being answered is "which yard or shop is he at", which
+ *  changes a handful of times a day, not every ten minutes — and the
+ *  longer interval costs materially less battery on a phone that is
+ *  already being asked to hold a background location session for a
+ *  full shift. */
+const PING_INTERVAL_MS  = 30 * 60 * 1000;
+/** A move of this far reports regardless of the timer, so driving
+ *  between yards still produces a legible trail rather than two dots
+ *  half an hour apart. */
+const PING_DISTANCE_M   = 250;
 
 const KEY_BUFFER   = "timesheet:pingBuffer";
 const KEY_SHIFT_ID = "timesheet:activeShiftId";
 const KEY_HEALTH   = "timesheet:trackingHealth";
 
 /** Hard cap so a long offline stretch can't grow the buffer without
- *  bound. At one sample per 10 minutes this is about 41 days. */
+ *  bound. At one sample per 30 minutes this is about 125 days. */
 const MAX_BUFFERED = 6000;
 
 export interface BufferedPing {

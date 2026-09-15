@@ -31,7 +31,7 @@
           "location"
         ],
         "NSLocationWhenInUseUsageDescription": "FleetCal Go records where you clock in and out so your timesheet shows which yard or shop you worked at.",
-        "NSLocationAlwaysAndWhenInUseUsageDescription": "While you are clocked in, FleetCal Go records your location about every 10 minutes so your supervisor can see which yard or shop you are working at. Location is recorded only between clock in and clock out, never when you are off the clock."
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "While you are clocked in, FleetCal Go records your location about every 30 minutes so your supervisor can see which yard or shop you are working at. Location is recorded only between clock in and clock out, never when you are off the clock."
       }
     },
     "android": {
@@ -78,7 +78,7 @@
       [
         "expo-location",
         {
-          "locationAlwaysAndWhenInUsePermission": "While you are clocked in, FleetCal Go records your location about every 10 minutes so your supervisor can see which yard or shop you are working at.",
+          "locationAlwaysAndWhenInUsePermission": "While you are clocked in, FleetCal Go records your location about every 30 minutes so your supervisor can see which yard or shop you are working at.",
           "locationWhenInUsePermission": "FleetCal Go records where you clock in and out so your timesheet shows which yard or shop you worked at.",
           "isAndroidBackgroundLocationEnabled": true
         }

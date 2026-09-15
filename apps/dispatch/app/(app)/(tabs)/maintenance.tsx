@@ -366,7 +366,12 @@ export default function MaintenanceScreen() {
   const [reportsListOpen, setReportsListOpen] = useState(false);
 
   // ── Data ────────────────────────────────────────────────────────────
-  const { data: assets   = [] } = useQuery({ queryKey: ["assets", orgId],   queryFn: () => fetchAssets(orgId!),   enabled: !!orgId, staleTime: 5 * 60 * 1000 });
+  // FULL list, retired trucks included. Work-order rows resolve the
+  // truck NAME from this, and a work order done on WS-140692 in April
+  // must still say "WS-140692" rather than "—" now that it is retired.
+  // Filtering for *choosing* happens inside AssetPickerSheet, which is
+  // the one surface where the question is "what can I pick today".
+  const { data: assets = [] } = useQuery({ queryKey: ["assets", orgId],   queryFn: () => fetchAssets(orgId!),   enabled: !!orgId, staleTime: 5 * 60 * 1000 });
   const { data: trailers = [] } = useQuery({ queryKey: ["trailers", orgId], queryFn: () => fetchTrailers(orgId!), enabled: !!orgId, staleTime: 5 * 60 * 1000 });
   const { data: drivers  = [] } = useQuery({ queryKey: ["drivers", orgId],  queryFn: () => fetchDrivers(orgId!),  enabled: !!orgId, staleTime: 5 * 60 * 1000 });
 

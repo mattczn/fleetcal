@@ -455,11 +455,51 @@ timesheets.get("/", async (c) => {
 // correction stamps edited_by / edited_at so the record shows it was
 // touched. Correcting your OWN times still needs timesheet.edit —
 // timesheet.self is "punch the clock", not "rewrite the clock".
-timesheets.patch("/:id", requireCapability("timesheet.edit"), async (c) => {
+timesheets.patch("/:id", async (c) => {
   const orgId  = c.get("orgId");
   const userId = c.get("userId");
+  const role   = c.get("orgRole");
   const id     = c.req.param("id");
   const body   = await c.req.json().catch(() => ({})) as Record<string, unknown>;
+
+  // Two ways to be allowed here, and they are not the same right:
+  //
+  //   · your OWN shift, with timesheet.self — fixing the punch you
+  //     forgot to make at 7am is part of recording your own hours, not
+  //     an administrative power. Without this a mechanic who clocks in
+  //     late has no way to correct it and the week is simply wrong.
+  //   · ANYONE's shift, with timesheet.edit — the reviewer's power.
+  //
+  // Self-editing is deliberate and auditable rather than trusted
+  // blindly: every write below stamps edited_by/edited_at, and the
+  // overlap constraint still refuses times that collide with another
+  // shift, so the worst case is a visible, attributable correction
+  // rather than a silent one.
+  const { data: owner, error: ownerErr } = await db
+    .from("timesheet_shifts")
+    .select("user_id")
+    .eq("org_id", orgId)
+    .eq("id", id)
+    .is("deleted_at", null)
+    .maybeSingle();
+
+  if (ownerErr) {
+    console.error("[timesheets] PATCH owner read:", ownerErr);
+    return c.json({ error: "db_error", message: ownerErr.message }, 500);
+  }
+  if (!owner) return c.json({ error: "not_found" }, 404);
+
+  const isOwn = (owner as { user_id: string }).user_id === userId;
+  const allowed = isOwn
+    ? await effectiveCanForOrg(role, "timesheet.self", orgId)
+    : await effectiveCanForOrg(role, "timesheet.edit", orgId);
+  if (!allowed) {
+    return c.json({
+      error:      "forbidden",
+      reason:     isOwn ? "missing_capability" : "not_your_shift",
+      capability: isOwn ? "timesheet.self" : "timesheet.edit",
+    }, 403);
+  }
 
   const patch: Record<string, unknown> = {
     edited_by:  userId,

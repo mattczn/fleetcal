@@ -34,6 +34,8 @@ import { Toast } from "@/components/Toast";
 import type { Accessorial, Load, LoadStatus, Stop, StopType } from "@/lib/types";
 import { txt } from "@/lib/font";
 import { usePermissions } from "@/lib/usePermissions";
+import { pickableOn } from "@fleetcal/types";
+import { todayKeyDeviceLocal } from "@/lib/timezone";
 
 const STOP_TINT: Record<StopType, { bg: string; fg: string; mark: string; label: string }> = {
   pickup:    { bg: "#dcfce7", fg: "#15803d", mark: "#16a34a", label: "Pickup" },
@@ -1784,7 +1786,12 @@ export default function LoadDetail() {
     enabled:  !!orgId,
     staleTime: 5 * 60 * 1000,
   });
-  const visiblePickerAssets = useMemo(() => assetsForPicker.filter((a) => !a.hidden), [assetsForPicker]);
+  // `hidden` alone let retired trucks (activeTo in the past) stay
+  // assignable; pickableOn covers both.
+  const visiblePickerAssets = useMemo(
+    () => pickableOn(assetsForPicker, todayKeyDeviceLocal()),
+    [assetsForPicker],
+  );
 
   const { data: drivers = [] } = useQuery({
     queryKey: ["drivers", orgId],

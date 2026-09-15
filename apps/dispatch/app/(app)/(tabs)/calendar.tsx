@@ -30,6 +30,7 @@ import {
   fmtTimeRangeShort, loadNumLabel, fmtPrice, RelayChip, DiagonalStripes, NonRevChip,
 } from "@/lib/loadCard";
 import type { Asset, Load } from "@/lib/types";
+import { isVisibleOn } from "@fleetcal/types";
 
 type ViewMode = "calendar" | "schedule" | "timeline";
 const VIEW_MODE_KEY = "fleetcal.dispatch.calendar.viewMode";
@@ -1009,7 +1010,20 @@ export default function CalendarScreen() {
     staleTime: 60 * 1000,
   });
 
-  const { visibleAssets, orderedIds, prefs, setHidden, setAllHidden, move } = useAssetPrefs(orgId, assets);
+  // Drop equipment that isn't ours on the day being viewed, before any
+  // of it reaches the pager, the side panel, or the per-device prefs.
+  //
+  // Filtered by the VIEWED day, not by today — a truck retired in May
+  // must still appear on April's calendar, or April's loads render under
+  // no column at all. Same rule the web calendar has always applied
+  // (CalendarHeader's visibleAssets); it was missing here only because
+  // the helper lived in apps/web where the phone couldn't reach it.
+  const fleetAssets = useMemo(
+    () => assets.filter((a) => isVisibleOn(a, dateKey)),
+    [assets, dateKey],
+  );
+
+  const { visibleAssets, orderedIds, prefs, setHidden, setAllHidden, move } = useAssetPrefs(orgId, fleetAssets);
   const [panelOpen, setPanelOpen] = useState(false);
 
   // Jump to a requested asset (?assetId=X). If the user has personally hidden
@@ -1318,7 +1332,7 @@ export default function CalendarScreen() {
       <AssetSidePanel
         visible={panelOpen}
         onClose={() => setPanelOpen(false)}
-        allAssets={assets}
+        allAssets={fleetAssets}
         effectiveOrder={orderedIds}
         hiddenIds={prefs.hidden}
         onToggleHidden={setHidden}
