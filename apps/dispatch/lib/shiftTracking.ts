@@ -331,3 +331,42 @@ export async function verifyTrackingAlive(): Promise<boolean> {
 export async function bufferedPingCount(): Promise<number> {
   return (await readBuffer()).length;
 }
+
+// ── Punch location ───────────────────────────────────────────────────
+
+/**
+ * A single foreground fix for a clock-in / clock-out stamp.
+ *
+ * Returns null instead of throwing, and gives up after `timeoutMs`.
+ * Both matter: a punch must NEVER be blocked or lost because the GPS
+ * is cold, the user denied location, or they are standing inside a
+ * steel shop where a fix takes 40 seconds. The hour is the record; the
+ * coordinates are a nice-to-have on top of it.
+ *
+ * This is separate from the background task on purpose — the endpoints
+ * of a shift are the two locations that matter most to a reviewer
+ * ("which yard did he start at"), and waiting up to 30 minutes for the
+ * first background sample to answer that would be absurd.
+ */
+export async function getPunchLocation(
+  timeoutMs = 8000,
+): Promise<{ lat: number; lng: number } | null> {
+  try {
+    const perm = await Location.getForegroundPermissionsAsync();
+    if (perm.status !== "granted") {
+      // Don't prompt here. Clock-in asks for permission right after, on
+      // its own terms; prompting twice in two seconds reads as a bug.
+      if (!perm.canAskAgain) return null;
+      const asked = await Location.requestForegroundPermissionsAsync();
+      if (asked.status !== "granted") return null;
+    }
+    const pos = await Promise.race([
+      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
+    ]);
+    if (!pos) return null;
+    return { lat: pos.coords.latitude, lng: pos.coords.longitude };
+  } catch {
+    return null;
+  }
+}

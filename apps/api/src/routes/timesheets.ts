@@ -232,7 +232,12 @@ timesheets.post("/clock-in", requireCapability("timesheet.self"), async (c) => {
 });
 
 // ── POST /:id/clock-out ─────────────────────────────────────────────────
-timesheets.post("/:id/clock-out", requireCapability("timesheet.self"), async (c) => {
+// NOT gated on timesheet.self at the route level. Closing a shift is a
+// correction as much as a punch, and a route-level self gate stranded
+// an open shift whose owner had since lost timesheet.self — unclosable
+// from the app, and the one-open-shift index then blocked them from
+// ever clocking in again. The ownership check inside covers it.
+timesheets.post("/:id/clock-out", async (c) => {
   const orgId  = c.get("orgId");
   const userId = c.get("userId");
   const role   = c.get("orgRole");
@@ -256,8 +261,11 @@ timesheets.post("/:id/clock-out", requireCapability("timesheet.self"), async (c)
 
   const row = existing as unknown as ShiftRow;
 
-  // Closing someone else's shift is an edit of their pay record.
-  if (row.user_id !== userId && !(await effectiveCanForOrg(role, "timesheet.edit", orgId))) {
+  // Your own shift, or anyone's with timesheet.edit. Owning the shift
+  // is enough to close it: whoever started a clock can stop it, even if
+  // their role later changed underneath them.
+  const isOwn = row.user_id === userId;
+  if (!isOwn && !(await effectiveCanForOrg(role, "timesheet.edit", orgId))) {
     return c.json({ error: "forbidden", reason: "not_your_shift" }, 403);
   }
   // Already closed — idempotent, same reasoning as clock-in.
@@ -489,10 +497,15 @@ timesheets.patch("/:id", async (c) => {
   }
   if (!owner) return c.json({ error: "not_found" }, 404);
 
-  const isOwn = (owner as { user_id: string }).user_id === userId;
-  const allowed = isOwn
-    ? await effectiveCanForOrg(role, "timesheet.self", orgId)
-    : await effectiveCanForOrg(role, "timesheet.edit", orgId);
+  const isOwn   = (owner as { user_id: string }).user_id === userId;
+  const canEdit = await effectiveCanForOrg(role, "timesheet.edit", orgId);
+  // timesheet.edit is the broader right and ALWAYS suffices — including
+  // on your own row. An earlier version checked self-vs-other
+  // exclusively, which left an admin able to correct everyone's shifts
+  // except their own. Own + timesheet.self is the additional path, for
+  // shop staff who hold no edit right at all.
+  const allowed = canEdit
+    || (isOwn && await effectiveCanForOrg(role, "timesheet.self", orgId));
   if (!allowed) {
     return c.json({
       error:      "forbidden",

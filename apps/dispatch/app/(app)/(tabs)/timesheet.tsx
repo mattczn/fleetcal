@@ -38,15 +38,18 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useOrganization, useUser } from "@clerk/clerk-expo";
 import {
   Play, Square, MapPin, MapPinOff, Clock, Users, User as UserIcon, CloudUpload,
+  Pencil,
 } from "lucide-react-native";
 import type { TimesheetShift } from "@fleetcal/types";
 import { txt } from "@/lib/font";
 import { railway } from "@/lib/railway";
 import { usePermissions } from "@/lib/usePermissions";
 import { ShiftMapSheet } from "@/components/ShiftMapSheet";
+import { ShiftEditSheet } from "@/components/ShiftEditSheet";
 import {
   startShiftTracking, stopShiftTracking, flushPings,
   verifyTrackingAlive, getTrackingHealth, bufferedPingCount,
+  getPunchLocation,
 } from "@/lib/shiftTracking";
 
 // ── Helpers ───────────────────────────────────────────────────────────
@@ -101,6 +104,11 @@ export default function TimesheetScreen() {
   // offering the tap to someone who can't use it would just produce a
   // 403 they can do nothing about.
   const [mapShift, setMapShift] = useState<TimesheetShift | null>(null);
+  // Correcting times. `canPunch` covers your own shifts (the forgotten
+  // 7am clock-in), `timesheet.edit` covers anyone's. The API re-checks
+  // both, so this only decides whether the pencil is offered.
+  const canEditAny = can("timesheet.edit");
+  const [editShift, setEditShift] = useState<TimesheetShift | null>(null);
   const [buffered, setBuffered] = useState(0);
 
   useEffect(() => {
@@ -154,10 +162,17 @@ export default function TimesheetScreen() {
     if (busy) return;
     setBusy(true);
     try {
+      // Stamp WHERE the punch happened. This was missing: the schema
+      // and API have carried start_lat/lng since day one but the client
+      // sent {}, so every shift recorded a null origin and the map's IN
+      // marker could never render. Capped at 8s and null-safe — the
+      // hour is the record, the coordinates are a bonus on top.
+      const at = await getPunchLocation();
+
       // Clock in FIRST, then start tracking. If this order were
       // reversed, a denied permission prompt would leave the person
       // un-clocked-in — the hour matters more than the trail.
-      const { shift } = await railway.clockIn({});
+      const { shift } = await railway.clockIn({ lat: at?.lat, lng: at?.lng });
       await qc.invalidateQueries({ queryKey: ["timesheet"] });
 
       const res = await startShiftTracking(shift.id);
@@ -196,8 +211,11 @@ export default function TimesheetScreen() {
       // Last flush BEFORE closing the shift so the final samples land
       // against a shift that is still open.
       await flushPings(active.id);
+      const at = await getPunchLocation();
       const health = await getTrackingHealth();
       await railway.clockOut(active.id, {
+        lat: at?.lat,
+        lng: at?.lng,
         trackingStoppedAt: health.stoppedAt,
       });
       await stopShiftTracking();
@@ -378,6 +396,11 @@ export default function TimesheetScreen() {
               isMe={s.userId === user?.id}
               nowMs={nowMs}
               onPress={canViewAll ? () => setMapShift(s) : undefined}
+              onEdit={
+                canEditAny || (canPunch && s.userId === user?.id)
+                  ? () => setEditShift(s)
+                  : undefined
+              }
             />
           ))
         )}
@@ -387,6 +410,12 @@ export default function TimesheetScreen() {
         visible={mapShift != null}
         shift={mapShift}
         onClose={() => setMapShift(null)}
+      />
+      <ShiftEditSheet
+        visible={editShift != null}
+        shift={editShift}
+        onClose={() => setEditShift(null)}
+        onSaved={refresh}
       />
     </View>
   );
@@ -420,7 +449,7 @@ function ScopeTab({
 }
 
 function ShiftRow({
-  shift, showName, isMe, nowMs, onPress,
+  shift, showName, isMe, nowMs, onPress, onEdit,
 }: {
   shift: TimesheetShift;
   showName: boolean;
@@ -429,6 +458,9 @@ function ShiftRow({
   /** Opens the location trail. Undefined for viewers who can't read
    *  it, in which case the row renders as a plain, untappable card. */
   onPress?: () => void;
+  /** Opens the time-correction sheet. Undefined when this viewer may
+   *  not correct THIS shift. */
+  onEdit?: () => void;
 }) {
   const running = !shift.endedAt;
   // durationMinutes is null while open — compute the live value rather
@@ -475,6 +507,15 @@ function ShiftRow({
         ) : null}
         {onPress && hasTrail ? (
           <MapPin size={12} color="#1a73e8" strokeWidth={2.4} />
+        ) : null}
+        {onEdit ? (
+          <TouchableOpacity
+            onPress={onEdit}
+            hitSlop={12}
+            style={{ paddingLeft: 4 }}
+          >
+            <Pencil size={13} color="#5f6368" strokeWidth={2.4} />
+          </TouchableOpacity>
         ) : null}
       </View>
     </Container>
