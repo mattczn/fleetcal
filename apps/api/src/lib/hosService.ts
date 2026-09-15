@@ -12,6 +12,7 @@ import {
   type HosSnapshot, type HosCycle, type ShiftInterval,
 } from "./hos.js";
 import { classifyByAirMiles, parseTerminal } from "./airMiles.js";
+import { legStops } from "./routeGeometry.js";
 
 /** How far back to pull shifts. The 8-day cycle needs 8; restart
  *  detection needs to see the gap *before* the window opens, so pad. */
@@ -156,7 +157,7 @@ export async function classifyShiftByLoads(opts: {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: events, error: evErr } = await (supabase as any)
     .from("events")
-    .select("id")
+    .select("id, load_id, leg_index, relay_role")
     .eq("org_id", opts.orgId)
     .eq("driver_id", opts.driverId)
     .lte("start", dayEnd)
@@ -166,25 +167,67 @@ export async function classifyShiftByLoads(opts: {
     console.warn("[classifyShiftByLoads] events read failed:", evErr.message);
     return none;
   }
-  const eventIds = ((events ?? []) as Array<{ id: number }>).map(e => e.id);
-  if (eventIds.length === 0) return none;
+  type EventRow = { id: number; load_id: string | null; leg_index: number | null; relay_role: string | null };
+  const myLegs = (events ?? []) as EventRow[];
+  if (myLegs.length === 0) return none;
+
+  // A relay load stores the FULL merged stop list on EVERY leg, so a
+  // driver whose leg is a local pickup on a Vegas load would otherwise
+  // measure against the Vegas stop and be classified OTR for work they
+  // never do. legCount comes from how many legs the LOAD has, not how
+  // many this driver holds — leg 2 of 3 needs to know it's 2 of 3.
+  const loadIds = Array.from(new Set(myLegs.map(l => l.load_id).filter((x): x is string => !!x)));
+  const legCountByLoad = new Map<string, number>();
+  if (loadIds.length > 0) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: siblings } = await (supabase as any)
+      .from("events").select("load_id")
+      .eq("org_id", opts.orgId).in("load_id", loadIds).is("deleted_at", null);
+    for (const r of ((siblings ?? []) as Array<{ load_id: string }>)) {
+      legCountByLoad.set(r.load_id, (legCountByLoad.get(r.load_id) ?? 0) + 1);
+    }
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: stops, error: stopErr } = await (supabase as any)
     .from("stops")
-    .select("lat, lng, facility_name, city, state")
-    .in("event_id", eventIds);
+    .select("event_id, sequence, type, is_handoff, lat, lng, facility_name, city, state")
+    .in("event_id", myLegs.map(l => l.id));
   if (stopErr) {
     console.warn("[classifyShiftByLoads] stops read failed:", stopErr.message);
     return none;
   }
 
-  type StopRow = { lat: number | null; lng: number | null; facility_name: string | null; city: string | null; state: string | null };
-  const points = ((stops ?? []) as StopRow[]).map(s => ({
-    lat: s.lat as number,
-    lon: s.lng as number,
-    label: s.facility_name || [s.city, s.state].filter(Boolean).join(", ") || null,
-  }));
+  type StopRow = {
+    event_id: number; sequence: number; type: string | null; is_handoff: boolean | null;
+    lat: number | null; lng: number | null;
+    facility_name: string | null; city: string | null; state: string | null;
+  };
+  const stopsByEvent = new Map<number, StopRow[]>();
+  for (const s of ((stops ?? []) as StopRow[])) {
+    const l = stopsByEvent.get(s.event_id) ?? []; l.push(s); stopsByEvent.set(s.event_id, l);
+  }
+
+  // Slice each leg down to the stops that leg actually drives, using the
+  // same helper that computes per-leg loaded_miles — so the mileage a
+  // dispatcher sees and the classification agree about what a leg
+  // covers, rather than drifting apart as two implementations.
+  const points: Array<{ lat: number; lon: number; label: string | null }> = [];
+  for (const leg of myLegs) {
+    const all = (stopsByEvent.get(leg.id) ?? []).sort((a, b) => a.sequence - b.sequence);
+    const legCount = leg.load_id ? legCountByLoad.get(leg.load_id) ?? 1 : 1;
+    const mine = leg.relay_role
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ? legStops(all as any, { legIndex: leg.leg_index ?? 0, legCount })
+      : all;
+    for (const s of (mine as unknown as StopRow[])) {
+      points.push({
+        lat: s.lat as number,
+        lon: s.lng as number,
+        label: s.facility_name || [s.city, s.state].filter(Boolean).join(", ") || null,
+      });
+    }
+  }
 
   const result = classifyByAirMiles(terminal, points);
   return {

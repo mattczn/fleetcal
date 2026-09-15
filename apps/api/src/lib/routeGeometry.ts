@@ -73,7 +73,7 @@ export interface LegPosition {
  * client's per-leg calc in EventModal.tsx so server + client agree.
  * Non-relay events (no handoff) route through every stop unchanged.
  */
-function legStops(stops: Stop[], leg: LegPosition | null): Stop[] {
+export function legStops(stops: Stop[], leg: LegPosition | null): Stop[] {
   const markerIdxs: number[] = [];
   stops.forEach((s, i) => {
     if (isHandoffStop(s)) markerIdxs.push(i);
