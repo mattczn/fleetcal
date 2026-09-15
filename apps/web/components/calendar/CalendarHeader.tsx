@@ -236,20 +236,18 @@ export default function CalendarHeader() {
               borderRight: '1px solid var(--gc-border-light)',
             }}
           >
-            {/* Icon + name/unit — responsive layout driven by column
-                width (rw). At ≥130px we use the original horizontal
-                layout (icon on the left, name + unit stacked to the
-                right). Below 130px the icon drops above the name so
-                the name gets the full column width — even a long
-                "Freightliner" stays on one line at typical narrow
-                widths. Unit number hides entirely under ~90px since
-                neither line fits cleanly below a 5-char name.
+            {/* Icon + name — responsive layout driven by column width
+                (rw). At ≥130px the icon sits left of the name; below
+                that it drops above so the name gets the full column
+                width, and even a long "Freightliner" stays on one line.
+                The unit number used to render on a second line here; it
+                was dropped to give that row to the driver + hours chip,
+                which is the more useful thing to know at a glance. It
+                survives in the hover title.
                 Clickable to open the asset detail modal. */}
             {(() => {
               const isVertical  = rw < 130;
-              const showUnit    = rw >= 90;
               const iconSize    = isVertical ? 18 : 28;
-              const unitLabel   = asset.unit ? `#${asset.unit}` : asset.type;
               const innerBlock = (
                 <>
                   <Truck size={iconSize} style={{ color: asset.color, flexShrink: 0 }} />
@@ -267,14 +265,6 @@ export default function CalendarHeader() {
                     >
                       {asset.name}
                     </span>
-                    {showUnit && (
-                      <span
-                        className="text-[11px] font-medium truncate leading-tight"
-                        style={{ color: 'var(--gc-text-3)', maxWidth: '100%' }}
-                      >
-                        {unitLabel}
-                      </span>
-                    )}
                   </div>
                 </>
               );
