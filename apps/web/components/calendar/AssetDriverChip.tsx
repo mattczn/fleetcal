@@ -23,8 +23,9 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { User, Check } from 'lucide-react';
+import { User, Check, ExternalLink } from 'lucide-react';
 import { railway, type HosAssetDriver, type HosDriverOption } from '@/lib/railway';
+import { useHosPanel } from '@/lib/useHosPanel';
 
 function fmtHours(seconds: number | null | undefined): string {
   if (seconds == null) return '';
@@ -32,6 +33,17 @@ function fmtHours(seconds: number | null | undefined): string {
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
   return h === 0 ? `${m}m` : `${h}h`;
+}
+
+const SHIFT_WINDOW_SECONDS = 14 * 3600;
+
+/** Popover has room for minutes; the chip itself does not. */
+function fmtLong(seconds: number | null | undefined): string {
+  if (seconds == null) return '—';
+  const s = Math.max(0, Math.round(seconds));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return h === 0 ? `${m}m` : `${h}h ${String(m).padStart(2, '0')}m`;
 }
 
 function initials(name: string): string {
@@ -102,6 +114,7 @@ export default function AssetDriverChip({ entry, width, onChanged }: {
   const [open, setOpen] = useState(false);
   const [options, setOptions] = useState<HosDriverOption[] | null>(null);
   const [busy, setBusy] = useState(false);
+  const openHosPanel = useHosPanel(s => s.openFor);
   const btnRef = useRef<HTMLButtonElement>(null);
   const [anchor, setAnchor] = useState<{ top: number; left: number } | null>(null);
 
@@ -212,6 +225,81 @@ export default function AssetDriverChip({ entry, width, onChanged }: {
             letterSpacing: 0.3, textTransform: 'uppercase', color: 'var(--gc-text-3)',
           }}>
             Driver in {entry.assetName}
+          </div>
+
+          {/* Hours first — the reason a dispatcher clicked this chip is
+              usually "can I give them this run", not "who is it". */}
+          {entry.driverId != null && (
+            <div style={{
+              margin: '2px 4px 6px', padding: '8px 9px', borderRadius: 7,
+              background: 'var(--gc-bg)', border: '1px solid var(--gc-border-light)',
+            }}>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--gc-text-1)' }}>
+                {entry.driverName}
+              </div>
+              {entry.hos ? (() => {
+                const h = entry.hos;
+                // Elapsed against the 14-hour window, not the shift —
+                // after a short break those differ and the window is the
+                // one with legal teeth.
+                const left = h.windowRemainingSeconds;
+                const used = left != null ? SHIFT_WINDOW_SECONDS - left : null;
+                const pct = used != null ? Math.min(1, Math.max(0, used / SHIFT_WINDOW_SECONDS)) : 0;
+                const tone = toneOf(entry);
+                return (
+                  <>
+                    <div style={{
+                      fontSize: 12, marginTop: 3, color: 'var(--gc-text-2)',
+                      fontVariantNumeric: 'tabular-nums',
+                    }}>
+                      {h.status === 'on_duty' && used != null ? (
+                        <>
+                          <strong style={{ color: TONE_COLOR[tone] }}>{fmtLong(used)}</strong>
+                          {' of 14h used · '}{fmtLong(left)} left
+                        </>
+                      ) : h.status === 'on_duty' ? 'On duty'
+                        : h.canResumeWithinWindow && left != null
+                          ? <>Off duty · <strong style={{ color: TONE_COLOR[tone] }}>{fmtLong(left)}</strong> still available today</>
+                          : h.availableAt
+                            ? <>Off duty · back {new Date(h.availableAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}</>
+                            : 'Off duty · rested'}
+                    </div>
+                    {h.status === 'on_duty' && (
+                      <div style={{
+                        height: 4, borderRadius: 2, marginTop: 6,
+                        background: 'var(--gc-border-light)', overflow: 'hidden',
+                      }}>
+                        <div style={{ width: `${pct * 100}%`, height: '100%', background: TONE_COLOR[tone] }} />
+                      </div>
+                    )}
+                  </>
+                );
+              })() : (
+                <div style={{ fontSize: 11.5, marginTop: 3, color: 'var(--gc-text-3)' }}>
+                  Hours not tracked for this driver
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={() => { setOpen(false); openHosPanel(entry.driverId); }}
+                style={{
+                  width: '100%', marginTop: 8, padding: '6px 9px', borderRadius: 6,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+                  border: '1px solid var(--gc-border-light)', background: 'var(--gc-surface)',
+                  color: 'var(--gc-text-1)', fontSize: 11.5, fontWeight: 700, cursor: 'pointer',
+                }}
+              >
+                <ExternalLink size={11} /> Open timesheet
+              </button>
+            </div>
+          )}
+
+          <div style={{
+            padding: '4px 8px 2px', fontSize: 9.5, fontWeight: 700,
+            letterSpacing: 0.3, textTransform: 'uppercase', color: 'var(--gc-text-4, #a4abb4)',
+          }}>
+            Change driver
           </div>
 
           {options === null ? (

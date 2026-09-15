@@ -15,6 +15,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Clock, AlertTriangle, X } from 'lucide-react';
 import { railway, type HosBoardDriver } from '@/lib/railway';
 import HosPanel from './HosPanel';
+import { useHosPanel } from '@/lib/useHosPanel';
 
 /**
  * Warn dispatch an hour before a driver's 14-hour window closes, so
@@ -45,7 +46,14 @@ function fmtLeft(seconds: number | null): string {
 const POLL_MS = 5 * 60 * 1000;
 
 export default function HosDutyButton() {
-  const [open, setOpen] = useState(false);
+  // Open state is shared: the calendar's driver chip opens this same
+  // panel focused on one driver, rather than mounting a second one.
+  const open = useHosPanel(s => s.open);
+  const requestedDriverId = useHosPanel(s => s.requestedDriverId);
+  const focusNonce = useHosPanel(s => s.nonce);
+  const openPanel = useHosPanel(s => s.openFor);
+  const closePanel = useHosPanel(s => s.close);
+  const setOpen = (v: boolean) => (v ? openPanel(null) : closePanel());
   const [attention, setAttention] = useState(0);
   const [available, setAvailable] = useState(true);
   const [expiring, setExpiring] = useState<HosBoardDriver[]>([]);
@@ -200,7 +208,13 @@ export default function HosDutyButton() {
         </div>
       )}
 
-      {open && <HosPanel onClose={() => { setOpen(false); void load(); }} />}
+      {open && (
+        <HosPanel
+          initialDriverId={requestedDriverId}
+          focusNonce={focusNonce}
+          onClose={() => { closePanel(); void load(); }}
+        />
+      )}
     </>
   );
 }

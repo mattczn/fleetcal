@@ -181,7 +181,15 @@ function sortKey(d: HosBoardDriver): [number, number, string] {
   return [group, rank, d.name];
 }
 
-export default function HosPanel({ onClose }: { onClose: () => void }) {
+export default function HosPanel({ onClose, initialDriverId, focusNonce }: {
+  onClose: () => void;
+  /** Open focused on this driver — set when the panel is opened from a
+   *  calendar column header rather than the top-bar button. */
+  initialDriverId?: number | null;
+  /** Changes on every open request, so asking for the same driver twice
+   *  in a row still re-focuses rather than being a no-op. */
+  focusNonce?: number;
+}) {
   const [drivers, setDrivers] = useState<HosBoardDriver[]>([]);
   const [config, setConfig] = useState<{ cycle: '70_8' | '60_7'; timeZone: string }>(
     { cycle: '70_8', timeZone: 'America/Denver' },
@@ -221,6 +229,13 @@ export default function HosPanel({ onClose }: { onClose: () => void }) {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+
+  // Focus the requested driver. Runs on nonce rather than id so opening
+  // the panel twice on the same driver still re-selects them after the
+  // user has clicked elsewhere in the rail.
+  useEffect(() => {
+    if (initialDriverId != null) setSelectedId(initialDriverId);
+  }, [initialDriverId, focusNonce]);
 
   // Keep the board live while it's open. Every number here counts down
   // in real time — window remaining, time until a reset completes — so
