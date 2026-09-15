@@ -162,6 +162,43 @@ export function requireCapability(
 }
 
 /**
+ * Passes when the role holds ANY of the listed capabilities.
+ *
+ * For a router whose members reach it by different routes — the
+ * timesheets group is the motivating case, where a shop employee gets
+ * in on `timesheet.self` (punch my clock) and a reviewer on
+ * `timesheet.view_all` (read everyone's hours), and neither implies
+ * the other. Gating that group on a single capability forces one of
+ * the two to hold a capability it has no business with.
+ *
+ * Use it for the router-level gate only, and keep the per-ACTION check
+ * on the individual handler: "may enter this area" and "may do this
+ * thing" are different questions, and collapsing them is how a reader
+ * ends up with a writer's rights.
+ */
+export function requireAnyCapability(
+  ...caps: Capability[]
+): MiddlewareHandler<{ Variables: AuthVariables }> {
+  return async (c, next) => {
+    const role  = c.get("orgRole");
+    const orgId = c.get("orgId");
+    const overrides = orgId ? await loadOverrides(orgId) : {};
+    if (!caps.some((cap) => effectiveCan(role, cap, overrides))) {
+      return c.json(
+        {
+          error: "forbidden",
+          reason: "missing_capability",
+          capability: caps.join(" | "),
+          role: role ?? null,
+        },
+        403,
+      );
+    }
+    await next();
+  };
+}
+
+/**
  * Org-level module gate. Returns 403 if the module is OFF for the
  * org. Mount this BEFORE requireCapability on every route in a
  * module's group:

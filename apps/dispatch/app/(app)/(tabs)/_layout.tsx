@@ -7,7 +7,7 @@ import { usePermissions } from "@/lib/usePermissions";
 /**
  * Role-aware tab bar.
  *
- *   admin       Home · Calendar · Map · Maintenance · Timesheet
+ *   admin       Home · Calendar · Map · Maintenance · Timesheet (review only)
  *   dispatcher  Home · Calendar · Map
  *   maintenance Maintenance · Calendar · Timesheet
  *
@@ -76,11 +76,12 @@ export default function TabsLayout() {
   const showMaintenance =
     can("maintenance.access") &&
     (role !== "dispatcher" || SHOW_MAINTENANCE_TAB_FOR_DISPATCHER);
-  // Anyone who can punch a clock gets the tab. Dispatchers don't have
-  // timesheet.self, so Bruno and Jorge never see it; admins do, both to
-  // review everyone's hours and because an admin who works the shop
-  // should be able to clock in like anyone else.
-  const showTimesheet = can("timesheet.self");
+  // Two ways in, and neither implies the other: punching your own clock
+  // (timesheet.self) or reviewing other people's hours
+  // (timesheet.view_all). An admin who only reviews still needs the tab,
+  // and the screen hides the clock card for them. Dispatchers have
+  // neither, so Bruno and Jorge don't see it at all.
+  const showTimesheet = can("timesheet.self") || can("timesheet.view_all");
 
   const homeTab = (
     <Tabs.Screen

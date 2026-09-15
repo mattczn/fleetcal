@@ -24,7 +24,7 @@ import { supabase } from "../lib/supabase.js";
 import { getUserDisplayName } from "../lib/clerk.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import {
-  requireCapability, requireModule, effectiveCanForOrg,
+  requireCapability, requireAnyCapability, requireModule, effectiveCanForOrg,
 } from "../middleware/require.js";
 
 const timesheets = new Hono<{ Variables: AuthVariables }>();
@@ -47,7 +47,17 @@ const timesheets = new Hono<{ Variables: AuthVariables }>();
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = supabase as any;
 
-timesheets.use("*", requireModule("timesheets"), requireCapability("timesheet.self"));
+// Two different people reach this router and neither implies the other:
+// a shop employee with `timesheet.self` who punches a clock, and a
+// reviewer with `timesheet.view_all` who reads hours but never clocks
+// in. An admin is the second kind — the punch endpoints below check
+// `timesheet.self` individually, so a reviewer without it gets the
+// list and is refused the clock.
+timesheets.use(
+  "*",
+  requireModule("timesheets"),
+  requireAnyCapability("timesheet.self", "timesheet.view_all"),
+);
 
 // ── Row types + converters ──────────────────────────────────────────────
 
@@ -142,6 +152,14 @@ function coords(body: Record<string, unknown>): { lat: number | null; lng: numbe
 timesheets.get("/active", async (c) => {
   const orgId  = c.get("orgId");
   const userId = c.get("userId");
+  const role   = c.get("orgRole");
+
+  // A reviewer who cannot punch a clock has no "my active shift" — say
+  // so with null rather than 403ing, so the client renders the list
+  // without a clock card instead of showing an error.
+  if (!(await effectiveCanForOrg(role, "timesheet.self", orgId))) {
+    return c.json({ shift: null });
+  }
 
   const { data, error } = await db
     .from("timesheet_shifts")
@@ -160,7 +178,7 @@ timesheets.get("/active", async (c) => {
 });
 
 // ── POST /clock-in ──────────────────────────────────────────────────────
-timesheets.post("/clock-in", async (c) => {
+timesheets.post("/clock-in", requireCapability("timesheet.self"), async (c) => {
   const orgId  = c.get("orgId");
   const userId = c.get("userId");
   const body   = await c.req.json().catch(() => ({})) as Record<string, unknown>;
@@ -214,7 +232,7 @@ timesheets.post("/clock-in", async (c) => {
 });
 
 // ── POST /:id/clock-out ─────────────────────────────────────────────────
-timesheets.post("/:id/clock-out", async (c) => {
+timesheets.post("/:id/clock-out", requireCapability("timesheet.self"), async (c) => {
   const orgId  = c.get("orgId");
   const userId = c.get("userId");
   const role   = c.get("orgRole");
@@ -282,7 +300,7 @@ timesheets.post("/:id/clock-out", async (c) => {
 // timeout the client never saw resolved. UNIQUE(shift_id, at) plus
 // ignoreDuplicates makes the retry a no-op instead of a second cluster
 // of pins on the reviewer's map.
-timesheets.post("/:id/pings", async (c) => {
+timesheets.post("/:id/pings", requireCapability("timesheet.self"), async (c) => {
   const orgId  = c.get("orgId");
   const userId = c.get("userId");
   const id     = c.req.param("id");

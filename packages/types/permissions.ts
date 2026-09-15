@@ -274,8 +274,35 @@ const EVERY_CAP: Record<Capability, true> = {
 
 const ALL_CAPS = Object.keys(EVERY_CAP) as Capability[];
 
+/**
+ * The one set of capabilities admin does NOT receive by default.
+ *
+ * Admin otherwise holds everything, deliberately — see the note above
+ * EVERY_CAP. The exception exists because `timesheet.self` is not an
+ * authority, it is a JOB: it means "this person punches a clock and
+ * has their own hours recorded". An admin reviewing the shop's
+ * timesheet is not doing that job, and granting it would put a CLOCK
+ * IN button and background location tracking on an owner's phone that
+ * nobody asked for.
+ *
+ * This does not lock admin out of anything, which is the risk the
+ * everything-by-default rule guards against: the timesheet screen is
+ * reached through `timesheet.view_all`, which admin does hold. Admin
+ * sees every shift and can correct any of them; it just has no clock
+ * of its own.
+ *
+ * A carrier whose owner genuinely works the shop grants it back in
+ * Settings → Role Permissions — except that the admin column is
+ * read-only there today, so for now it is a per-org override written
+ * directly to org_settings.role_overrides. If that becomes a real
+ * request, make the admin column editable rather than reverting this.
+ */
+const ADMIN_EXCLUDED: ReadonlySet<Capability> = new Set<Capability>([
+  "timesheet.self",
+]);
+
 export const ROLE_CAPABILITIES: Record<OrgRole, ReadonlySet<Capability>> = {
-  admin: new Set(ALL_CAPS),
+  admin: new Set(ALL_CAPS.filter((cap) => !ADMIN_EXCLUDED.has(cap))),
 
   // Dispatcher: day-to-day operations. Reads everything operations-
   // related, edits loads/customers/drivers/trailers, runs closeout.

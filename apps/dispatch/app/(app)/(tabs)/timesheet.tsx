@@ -2,13 +2,19 @@
  * /timesheet — clock in, clock out, and read back hours.
  *
  * One screen for two audiences, decided by capability rather than by
- * role:
- *   · timesheet.self      punch the clock + see your own history
- *   · timesheet.view_all  additionally see everyone else's
+ * role. The two are INDEPENDENT — neither implies the other:
+ *   · timesheet.self      punch a clock + see your own history
+ *   · timesheet.view_all  read everyone's hours
+ *
+ * A shop employee holds self. An admin holds view_all and NOT self:
+ * they review hours, they don't clock in, so the clock card and all
+ * location tracking are absent for them and the screen is titled
+ * "Shop Hours". Holding both (a working owner-operator) gets the
+ * Mine/Everyone toggle.
  *
  * The server narrows the list on its own for a caller without
  * view_all (GET /v1/timesheets returns `scope: "self"`), so the toggle
- * below is an affordance, not the enforcement.
+ * is an affordance, not the enforcement.
  *
  * ── What this screen owes the person using it ─────────────────────────
  *
@@ -74,8 +80,17 @@ export default function TimesheetScreen() {
   const qc = useQueryClient();
   const { can } = usePermissions();
   const canViewAll = can("timesheet.view_all");
+  // Punching a clock and reviewing hours are separate rights. An admin
+  // reviewing the shop's hours has view_all without self, so this
+  // screen renders as a read-only timesheet for them — no clock card,
+  // no location tracking, nothing to accidentally start.
+  const canPunch = can("timesheet.self");
 
-  const [scope, setScope] = useState<"self" | "org">("self");
+  // A reviewer's own "Mine" list is empty by definition, so open on
+  // everyone rather than on a blank screen.
+  const [scope, setScope] = useState<"self" | "org">(
+    canViewAll && !canPunch ? "org" : "self",
+  );
   const [busy, setBusy] = useState(false);
   // Ticks once a minute so the running clock advances without a refetch.
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -90,7 +105,7 @@ export default function TimesheetScreen() {
   const activeQ = useQuery({
     queryKey: ["timesheet", "active", orgId],
     queryFn:  async () => (await railway.getActiveTimesheetShift()).shift,
-    enabled:  !!orgId,
+    enabled:  !!orgId && canPunch,
   });
 
   const listQ = useQuery({
@@ -216,7 +231,7 @@ export default function TimesheetScreen() {
       {/* Header */}
       <View style={{ backgroundColor: "#1a73e8", paddingHorizontal: 16, paddingTop: insets.top + 8, paddingBottom: 12 }}>
         <Text style={[txt(800), { fontSize: 22, color: "#ffffff", letterSpacing: -0.3 }]}>
-          Timesheet
+          {canPunch ? "Timesheet" : "Shop Hours"}
         </Text>
       </View>
 
@@ -224,7 +239,8 @@ export default function TimesheetScreen() {
         contentContainerStyle={{ paddingBottom: 120 }}
         refreshControl={<RefreshControl refreshing={listQ.isFetching} onRefresh={refresh} tintColor="#1a73e8" />}
       >
-        {/* Clock card */}
+        {/* Clock card — only for roles that actually punch a clock. */}
+        {canPunch ? (
         <View style={{
           margin: 14, padding: 18, borderRadius: 14,
           backgroundColor: "#ffffff",
@@ -311,9 +327,12 @@ export default function TimesheetScreen() {
             </View>
           ) : null}
         </View>
+        ) : null}
 
-        {/* Scope toggle — reviewers only */}
-        {canViewAll ? (
+        {/* Scope toggle — only when the viewer has BOTH rights. A
+            reviewer who never punches a clock has an empty "Mine", so
+            offering it is a dead end; they just get everyone. */}
+        {canViewAll && canPunch ? (
           <View style={{ flexDirection: "row", gap: 8, paddingHorizontal: 14, marginBottom: 6 }}>
             <ScopeTab
               label="Mine" Icon={UserIcon}
