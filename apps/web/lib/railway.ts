@@ -664,6 +664,38 @@ export class RailwayError extends Error {
   }
 }
 
+/**
+ * The message to actually show a user.
+ *
+ * RailwayError.message is diagnostic — "PATCH /v1/hos/shifts/… → 400" —
+ * which is right for a console and useless in a UI: it names the
+ * request that failed and not one word about why. The API already
+ * returns prose written for a human in `errors[]`; this digs it out.
+ *
+ * Falls back to the caller's message for anything unstructured, since a
+ * driver or dispatcher can do nothing with "insert_failed".
+ */
+export function userFacingError(err: unknown, fallback = 'Something went wrong. Please try again.'): string {
+  if (err instanceof RailwayError) {
+    const d = err.detail as { errors?: unknown; detail?: unknown; error?: unknown } | null;
+    if (d && typeof d === 'object') {
+      if (Array.isArray(d.errors)) {
+        const msgs = d.errors.filter((m): m is string => typeof m === 'string' && m.length > 0);
+        if (msgs.length > 0) return msgs.join('\n');
+      }
+      // `detail` is often an internal message (a Postgres error, say),
+      // so only surface it when it reads like a sentence.
+      if (typeof d.detail === 'string' && /^[A-Z].*[.!?]$/.test(d.detail.trim())) {
+        return d.detail.trim();
+      }
+    }
+    if (err.status === 403) return 'You do not have permission to do that.';
+    if (err.status === 404) return 'That record no longer exists — try refreshing.';
+    return fallback;
+  }
+  return fallback;
+}
+
 class RailwayClient {
   private async req<T>(method: string, path: string, body?: unknown): Promise<T> {
     // First-paint auth race: if a component fires a request BEFORE

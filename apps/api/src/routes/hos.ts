@@ -400,7 +400,15 @@ hos.patch("/shifts/:id", requireCapability("drivers.edit"), async (c) => {
     }
   }
 
-  if (errors.length > 0) return c.json({ error: "validation_failed", errors }, 400);
+  if (errors.length > 0) {
+    // Logged, not just returned: a bare "400" in the Railway log gives
+    // nothing to debug from, and these are exactly the failures someone
+    // reports after the fact.
+    console.warn("[PATCH /v1/hos/shifts/:id] rejected", {
+      shiftId, driverId: shift.driver_id, body, errors,
+    });
+    return c.json({ error: "validation_failed", errors }, 400);
+  }
 
   if (startedAt || endedAt) {
     await correctShiftTimes({

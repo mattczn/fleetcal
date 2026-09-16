@@ -29,7 +29,7 @@ import {
   X, Loader2, Clock, AlertTriangle, Check, RefreshCw, CircleAlert, Pencil,
   Plus, Trash2,
 } from 'lucide-react';
-import { railway, type HosBoardDriver, type HosBoardShift, type HosDutyEvent } from '@/lib/railway';
+import { railway, userFacingError, type HosBoardDriver, type HosBoardShift, type HosDutyEvent } from '@/lib/railway';
 
 // ── formatting ───────────────────────────────────────────────────────
 
@@ -223,7 +223,7 @@ export default function HosPanel({ onClose, initialDriverId, focusNonce }: {
             })[0].driverId : null,
       );
     } catch (err) {
-      setError((err as Error).message ?? 'Could not load the duty board');
+      setError(userFacingError(err, 'Could not load the duty board.'));
     }
     setLoading(false);
   }, []);
@@ -584,7 +584,7 @@ function DriverDetail({ driver, timeZone, refreshKey, onChanged }: {
       setShifts(res.shifts);
       setEvents(res.events);
     } catch (e) {
-      setErr((e as Error).message ?? 'Could not load shifts');
+      setErr(userFacingError(e, 'Could not load shifts.'));
     }
     setLoading(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -599,7 +599,7 @@ function DriverDetail({ driver, timeZone, refreshKey, onChanged }: {
       await load();
       onChanged();
     } catch (e) {
-      setErr((e as Error).message ?? 'Update failed');
+      setErr(userFacingError(e, 'Could not save that change.'));
     }
     setBusyId(null);
   };
@@ -612,7 +612,7 @@ function DriverDetail({ driver, timeZone, refreshKey, onChanged }: {
       await load();
       onChanged();
     } catch (e) {
-      setErr((e as Error).message ?? 'Could not remove that shift');
+      setErr(userFacingError(e, 'Could not remove that shift.'));
     }
     setBusyId(null);
   };
@@ -625,7 +625,7 @@ function DriverDetail({ driver, timeZone, refreshKey, onChanged }: {
       await load();
       onChanged();
     } catch (e) {
-      setErr((e as Error).message ?? 'Could not add that shift');
+      setErr(userFacingError(e, 'Could not add that shift.'));
     }
   };
 
