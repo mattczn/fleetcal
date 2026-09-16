@@ -29,6 +29,8 @@ import {
   X, Loader2, Clock, AlertTriangle, Check, RefreshCw, CircleAlert, Pencil,
   Plus, Trash2,
 } from 'lucide-react';
+import DateTimeInput from '@/components/ui/DateTimeInput';
+import { tzAbbr } from '@/lib/time-utils';
 import { railway, userFacingError, type HosBoardDriver, type HosBoardShift, type HosDutyEvent } from '@/lib/railway';
 
 // ── formatting ───────────────────────────────────────────────────────
@@ -1226,12 +1228,6 @@ function NewShiftForm({ timeZone, defaultClassification, onCancel, onSave }: {
   const [end, setEnd] = useState('');
   const [cls, setCls] = useState<'local' | 'otr'>(defaultClassification);
 
-  const inputStyle: React.CSSProperties = {
-    padding: '5px 8px', borderRadius: 6, fontSize: 12,
-    border: '1px solid var(--gc-border-light)',
-    background: 'var(--gc-surface)', color: 'var(--gc-text-1)',
-  };
-
   return (
     <div style={{
       padding: '11px 12px', borderRadius: 8,
@@ -1240,25 +1236,41 @@ function NewShiftForm({ timeZone, defaultClassification, onCancel, onSave }: {
       <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--gc-text-1)', marginBottom: 9 }}>
         Add a shift
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        <label style={{ fontSize: 11, color: 'var(--gc-text-3)' }}>
-          Start
-          <input type="datetime-local" value={start} onChange={e => setStart(e.target.value)}
-            style={{ ...inputStyle, marginLeft: 6 }} />
-        </label>
-        <label style={{ fontSize: 11, color: 'var(--gc-text-3)' }}>
-          End
-          <input type="datetime-local" value={end} onChange={e => setEnd(e.target.value)}
-            style={{ ...inputStyle, marginLeft: 6 }} />
-        </label>
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12, flexWrap: 'wrap' }}>
+        <div>
+          <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.3, textTransform: 'uppercase', color: 'var(--gc-text-3)', marginBottom: 3 }}>
+            Start ({tzAbbr(timeZone)})
+          </div>
+          <DateTimeInput value={start} onChange={setStart} size="sm"
+            accentColor="var(--gc-blue, #1a73e8)" placeholder="Set start" />
+        </div>
+        <div>
+          <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.3, textTransform: 'uppercase', color: 'var(--gc-text-3)', marginBottom: 3 }}>
+            End ({tzAbbr(timeZone)})
+          </div>
+          <DateTimeInput value={end} onChange={setEnd} size="sm"
+            accentColor="var(--gc-blue, #1a73e8)" placeholder="Leave blank to open" />
+        </div>
         <SegToggle
           value={cls}
           options={[{ v: 'local', label: 'Local' }, { v: 'otr', label: 'OTR' }]}
           onChange={(v) => setCls(v as 'local' | 'otr')}
         />
-        <span style={{ fontSize: 10.5, color: 'var(--gc-text-3)' }}>
-          {timeZone.replace('_', ' ')} · leave End blank to open the shift
-        </span>
+        {(() => {
+          const a = zonedInputToIso(start, timeZone);
+          const b = zonedInputToIso(end, timeZone);
+          if (!a || !b) return null;
+          const secs = (new Date(b).getTime() - new Date(a).getTime()) / 1000;
+          const bad = secs <= 0 || secs > SHIFT_WINDOW_SECONDS;
+          return (
+            <span style={{
+              fontSize: 12, fontWeight: 700, fontVariantNumeric: 'tabular-nums',
+              color: bad ? '#991b1b' : 'var(--gc-text-2)', paddingBottom: 6,
+            }}>
+              {secs <= 0 ? 'End is before start' : fmtHours(secs)}
+            </span>
+          );
+        })()}
         <div style={{ flex: 1 }} />
         <button type="button" onClick={onCancel}
           style={{ padding: '5px 10px', borderRadius: 6, fontSize: 11.5, border: '1px solid var(--gc-border-light)', background: 'var(--gc-surface)', color: 'var(--gc-text-2)', cursor: 'pointer' }}>
@@ -1286,7 +1298,7 @@ function NewShiftForm({ timeZone, defaultClassification, onCancel, onSave }: {
 }
 
 /**
- * Interpret a `datetime-local` value as a wall-clock time in `timeZone`.
+ * Interpret a "YYYY-MM-DDTHH:mm" value as a wall-clock time in `timeZone`.
  *
  * The browser's own zone is NOT the right frame: a dispatcher working
  * remotely from a Denver fleet must be entering Denver times, or every
@@ -1315,10 +1327,17 @@ function zonedInputToIso(value: string, timeZone: string): string | undefined {
   return new Date(guess - offsetAt(first)).toISOString();
 }
 
-/** datetime-local inputs, pre-filled in the ORG's timezone rather than
- *  the browser's — a dispatcher in a different zone editing a Denver
- *  fleet's hours must be entering Denver times, or the correction is
- *  wrong by the offset. */
+/** Shift time editor. Uses the shared DateTimeInput (same control as
+ *  the load modal) rather than a native datetime-local, which renders
+ *  differently in every browser.
+ *
+ *  Times are read and written in the ORG's zone, never the browser's,
+ *  and every field is labelled with the zone abbreviation. A dispatcher
+ *  working from a different timezone who enters their own local time
+ *  produces a shift wrong by the offset, and nothing about the result
+ *  looks wrong — which is why the live shift length sits next to the
+ *  fields. "15h 02m" is obviously incorrect in a way that "10:29 PM"
+ *  is not. */
 function TimeEditor({ shift, timeZone, busy, onCancel, onSave }: {
   shift: HosBoardShift;
   timeZone: string;
@@ -1326,65 +1345,121 @@ function TimeEditor({ shift, timeZone, busy, onCancel, onSave }: {
   onCancel: () => void;
   onSave: (body: { startedAt?: string; endedAt?: string }) => void;
 }) {
+  /** ISO → the naive "YYYY-MM-DDTHH:mm" the picker speaks, rendered in
+   *  the ORG's zone rather than the browser's. */
   const toLocalInput = (iso: string | null): string => {
     if (!iso) return '';
-    // en-CA gives YYYY-MM-DD; pair it with a 24h time for the input.
     const d = new Date(iso);
     const date = d.toLocaleDateString('en-CA', { timeZone });
     const time = d.toLocaleTimeString('en-GB', { timeZone, hour: '2-digit', minute: '2-digit' });
     return `${date}T${time}`;
   };
-
   const fromLocalInput = (value: string) => zonedInputToIso(value, timeZone);
 
   const [start, setStart] = useState(() => toLocalInput(shift.startedAt));
   const [end, setEnd] = useState(() => toLocalInput(shift.endedAt));
 
-  const inputStyle: React.CSSProperties = {
-    padding: '5px 8px', borderRadius: 6, fontSize: 12,
-    border: '1px solid var(--gc-border-light)',
-    background: 'var(--gc-surface)', color: 'var(--gc-text-1)',
-  };
+  // Live duration. Entering a time in the wrong zone is silent — the
+  // field looks right and the shift is three hours long in the wrong
+  // direction. Showing the resulting length as it's typed makes that
+  // impossible to miss, since the duration is what anyone actually
+  // cares about and "15h 02m" is obviously wrong in a way that
+  // "10:29 PM" is not.
+  const startIso = fromLocalInput(start);
+  const endIso = fromLocalInput(end);
+  const durationSeconds = startIso && endIso
+    ? (new Date(endIso).getTime() - new Date(startIso).getTime()) / 1000
+    : null;
+  const inverted = durationSeconds != null && durationSeconds <= 0;
+  const overWindow = durationSeconds != null && durationSeconds > SHIFT_WINDOW_SECONDS;
+
+  const zone = tzAbbr(timeZone);
 
   return (
     <div style={{
-      padding: '10px 12px', borderTop: '1px solid var(--gc-border-light)',
-      background: 'var(--gc-bg)', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+      padding: '11px 12px', borderTop: '1px solid var(--gc-border-light)',
+      background: 'var(--gc-bg)',
     }}>
-      <label style={{ fontSize: 11, color: 'var(--gc-text-3)' }}>
-        Start
-        <input type="datetime-local" value={start} onChange={e => setStart(e.target.value)}
-          style={{ ...inputStyle, marginLeft: 6 }} />
-      </label>
-      <label style={{ fontSize: 11, color: 'var(--gc-text-3)' }}>
-        End
-        <input type="datetime-local" value={end} onChange={e => setEnd(e.target.value)}
-          style={{ ...inputStyle, marginLeft: 6 }} />
-      </label>
-      <span style={{ fontSize: 10.5, color: 'var(--gc-text-3)' }}>
-        {timeZone.replace('_', ' ')}
-      </span>
-      <div style={{ flex: 1 }} />
-      <button type="button" onClick={onCancel} disabled={busy}
-        style={{ padding: '5px 10px', borderRadius: 6, fontSize: 11.5, border: '1px solid var(--gc-border-light)', background: 'var(--gc-surface)', color: 'var(--gc-text-2)', cursor: 'pointer' }}>
-        Cancel
-      </button>
-      <button
-        type="button"
-        disabled={busy}
-        onClick={() => {
-          const body: { startedAt?: string; endedAt?: string } = {};
-          const s = fromLocalInput(start);
-          const e = fromLocalInput(end);
-          if (s && s !== shift.startedAt) body.startedAt = s;
-          if (e && e !== shift.endedAt) body.endedAt = e;
-          if (body.startedAt || body.endedAt) onSave(body);
-          else onCancel();
-        }}
-        style={{ padding: '5px 12px', borderRadius: 6, fontSize: 11.5, fontWeight: 700, border: 'none', background: 'var(--gc-blue, #1a73e8)', color: '#fff', cursor: 'pointer' }}
-      >
-        Save
-      </button>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <div>
+          <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.3, textTransform: 'uppercase', color: 'var(--gc-text-3)', marginBottom: 3 }}>
+            Start ({zone})
+          </div>
+          <DateTimeInput
+            value={start}
+            onChange={setStart}
+            accentColor="var(--gc-blue, #1a73e8)"
+            size="sm"
+            placeholder="Set start"
+          />
+        </div>
+        <div>
+          <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.3, textTransform: 'uppercase', color: 'var(--gc-text-3)', marginBottom: 3 }}>
+            End ({zone})
+          </div>
+          <DateTimeInput
+            value={end}
+            onChange={setEnd}
+            accentColor="var(--gc-blue, #1a73e8)"
+            size="sm"
+            placeholder="Leave blank to reopen"
+          />
+        </div>
+
+        {durationSeconds != null && (
+          <div style={{
+            padding: '6px 10px', borderRadius: 7, alignSelf: 'flex-end',
+            background: inverted || overWindow ? '#fef2f2' : 'var(--gc-surface)',
+            border: `1px solid ${inverted || overWindow ? '#fecaca' : 'var(--gc-border-light)'}`,
+          }}>
+            <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: 0.3, textTransform: 'uppercase', color: 'var(--gc-text-3)' }}>
+              Shift length
+            </div>
+            <div style={{
+              fontSize: 14, fontWeight: 800, fontVariantNumeric: 'tabular-nums',
+              color: inverted || overWindow ? '#991b1b' : 'var(--gc-text-1)',
+            }}>
+              {inverted ? 'invalid' : fmtHours(durationSeconds)}
+            </div>
+          </div>
+        )}
+
+        <div style={{ flex: 1 }} />
+        <button type="button" onClick={onCancel} disabled={busy}
+          style={{ padding: '6px 11px', borderRadius: 6, fontSize: 11.5, border: '1px solid var(--gc-border-light)', background: 'var(--gc-surface)', color: 'var(--gc-text-2)', cursor: 'pointer', alignSelf: 'flex-end' }}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          disabled={busy || inverted}
+          onClick={() => {
+            const body: { startedAt?: string; endedAt?: string } = {};
+            if (startIso && startIso !== shift.startedAt) body.startedAt = startIso;
+            if (endIso && endIso !== shift.endedAt) body.endedAt = endIso;
+            if (body.startedAt || body.endedAt) onSave(body);
+            else onCancel();
+          }}
+          style={{
+            padding: '6px 13px', borderRadius: 6, fontSize: 11.5, fontWeight: 700,
+            border: 'none', alignSelf: 'flex-end',
+            background: inverted ? 'var(--gc-border-light)' : 'var(--gc-blue, #1a73e8)',
+            color: '#fff', cursor: (busy || inverted) ? 'not-allowed' : 'pointer',
+          }}
+        >
+          Save
+        </button>
+      </div>
+
+      {inverted && (
+        <div style={{ fontSize: 11.5, color: '#991b1b', marginTop: 8, fontWeight: 600 }}>
+          The end time is before the start time.
+        </div>
+      )}
+      {overWindow && !inverted && (
+        <div style={{ fontSize: 11.5, color: '#991b1b', marginTop: 8, fontWeight: 600 }}>
+          That is longer than a 14 hour window allows — check the times are in {zone}.
+        </div>
+      )}
     </div>
   );
 }
