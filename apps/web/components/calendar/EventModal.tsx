@@ -21,7 +21,6 @@ import { AssetSelect } from './AssetSelect';
 import type { CalendarEvent, Driver, EventStatus, Accessorial, Stop, RefNum, LoadAuditEntry, CustomerMatchResult } from '@/lib/types';
 import { NON_REVENUE_TYPES } from '@/lib/types';
 import { matchCustomer } from '@/lib/customerMatch';
-import { cleanBrokerName } from '@/lib/brokerName';
 import { NewBrokerReviewModal } from './NewBrokerReviewModal';
 import { LOAD_ACCENT, LOAD_ACCENT_BG, LOAD_ACCENT_BG_HOVER, LOAD_ACCENT_BORDER, LOAD_ACCENT_HOVER } from '@/lib/loadAccent';
 import { RefNumsField } from '@/components/forms/EventModalForm';
@@ -1667,25 +1666,44 @@ function BrokerMatchBanner({ match, onConfirmMatch, onRejectMatch, onCreateNew, 
   const [creating, setCreating] = useState(false);
 
   if (match.status === 'confirm') {
+    // `alternative` means two customers scored within AMBIGUITY_MARGIN
+    // of each other, so the matcher genuinely cannot tell them apart
+    // (e.g. "Worldwide Logistics Group" vs "Worldwide Express"). Naming
+    // only the winner would read as a recommendation it hasn't earned,
+    // so both get an equal-weight button.
+    const ambiguous = match.alternative;
     return (
       <div className="rounded-xl p-3 space-y-2" style={{ background: '#fffbeb', border: '1px solid #fcd34d' }}>
         <div className="flex items-center gap-2">
           <AlertCircle size={13} style={{ color: '#b45309', flexShrink: 0 }} />
           <span style={{ fontSize: 12, color: '#92400e' }}>
-            Possible match: <strong>{match.customer.name}</strong>{' '}
-            <span style={{ opacity: 0.6 }}>({Math.round(match.score * 100)}%)</span>
+            {ambiguous ? (
+              <>Two customers match this name equally well — pick one:</>
+            ) : (
+              <>
+                Possible match: <strong>{match.customer.name}</strong>{' '}
+                <span style={{ opacity: 0.6 }}>({Math.round(match.score * 100)}%)</span>
+              </>
+            )}
           </span>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <button type="button" onClick={() => onConfirmMatch(match.customer)}
             className="text-xs font-semibold px-3 py-1.5 rounded-lg"
             style={{ background: '#1a73e8', color: '#fff', border: 'none', cursor: 'pointer' }}>
-            Yes, use {match.customer.name}
+            {ambiguous ? match.customer.name : `Yes, use ${match.customer.name}`}
           </button>
+          {ambiguous && (
+            <button type="button" onClick={() => onConfirmMatch(ambiguous)}
+              className="text-xs font-semibold px-3 py-1.5 rounded-lg"
+              style={{ background: '#1a73e8', color: '#fff', border: 'none', cursor: 'pointer' }}>
+              {ambiguous.name}
+            </button>
+          )}
           <button type="button" onClick={onRejectMatch}
             className="text-xs px-3 py-1.5 rounded-lg"
             style={{ border: '1px solid #fcd34d', background: 'transparent', color: '#92400e', cursor: 'pointer' }}>
-            Not this one
+            {ambiguous ? 'Neither' : 'Not this one'}
           </button>
         </div>
       </div>
@@ -2704,6 +2722,14 @@ export default function EventModal() {
       });
       // load.notes is the canonical column for the consolidated notes field
       if (vals['specialInstructions'] === undefined && ev.notes) vals['specialInstructions'] = ev.notes;
+      // customerId is NOT in ALL_FIELDS (internal FK, no UI field of its
+      // own), so the loop above can't carry it. It has to be seeded by
+      // hand — reinitForm already did, this path didn't, and that gap
+      // was silently unlinking loads: fieldValues had no customerId, so
+      // every save sent customerId: null and wiped the FK, logging
+      // "Customer changed from <broker> to —" with nobody having touched
+      // the field. 116 loads lost their customer that way.
+      if (ev.customerId) vals['customerId'] = ev.customerId;
       setFieldValues(vals);
       setRateConPdf(ev.rateConPdf ?? undefined);
       // Mirror reinitForm's baseline snapshot so this path doesn't
@@ -3083,11 +3109,15 @@ export default function EventModal() {
     // is still being populated) and trigger a "save changes?" prompt
     // on close even when the user did nothing.
     const setCustomerId = (id: string) => setFieldValues(prev => ({ ...prev, customerId: id }));
+    // Clears to '' rather than deleting the key. The two used to be
+    // indistinguishable downstream, and buildOptionalPayload read BOTH
+    // as "null it out" — so a path that merely failed to seed the field
+    // was treated as an explicit clear and silently dropped the FK.
+    // Now: absent = never loaded (leave the DB alone), '' = the user
+    // emptied the broker (really clear it).
     const clearCustomerId = () => setFieldValues(prev => {
-      if (!('customerId' in prev)) return prev;
-      const next = { ...prev };
-      delete next.customerId;
-      return next;
+      if (prev.customerId === '' || !('customerId' in prev)) return prev;
+      return { ...prev, customerId: '' };
     });
     if (!brokerVal) {
       if (currentId) clearCustomerId();
@@ -3174,8 +3204,18 @@ export default function EventModal() {
     // batch-send / invoice flows can't reliably resolve the recipient.
     // Empty-string is normalised to null so a "(cleared)" picker write
     // actually clears the FK rather than landing as garbage.
+    //
+    // `undefined` means something different from `''` and must NOT be
+    // conflated with it: it says the field was never loaded into this
+    // form, which is not the same as the user clearing it. Sending null
+    // for that case is what unlinked 116 loads — the edit-init path
+    // didn't seed customerId, so every save looked like a deliberate
+    // clear. Omitting the key instead leaves the column untouched,
+    // because PATCH /v1/loads/:id gates on `"customerId" in body`
+    // (loads.ts:1588). Belt-and-braces behind the init fix above.
     const cid = fieldValues['customerId'];
-    out['customerId'] = (cid === undefined || cid === '') ? null : cid;
+    if (cid === '') out['customerId'] = null;
+    else if (cid !== undefined) out['customerId'] = cid;
     return out;
   };
 
