@@ -26,7 +26,7 @@
  * "&"-joined single line had no room for them.
  */
 
-import type { ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import type { Accessorial, AccessorialChange, LoadAuditEntry } from '@fleetcal/types';
 
 // ── Categories ───────────────────────────────────────────────────────
@@ -191,6 +191,18 @@ export interface AuditLine {
   key: string;
   category: AuditCategory;
   node: ReactNode;
+  /** Plain-text field name + endpoints, set only on simple "X changed
+   *  from A to B" lines. AuditHistory uses these to collapse a run of
+   *  edits to the same field into one row showing the NET change
+   *  ("Truck changed 4 times · CT-2027 → CT-2025"), which is the part
+   *  worth reading — the intermediate steps are churn.
+   *
+   *  Omitted on lines with no meaningful A→B pair (relay handoffs,
+   *  document uploads, stop counts). Those never collapse, they just
+   *  render as they always have. */
+  label?: string;
+  from?:  string;
+  to?:    string;
 }
 
 /**
@@ -202,7 +214,12 @@ export interface AuditLine {
  */
 export function buildAuditLines(entry: LoadAuditEntry, ctx: AuditRenderCtx): AuditLine[] {
   const out: AuditLine[] = [];
-  const push = (key: string, category: AuditCategory, node: ReactNode) => out.push({ key, category, node });
+  const push = (
+    key: string,
+    category: AuditCategory,
+    node: ReactNode,
+    pair?: { label: string; from: string; to: string },
+  ) => out.push({ key, category, node, ...pair });
   const assetName = (id?: number) =>
     id == null ? '—' : (ctx.assetName?.(id) ?? `Asset ${id}`);
 
@@ -220,15 +237,22 @@ export function buildAuditLines(entry: LoadAuditEntry, ctx: AuditRenderCtx): Aud
 
   // ── Assignment ──
   if (entry.prevAssetId !== undefined || entry.newAssetId !== undefined)
-    push('asset', 'assignment', <>{b('Truck')} changed from {b(assetName(entry.prevAssetId))} to {b(assetName(entry.newAssetId))}</>);
+    push('asset', 'assignment', <>{b('Truck')} changed from {b(assetName(entry.prevAssetId))} to {b(assetName(entry.newAssetId))}</>,
+      { label: 'Truck', from: assetName(entry.prevAssetId), to: assetName(entry.newAssetId) });
   if (entry.prevDriverName !== undefined || entry.newDriverName !== undefined)
-    push('driver', 'assignment', <>{b('Driver')} changed from {b(entry.prevDriverName || '—')} to {b(entry.newDriverName || '—')}</>);
-  if (entry.prevTrailerId !== undefined || entry.newTrailerId !== undefined)
-    push('trailer', 'assignment', <>{b('Trailer')} changed from {b(entry.prevTrailerNum || (entry.prevTrailerId ? `#${entry.prevTrailerId}` : '—'))} to {b(entry.newTrailerNum || (entry.newTrailerId ? `#${entry.newTrailerId}` : '—'))}</>);
+    push('driver', 'assignment', <>{b('Driver')} changed from {b(entry.prevDriverName || '—')} to {b(entry.newDriverName || '—')}</>,
+      { label: 'Driver', from: entry.prevDriverName || '—', to: entry.newDriverName || '—' });
+  if (entry.prevTrailerId !== undefined || entry.newTrailerId !== undefined) {
+    const pt = entry.prevTrailerNum || (entry.prevTrailerId ? `#${entry.prevTrailerId}` : '—');
+    const nt = entry.newTrailerNum  || (entry.newTrailerId  ? `#${entry.newTrailerId}`  : '—');
+    push('trailer', 'assignment', <>{b('Trailer')} changed from {b(pt)} to {b(nt)}</>,
+      { label: 'Trailer', from: pt, to: nt });
+  }
 
   // ── Financial ──
   if (entry.prevLoadPrice !== undefined || entry.newLoadPrice !== undefined)
-    push('lprice', 'financial', <>{b('Load price')} changed from {b(fmt$(entry.prevLoadPrice))} to {b(fmt$(entry.newLoadPrice))}</>);
+    push('lprice', 'financial', <>{b('Load price')} changed from {b(fmt$(entry.prevLoadPrice))} to {b(fmt$(entry.newLoadPrice))}</>,
+      { label: 'Load price', from: fmt$(entry.prevLoadPrice), to: fmt$(entry.newLoadPrice) });
   // The pay badge rides on THIS line only. `paySource` describes the
   // driver-pay pair, never the load price sitting in the same entry.
   if (entry.prevDriverPay !== undefined || entry.newDriverPay !== undefined)
@@ -240,18 +264,26 @@ export function buildAuditLines(entry: LoadAuditEntry, ctx: AuditRenderCtx): Aud
     push('billing', 'financial', <>{b('Billing status')} changed from {b(fmtCat(entry.prevBillingStatus) || '—')} to {b(fmtCat(entry.newBillingStatus) || '—')}</>);
 
   // ── Customer ──
-  if (entry.prevCustomerId !== undefined || entry.newCustomerId !== undefined)
-    push('customer', 'customer', <>{b('Customer')} changed from {b(entry.prevCustomerName || entry.prevBroker || '—')} to {b(entry.newCustomerName || entry.newBroker || '—')}</>);
-  else if (entry.prevBroker !== undefined || entry.newBroker !== undefined)
-    push('broker', 'customer', <>{b('Customer')} changed from {b(entry.prevBroker || '—')} to {b(entry.newBroker || '—')}</>);
+  if (entry.prevCustomerId !== undefined || entry.newCustomerId !== undefined) {
+    const pc = entry.prevCustomerName || entry.prevBroker || '—';
+    const nc = entry.newCustomerName  || entry.newBroker  || '—';
+    push('customer', 'customer', <>{b('Customer')} changed from {b(pc)} to {b(nc)}</>,
+      { label: 'Customer', from: pc, to: nc });
+  } else if (entry.prevBroker !== undefined || entry.newBroker !== undefined) {
+    push('broker', 'customer', <>{b('Customer')} changed from {b(entry.prevBroker || '—')} to {b(entry.newBroker || '—')}</>,
+      { label: 'Customer', from: entry.prevBroker || '—', to: entry.newBroker || '—' });
+  }
   if (entry.prevDispatcher !== undefined || entry.newDispatcher !== undefined)
-    push('disp', 'customer', <>{b('Dispatcher')} changed from {b(entry.prevDispatcher || '—')} to {b(entry.newDispatcher || '—')}</>);
+    push('disp', 'customer', <>{b('Dispatcher')} changed from {b(entry.prevDispatcher || '—')} to {b(entry.newDispatcher || '—')}</>,
+      { label: 'Dispatcher', from: entry.prevDispatcher || '—', to: entry.newDispatcher || '—' });
 
   // ── Schedule ──
   if (entry.prevStart !== undefined || entry.newStart !== undefined)
-    push('start', 'schedule', <>{b('Start')} changed from {b(fmtAuditTime(entry.prevStart))} to {b(fmtAuditTime(entry.newStart))}</>);
+    push('start', 'schedule', <>{b('Start')} changed from {b(fmtAuditTime(entry.prevStart))} to {b(fmtAuditTime(entry.newStart))}</>,
+      { label: 'Start', from: fmtAuditTime(entry.prevStart), to: fmtAuditTime(entry.newStart) });
   if (entry.prevEnd !== undefined || entry.newEnd !== undefined)
-    push('end', 'schedule', <>{b('End')} changed from {b(fmtAuditTime(entry.prevEnd))} to {b(fmtAuditTime(entry.newEnd))}</>);
+    push('end', 'schedule', <>{b('End')} changed from {b(fmtAuditTime(entry.prevEnd))} to {b(fmtAuditTime(entry.newEnd))}</>,
+      { label: 'End', from: fmtAuditTime(entry.prevEnd), to: fmtAuditTime(entry.newEnd) });
 
   // ── Status ──
   if (entry.prevPriority !== undefined || entry.newPriority !== undefined)
@@ -362,32 +394,161 @@ export function buildAuditLines(entry: LoadAuditEntry, ctx: AuditRenderCtx): Aud
 
 // ── Entry component ─────────────────────────────────────────────────
 
+// AuditEntryLines (one entry → N ungrouped rows) used to live here and
+// is now folded into AuditHistory. Deliberately not kept alongside it:
+// two renderers for the same history is how the modal and the load page
+// drifted apart in the first place — see the module header. Anything
+// that needs raw lines calls buildAuditLines directly.
+
+/** One rendered line plus the entry context it came from. */
+interface FlatLine extends AuditLine {
+  who:      string;
+  when:     string;
+  /** Sort/group key for the leg this change belongs to; '' = load-level. */
+  legKey:   string;
+  leg?:     LoadAuditEntry['leg'];
+}
+
+/** A run of consecutive lines that describe the same field on the same
+ *  leg. `lines.length === 1` for everything that didn't collapse. */
+interface LineGroup {
+  key:   string;
+  lines: FlatLine[];
+}
+
 /**
- * Renders one audit entry as N lines — `[Category] [Leg?] change · by
- * who · when`. Emits nothing when the entry produces no lines (the
- * detail page already hid those; EventModal used to leave an empty row).
+ * Collapse consecutive edits to the SAME field on the SAME leg.
+ *
+ * Only adjacent lines merge, so the history never reorders itself and a
+ * group can't swallow an unrelated change that happened in between —
+ * "truck A→B, driver X→Y, truck B→C" stays three rows, because the
+ * driver change really did happen between the two truck edits.
+ *
+ * Lines without a from/to pair (relay handoffs, uploads, stop counts)
+ * never group: there's no net change to summarise and each one is a
+ * distinct event worth its own row.
  */
-export function AuditEntryLines({
-  entry, ctx,
+function groupLines(flat: FlatLine[]): LineGroup[] {
+  const out: LineGroup[] = [];
+  for (const line of flat) {
+    const prev = out[out.length - 1];
+    const groupable = line.label != null;
+    if (
+      prev && groupable &&
+      prev.lines[0].label != null &&
+      prev.lines[0].key === line.key &&
+      prev.lines[0].legKey === line.legKey
+    ) {
+      prev.lines.push(line);
+    } else {
+      out.push({ key: `${line.key}:${line.legKey}:${out.length}`, lines: [line] });
+    }
+  }
+  return out;
+}
+
+/**
+ * The full history list: every entry expanded to lines, then runs of
+ * repeated edits to one field folded into a single expandable row.
+ *
+ * Dispatch reassigns trucks and drivers repeatedly while a load firms
+ * up — one real load logged four truck swaps and two driver swaps in
+ * three hours, which read as six rows of near-identical text. Folded,
+ * that's "Truck changed 4 times · CT-2027 → CT-2025" and the detail is
+ * one click away. The net endpoints are the useful part; the middle is
+ * churn.
+ */
+export function AuditHistory({
+  entries, ctx,
 }: {
-  entry: LoadAuditEntry;
-  ctx: AuditRenderCtx;
+  entries: LoadAuditEntry[];
+  ctx:     AuditRenderCtx;
 }) {
-  const lines = buildAuditLines(entry, ctx);
-  if (lines.length === 0) return null;
-  const who = entry.changedByName || 'Unknown';
-  const when = fmtAuditDate(entry.changedAt, ctx.timeZone);
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
+
+  const groups = useMemo(() => {
+    const flat: FlatLine[] = [];
+    for (const entry of entries) {
+      const who  = entry.changedByName || 'Unknown';
+      const when = fmtAuditDate(entry.changedAt, ctx.timeZone);
+      for (const line of buildAuditLines(entry, ctx)) {
+        flat.push({ ...line, who, when, leg: entry.leg, legKey: entry.leg ? String(entry.leg.index) : '' });
+      }
+    }
+    return groupLines(flat);
+  }, [entries, ctx]);
+
+  if (groups.length === 0) return null;
+
+  const row = (children: ReactNode, key: string) => (
+    <div key={key} style={{ display: 'flex', alignItems: 'baseline', gap: 6, fontSize: 12, flexWrap: 'wrap' }}>
+      {children}
+    </div>
+  );
+
   return (
     <>
-      {lines.map(line => (
-        <div key={line.key}
-          style={{ display: 'flex', alignItems: 'baseline', gap: 6, fontSize: 12, flexWrap: 'wrap' }}>
-          <AuditBadge category={line.category} />
-          {entry.leg && <AuditLegChip leg={entry.leg} />}
-          <span style={{ color: 'var(--gc-text-1)' }}>{line.node}</span>
-          <span style={{ color: 'var(--gc-text-3)', whiteSpace: 'nowrap' }}>· by {who} · {when}</span>
-        </div>
-      ))}
+      {groups.map(group => {
+        const first = group.lines[0];
+        // Single line — render exactly as before, no affordance added.
+        if (group.lines.length === 1) {
+          return row(
+            <>
+              <AuditBadge category={first.category} />
+              {first.leg && <AuditLegChip leg={first.leg} />}
+              <span style={{ color: 'var(--gc-text-1)' }}>{first.node}</span>
+              <span style={{ color: 'var(--gc-text-3)', whiteSpace: 'nowrap' }}>· by {first.who} · {first.when}</span>
+            </>,
+            group.key,
+          );
+        }
+
+        // Collapsed run. `from` comes from the OLDEST edit and `to` from
+        // the newest, so the summary is the net move across the whole
+        // run rather than either end's individual hop.
+        const last    = group.lines[group.lines.length - 1];
+        const open    = openGroups[group.key] ?? false;
+        const people  = Array.from(new Set(group.lines.map(l => l.who)));
+        const byLabel = people.length === 1 ? people[0] : `${people.length} people`;
+        return (
+          <div key={group.key} style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+            {row(
+              <>
+                <AuditBadge category={first.category} />
+                {first.leg && <AuditLegChip leg={first.leg} />}
+                <span style={{ color: 'var(--gc-text-1)' }}>
+                  <strong>{first.label}</strong> changed {group.lines.length} times
+                  {first.from !== last.to && <> · {first.from} → <strong>{last.to}</strong></>}
+                  {first.from === last.to && <> · ended back at <strong>{last.to}</strong></>}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setOpenGroups(p => ({ ...p, [group.key]: !open }))}
+                  style={{
+                    fontSize: 11, fontWeight: 600, color: 'var(--gc-blue)',
+                    background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+                  }}
+                >
+                  {open ? 'Hide' : 'Show all'}
+                </button>
+                <span style={{ color: 'var(--gc-text-3)', whiteSpace: 'nowrap' }}>· by {byLabel} · {last.when}</span>
+              </>,
+              `${group.key}-head`,
+            )}
+            {open && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5, paddingLeft: 18, borderLeft: '2px solid var(--gc-border-light)', marginLeft: 6 }}>
+                {group.lines.map((l, i) => row(
+                  <>
+                    <span style={{ color: 'var(--gc-text-1)' }}>{l.node}</span>
+                    <span style={{ color: 'var(--gc-text-3)', whiteSpace: 'nowrap' }}>· by {l.who} · {l.when}</span>
+                  </>,
+                  `${group.key}-${i}`,
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </>
   );
 }

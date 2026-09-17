@@ -32,7 +32,7 @@ import TimePicker from './TimePicker';
 import StopsSection from './StopsSection';
 import RelayLegsEditor, { RelayLegView, RelayHandoffView, RelayHandoffPhoto } from './RelayLegsEditor';
 import { legRoleFor, legLabel, byLegIndex, handoffIndexes, handoffTimesOf, isHandoffStop } from '@fleetcal/types';
-import { AuditEntryLines, appendAuditEntry, buildAuditEntry } from '@/lib/auditEntry';
+import { AuditHistory, appendAuditEntry, buildAuditEntry } from '@/lib/auditEntry';
 import { legStraightMiles } from '@/lib/legMiles';
 import {
   PAY_BASIS_LABEL, autoPayFor, fmtPct, payPctOf, proratePayAcrossLegs,
@@ -7669,16 +7669,13 @@ export default function EventModal() {
                 </div>
                 {historyExpanded && hasHistory && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 10 }}>
-                    {auditLog.map((entry, i) => (
-                      <AuditEntryLines
-                        key={i}
-                        entry={entry}
-                        ctx={{
-                          timeZone: calendarTimezone,
-                          assetName: (id: number) => assets.find(a => a.id === id)?.name ?? `Asset ${id}`,
-                        }}
-                      />
-                    ))}
+                    <AuditHistory
+                      entries={auditLog}
+                      ctx={{
+                        timeZone: calendarTimezone,
+                        assetName: (id: number) => assets.find(a => a.id === id)?.name ?? `Asset ${id}`,
+                      }}
+                    />
                   </div>
                 )}
               </div>

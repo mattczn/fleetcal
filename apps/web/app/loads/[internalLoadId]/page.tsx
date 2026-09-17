@@ -26,7 +26,7 @@ import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth, useUser } from '@clerk/nextjs';
-import { AuditEntryLines, auditSubjectAsNext, buildAuditEntry } from '@/lib/auditEntry';
+import { AuditHistory, auditSubjectAsNext, buildAuditEntry } from '@/lib/auditEntry';
 import {
   ArrowLeft, Truck, Loader2, Receipt, MapPin,
   ExternalLink as ExternalLinkIcon, Eye,
@@ -2243,9 +2243,7 @@ function LoadHistorySection({ load, calendarTimezone }: {
       </div>
       {expanded && hasHistory && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 10 }}>
-          {auditLog.map((entry, i) => (
-            <AuditEntryLines key={i} entry={entry} ctx={{ timeZone: calendarTimezone }} />
-          ))}
+          <AuditHistory entries={auditLog} ctx={{ timeZone: calendarTimezone }} />
         </div>
       )}
     </div>
