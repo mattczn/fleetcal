@@ -44,6 +44,9 @@ export type { Customer, CustomerContact, Dispatcher, SavedLocation } from "@flee
 
 export type CustomerMatchResult =
   | { status: "auto";    customer: _Customer; score: number }
-  | { status: "confirm"; customer: _Customer; score: number }
+  // `alternative` is a runner-up scoring within AMBIGUITY_MARGIN of the
+  // winner. When it is set the two are indistinguishable to the matcher,
+  // so the banner must offer both rather than implying one is right.
+  | { status: "confirm"; customer: _Customer; score: number; alternative?: _Customer }
   | { status: "new";     extracted: string }
   | { status: "none" };
