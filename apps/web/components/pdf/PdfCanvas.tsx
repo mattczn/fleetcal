@@ -46,9 +46,22 @@ export default function PdfCanvas({ dataUrl, onRetry, toolbarStyle, canvasBg = '
   const boxRef     = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const pdfRef     = useRef<any>(null);
-  // First-page natural dimensions — used by the fit-to-page calc so
-  // the whole first page is visible by default rather than just the
-  // page width (which would leave the bottom cut off on tall pages).
+  // LARGEST natural page dimensions in the document — used by the
+  // fit-to-page calc so the whole page is visible by default rather
+  // than just its width (which would leave the bottom cut off on tall
+  // pages).
+  //
+  // Max across every page, NOT page 1. One fit scale is applied to the
+  // whole document, so sizing it off the first page overflows any later
+  // page that is bigger. Invoice packets are exactly that: a Letter
+  // portrait invoice, then a landscape POD photo, then an A4 rate con
+  // (612x792, then 792x612, then 595x842). Fitting to 612 wide rendered
+  // the 792-wide POD ~29% past the edge, which raised a HORIZONTAL
+  // scrollbar — and that shrinks clientHeight, which changes the fit
+  // scale, which re-renders, which can drop the scrollbar again. The
+  // same oscillation the rounding below was added to damp, just on the
+  // other axis. Taking the max means no page can overflow, so the loop
+  // can't start.
   const naturalRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
 
   const [containerW, setContainerW] = useState(0);
@@ -94,9 +107,17 @@ export default function PdfCanvas({ dataUrl, onRetry, toolbarStyle, canvasBg = '
       const pdf = await pdfjsLib.getDocument(src).promise;
       if (cancelled) return;
 
-      const page    = await pdf.getPage(1);
-      const natural = page.getViewport({ scale: 1 });
-      naturalRef.current = { w: natural.width, h: natural.height };
+      // Measure every page at scale 1 and keep the largest width and
+      // height. Cheap — getViewport does no rasterising — and it's the
+      // only way to pick a scale that fits a mixed-size document.
+      let maxW = 0, maxH = 0;
+      for (let n = 1; n <= pdf.numPages; n++) {
+        if (cancelled) return;
+        const vp = (await pdf.getPage(n)).getViewport({ scale: 1 });
+        if (vp.width  > maxW) maxW = vp.width;
+        if (vp.height > maxH) maxH = vp.height;
+      }
+      naturalRef.current = { w: maxW, h: maxH };
       pdfRef.current = pdf;
       if (!cancelled) setReady(true);
     })().catch(err => { if (!cancelled) setError(String(err)); });
@@ -117,21 +138,30 @@ export default function PdfCanvas({ dataUrl, onRetry, toolbarStyle, canvasBg = '
       while (box.firstChild) box.removeChild(box.firstChild);
 
       // Fit-to-PAGE: scale to whichever of width or height is the binding
-      // constraint so the whole first page lands on screen at 100% zoom.
+      // constraint so the whole of the LARGEST page lands on screen at
+      // 100% zoom — see naturalRef for why the largest and not the first.
       // The 32 / 24 paddings account for the canvas-area inner padding
       // (16px top+bottom, 16px left+right) plus a little for the scroll-
       // bar gutter so the page never reflows under the user.
       const { w: natW, h: natH } = naturalRef.current;
       const fitW = (containerW - 32) / natW;
       const fitH = containerH > 0 ? (containerH - 24) / natH : fitW;
-      // Round to 2 decimals to damp sub-pixel oscillation. Without
+      // Quantise to 2 decimals to damp sub-pixel oscillation. Without
       // this + the `scrollbar-gutter: stable` below, fast window
       // resizes could land the fit-scale just barely on the edge of
       // needing a vertical scrollbar — the scrollbar flickering on/off
       // would change clientWidth on each frame, which retriggers this
       // useEffect and locks us in a render loop.
+      //
+      // FLOOR, not round: rounding can go UP, and the widest page then
+      // lands a pixel or two past the edge — which is the whole failure
+      // this fit is meant to avoid, just smaller. Measured on a real
+      // 6-page packet in a 600px-wide pane, rounding put the landscape
+      // POD at 570px against a 568px viewport. Flooring can only ever
+      // render a hair small, which is invisible and cannot trigger a
+      // scrollbar.
       const rawScale = Math.max(0.1, Math.min(fitW, fitH));
-      const fitScale = Math.round(rawScale * 100) / 100;
+      const fitScale = Math.max(0.1, Math.floor(rawScale * 100) / 100);
       const scale = fitScale * zoomMult;
       const pdfjsLib = await loadPdfJsFromCDN();
 
@@ -253,7 +283,11 @@ export default function PdfCanvas({ dataUrl, onRetry, toolbarStyle, canvasBg = '
             </button>
           </div>
         )}
-        <div ref={boxRef} />
+        {/* Pages are centred individually because a mixed-size document
+            (Letter invoice + landscape POD + A4 rate con) gives each
+            page its own width. Left-aligned, they'd step in and out
+            against the edge as you scroll. */}
+        <div ref={boxRef} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }} />
       </div>
     </div>
   );
