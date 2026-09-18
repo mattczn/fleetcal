@@ -82,6 +82,10 @@ export interface DragState {
   originAssetId: number;
   originStart:   string;
   originEnd:     string;
+  /** Set when the block being dragged is a planned placeholder
+   *  (module: planning), not an event. eventId is then `plan:<id>` —
+   *  never a real event id — and the drop writes usePlannedStore. */
+  planId?: string;
 }
 
 export interface BatchItem {

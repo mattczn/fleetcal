@@ -6,6 +6,7 @@ import { PLANNED_PURPOSE_LABEL } from '@fleetcal/types';
 import type { Asset } from '@/lib/types';
 import { timeToPixels, timeHeightPixels, localDateStr, naiveHomeToView } from '@/lib/time-utils';
 import { useCalendarStore } from '@/store/useCalendarStore';
+import { usePermissions } from '@/lib/usePermissions';
 
 const PURPOSE_ICON: Record<PlannedPurpose, typeof Search> = {
   find_load:     Search,
@@ -34,11 +35,15 @@ interface Props {
  * glance. Expired plans (24h past their end with no load attached)
  * fade out but stay until someone deletes them.
  *
- * Not draggable in v1 — click opens it in the event modal, where
- * truck and times are edited.
+ * Drags like a load card (drop on another truck/time to move it);
+ * a click opens it in the event modal.
  */
 export default function PlannedEventCard({ plan, asset, colIdx, totalCols }: Props) {
-  const { currentDate, rowHeight, calendarTimezone, cardFontScale, openPlanModal } = useCalendarStore();
+  const { currentDate, rowHeight, calendarTimezone, cardFontScale, openPlanModal, dragState, setDragState } = useCalendarStore();
+  const { can } = usePermissions();
+  const canDrag = can('planning.access');
+  const dragId = `plan:${plan.id}`;
+  const isDragging = dragState?.eventId === dragId && dragState.hasMoved;
 
   const scale = cardFontScale ?? 1.0;
   const fs = (px: number) => Math.round(px * scale * 2) / 2;
@@ -68,12 +73,32 @@ export default function PlannedEventCard({ plan, asset, colIdx, totalCols }: Pro
         backgroundColor: 'var(--gc-surface)',
         backgroundImage: `repeating-linear-gradient(135deg, transparent 0 7px, ${hexToRgba(color, 0.14)} 7px 9px)`,
         border: `1.5px dashed ${color}`,
-        opacity: plan.expired ? 0.5 : 1,
-        cursor: 'pointer',
+        opacity: isDragging ? 0.3 : plan.expired ? 0.5 : 1,
+        cursor: isDragging ? 'grabbing' : canDrag ? 'grab' : 'pointer',
+        pointerEvents: isDragging ? 'none' : 'auto',
         userSelect: 'none',
       }}
-      onMouseDown={(e) => e.stopPropagation()}
-      onClick={(e) => { e.stopPropagation(); openPlanModal(plan.id); }}
+      // Same drag system as load cards (calendar/index.tsx): a drop on
+      // a new truck/time saves the plan; a mouseup without movement is
+      // a click and opens it in the event modal.
+      onMouseDown={(e) => {
+        e.stopPropagation();
+        if (!canDrag) return;
+        setDragState({
+          eventId: dragId,
+          planId: plan.id,
+          targetAssetId: asset.id,
+          newStart: viewStart,
+          newEnd: viewEnd,
+          hasMoved: false,
+          pointerStartX: e.clientX,
+          pointerStartY: e.clientY,
+          originAssetId: asset.id,
+          originStart: viewStart,
+          originEnd: viewEnd,
+        });
+      }}
+      onClick={(e) => { e.stopPropagation(); if (!canDrag) openPlanModal(plan.id); }}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPlanModal(plan.id); } }}
       title={`${label} · ${plan.title} · ${startTime}–${endTime}${plan.expired ? ' · Expired' : ''}`}
     >

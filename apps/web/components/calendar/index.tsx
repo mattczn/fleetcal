@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useCalendarStore, DragState } from '@/store/useCalendarStore';
+import { usePlannedStore } from '@/store/usePlannedStore';
 import { GUTTER_W, addMsToNaiveDatetime, naiveViewToHome, timeToPixels, timeHeightPixels } from '@/lib/time-utils';
 import { isActiveInRange, dateKeyInTz } from '@/lib/lifecycle';
 import CalendarHeader from './CalendarHeader';
@@ -197,8 +198,9 @@ export default function CalendarView() {
         setDragState(updated);
       }
 
-      const event      = events.find(ev => ev.id === ds.eventId);
-      const eventAsset = assets.find(a => a.id === event?.assetId);
+      const plan       = ds.planId ? usePlannedStore.getState().items.find(p => p.id === ds.planId) : undefined;
+      const event      = plan ? undefined : events.find(ev => ev.id === ds.eventId);
+      const eventAsset = assets.find(a => a.id === (plan?.assetId ?? event?.assetId));
 
       // Preview top/height clamped to the currently visible day, same
       // way CalendarEvent positions multi-day blocks: continuation →
@@ -214,7 +216,7 @@ export default function CalendarView() {
         top:     previewTop,
         height:  previewHeight,
         color:   eventAsset?.color ?? targetAsset.color,
-        title:   event?.title ?? '',
+        title:   plan?.title ?? event?.title ?? '',
         newStart,
         newEnd,
       });
@@ -223,7 +225,7 @@ export default function CalendarView() {
     const handleMouseUp = () => {
       const ds = dragStateRef.current;
       if (ds) {
-        const { updateEvent, openEditModal, setDragState, calendarTimezone } = useCalendarStore.getState();
+        const { updateEvent, openEditModal, openPlanModal, setDragState, calendarTimezone } = useCalendarStore.getState();
         // Belt-and-braces: even if hasMoved flipped to true at some
         // point during the gesture, only persist a drag when the
         // FINAL position differs from where the user grabbed the
@@ -266,6 +268,16 @@ export default function CalendarView() {
           // view-positioned blocks — see CalendarEvent.tsx). Convert
           // back to HOME_TZ before persisting so the round-trip is
           // stable.
+          if (ds.planId) {
+            // Planned placeholder: same move + same driver rule as a
+            // load, written to the plan table instead of the event.
+            void usePlannedStore.getState().update(ds.planId, {
+              assetId: ds.targetAssetId,
+              start:   naiveViewToHome(ds.newStart, calendarTimezone),
+              end:     naiveViewToHome(ds.newEnd,   calendarTimezone),
+              ...(prefDriver ? { driverId: prefDriver.id } : {}),
+            });
+          } else {
           updateEvent(ds.eventId, {
             assetId:    ds.targetAssetId,
             start:      naiveViewToHome(ds.newStart, calendarTimezone),
@@ -274,10 +286,13 @@ export default function CalendarView() {
               ? { driverName: canonicalName, driverId: prefDriver.id }
               : {}),
           });
+          }
           // Prevent the upcoming click from firing the column create handler
           document.addEventListener('click', (ce) => { ce.stopPropagation(); }, {
             capture: true, once: true,
           });
+        } else if (ds.planId) {
+          openPlanModal(ds.planId);
         } else {
           openEditModal(ds.eventId);
         }

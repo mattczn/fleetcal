@@ -66,11 +66,25 @@ export const usePlannedStore = create<PlannedState>((set, get) => ({
   },
 
   update: async (id, body) => {
+    // Optimistic for the fields a drag changes, so a dropped plan stays
+    // where it was dropped instead of snapping back until the API
+    // answers. The server's copy replaces it on success; failure rolls
+    // back.
+    const prev = get().items;
+    set({
+      items: prev.map((p) => (p.id === id ? {
+        ...p,
+        ...(body.assetId !== undefined ? { assetId: body.assetId } : {}),
+        ...(body.start   !== undefined ? { start: body.start } : {}),
+        ...(body.end     !== undefined ? { end: body.end } : {}),
+      } : p)).sort(byStart),
+    });
     try {
       const { plannedEvent } = await railway.updatePlannedEvent(id, body);
       set((s) => ({ items: s.items.map((p) => (p.id === id ? plannedEvent : p)).sort(byStart) }));
       return true;
     } catch (err) {
+      set({ items: prev });
       errorToast(err, 'Plan did not save');
       return false;
     }
