@@ -10,7 +10,7 @@ import { usePlannedStore } from '@/store/usePlannedStore';
  * refreshes on window focus and every 2 minutes so a plan another
  * dispatcher added shows up without a reload — plans have no realtime
  * channel. Renders nothing; does nothing for orgs/roles without access
- * (and it is the only planning surface mounted on the calendar page).
+ * It is the only planning component mounted on the calendar page.
  */
 export default function PlannedLoader() {
   const { enabled: moduleOn } = useModules();
