@@ -118,7 +118,7 @@ function computeWeekLayout<T extends { start: string; end: string }>(events: T[]
 }
 
 export default function WeekView() {
-  const { assets: allAssets, events, currentDate, rowHeight, openEditModal, openCreateModal, activeCategoryFilter, showUnassigned, unassignedAssetId, calendarTimezone } = useCalendarStore();
+  const { assets: allAssets, events, currentDate, rowHeight, openEditModal, openCreateModal, openPlanModal, activeCategoryFilter, showUnassigned, unassignedAssetId, calendarTimezone } = useCalendarStore();
   const unassignedAsset = showUnassigned && unassignedAssetId !== null ? allAssets.find(a => a.id === unassignedAssetId) ?? null : null;
 
   const weekDays    = getWeekDays(currentDate);
@@ -153,7 +153,6 @@ export default function WeekView() {
   const { enabled: moduleOn } = useModules();
   const { can } = usePermissions();
   const plans = usePlannedStore((s) => s.items);
-  const openPlan = usePlannedStore((s) => s.openEdit);
   const showPlans = moduleOn('planning') && can('planning.access');
 
   return (
@@ -328,7 +327,7 @@ export default function WeekView() {
                             opacity:         plan.expired ? 0.5 : 1,
                           }}
                           title={`${PLANNED_PURPOSE_LABEL[plan.purpose]} · ${plan.title}${plan.expired ? ' · Expired' : ''}`}
-                          onClick={e => { e.stopPropagation(); openPlan(plan.id); }}
+                          onClick={e => { e.stopPropagation(); openPlanModal(plan.id); }}
                         >
                           <div className="flex items-center h-full px-1.5 overflow-hidden min-w-0">
                             <span className="text-[11px] font-extrabold truncate leading-tight" style={{ color: 'var(--gc-text-1)' }}>

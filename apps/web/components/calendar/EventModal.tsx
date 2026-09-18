@@ -15,6 +15,8 @@ import { usePermissions } from '@/lib/usePermissions';
 import { useModules } from '@/lib/useModules';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { usePlannedStore } from '@/store/usePlannedStore';
+import PlanToLoadSection from './PlanToLoadSection';
+import { PLANNED_PURPOSES, PLANNED_PURPOSE_LABEL, type PlannedPurpose } from '@fleetcal/types';
 import Tooltip from '@/components/ui/Tooltip';
 import { localDateStr, parseTimeInput } from '@/lib/time-utils';
 import { isActiveOn } from '@/lib/lifecycle';
@@ -1791,6 +1793,7 @@ export default function EventModal() {
   const {
     assets, events, drivers, driverPrefs, driverPrefsSecondary, currentDate,
     modalOpen, modalMode, modalEventId, modalDefaults, modalShowMap, modalConflict, clearModalConflict,
+    modalPlanId,
     prefillWorkOrderLinkIds,
     refetchEvent, refetchingEventIds,
     addEvent, updateEvent, removeEvent, cancelEventKeepLoad, cancelLoadKeepRecord, closeModal,
@@ -1849,6 +1852,8 @@ export default function EventModal() {
   const canCreateRevenue    = canDo('loads.create');
   const canCreateNonRevenue = canDo('nonRevenueEvents.create');
   const canCreatePlan       = moduleEnabled('planning') && canDo('planning.access');
+  // The plan this modal is showing, when opened from a plan block.
+  const editingPlan = usePlannedStore((s) => (modalPlanId ? s.items.find((p) => p.id === modalPlanId) ?? null : null));
   // Both revenue destructive paths (Cancel load → permanent / Remove
   // a cancelled load) call DELETE /v1/loads/:id under the hood. Hide
   // the buttons entirely from roles that lack the capability — the
@@ -1977,8 +1982,12 @@ export default function EventModal() {
   const [suggestDriverSwap,           setSuggestDriverSwap]           = useState<string | null>(null);
   const [status,     setStatus]     = useState<EventStatus>('scheduled');
   const [priority,   setPriority]   = useState(false);
-  const [eventKind,  setEventKind]  = useState<'revenue' | 'non_revenue'>('revenue');
+  // 'planned' is modal-only: plans aren't events (own table, see
+  // usePlannedStore) — picking it swaps what Save writes, nothing else
+  // about the form's shape beyond hiding load-only sections.
+  const [eventKind,  setEventKind]  = useState<'revenue' | 'non_revenue' | 'planned'>('revenue');
   const [nonRevenueType, setNonRevenueType] = useState<string>('Maintenance');
+  const [plannedPurpose, setPlannedPurpose] = useState<PlannedPurpose>('find_load');
   // Buffer of maintenance work-order IDs the dispatcher has checked
   // in the Linked Work Orders section, but not yet saved (because the
   // event is still being created). On a successful create save we
@@ -2893,6 +2902,16 @@ export default function EventModal() {
       if (Array.isArray(d.stops) && d.stops.length > 0) {
         setStops((d.stops as Stop[]).map((s, i) => ({ ...s, id: crypto.randomUUID(), eventId: '', sequence: i + 1 })));
       }
+      // Opened from a plan block: lock the form to Planned and carry the
+      // plan's purpose. (Its title / truck / driver / times / notes came
+      // in through modalDefaults above like any other prefill.)
+      const openedPlan = modalPlanId ? usePlannedStore.getState().items.find((p) => p.id === modalPlanId) : undefined;
+      if (openedPlan) {
+        setEventKind('planned');
+        setPlannedPurpose(openedPlan.purpose);
+      } else {
+        setPlannedPurpose('find_load');
+      }
     }
     setConfirmDel(false);
     setConfirmSkip(false);
@@ -3280,7 +3299,48 @@ export default function EventModal() {
     }
   };
 
+  /** Save path for a Planned placeholder. Writes the plan table, never
+   *  an event — none of the load/relay/stops machinery below applies. */
+  const savePlan = async () => {
+    if (getDateOrderError()) return;
+    if (!canDo('planning.access')) return;
+    const notesVal = fieldValues['specialInstructions'];
+    const body = {
+      assetId,
+      driverId: findDriverByName(driverName)?.id ?? null,
+      purpose: plannedPurpose,
+      title: title.trim(),
+      notes: typeof notesVal === 'string' && notesVal.trim() ? notesVal.trim() : null,
+      start: `${startDate}T${startTime || '00:00'}`,
+      end:   `${endDate}T${endTime || '00:00'}`,
+    };
+    const planned = usePlannedStore.getState();
+    const ok = modalPlanId ? await planned.update(modalPlanId, body) : await planned.create(body);
+    if (ok) closeModal();
+  };
+
+  const deletePlan = async () => {
+    if (!modalPlanId) return;
+    if (!confirmDel) { setConfirmDel(true); return; }
+    const ok = await usePlannedStore.getState().remove(modalPlanId);
+    if (ok) closeModal();
+  };
+
+  /** Close this plan and reopen the modal as a new load prefilled from
+   *  it; the load saved from there attaches to the plan automatically
+   *  (usePlannedStore.pendingAttachId, consumed in addEvent). */
+  const createLoadFromPlan = () => {
+    if (!editingPlan) return;
+    const planId = editingPlan.id;
+    const defaults = { assetId, start: `${startDate}T${startTime}`, end: `${endDate}T${endTime}`, driverName: driverName || undefined };
+    closeModal(); // clears any stale pending attach — so arm AFTER it
+    usePlannedStore.getState().setPendingAttach(planId);
+    // Next tick, so the modal sees closed → open and re-seeds.
+    setTimeout(() => openCreateModal(defaults), 0);
+  };
+
   const runSave = async (opts?: { skipGeocodeCheck?: boolean }) => {
+    if (eventKind === 'planned') { await savePlan(); return; }
     // Covers EVERY save branch, not just the reconcile: a load whose
     // legs are still arriving must not be written back from a
     // half-known plan.
@@ -5311,7 +5371,8 @@ export default function EventModal() {
       stops: stops.filter(s => s.type !== 'relay'),
       assetId, driverName: driverName || undefined,
       start: `${startDate}T${startTime}`, end: `${endDate}T${endTime}`,
-      status, eventKind, nonRevenueType: eventKind === 'non_revenue' ? nonRevenueType : undefined,
+      // Batch rows are rate cons — never plans (the toggle hides Planned in batch).
+      status, eventKind: eventKind === 'planned' ? 'revenue' : eventKind, nonRevenueType: eventKind === 'non_revenue' ? nonRevenueType : undefined,
     };
     addEvent(payload, newEventId);
     if (batchIndex >= batchItems.length - 1) {
@@ -6357,7 +6418,7 @@ export default function EventModal() {
             <div>
               <div className="flex items-center gap-2">
                 <div className="text-[11px] font-bold uppercase tracking-wider" style={{ color: headerColor }}>
-                  {isBatch ? `Create Load ${batchIndex + 1} of ${batchItems.length}` : isEdit ? (eventKind === 'non_revenue' ? 'Edit Event' : 'Edit Load') : (eventKind === 'non_revenue' ? 'New Event' : 'New Load')}
+                  {isBatch ? `Create Load ${batchIndex + 1} of ${batchItems.length}` : eventKind === 'planned' ? (modalPlanId ? 'Edit Plan' : 'New Plan') : isEdit ? (eventKind === 'non_revenue' ? 'Edit Event' : 'Edit Load') : (eventKind === 'non_revenue' ? 'New Event' : 'New Load')}
                 </div>
                 {isEdit && (() => {
                   const ev = events.find(e => e.id === modalEventId);
@@ -6516,6 +6577,7 @@ export default function EventModal() {
                 </Tooltip>
               );
             })()}
+            {eventKind !== 'planned' && (
             <Tooltip content={priority ? 'Remove Priority' : 'Mark as Priority'}>
               <button
                 type="button"
@@ -6533,6 +6595,7 @@ export default function EventModal() {
                 {priority && <span style={{ fontSize: 12, fontWeight: 700, color: '#92400e' }}>Priority</span>}
               </button>
             </Tooltip>
+            )}
             {eventKind === 'revenue' && (
               <StyledSelect value={status} onChange={e => { markDirty(); setStatus(e.target.value as EventStatus); }}
                 style={{
@@ -6711,60 +6774,40 @@ export default function EventModal() {
             <div className="flex items-center pb-3 gap-2">
               <div className="flex-1" />
               <div className="flex items-center gap-2">
-                {(['revenue', 'non_revenue'] as const).map(kind => {
+                {(['revenue', 'non_revenue', 'planned'] as const).map(kind => {
+                  // Planned only appears where the org has the planning
+                  // module and the role holds planning.access.
+                  if (kind === 'planned' && ((!canCreatePlan && !modalPlanId) || isBatch)) return null;
                   // Disable Revenue for users who lack loads.create (e.g.
                   // Maintenance role) — they can only make non-revenue
                   // events and the API would 403 a revenue submit anyway.
                   const blockedByPerm = !isEdit && kind === 'revenue' && !canCreateRevenue;
-                  const disabled = isEdit || blockedByPerm;
+                  // Kind is fixed once the record exists — an event can't
+                  // become a plan (or back) by flipping this toggle.
+                  const disabled = isEdit || !!modalPlanId || blockedByPerm;
                   const hidden   = blockedByPerm && eventKind !== 'revenue';
                   if (hidden) return null;
+                  const activeBg = kind === 'revenue' ? 'var(--gc-blue)' : kind === 'non_revenue' ? '#7c3aed' : '#475569';
                   return (
                     <button
                       key={kind}
                       type="button"
                       onClick={() => { if (!disabled) setEventKind(kind); }}
                       disabled={disabled}
-                      title={blockedByPerm ? 'Your role can only create non-revenue events' : undefined}
+                      title={blockedByPerm ? 'Your role can only create non-revenue events' : kind === 'planned' ? 'Placeholder for work that isn\u2019t booked yet — drivers don\u2019t see it' : undefined}
                       className="text-xs px-3 py-1.5 rounded-lg font-medium"
                       style={{
-                        background: eventKind === kind ? (kind === 'revenue' ? 'var(--gc-blue)' : '#7c3aed') : 'var(--gc-hover)',
+                        background: eventKind === kind ? activeBg : 'var(--gc-hover)',
                         color: eventKind === kind ? '#fff' : 'var(--gc-text-2)',
                         cursor: disabled ? 'default' : 'pointer',
                         opacity: disabled && eventKind !== kind ? 0.35 : 1,
                         transition: disabled ? 'none' : 'colors 150ms',
                       }}
                     >
-                      {kind === 'revenue' ? 'Revenue' : 'Non-Revenue'}
+                      {kind === 'revenue' ? 'Revenue' : kind === 'non_revenue' ? 'Non-Revenue' : 'Planned'}
                     </button>
                   );
                 })}
-                {/* Planned placeholder (module: planning). Not an event
-                    kind — plans live in their own table — so this hands
-                    the clicked truck + slot over to PlannedEventModal
-                    and closes this one. Create-only. */}
-                {!isEdit && canCreatePlan && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      usePlannedStore.getState().openCreate({
-                        assetId,
-                        ...(startDate ? { start: `${startDate}T${startTime || '08:00'}` } : {}),
-                        ...(endDate   ? { end:   `${endDate}T${endTime || '17:00'}` }     : {}),
-                      });
-                      closeModal();
-                    }}
-                    title="Placeholder for work that isn't booked yet — drivers don't see it"
-                    className="text-xs px-3 py-1.5 rounded-lg font-medium"
-                    style={{
-                      background: 'var(--gc-hover)',
-                      color: 'var(--gc-text-2)',
-                      border: '1px dashed #475569',
-                    }}
-                  >
-                    Planned
-                  </button>
-                )}
               </div>
               <div className="flex-1 flex items-center justify-end gap-2">
                 {eventKind === 'revenue' && isEdit && (() => {
@@ -6916,6 +6959,50 @@ export default function EventModal() {
                   ))}
                 </div>
               </div>
+            )}
+
+            {/* Planned purpose — same chip row as the non-revenue Type. */}
+            {eventKind === 'planned' && (
+              <div>
+                <label className="block text-[11px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: 'var(--gc-text-3)' }}>
+                  Purpose
+                </label>
+                <div className="flex flex-wrap gap-1.5">
+                  {PLANNED_PURPOSES.map(t => (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => { markDirty(); setPlannedPurpose(t); }}
+                      className="text-xs px-2.5 py-1 rounded-lg transition-colors"
+                      style={{
+                        background: plannedPurpose === t ? '#475569' : 'var(--gc-hover)',
+                        color: plannedPurpose === t ? '#fff' : 'var(--gc-text-2)',
+                      }}
+                    >
+                      {PLANNED_PURPOSE_LABEL[t]}
+                    </button>
+                  ))}
+                </div>
+                {editingPlan?.expired && (
+                  <div className="text-xs mt-2" style={{ color: 'var(--gc-text-3)' }}>
+                    Expired — more than 24 hours past its end with no load attached.
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Turn an existing plan into a load: attach one already on
+                this truck, or open a new load prefilled from the plan. */}
+            {eventKind === 'planned' && editingPlan && (
+              <PlanToLoadSection
+                plan={editingPlan}
+                events={events}
+                onAttach={async (loadId) => {
+                  const ok = await usePlannedStore.getState().attach(editingPlan.id, loadId);
+                  if (ok) closeModal();
+                }}
+                onCreateLoad={createLoadFromPlan}
+              />
             )}
 
             {/* Linked work orders — only meaningful when this event
@@ -7308,6 +7395,9 @@ export default function EventModal() {
             {/* ── Sections in user-defined order (load pinned above, locations = relay+stops) ── */}
             {(sectionOrder.includes('locations') ? sectionOrder : [...sectionOrder, 'locations' as const]).map(section => {
               if (section === 'load') return null; // pinned above
+              // A plan is a title, a truck, a window, and notes — no
+              // stops, no money.
+              if (eventKind === 'planned' && (section === 'locations' || section === 'financial')) return null;
               if (section === 'locations') return (
                 <div key="locations">
                   {/* Relay legs editor — one card per leg with a handoff
@@ -7427,6 +7517,9 @@ export default function EventModal() {
                 </div>
               );
               let fields = getEnabledFieldsForSection(section, fieldSettings);
+              if (eventKind === 'planned') {
+                fields = fields.filter(f => f.id === 'specialInstructions');
+              }
               // For non-revenue events, hide revenue-only financial fields (keep only driverPay)
               if (section === 'financial' && eventKind === 'non_revenue') {
                 fields = fields.filter(f => f.id === 'driverPay');
@@ -7748,6 +7841,16 @@ export default function EventModal() {
             <div className="shrink-0 flex items-center justify-between px-8 py-5"
               style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
               <div className="flex items-center gap-1">
+                {modalPlanId && (
+                  <button type="button" onClick={() => void deletePlan()}
+                    className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-[13px] font-medium transition-all"
+                    style={confirmDel ? { background: '#d93025', color: 'white' } : { color: '#d93025', background: 'transparent' }}
+                    onMouseEnter={e => { if (!confirmDel) e.currentTarget.style.background = 'rgba(217,48,37,.1)'; }}
+                    onMouseLeave={e => { if (!confirmDel) e.currentTarget.style.background = 'transparent'; }}>
+                    <Trash2 size={15} />
+                    {confirmDel ? 'Confirm?' : 'Delete plan'}
+                  </button>
+                )}
                 {isEdit && (
                   <>
                     {eventKind === 'revenue' && isCancelled ? (
@@ -7838,7 +7941,7 @@ export default function EventModal() {
                     onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-blue)')}>
                     {saving
                       ? 'Saving…'
-                      : isEdit ? 'Save changes' : draftLegs.length > 0 ? 'Create relay' : eventKind === 'non_revenue' ? 'Create event' : 'Create load'}
+                      : eventKind === 'planned' ? (modalPlanId ? 'Save plan' : 'Create plan') : isEdit ? 'Save changes' : draftLegs.length > 0 ? 'Create relay' : eventKind === 'non_revenue' ? 'Create event' : 'Create load'}
                   </button>
                 )}
               </div>

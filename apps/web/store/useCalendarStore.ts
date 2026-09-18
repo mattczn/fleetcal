@@ -102,6 +102,11 @@ interface ModalState {
   modalMode: 'create' | 'edit';
   modalEventId?: string;
   modalDefaults?: Partial<CalendarEvent>;
+  /** Set when the modal is showing a PLANNED placeholder (module:
+   *  planning) rather than an event. Plans aren't events — they live in
+   *  usePlannedStore — so the modal opens in create mode, seeded from
+   *  the plan, with eventKind 'planned' locked. */
+  modalPlanId?: string;
   modalShowMap: boolean;
   modalConflict: 'updated' | 'deleted' | null;
   /** Cross-page hand-off: when the maintenance work-order modal sends
@@ -576,6 +581,8 @@ interface CalendarStore extends ModalState {
   openCreateModal: (defaults?: Partial<CalendarEvent>, opts?: { prefillWorkOrderLinkIds?: string[] }) => void;
   openEditModal: (eventId: string) => void;
   openEditModalWithMap: (eventId: string) => void;
+  /** Open an existing planned placeholder in the event modal. */
+  openPlanModal: (planId: string) => void;
   closeModal: () => void;
   clearModalConflict: () => void;
   /** Tag every event belonging to a load as a self-write so the incoming
@@ -2803,27 +2810,44 @@ export const useCalendarStore = create<CalendarStore>()(
   openCreateModal: (defaults, opts) => {
     if (!get().canEditLoads) return;
     set({
-      modalOpen: true, modalMode: 'create', modalEventId: undefined,
+      modalOpen: true, modalMode: 'create', modalEventId: undefined, modalPlanId: undefined,
       modalDefaults: defaults, modalShowMap: false,
       prefillWorkOrderLinkIds: opts?.prefillWorkOrderLinkIds,
     });
   },
 
+  openPlanModal: (planId) => {
+    const plan = usePlannedStore.getState().items.find((p) => p.id === planId);
+    if (!plan) return;
+    const driver = plan.driverId != null ? get().drivers.find((d) => d.id === plan.driverId) : undefined;
+    set({
+      modalOpen: true, modalMode: 'create', modalEventId: undefined, modalPlanId: planId,
+      // specialInstructions is the notes field the non-revenue form
+      // shows; the plan's notes ride in on it.
+      modalDefaults: {
+        title: plan.title, assetId: plan.assetId, start: plan.start, end: plan.end,
+        driverName: driver?.name ?? plan.driverName,
+        specialInstructions: plan.notes,
+      } as Partial<CalendarEvent>,
+      modalShowMap: false, prefillWorkOrderLinkIds: undefined,
+    });
+  },
+
   openEditModal: (eventId) => {
     if (!get().canEditLoads) return;
-    set({ modalOpen: true, modalMode: 'edit', modalEventId: eventId, modalDefaults: undefined, modalShowMap: false, prefillWorkOrderLinkIds: undefined });
+    set({ modalOpen: true, modalMode: 'edit', modalEventId: eventId, modalPlanId: undefined, modalDefaults: undefined, modalShowMap: false, prefillWorkOrderLinkIds: undefined });
   },
 
   openEditModalWithMap: (eventId) => {
     if (!get().canEditLoads) return;
-    set({ modalOpen: true, modalMode: 'edit', modalEventId: eventId, modalDefaults: undefined, modalShowMap: true, prefillWorkOrderLinkIds: undefined });
+    set({ modalOpen: true, modalMode: 'edit', modalEventId: eventId, modalPlanId: undefined, modalDefaults: undefined, modalShowMap: true, prefillWorkOrderLinkIds: undefined });
   },
 
   closeModal: () => {
     // A load modal opened from "Create load from plan" and then
     // cancelled must not leave the plan armed for the next new load.
     usePlannedStore.getState().setPendingAttach(null);
-    set({ modalOpen: false, modalEventId: undefined, modalDefaults: undefined, modalShowMap: false, modalConflict: null, batchItems: [], batchIndex: 0, batchParseProgress: 0, batchParseTotal: 0, batchMinimized: false, batchCancelRequested: false, prefillWorkOrderLinkIds: undefined });
+    set({ modalOpen: false, modalEventId: undefined, modalPlanId: undefined, modalDefaults: undefined, modalShowMap: false, modalConflict: null, batchItems: [], batchIndex: 0, batchParseProgress: 0, batchParseTotal: 0, batchMinimized: false, batchCancelRequested: false, prefillWorkOrderLinkIds: undefined });
   },
 
   clearModalConflict: () => set({ modalConflict: null }),

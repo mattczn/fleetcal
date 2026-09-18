@@ -6,7 +6,6 @@ import { PLANNED_PURPOSE_LABEL } from '@fleetcal/types';
 import type { Asset } from '@/lib/types';
 import { timeToPixels, timeHeightPixels, localDateStr, naiveHomeToView } from '@/lib/time-utils';
 import { useCalendarStore } from '@/store/useCalendarStore';
-import { usePlannedStore } from '@/store/usePlannedStore';
 
 const PURPOSE_ICON: Record<PlannedPurpose, typeof Search> = {
   find_load:     Search,
@@ -35,12 +34,11 @@ interface Props {
  * glance. Expired plans (24h past their end with no load attached)
  * fade out but stay until someone deletes them.
  *
- * Not draggable in v1 — click opens the plan modal, where truck and
- * times are edited.
+ * Not draggable in v1 — click opens it in the event modal, where
+ * truck and times are edited.
  */
 export default function PlannedEventCard({ plan, asset, colIdx, totalCols }: Props) {
-  const { currentDate, rowHeight, calendarTimezone, cardFontScale } = useCalendarStore();
-  const openEdit = usePlannedStore((s) => s.openEdit);
+  const { currentDate, rowHeight, calendarTimezone, cardFontScale, openPlanModal } = useCalendarStore();
 
   const scale = cardFontScale ?? 1.0;
   const fs = (px: number) => Math.round(px * scale * 2) / 2;
@@ -75,8 +73,8 @@ export default function PlannedEventCard({ plan, asset, colIdx, totalCols }: Pro
         userSelect: 'none',
       }}
       onMouseDown={(e) => e.stopPropagation()}
-      onClick={(e) => { e.stopPropagation(); openEdit(plan.id); }}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openEdit(plan.id); } }}
+      onClick={(e) => { e.stopPropagation(); openPlanModal(plan.id); }}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPlanModal(plan.id); } }}
       title={`${label} · ${plan.title} · ${startTime}–${endTime}${plan.expired ? ' · Expired' : ''}`}
     >
       <div className="px-1.5 pt-1 flex flex-col gap-0.5 h-full overflow-hidden">

@@ -14,18 +14,9 @@ import type { PlannedEvent, CreatePlannedEventRequest, UpdatePlannedEventRequest
 import { railway } from '@/lib/railway';
 import { errorToast } from '@/lib/errorToast';
 
-export interface PlannedModalState {
-  mode: 'create' | 'edit';
-  /** Set in edit mode. */
-  id?: string;
-  /** Prefill for create mode — typically the clicked truck + time slot. */
-  defaults?: Partial<Pick<PlannedEvent, 'assetId' | 'driverId' | 'start' | 'end' | 'purpose' | 'title'>>;
-}
-
 interface PlannedState {
   items: PlannedEvent[];
   loaded: boolean;
-  modal: PlannedModalState | null;
   /** Plan waiting for the next load created through the load modal —
    *  set by "Create load from plan", consumed by useCalendarStore's
    *  addEvent the moment the save starts, so a cancelled load modal
@@ -39,10 +30,6 @@ interface PlannedState {
   /** Close the plan against a load (the load's uuid, not the event id). */
   attach: (id: string, loadId: string) => Promise<boolean>;
 
-  openCreate: (defaults?: PlannedModalState['defaults']) => void;
-  openEdit: (id: string) => void;
-  closeModal: () => void;
-
   setPendingAttach: (id: string | null) => void;
   /** Returns and clears the pending plan id. */
   takePendingAttach: () => string | null;
@@ -53,7 +40,6 @@ const byStart = (a: PlannedEvent, b: PlannedEvent) => a.start.localeCompare(b.st
 export const usePlannedStore = create<PlannedState>((set, get) => ({
   items: [],
   loaded: false,
-  modal: null,
   pendingAttachId: null,
 
   load: async () => {
@@ -114,10 +100,6 @@ export const usePlannedStore = create<PlannedState>((set, get) => ({
       return false;
     }
   },
-
-  openCreate: (defaults) => set({ modal: { mode: 'create', defaults } }),
-  openEdit: (id) => set({ modal: { mode: 'edit', id } }),
-  closeModal: () => set({ modal: null }),
 
   setPendingAttach: (id) => set({ pendingAttachId: id }),
   takePendingAttach: () => {
