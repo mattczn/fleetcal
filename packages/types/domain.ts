@@ -2405,3 +2405,57 @@ export interface TimesheetPing {
   /** Horizontal accuracy in metres, when the OS reported one. */
   accuracy?: number;
 }
+
+// ── Planned events (module: planning) ─────────────────────────────────
+// A dispatcher's placeholder on a truck's calendar for work that isn't
+// booked yet. Lives in its own table (planned_events), NOT in events —
+// see migration 20260918_planned_events.sql for why. Never sent to the
+// driver API.
+
+export const PLANNED_PURPOSES = ["find_load", "expected_load", "reposition"] as const;
+export type PlannedPurpose = (typeof PLANNED_PURPOSES)[number];
+
+export const PLANNED_PURPOSE_LABEL: Record<PlannedPurpose, string> = {
+  find_load:     "Find load",
+  expected_load: "Expected load",
+  reposition:    "Reposition",
+};
+
+/** How long after a plan's end it stays "live" before reading as
+ *  expired. Derived at read time; nothing is written when it expires. */
+export const PLANNED_EXPIRY_HOURS = 24;
+
+export interface PlannedEvent {
+  id: string;
+  assetId: number;
+  driverId?: number;
+  /** Denormalized from drivers for display; server-joined. */
+  driverName?: string;
+  purpose: PlannedPurpose;
+  title: string;
+  notes?: string;
+  /** Naive 'YYYY-MM-DDTHH:mm' in the org's home timezone — same format
+   *  as a load's start/end, so both position identically. */
+  start: string;
+  end: string;
+  convertedLoadId?: string;
+  convertedAt?: string;
+  createdByName?: string;
+  createdAt: string;
+  updatedAt: string;
+  /** Server-computed: end is more than PLANNED_EXPIRY_HOURS ago and no
+   *  load was attached. Clients render it faded; nothing else changes. */
+  expired?: boolean;
+}
+
+export interface CreatePlannedEventRequest {
+  assetId: number;
+  driverId?: number | null;
+  purpose: PlannedPurpose;
+  title: string;
+  notes?: string | null;
+  start: string;
+  end: string;
+}
+
+export type UpdatePlannedEventRequest = Partial<CreatePlannedEventRequest>;

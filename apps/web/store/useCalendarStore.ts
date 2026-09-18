@@ -1,6 +1,7 @@
 'use client';
 
 import { create } from 'zustand';
+import { usePlannedStore } from './usePlannedStore';
 import { persist } from 'zustand/middleware';
 import { TRAILER_CATEGORIES, legRoleFor, byLegIndex } from '@fleetcal/types';
 import { Asset, CalendarEvent, Driver, Dispatcher, Customer, SavedLocation, Trailer } from '@/lib/types';
@@ -1704,6 +1705,10 @@ export const useCalendarStore = create<CalendarStore>()(
     }
 
     // Revenue events: POST /v1/loads creates load + 1 event in one shot.
+    // Claim the plan waiting on this load (set by "Create load from
+    // plan") NOW, synchronously — the modal closes right after this
+    // returns, and closeModal clears any unclaimed pending plan.
+    const planToAttach = usePlannedStore.getState().takePendingAttach();
     const { load, event: evBody } = buildCreateLoadBody({
       ...event,
       driverId: resolved.driverId ?? undefined,
@@ -1729,6 +1734,9 @@ export const useCalendarStore = create<CalendarStore>()(
             created,
           ],
         }));
+        if (planToAttach && created.loadId) {
+          void usePlannedStore.getState().attach(planToAttach, created.loadId);
+        }
         // Notify driver if assigned. Rule-gated: respects org
         // notification_rules.onAssignment.enabled + hoursBeforeStart
         // window + quiet hours + the driver's per-rule opt-out.
@@ -2811,8 +2819,12 @@ export const useCalendarStore = create<CalendarStore>()(
     set({ modalOpen: true, modalMode: 'edit', modalEventId: eventId, modalDefaults: undefined, modalShowMap: true, prefillWorkOrderLinkIds: undefined });
   },
 
-  closeModal: () =>
-    set({ modalOpen: false, modalEventId: undefined, modalDefaults: undefined, modalShowMap: false, modalConflict: null, batchItems: [], batchIndex: 0, batchParseProgress: 0, batchParseTotal: 0, batchMinimized: false, batchCancelRequested: false, prefillWorkOrderLinkIds: undefined }),
+  closeModal: () => {
+    // A load modal opened from "Create load from plan" and then
+    // cancelled must not leave the plan armed for the next new load.
+    usePlannedStore.getState().setPendingAttach(null);
+    set({ modalOpen: false, modalEventId: undefined, modalDefaults: undefined, modalShowMap: false, modalConflict: null, batchItems: [], batchIndex: 0, batchParseProgress: 0, batchParseTotal: 0, batchMinimized: false, batchCancelRequested: false, prefillWorkOrderLinkIds: undefined });
+  },
 
   clearModalConflict: () => set({ modalConflict: null }),
 

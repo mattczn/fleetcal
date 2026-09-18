@@ -7,7 +7,10 @@ import { CalendarEvent } from '@/lib/types';
 import { localDateStr, todayStrInTz, naiveHomeToView, naiveViewToHome } from '@/lib/time-utils';
 import { isActiveInRange, dateKeyInTz } from '@/lib/lifecycle';
 import { legPositionFor } from '@/lib/legDisplay';
-import { legShortLabel, legLabel } from '@fleetcal/types';
+import { legShortLabel, legLabel, PLANNED_PURPOSE_LABEL, type PlannedEvent } from '@fleetcal/types';
+import { useModules } from '@/lib/useModules';
+import { usePermissions } from '@/lib/usePermissions';
+import { usePlannedStore } from '@/store/usePlannedStore';
 
 const ASSET_GUTTER = 140;
 const HEADER_H     = 68;
@@ -43,14 +46,23 @@ function fmtTime(t: string): string {
   return m === 0 ? `${hr}${period}` : `${hr}:${String(m).padStart(2, '0')}${period}`;
 }
 
-interface WeekEventLayout {
-  event: CalendarEvent;
+interface WeekEventLayout<T> {
+  event: T;
   leftFrac: number;
   rightFrac: number;
   lane: number;
 }
 
-function computeWeekLayout(events: CalendarEvent[], weekDayStrs: string[], viewTz: string): WeekEventLayout[] {
+/** A load or a planned placeholder in one row's lane layout. Exactly
+ *  one of `event` / `plan` is set. */
+interface WeekItem {
+  start: string;
+  end: string;
+  event?: CalendarEvent;
+  plan?: PlannedEvent;
+}
+
+function computeWeekLayout<T extends { start: string; end: string }>(events: T[], weekDayStrs: string[], viewTz: string): WeekEventLayout<T>[] {
   const weekStart = weekDayStrs[0];
   const weekEnd   = weekDayStrs[6];
 
@@ -137,6 +149,13 @@ export default function WeekView() {
   ];
   const todayStr    = todayStrInTz(calendarTimezone);
 
+  // Planned placeholders (module: planning) — see CalendarColumn.
+  const { enabled: moduleOn } = useModules();
+  const { can } = usePermissions();
+  const plans = usePlannedStore((s) => s.items);
+  const openPlan = usePlannedStore((s) => s.openEdit);
+  const showPlans = moduleOn('planning') && can('planning.access');
+
   return (
     <div className="flex-1 overflow-auto select-none" style={{ background: 'var(--gc-surface)' }}>
       <div style={{ minHeight: '100%', minWidth: ASSET_GUTTER + 7 * 120, display: 'flex', flexDirection: 'column' }}>
@@ -209,8 +228,11 @@ export default function WeekView() {
           {assets.map(asset => {
             // Drop soft-deleted — see CalendarColumn for the full
             // explanation of why these end up in the events store.
-            const assetEvents = events.filter(e => e.assetId === asset.id && !e.deletedAt);
-            const layout      = computeWeekLayout(assetEvents, weekDayStrs, calendarTimezone);
+            const assetItems: WeekItem[] = [
+              ...events.filter(e => e.assetId === asset.id && !e.deletedAt).map(e => ({ start: e.start, end: e.end, event: e })),
+              ...(showPlans ? plans.filter(p => p.assetId === asset.id).map(p => ({ start: p.start, end: p.end, plan: p })) : []),
+            ];
+            const layout      = computeWeekLayout(assetItems, weekDayStrs, calendarTimezone);
             const numLanes    = layout.length === 0 ? 1 : Math.max(...layout.map(l => l.lane)) + 1;
 
             return (
@@ -285,9 +307,39 @@ export default function WeekView() {
                   ))}
 
                   {/* Events */}
-                  {layout.map(({ event, leftFrac, rightFrac, lane }) => {
+                  {layout.map(({ event: item, leftFrac, rightFrac, lane }) => {
                     const topPct    = (lane / numLanes) * 100;
                     const heightPct = (1 / numLanes) * 100;
+                    if (item.plan) {
+                      const plan = item.plan;
+                      return (
+                        <div
+                          key={`plan:${plan.id}`}
+                          className="absolute rounded overflow-hidden cursor-pointer z-10"
+                          style={{
+                            left:            `calc(${leftFrac * 100}% + 2px)`,
+                            width:           `calc(${(rightFrac - leftFrac) * 100}% - 4px)`,
+                            top:             `calc(${topPct}% + 3px)`,
+                            height:          `calc(${heightPct}% - 6px)`,
+                            minWidth:        24,
+                            backgroundColor: 'var(--gc-surface)',
+                            backgroundImage: 'repeating-linear-gradient(135deg, transparent 0 7px, rgba(100,116,139,0.16) 7px 9px)',
+                            border:          `1.5px dashed ${asset.color}`,
+                            opacity:         plan.expired ? 0.5 : 1,
+                          }}
+                          title={`${PLANNED_PURPOSE_LABEL[plan.purpose]} · ${plan.title}${plan.expired ? ' · Expired' : ''}`}
+                          onClick={e => { e.stopPropagation(); openPlan(plan.id); }}
+                        >
+                          <div className="flex items-center h-full px-1.5 overflow-hidden min-w-0">
+                            <span className="text-[11px] font-extrabold truncate leading-tight" style={{ color: 'var(--gc-text-1)' }}>
+                              {plan.expired ? 'Expired' : PLANNED_PURPOSE_LABEL[plan.purpose]} · {plan.title}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    }
+                    const event = item.event;
+                    if (!event) return null;
                     const startTime = naiveHomeToView(event.start, calendarTimezone).split('T')[1]?.slice(0, 5) ?? '';
                     const endTime   = naiveHomeToView(event.end,   calendarTimezone).split('T')[1]?.slice(0, 5) ?? '';
                     const widthFrac = rightFrac - leftFrac;

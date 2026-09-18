@@ -756,7 +756,9 @@ export interface NewLoadInput {
   createdByName?: string;
 }
 
-export async function createLoad(input: NewLoadInput): Promise<string | null> {
+/** Returns the created calendar event id (what /load/[id] routes on)
+ *  and its parent load uuid (what a planned event attaches to). */
+export async function createLoad(input: NewLoadInput): Promise<{ id: string; loadId: string | null } | null> {
   const { loads } = await railway.createLoad({
     load: {
       loadNum:       input.loadNum,
@@ -779,7 +781,8 @@ export async function createLoad(input: NewLoadInput): Promise<string | null> {
       stops:      [],
     }],
   });
-  return loads[0]?.id ?? null;
+  const created = loads[0];
+  return created ? { id: created.id, loadId: created.loadId ?? null } : null;
 }
 
 export interface ParsedRateCon {

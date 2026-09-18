@@ -58,6 +58,8 @@ export type OrgModule =
   | "hiring"             // Applicant pipeline + driver onboarding documents (independent contractor agreement e-signing). DEFAULT-OFF for every org including Curzon — the agreement template is carrier-specific today, so this stays dark until a carrier's own documents are loaded.
   // ── Shop timesheets (2026-09-15) ────────────────────────────────────
   | "timesheets"         // clock in/out + location pings for non-driver staff (shop/maintenance). Separate from `payroll`, which pays DRIVERS per load: this is hours-worked for people who aren't paid by the mile, and separate from driver HOS, which is a compliance record rather than a pay record.
+  // ── Truck planning (2026-09-18) ─────────────────────────────────────
+  | "planning"           // Planned events: dashed placeholders on a truck's calendar column for work that isn't booked yet ("find load SLC → Vegas for Kevin"). Stored in their own table, never visible to drivers. DEFAULT-OFF — Curzon only for now.
   | "receivables";       // /receivables — open AR by customer, aging, and the payment-proof ledger. Split from `accounting` deliberately: Billing is "did we invoice it", Receivables is "did they pay and how do we know". A carrier can run the invoice pipeline without wanting a collections desk, and the payment evidence surface is where custom bank/remittance integrations will land.
 
 export const ORG_MODULES: readonly OrgModule[] = [
@@ -81,6 +83,7 @@ export const ORG_MODULES: readonly OrgModule[] = [
   "timesheets",
   "receivables",
   "hiring",
+  "planning",
 ] as const;
 
 /** Display labels (singular). Used in Settings → Modules toggles
@@ -106,6 +109,7 @@ export const ORG_MODULE_LABEL: Record<OrgModule, string> = {
   receivables:        "Receivables",
   hiring:             "Hiring & onboarding",
   timesheets:         "Shop timesheets",
+  planning:           "Truck planning",
 };
 
 /** Short description for the Settings → Modules toggle UI. */
@@ -130,6 +134,7 @@ export const ORG_MODULE_BLURB: Record<OrgModule, string> = {
   hiring:             "Applicant pipeline and driver onboarding paperwork — send a contractor agreement by link, collect a signature on any device, and file the signed PDF against the driver. Off until your own agreement template is loaded.",
   receivables:        "Collections desk — open AR by customer, aging buckets, and recording payments with the remittance or bank line that proves them. Billing sends the invoice; this tracks getting paid for it.",
   timesheets:         "Clock in / clock out for shop and maintenance staff, with an optional location stamp on each punch. For people paid by the hour rather than by the load — drivers keep using Payroll and HOS.",
+  planning:           "Planned events on the calendar — placeholders for loads you still need to find, loads you're expecting, and empty repositioning moves. Dispatchers and admins only; drivers never see them.",
 };
 
 // ── Check API ─────────────────────────────────────────────────────
@@ -148,6 +153,9 @@ export const DEFAULT_OFF_MODULES: ReadonlySet<OrgModule> = new Set<OrgModule>([
   // — including Curzon — gets this until it is turned on deliberately in
   // /admin/orgs. Absent flags mean DISABLED here, not enabled.
   "hiring",
+  // Planning ships dark: it's being shaped with one carrier first, so
+  // absent flags must read as disabled for everyone else.
+  "planning",
 ]);
 
 /**
@@ -270,6 +278,8 @@ export const MVP_LAUNCH_DEFAULTS: Readonly<Record<OrgModule, boolean>> = {
   // document; until templates are per-org data this must not light up for
   // anyone who didn't ask for it.
   hiring:             false,
+  // Planning: OFF, and in DEFAULT_OFF_MODULES — see there.
+  planning:           false,
 };
 
 // ── Resolution ────────────────────────────────────────────────────

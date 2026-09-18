@@ -14,6 +14,7 @@ import { useRouter } from 'next/navigation';
 import { usePermissions } from '@/lib/usePermissions';
 import { useModules } from '@/lib/useModules';
 import { useCalendarStore } from '@/store/useCalendarStore';
+import { usePlannedStore } from '@/store/usePlannedStore';
 import Tooltip from '@/components/ui/Tooltip';
 import { localDateStr, parseTimeInput } from '@/lib/time-utils';
 import { isActiveOn } from '@/lib/lifecycle';
@@ -1847,6 +1848,7 @@ export default function EventModal() {
   // wouldn't be allowed to save.
   const canCreateRevenue    = canDo('loads.create');
   const canCreateNonRevenue = canDo('nonRevenueEvents.create');
+  const canCreatePlan       = moduleEnabled('planning') && canDo('planning.access');
   // Both revenue destructive paths (Cancel load → permanent / Remove
   // a cancelled load) call DELETE /v1/loads/:id under the hood. Hide
   // the buttons entirely from roles that lack the capability — the
@@ -6737,6 +6739,32 @@ export default function EventModal() {
                     </button>
                   );
                 })}
+                {/* Planned placeholder (module: planning). Not an event
+                    kind — plans live in their own table — so this hands
+                    the clicked truck + slot over to PlannedEventModal
+                    and closes this one. Create-only. */}
+                {!isEdit && canCreatePlan && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      usePlannedStore.getState().openCreate({
+                        assetId,
+                        ...(startDate ? { start: `${startDate}T${startTime || '08:00'}` } : {}),
+                        ...(endDate   ? { end:   `${endDate}T${endTime || '17:00'}` }     : {}),
+                      });
+                      closeModal();
+                    }}
+                    title="Placeholder for work that isn't booked yet — drivers don't see it"
+                    className="text-xs px-3 py-1.5 rounded-lg font-medium"
+                    style={{
+                      background: 'var(--gc-hover)',
+                      color: 'var(--gc-text-2)',
+                      border: '1px dashed #475569',
+                    }}
+                  >
+                    Planned
+                  </button>
+                )}
               </div>
               <div className="flex-1 flex items-center justify-end gap-2">
                 {eventKind === 'revenue' && isEdit && (() => {

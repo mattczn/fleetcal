@@ -7,6 +7,7 @@ import CalendarSkeleton from '@/components/calendar/CalendarSkeleton';
 import WeekView from '@/components/calendar/WeekView';
 import CalendarToolbar from '@/components/toolbar/CalendarToolbar';
 import EventModal from '@/components/calendar/EventModal';
+import PlannedEventModal from '@/components/calendar/PlannedEventModal';
 import BatchNotification from '@/components/calendar/BatchNotification';
 import DataLoader from '@/components/DataLoader';
 import CalendarDeepLink from '@/components/calendar/CalendarDeepLink';
@@ -56,6 +57,9 @@ export default function CalendarPage() {
             : viewMode === 'week' ? <WeekView /> : <CalendarView />}
       </div>
       <EventModal />
+      {/* Planned placeholders (module: planning) — also loads the plan
+          list, so it renders nothing for orgs/roles without access. */}
+      <PlannedEventModal />
       <BatchNotification />
       {/* OnboardingController unmounted 2026-07-26 — it drove the
           demo-fleet tour (TourOverlay → ReadyScreen → SetupWizard) for

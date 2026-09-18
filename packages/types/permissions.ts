@@ -126,6 +126,13 @@ export type Capability =
   | "nonRevenueEvents.create"
   | "nonRevenueEvents.edit"
   | "nonRevenueEvents.delete"
+  // Planned events (module: planning) — dispatcher placeholders for
+  // work that isn't booked yet. One capability covers view + create +
+  // edit + delete: a plan is a note to the dispatch team, not a record
+  // anyone else depends on, so there's nothing to split. Admin +
+  // Dispatcher only; Maintenance doesn't get it, which also keeps plans
+  // off the maintenance calendar.
+  | "planning.access"
 
   // Customers / brokers
   | "customers.view"
@@ -252,6 +259,7 @@ const EVERY_CAP: Record<Capability, true> = {
   "loads.view": true, "loads.view_detail": true, "loads.create": true, "loads.edit": true, "loads.delete": true,
   "loads.view_driver_pay": true, "loads.view_price": true, "loads.view_rate_con": true,
   "nonRevenueEvents.create": true, "nonRevenueEvents.edit": true, "nonRevenueEvents.delete": true,
+  "planning.access": true,
   "customers.view": true, "customers.create": true, "customers.edit": true, "customers.delete": true,
   "drivers.view": true, "drivers.create": true, "drivers.edit": true, "drivers.delete": true,
   "assets.view": true, "assets.create": true, "assets.edit": true, "assets.delete": true,
@@ -316,6 +324,7 @@ export const ROLE_CAPABILITIES: Record<OrgRole, ReadonlySet<Capability>> = {
   dispatcher: new Set<Capability>([
     "loads.view", "loads.view_detail", "loads.create", "loads.edit", "loads.view_price", "loads.view_rate_con",
     "nonRevenueEvents.create", "nonRevenueEvents.edit", "nonRevenueEvents.delete",
+    "planning.access",
     "customers.view", "customers.create", "customers.edit",
     "drivers.view", "drivers.create", "drivers.edit",
     "assets.view", "assets.create", "assets.edit",
@@ -453,6 +462,7 @@ export const CAPABILITY_CATALOG: CapabilityInfo[] = [
   { cap: "loads.edit",            label: "Edit loads",            group: "Create / Edit" },
   { cap: "nonRevenueEvents.create", label: "Create non-revenue events", group: "Create / Edit", hint: "Maintenance blocks, repair holds, asset out-of-service windows — anything on the calendar that isn't a paying load." },
   { cap: "nonRevenueEvents.edit",   label: "Edit non-revenue events",   group: "Create / Edit" },
+  { cap: "planning.access",         label: "Planned events",            group: "Create / Edit", hint: "See, create, edit, and delete planned placeholders on the calendar (Truck planning module)." },
   { cap: "customers.create",      label: "Create customers",      group: "Create / Edit" },
   { cap: "customers.edit",        label: "Edit customers",        group: "Create / Edit" },
   { cap: "drivers.create",        label: "Create drivers",        group: "Create / Edit" },

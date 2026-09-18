@@ -13,6 +13,7 @@
  */
 
 import type {
+  PlannedEvent, CreatePlannedEventRequest, UpdatePlannedEventRequest,
   CreateLoadRequest, CreateLoadResponse,
   ListLoadsResponse, GetLoadResponse,
   ListLoadSummariesResponse,
@@ -914,6 +915,27 @@ class RailwayClient {
   }
   deleteLoad(id: string)              { return this.req<DeleteLoadResponse>('DELETE',  `/v1/loads/${id}`); }
   restoreLoad(id: string)             { return this.req<RestoreLoadResponse>('POST',   `/v1/loads/${id}/restore`); }
+
+  // ── Planned events (module: planning) ─────────────────────────────
+  // Dispatcher placeholders on a truck's column. Their own table and
+  // endpoint — never part of listLoads, never sent to the driver API.
+  listPlannedEvents(from?: string) {
+    return this.req<{ plannedEvents: PlannedEvent[] }>('GET', `/v1/planned-events${from ? `?from=${encodeURIComponent(from)}` : ''}`);
+  }
+  createPlannedEvent(body: CreatePlannedEventRequest) {
+    return this.req<{ plannedEvent: PlannedEvent }>('POST', '/v1/planned-events', body);
+  }
+  updatePlannedEvent(id: string, body: UpdatePlannedEventRequest) {
+    return this.req<{ plannedEvent: PlannedEvent }>('PATCH', `/v1/planned-events/${id}`, body);
+  }
+  deletePlannedEvent(id: string) {
+    return this.req<{ ok: true }>('DELETE', `/v1/planned-events/${id}`);
+  }
+  /** Close a plan against the load it turned into. `loadId` is the LOAD
+   *  uuid (event.loadId), not the calendar event id. */
+  attachPlannedEvent(id: string, loadId: string) {
+    return this.req<{ plannedEvent: PlannedEvent }>('POST', `/v1/planned-events/${id}/attach`, { loadId });
+  }
 
   // ── Events (non-revenue + load-id-agnostic ops) ──────────────────────
   createEvent(req: CreateEventRequest)            { return this.req<CreateEventResponse>('POST',     '/v1/events', req); }

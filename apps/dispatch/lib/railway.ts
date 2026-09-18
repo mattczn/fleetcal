@@ -11,6 +11,7 @@
  */
 
 import type {
+  PlannedEvent, CreatePlannedEventRequest, UpdatePlannedEventRequest,
   CreateLoadRequest, CreateLoadResponse,
   ListLoadsResponse, GetLoadResponse,
   SearchLoadsResponse,
@@ -312,6 +313,27 @@ class RailwayClient {
   }
   convertMaintenanceReport(id: string, body: ConvertMaintenanceReportRequest = {}) {
     return this.req<ConvertMaintenanceReportResponse>("POST", `/v1/maintenance-reports/${id}/convert`, body);
+  }
+
+  // ── Planned events (module: planning) ─────────────────────────────
+  // Dispatcher placeholders. Own endpoint; the API 403s when the module
+  // is off or the role lacks planning.access — callers treat that as
+  // "no plans".
+  listPlannedEvents() {
+    return this.req<{ plannedEvents: PlannedEvent[] }>("GET", "/v1/planned-events");
+  }
+  createPlannedEvent(body: CreatePlannedEventRequest) {
+    return this.req<{ plannedEvent: PlannedEvent }>("POST", "/v1/planned-events", body);
+  }
+  updatePlannedEvent(id: string, body: UpdatePlannedEventRequest) {
+    return this.req<{ plannedEvent: PlannedEvent }>("PATCH", `/v1/planned-events/${id}`, body);
+  }
+  deletePlannedEvent(id: string) {
+    return this.req<{ ok: true }>("DELETE", `/v1/planned-events/${id}`);
+  }
+  /** `loadId` is the LOAD uuid (event.loadId), not the event id. */
+  attachPlannedEvent(id: string, loadId: string) {
+    return this.req<{ plannedEvent: PlannedEvent }>("POST", `/v1/planned-events/${id}/attach`, { loadId });
   }
 
   // ── Timesheets (shop clock in / out) ─────────────────────────────────

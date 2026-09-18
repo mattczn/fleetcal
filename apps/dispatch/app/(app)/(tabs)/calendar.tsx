@@ -9,7 +9,7 @@ import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
 import { useQuery } from "@tanstack/react-query";
 import { useUser, useAuth, useOrganization } from "@clerk/clerk-expo";
 import { useRouter, useLocalSearchParams } from "expo-router";
-import { ChevronLeft, ChevronRight, CalendarCheck, Menu, Calendar as CalendarIcon, Search, X, ArrowLeft, List as ListIcon, LayoutGrid, Truck } from "lucide-react-native";
+import { ChevronLeft, ChevronRight, CalendarCheck, Menu, Calendar as CalendarIcon, Search, X, ArrowLeft, List as ListIcon, LayoutGrid, Truck, Clock, MoveRight, CalendarPlus } from "lucide-react-native";
 import { fetchAssets, fetchLoadsForDay, searchLoads } from "@/lib/api";
 import { txt } from "@/lib/font";
 import { lighten, readableOn } from "@/lib/color";
@@ -30,7 +30,9 @@ import {
   fmtTimeRangeShort, loadNumLabel, fmtPrice, RelayChip, DiagonalStripes, NonRevChip,
 } from "@/lib/loadCard";
 import type { Asset, Load } from "@/lib/types";
-import { isVisibleOn } from "@fleetcal/types";
+import { isVisibleOn, PLANNED_PURPOSE_LABEL, type PlannedEvent, type PlannedPurpose } from "@fleetcal/types";
+import { usePlannedEvents, planToRow, plannedOf } from "@/lib/planned";
+import { PlannedEventSheet, type PlanSheetState } from "@/components/PlannedEventSheet";
 
 type ViewMode = "calendar" | "schedule" | "timeline";
 const VIEW_MODE_KEY = "fleetcal.dispatch.calendar.viewMode";
@@ -179,6 +181,64 @@ function assignLanes(positions: PositionedLoad[]): PositionedLoad[] {
   return out;
 }
 
+// ── Planned placeholders (module: planning) ──────────────────────────
+// Plans ride in each truck's load list as tagged rows (lib/planned.ts);
+// every card below branches on plannedOf() and renders this tile, which
+// opens the plan sheet instead of the load screen.
+
+const OpenPlanContext = React.createContext<(plan: PlannedEvent) => void>(() => {});
+
+const PLAN_ICON: Record<PlannedPurpose, typeof Search> = {
+  find_load:     Search,
+  expected_load: Clock,
+  reposition:    MoveRight,
+};
+
+function PlannedTile({
+  plan, assetColor, style, compact = false,
+}: {
+  plan: PlannedEvent;
+  assetColor?: string;
+  style: object;
+  compact?: boolean;
+}) {
+  const openPlan = React.useContext(OpenPlanContext);
+  const color = assetColor ?? "#475569";
+  const Icon = PLAN_ICON[plan.purpose] ?? Search;
+  return (
+    <TouchableOpacity
+      onPress={() => openPlan(plan)}
+      activeOpacity={0.8}
+      style={[{
+        backgroundColor: "#ffffff",
+        borderWidth: 1.5, borderStyle: "dashed", borderColor: color,
+        overflow: "hidden",
+        opacity: plan.expired ? 0.5 : 1,
+      }, style]}
+    >
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+        <Icon size={11} color={color} strokeWidth={2.6} />
+        <Text style={[txt(800), { fontSize: 9, color, letterSpacing: 0.4, textTransform: "uppercase" }]} numberOfLines={1}>
+          {plan.expired ? "Expired" : PLANNED_PURPOSE_LABEL[plan.purpose]}
+        </Text>
+      </View>
+      <Text style={[txt(800), { fontSize: compact ? 12 : 13, color: "#202124", marginTop: 1 }]} numberOfLines={2}>
+        {plan.title}
+      </Text>
+      {plan.driverName ? (
+        <Text style={[txt(600), { fontSize: 11, color: "#3c4043", marginTop: 1 }]} numberOfLines={1}>
+          {plan.driverName}
+        </Text>
+      ) : null}
+      {!compact && plan.notes ? (
+        <Text style={[txt(500), { fontSize: 11, color: "#5f6368", marginTop: 1 }]} numberOfLines={2}>
+          {plan.notes}
+        </Text>
+      ) : null}
+    </TouchableOpacity>
+  );
+}
+
 function LoadBlock({
   p, assetColor, pageWidth,
 }: {
@@ -205,6 +265,14 @@ function LoadBlock({
   const gap         = p.laneCount > 1 ? 3 : 0;
   const laneWidth   = (canvasW - gap * (p.laneCount - 1)) / p.laneCount;
   const left        = canvasLeft + p.lane * (laneWidth + gap);
+
+  const plan = plannedOf(p.load);
+  if (plan) {
+    return (
+      <PlannedTile plan={plan} assetColor={assetColor} compact={p.height < 60}
+        style={{ position: "absolute", top: p.top, height: p.height, left, width: laneWidth, borderRadius: 8, padding: 6 }} />
+    );
+  }
 
   return (
     <TouchableOpacity
@@ -273,6 +341,10 @@ function ScheduleCard({ load, assetColor }: { load: Load; assetColor?: string })
   const tint   = STATUS_TINT[load.status];
   const price  = can("loads.view_price") ? fmtPrice(load.loadPrice) : "";
   const isNonRev = load.eventKind === "non_revenue";
+  const plan = plannedOf(load);
+  if (plan) {
+    return <PlannedTile plan={plan} assetColor={assetColor} style={{ borderRadius: 10, marginBottom: 10, padding: 12 }} />;
+  }
   return (
     <TouchableOpacity
       onPress={canOpen ? () => router.push({ pathname: "/load/[id]", params: { id: load.id } }) : undefined}
@@ -578,6 +650,14 @@ function TimelineLoadBlock({
   // separate.
   const blockTop    = p.lane * TIMELINE_BASE_ROW_HEIGHT + 4;
   const blockHeight = TIMELINE_BASE_ROW_HEIGHT - 8;
+
+  const plan = plannedOf(p.load);
+  if (plan) {
+    return (
+      <PlannedTile plan={plan} assetColor={assetColor} compact
+        style={{ position: "absolute", left: p.left + 2, width: Math.max(p.width - 4, 36), top: blockTop, height: blockHeight, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 4 }} />
+    );
+  }
 
   return (
     <TouchableOpacity
@@ -1068,18 +1148,29 @@ export default function CalendarScreen() {
     enabled:  !!orgId,
   });
 
+  // Planned placeholders for the viewed day (module: planning). Empty for
+  // roles/orgs without access — the API refuses the list.
+  const { data: plans = [] } = usePlannedEvents(orgId);
+  const { can: canDo } = usePermissions();
+  const canPlan = canDo("planning.access");
+  const [planSheet, setPlanSheet] = useState<PlanSheetState | null>(null);
+  const openPlan = React.useCallback((plan: PlannedEvent) => setPlanSheet({ mode: "edit", plan }), []);
+
   // Pre-slice loads by asset id once per fetch — gives each AssetPage a
   // stable array reference so the React.memo wrapper actually skips
   // re-rendering off-screen pages during a horizontal swipe.
   const loadsByAsset = useMemo(() => {
     const m = new Map<number, Load[]>();
-    for (const l of loads) {
+    const dayPlans = plans
+      .filter((p) => p.start.slice(0, 10) <= dateKey && p.end.slice(0, 10) >= dateKey)
+      .map(planToRow);
+    for (const l of [...loads, ...dayPlans]) {
       const arr = m.get(l.assetId);
       if (arr) arr.push(l);
       else m.set(l.assetId, [l]);
     }
     return m;
-  }, [loads]);
+  }, [loads, plans, dateKey]);
 
   // Server-side search across ALL dates. Debounced so we don't spam Supabase
   // on every keystroke. Empty query = no search.
@@ -1136,6 +1227,7 @@ export default function CalendarScreen() {
   const activeAsset = visibleAssets[assetIdx];
 
   return (
+    <OpenPlanContext.Provider value={openPlan}>
     <View style={{ flex: 1, backgroundColor: "#ffffff" }}>
       {/* Header */}
       <View style={{ backgroundColor: "#1a73e8", paddingHorizontal: 16, paddingTop: insets.top + 6, paddingBottom: 12 }}>
@@ -1250,6 +1342,23 @@ export default function CalendarScreen() {
               ? `${activeAsset.name}${activeAsset.unit ? ` · #${activeAsset.unit}` : ""}`
               : "—"}
           </Text>
+          {canPlan && activeAsset ? (
+            <TouchableOpacity
+              onPress={() => setPlanSheet({
+                mode: "create",
+                defaults: { assetId: activeAsset.id, start: `${dateKey}T08:00`, end: `${dateKey}T17:00` },
+              })}
+              hitSlop={8}
+              style={{
+                flexDirection: "row", alignItems: "center", gap: 5,
+                paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999,
+                borderWidth: 1.5, borderStyle: "dashed", borderColor: "#475569",
+              }}
+            >
+              <CalendarPlus size={13} color="#475569" strokeWidth={2.4} />
+              <Text style={[txt(800), { fontSize: 12, color: "#475569" }]}>Plan</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
       ) : null}
 
@@ -1408,6 +1517,16 @@ export default function CalendarScreen() {
           </TouchableOpacity>
         </View>
       ) : null}
+
+      {orgId ? (
+        <PlannedEventSheet
+          state={planSheet}
+          orgId={orgId}
+          assets={assets}
+          onClose={() => setPlanSheet(null)}
+        />
+      ) : null}
     </View>
+    </OpenPlanContext.Provider>
   );
 }

@@ -6,8 +6,13 @@ import { useCalendarStore } from '@/store/useCalendarStore';
 import { Asset, CalendarEvent as EventType } from '@/lib/types';
 import { localDateStr, hoursToTimeStr, timeToPixels, timeHeightPixels, naiveHomeToView, naiveViewToHome } from '@/lib/time-utils';
 import { clusterMovements } from '@/lib/clusterMovements';
+import { useModules } from '@/lib/useModules';
+import { usePermissions } from '@/lib/usePermissions';
+import { usePlannedStore } from '@/store/usePlannedStore';
+import type { PlannedEvent } from '@fleetcal/types';
 
 import CalendarEvent from './CalendarEvent';
+import PlannedEventCard from './PlannedEventCard';
 import MovementCardView from './MovementCard';
 import AssetDetailModal from './AssetDetailModal';
 
@@ -24,7 +29,17 @@ interface LayoutEvent {
   top?: number;
 }
 
-function computeLayout(colEvents: EventType[], dateStr: string, rowH: number, viewTz: string): LayoutEvent[] {
+/** A load and a planned placeholder share one overlap layout so a plan
+ *  sitting beside a booked load gets its own lane instead of covering
+ *  it. Exactly one of `event` / `plan` is set. */
+interface ColumnItem {
+  start: string;
+  end: string;
+  event?: EventType;
+  plan?: PlannedEvent;
+}
+
+function computeLayout<T extends { start: string; end: string }>(colEvents: T[], dateStr: string, rowH: number, viewTz: string): { event: T; colIdx: number; totalCols: number }[] {
   if (colEvents.length === 0) return [];
 
   const items = colEvents.map(e => {
@@ -129,7 +144,27 @@ export default function CalendarColumn({ asset, compact = false, onSmartAssign }
     return eStart === dateStr || (eStart < dateStr && eEnd >= dateStr);
   });
 
-  const layoutEvents = computeLayout(colEvents, dateStr, rowHeight, calendarTimezone);
+  // Planned placeholders (module: planning). Admin/dispatcher only —
+  // the API refuses the list for anyone else, and gating here keeps a
+  // stale store from painting them for a role that lost access.
+  const { enabled: moduleOn } = useModules();
+  const { can } = usePermissions();
+  const plans = usePlannedStore((s) => s.items);
+  const showPlans = mode !== 'movements' && !compact && moduleOn('planning') && can('planning.access');
+  const colPlans = showPlans ? plans.filter((p) => {
+    if (p.assetId !== asset.id) return false;
+    const pStart = naiveHomeToView(p.start, calendarTimezone).split('T')[0];
+    const pEnd   = naiveHomeToView(p.end,   calendarTimezone).split('T')[0];
+    return pStart === dateStr || (pStart < dateStr && pEnd >= dateStr);
+  }) : [];
+
+  const layoutItems = computeLayout<ColumnItem>(
+    [
+      ...colEvents.map((e) => ({ start: e.start, end: e.end, event: e })),
+      ...colPlans.map((p) => ({ start: p.start, end: p.end, plan: p })),
+    ],
+    dateStr, rowHeight, calendarTimezone,
+  );
 
   // In triage mode, position events at their real start time with a fixed 1-hour height.
   // Run the same overlap algorithm but using 1-hour bounds so side-by-side stacking works.
@@ -244,9 +279,11 @@ export default function CalendarColumn({ asset, compact = false, onSmartAssign }
               onSmartAssign={onSmartAssign}
             />
           ))
-        : layoutEvents.map(({ event, colIdx, totalCols }) => (
-            <CalendarEvent key={event.id} event={event} asset={asset} colIdx={colIdx} totalCols={totalCols} onSmartAssign={onSmartAssign} />
-          ))
+        : layoutItems.map(({ event: item, colIdx, totalCols }) => item.plan
+            ? <PlannedEventCard key={`plan:${item.plan.id}`} plan={item.plan} asset={asset} colIdx={colIdx} totalCols={totalCols} />
+            : item.event
+              ? <CalendarEvent key={item.event.id} event={item.event} asset={asset} colIdx={colIdx} totalCols={totalCols} onSmartAssign={onSmartAssign} />
+              : null)
       }
       {openMovementId !== null && (
         <AssetDetailModal

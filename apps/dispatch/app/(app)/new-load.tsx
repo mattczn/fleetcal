@@ -3,7 +3,7 @@ import {
   View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Alert, TextInput,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import { useOrganization, useAuth, useUser } from "@clerk/clerk-expo";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import * as DocumentPicker from "expo-document-picker";
@@ -19,6 +19,7 @@ import {
   type ParsedRateCon, type Customer,
 } from "@/lib/api";
 import { railway } from "@/lib/railway";
+import { PLANNED_QUERY_KEY } from "@/lib/planned";
 import { useDriverPayPct } from "@/lib/settings";
 import { EditFieldSheet, type EditFieldKind } from "@/components/EditFieldSheet";
 import { AssetPickerSheet } from "@/components/AssetPickerSheet";
@@ -73,8 +74,21 @@ export default function NewLoadScreen() {
   const { user } = useUser();
   const orgId = organization?.id;
 
+  // "Create load from plan" (PlannedEventSheet) opens this screen with
+  // the plan's truck / driver / times and its id. The draft starts from
+  // those, and the plan is attached to the load once it saves.
+  const planParams = useLocalSearchParams<{
+    planId?: string; assetId?: string; start?: string; end?: string; driverId?: string; driverName?: string;
+  }>();
   const [stage, setStage] = useState<Stage>("pick");
-  const [draft, setDraft] = useState<Draft>(EMPTY);
+  const [draft, setDraft] = useState<Draft>(() => planParams.planId ? {
+    ...EMPTY,
+    assetId:    planParams.assetId ? Number(planParams.assetId) : null,
+    driverId:   planParams.driverId ? Number(planParams.driverId) : null,
+    driverName: planParams.driverName || null,
+    start:      planParams.start ?? "",
+    end:        planParams.end ?? "",
+  } : EMPTY);
   const [stops, setStops] = useState<Stop[]>([]);
   const [verifyingIds, setVerifyingIds] = useState<Set<string>>(new Set());
   // Tracks whether driverPay was auto-set from the configured percentage so we
@@ -406,7 +420,7 @@ export default function NewLoadScreen() {
         if (path) pdfPath = path;
       }
 
-      const loadId = await createLoad({
+      const created = await createLoad({
         orgId,
         assetId:   draft.assetId,
         title,
@@ -423,10 +437,20 @@ export default function NewLoadScreen() {
         createdByName: user?.fullName ?? user?.firstName ?? user?.primaryEmailAddress?.emailAddress ?? undefined,
       });
 
-      if (!loadId) throw new Error("Couldn't create load");
+      if (!created) throw new Error("Couldn't create load");
+      const loadId = created.id;
 
       if (stops.length > 0) {
         await saveStops(loadId, orgId, stops);
+      }
+
+      // Close the plan this load came from. Non-fatal: the load is
+      // saved either way, and the plan can still be attached by hand.
+      if (planParams.planId && created.loadId) {
+        await railway.attachPlannedEvent(planParams.planId, created.loadId).catch((err) => {
+          console.error("[new-load] attach plan failed:", err);
+        });
+        void qc.invalidateQueries({ queryKey: [PLANNED_QUERY_KEY] });
       }
 
       router.replace({ pathname: "/load/[id]", params: { id: loadId } });
