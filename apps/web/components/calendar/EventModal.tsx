@@ -4641,9 +4641,7 @@ export default function EventModal() {
     const loadId = currentEv?.loadId;
     if (!loadId) return false;
     try {
-      await configureLegs(loadId, {
-        stops,
-        legs: relayLegViews.map((l, i) => {
+      const legsPayload = relayLegViews.map((l, i) => {
           const times = legBoundaryTimes(i);
           const payVal = legPays[l.key];
           // ── Never silently downgrade an assigned leg ───────────────
@@ -4674,7 +4672,38 @@ export default function EventModal() {
             status: l.isViewed ? status : undefined,
             trailerId: l.isViewed ? (linkedTrailerId ?? null) : undefined,
           };
-        }),
+        });
+      // ── Load window: send it when, and only when, it moved ──────────
+      // The server pins the first leg's start and the last leg's end to
+      // the load window, and without `loadWindow` in the body it takes
+      // the window ALREADY STORED. That pinning is deliberate — adding a
+      // handoff must never drag the delivery earlier — but nothing ever
+      // sent loadWindow, so a dispatcher couldn't move a relay load's
+      // start or end at all. Load 2600760: end set to Mon 10:00, audit
+      // logged it, server clamped it straight back to Sun 03:30. Measured
+      // across recent relay edits, 10 of 12 start/end changes were lost
+      // this way.
+      //
+      // legBoundaryTimes already takes the outer bounds from the form
+      // ONLY when the viewed leg is the boundary leg, and from the
+      // stored window otherwise; the form's start/end are only written
+      // by a deliberate header edit on that leg or a rate-con parse —
+      // no split or handoff path touches them. So the outer bounds of
+      // this payload ARE the intended window. Sent only if they differ
+      // from what's stored, which keeps every save that didn't change
+      // them byte-identical to before.
+      const desiredWindow = legsPayload.length > 0
+        ? { start: legsPayload[0].start, end: legsPayload[legsPayload.length - 1].end }
+        : null;
+      const windowMoved = !!desiredWindow && (
+        !loadWindow ||
+        desiredWindow.start !== loadWindow.start ||
+        desiredWindow.end   !== loadWindow.end
+      );
+      await configureLegs(loadId, {
+        stops,
+        ...(windowMoved && desiredWindow ? { loadWindow: desiredWindow } : {}),
+        legs: legsPayload,
       });
       // ── Re-anchor to the server's state ─────────────────────────
       // The reconcile DELETES and re-INSERTS every stop row, so the
