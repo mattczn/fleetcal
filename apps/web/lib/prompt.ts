@@ -156,6 +156,12 @@ export function buildRateConPrompt(
     "stops": [
       { "sequence": <matches stop sequence>, "apptStart": "<short citation for this stop's apptStart>", "apptEnd": "<citation for apptEnd, or empty string>" }
     ]
+  },
+  "rateBreakdown": {
+    "lineHaul":      <the line labelled Linehaul / Line Haul / Freight / Flat Rate as a number, or null if the rate con shows only one figure>,
+    "fuelSurcharge": <the fuel surcharge / FSC line as a number, or null if none>,
+    "otherAgreed":   <sum of any OTHER charges already agreed on the rate con — mileage surcharge, tracking/ELD bonus, stop-off pay, tarp, hazmat, etc. Exclude conditional ones (detention, layover, lumper, TONU, anything "if applicable"). null if none>,
+    "printedTotal":  <the figure printed on the Total / Total Rate / Total Charges line as a number, or null if the rate con prints no total>
   }`;
 
   return `${variables.systemRole} Extract every field you can find and return ONLY a valid JSON object — no markdown, no explanation.
@@ -186,6 +192,33 @@ The load's "start" is the FIRST stop's appointment time. The load's "end" is the
    - For every middle stop: start <= stops[i].apptStart <= end (inclusive of both ends)
 
 5. Self-check before returning. Walk through your stops array and verify constraint #4. If any stop violates it, you misread the document — go back to the appointment column for that stop and re-extract. Do NOT return JSON that violates these constraints; that would be a bug.
+
+RATE EXTRACTION — the money is what the carrier gets paid, so read the rate table carefully:
+
+A. loadPrice is the TOTAL agreed rate, not the linehaul line. Many rate cons itemise:
+
+     LineHaul          $3,099.15
+     Fuel Surcharge      $800.85
+     Total             $3,900.00
+
+   For that table loadPrice is 3900.00. Returning 3099.15 under-bills the
+   load by the fuel surcharge, which nothing downstream recovers.
+
+B. When a "Total" / "Total Rate" / "Total Charges" line is printed, use it
+   verbatim — do not re-add the components yourself. Only sum the lines
+   when no total is printed.
+
+C. The split is WHEN the charge was agreed, not what it is called.
+   Anything printed on this rate con as part of the agreed rate is IN
+   the total — fuel surcharge, mileage surcharge, tracking/ELD bonus,
+   stop-off pay, tarp, hazmat. Charges that only arise after the load
+   runs are OUT: detention, layover, lumper, TONU, and anything worded
+   "if applicable", "per hour after N hours", or quoted as a rate
+   rather than an amount. Those are billed later as accessorials.
+
+D. Fill "rateBreakdown" with what you actually saw — it is checked
+   against loadPrice. Use null for any line the document doesn't print;
+   do not invent or back-compute figures to make them add up.
 
 ${schema},
 ${stopsSchema}

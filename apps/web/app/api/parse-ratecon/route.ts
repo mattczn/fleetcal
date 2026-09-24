@@ -10,6 +10,7 @@ import {
 } from '@/lib/prompt';
 import { makeUsageTracker, preflightCheck } from '@/lib/aiUsage';
 import { geocodeAll } from '@/lib/geocode';
+import { reconcileLoadPrice, type RateBreakdown } from '@/lib/rateTotal';
 import { cleanBrokerName } from '@/lib/brokerName';
 import type { StopType, GeocodeStatus } from '@/lib/types';
 
@@ -547,6 +548,28 @@ export async function POST(req: NextRequest) {
   // matchCustomer() — they already have the org's full roster in
   // state, so passing it through the server was pure waste.
 
+  // ── Rate total cross-check ──────────────────────────────────────────────────
+  // An itemised rate con ("LineHaul $3,099.15 / Fuel Surcharge $800.85
+  // / Total $3,900.00") has a line literally labelled LineHaul, and the
+  // extractor kept picking it. Nothing downstream recovers the
+  // surcharge — accessorials aren't extracted — so the load invoiced
+  // $800.85 short. The field hint now asks for the grand total; this
+  // catches the cases where the model still takes the wrong line, by
+  // checking loadPrice against the rate table it reported reading.
+  // Server-side because five call sites hit this route, and a guard on
+  // money shouldn't depend on which one.
+  const rateCheck = reconcileLoadPrice(parsed.loadPrice, parsed.rateBreakdown as RateBreakdown | null | undefined);
+  if (rateCheck.note) {
+    console.warn('[parse-ratecon] rate check:', rateCheck.note);
+  }
+  if (rateCheck.corrected) {
+    parsed.loadPrice = rateCheck.loadPrice;
+  }
+  // Internal scratchpad, same as dateJustifications — the client sets
+  // fields off this object and has no use for the breakdown.
+  const rateBreakdownSeen = parsed.rateBreakdown;
+  delete (parsed as Record<string, unknown>).rateBreakdown;
+
   // ── Enrich stops with geocoding ─────────────────────────────────────────────
   const rawStops: RawStop[] = Array.isArray(parsed.stops) ? (parsed.stops as RawStop[]) : [];
 
@@ -590,6 +613,14 @@ export async function POST(req: NextRequest) {
       escalatedToSonnet,
       pass1Model: PASS_1_MODEL,
       pass2Model: escalatedToSonnet ? PASS_2_MODEL : null,
+      // What the rate cross-check saw and whether it overrode the
+      // extracted price. Surfaced so a wrong rate can be diagnosed from
+      // the response instead of by re-running the parse.
+      rateCheck: {
+        corrected: rateCheck.corrected,
+        note:      rateCheck.note ?? null,
+        breakdown: rateBreakdownSeen ?? null,
+      },
       // Full debug trace — raw text + parsed JSON from each pass +
       // the discrepancies that triggered escalation + the corrective
       // prompt sent to Sonnet. Inspect via DevTools → Network. None

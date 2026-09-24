@@ -33,7 +33,14 @@ export const ALL_FIELDS: FieldDef[] = [
   { id: 'weight',     label: 'Weight (lbs)',      section: 'load',      type: 'number', defaultEnabled: true,  placeholder: '40000',            extractionHint: 'Total cargo weight in pounds — number only, no commas or units. Convert from kg/tons if needed. Omit if not stated.' },
 
   // Financial
-  { id: 'loadPrice',     label: 'Linehaul ($)',       section: 'financial', type: 'number', defaultEnabled: true,  placeholder: '0.00',    extractionHint: 'Linehaul rate from the rate confirmation — the flat freight charge, BEFORE accessorials (detention, lumper, layover, etc.). Number only, no $ sign or commas, e.g. 1850.00' },
+  // The TOTAL agreed rate, not the linehaul line. A rate con that
+  // itemises ("LineHaul $3,099.15 / Fuel Surcharge $800.85 / Total
+  // $3,900.00") used to yield 3099.15, because this hint said "BEFORE
+  // accessorials" and the model dutifully picked the line labelled
+  // LineHaul. Nothing else captures the fuel surcharge — the parser
+  // doesn't extract accessorials — so that $800.85 was simply dropped
+  // and the load billed short.
+  { id: 'loadPrice',     label: 'Linehaul ($)',       section: 'financial', type: 'number', defaultEnabled: true,  placeholder: '0.00',    extractionHint: 'TOTAL agreed rate the broker pays for this load — the grand total, INCLUDING fuel surcharge, mileage surcharge, tracking/ELD bonus, stop-off pay, tarp, hazmat, and any other charge already agreed on the rate con. If the rate con prints a "Total" / "Total Rate" / "Total Charges" line, use that figure EXACTLY. If it itemises without a total (e.g. LineHaul + Fuel Surcharge), add the agreed lines together. Do NOT use a line labelled "Linehaul"/"Line Haul" on its own when other agreed charges are listed. EXCLUDE conditional charges that have not been earned — detention, layover, lumper, TONU and anything worded "if applicable" or "per hour after N hours"; those are billed later as accessorials. Number only, no $ sign or commas, e.g. 3900.00' },
   { id: 'driverPay',     label: 'Driver Pay ($)',     section: 'financial', type: 'number', defaultEnabled: true,  placeholder: '0.00' },
 
   // Special Instructions — extraction hint is overridden by promptVariables.specialInstructionsFormat
