@@ -82,33 +82,52 @@ export function reconcileLoadPrice(
   }
   if (Math.abs(price - total) <= CENTS_SLACK) return { loadPrice: price, corrected: false };
 
-  // They disagree. Only trust the total if the components the model
-  // reported actually add up to it — that's the signature of having
-  // read a real table rather than guessed at one. When it reported no
-  // components at all, a printed total is still the better source than
-  // a figure that contradicts it.
-  const parts = [breakdown?.lineHaul, breakdown?.fuelSurcharge, breakdown?.otherAgreed]
-    .map(num)
-    .filter((n): n is number => n != null);
-  if (parts.length > 0) {
-    const sum = parts.reduce((a, b) => a + b, 0);
-    if (Math.abs(sum - total) > CENTS_SLACK) {
-      // The model's own numbers are inconsistent — it may have misread
-      // the table entirely. Leave the extracted price alone rather than
-      // trade one wrong number for another.
-      return {
-        loadPrice: price,
-        corrected: false,
-        note: `rate breakdown inconsistent (parts sum ${sum.toFixed(2)} vs printed total ${total.toFixed(2)}); kept extracted ${price}`,
-      };
-    }
+  // They disagree, and the printed total is the most reliable figure on
+  // the page — it's the number the broker pays against.
+  //
+  // This used to also demand that the components the model reported add
+  // up to the total, and only correct if they did. That rejected a real
+  // case: a rate con reading "Freight - flat $1,400 / Accessorial -
+  // delivery appointment $300 / Total $1,700". A model that classifies
+  // the $300 line as an accessorial reports lineHaul 1400 and nothing
+  // else, so the parts summed to 1400 against a total of 1700 and the
+  // guard "protected" the wrong number. A component the model left out
+  // is not the same as a total it invented.
+  //
+  // What's left is a sanity band on the total itself. A real rate con's
+  // total sits between the linehaul and a modest multiple of it —
+  // surcharges and agreed fees add tens of percent, not multiples. A
+  // figure outside that band is more likely a misread (a PRO number, a
+  // weight, an insurance limit) than a rate, so the extracted value
+  // stands and the disagreement is logged instead.
+  const MAX_TOTAL_MULTIPLE = 3;
+  if (total < price - CENTS_SLACK) {
+    // Total BELOW the extracted price. Could be a subtotal misread as
+    // the total, or the model over-read the rate. Either way, guessing
+    // risks over-billing a broker, so leave it and surface the conflict.
+    return {
+      loadPrice: price,
+      corrected: false,
+      note: `printed total ${total.toFixed(2)} is BELOW extracted ${price}; left alone — check the rate con`,
+    };
+  }
+  if (total > price * MAX_TOTAL_MULTIPLE) {
+    return {
+      loadPrice: price,
+      corrected: false,
+      note: `printed total ${total.toFixed(2)} is more than ${MAX_TOTAL_MULTIPLE}x extracted ${price}; looks misread, kept ${price}`,
+    };
   }
 
+  const extras = [
+    breakdown?.fuelSurcharge != null ? `fuel ${Number(breakdown.fuelSurcharge).toFixed(2)}` : null,
+    breakdown?.otherAgreed   != null ? `other agreed ${Number(breakdown.otherAgreed).toFixed(2)}`   : null,
+  ].filter(Boolean).join(', ');
   return {
     loadPrice: total,
     corrected: true,
     note: `extracted ${price} but rate con totals ${total.toFixed(2)}` +
-      (breakdown?.fuelSurcharge ? ` (incl. fuel surcharge ${Number(breakdown.fuelSurcharge).toFixed(2)})` : '') +
+      (extras ? ` (${extras})` : '') +
       '; used the total',
   };
 }

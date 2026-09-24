@@ -160,7 +160,7 @@ export function buildRateConPrompt(
   "rateBreakdown": {
     "lineHaul":      <the line labelled Linehaul / Line Haul / Freight / Flat Rate as a number, or null if the rate con shows only one figure>,
     "fuelSurcharge": <the fuel surcharge / FSC line as a number, or null if none>,
-    "otherAgreed":   <sum of any OTHER charges already agreed on the rate con — mileage surcharge, tracking/ELD bonus, stop-off pay, tarp, hazmat, etc. Exclude conditional ones (detention, layover, lumper, TONU, anything "if applicable"). null if none>,
+    "otherAgreed":   <sum of any OTHER charges already agreed on the rate con — mileage surcharge, tracking/ELD bonus, stop-off pay, tarp, hazmat, and any line the document counts in its own Total even if it is labelled "Accessorial". Exclude only charges that arise after the load runs (detention, layover, lumper, TONU, anything "if applicable" or quoted per-hour). null if none>,
     "printedTotal":  <the figure printed on the Total / Total Rate / Total Charges line as a number, or null if the rate con prints no total>
   }`;
 
@@ -195,7 +195,16 @@ The load's "start" is the FIRST stop's appointment time. The load's "end" is the
 
 RATE EXTRACTION — the money is what the carrier gets paid, so read the rate table carefully:
 
-A. loadPrice is the TOTAL agreed rate, not the linehaul line. Many rate cons itemise:
+A. The agreed total IS the linehaul. How a broker itemises its own
+   offer is presentation — splitting one agreed number into "freight"
+   plus a surcharge, a bonus, or a fee does not make the remainder
+   something other than the rate for hauling the load. Take the whole
+   agreed figure and do not be led by the names on the sub-lines; a
+   label you have never seen before still counts if the document totals
+   it.
+
+   So loadPrice is the TOTAL agreed rate, not the line that happens to
+   be labelled "linehaul". Many rate cons itemise:
 
      LineHaul          $3,099.15
      Fuel Surcharge      $800.85
@@ -214,7 +223,19 @@ C. The split is WHEN the charge was agreed, not what it is called.
    stop-off pay, tarp, hazmat. Charges that only arise after the load
    runs are OUT: detention, layover, lumper, TONU, and anything worded
    "if applicable", "per hour after N hours", or quoted as a rate
-   rather than an amount. Those are billed later as accessorials.
+   rather than an amount.
+
+   The word "Accessorial" on a line does NOT exclude it. If the line
+   carries a fixed amount and is counted in this document's own Total,
+   it was agreed up front and belongs in loadPrice:
+
+     Freight - flat                        $1,400.00
+     Accessorial - delivery appointment      $300.00
+     Total                                 $1,700.00
+
+   loadPrice is 1700.00, and the $300 goes in otherAgreed — even though
+   it says "Accessorial", it is part of the rate this broker committed
+   to. The test is whether the document totals it, not its label.
 
 D. Fill "rateBreakdown" with what you actually saw — it is checked
    against loadPrice. Use null for any line the document doesn't print;
