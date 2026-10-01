@@ -1,8 +1,8 @@
 /**
  * /v1/weekly-target — the dashboard's weekly profitability calculator.
  *
- *   GET  /?week=YYYY-MM-DD   model for the Sat–Fri week containing `week`
- *                            (default: current week). See lib/weeklyTarget.
+ *   GET  /?from=&to=         model for the dashboard's selected period
+ *                            (default: current Sat–Fri week). See lib/weeklyTarget.
  *   PUT  /settings           patch org_settings.weekly_target_settings;
  *                            null clears an override back to computed.
  *
@@ -25,12 +25,17 @@ weeklyTarget.use("*", requireModule("expenses"), requireCapability("expenses.acc
 
 weeklyTarget.get("/", async (c) => {
   const orgId = c.get("orgId");
-  const week = c.req.query("week");
-  if (week && !/^\d{4}-\d{2}-\d{2}$/.test(week)) {
-    return c.json({ error: "validation_failed", errors: ["week must be YYYY-MM-DD"] } satisfies ApiErrorResponse, 400);
+  const from = c.req.query("from");
+  const to = c.req.query("to");
+  const isDay = (s: string | undefined) => !!s && /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(`${s}T00:00:00Z`));
+  if ((from || to) && !(isDay(from) && isDay(to) && from! <= to!)) {
+    return c.json({ error: "validation_failed", errors: ["from and to must both be YYYY-MM-DD with from <= to"] } satisfies ApiErrorResponse, 400);
+  }
+  if (from && to && Date.parse(to) - Date.parse(from) > 400 * 86_400_000) {
+    return c.json({ error: "validation_failed", errors: ["period can't be longer than 400 days"] } satisfies ApiErrorResponse, 400);
   }
   try {
-    return c.json(await computeWeeklyTarget(orgId, { week: week ?? undefined }));
+    return c.json(await computeWeeklyTarget(orgId, { from: from || undefined, to: to || undefined }));
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     console.error("[GET /v1/weekly-target]", detail);

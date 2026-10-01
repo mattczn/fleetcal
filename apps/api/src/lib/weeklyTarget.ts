@@ -200,19 +200,32 @@ async function adjustmentsTotal(orgId: string, from: string, to: string, exclude
     .reduce((s, r) => s + Number(r.amount ?? 0), 0);
 }
 
-/** Same number as the dashboard's Total Payroll KPI for a finalized week:
- *  current (non-superseded) payroll records, owner-ops out. 0 = pending. */
-async function finalizedPayroll(orgId: string, weekStart: string, excluded: ExcludedDrivers): Promise<number> {
-  const rows = await fetchAllRows<{ total_pay: number | string | null; driver_name: string | null }>(
+/** Sat–Fri weeks whose Friday falls inside [from, to] — the weeks the
+ *  dashboard's Total Payroll KPI counts for a period. */
+function payrollWeeks(from: string, to: string): string[] {
+  const out: string[] = [];
+  for (let ws = saturdayOf(from); addDays(ws, 6) <= to; ws = addDays(ws, 7)) out.push(ws);
+  return out;
+}
+
+/** Finalized payroll per week_start: current (non-superseded) records,
+ *  owner-ops out — what the Total Payroll KPI sums. */
+async function finalizedPayroll(orgId: string, weeks: string[], excluded: ExcludedDrivers): Promise<Map<string, number>> {
+  const byWeek = new Map<string, number>();
+  if (!weeks.length) return byWeek;
+  const rows = await fetchAllRows<{ total_pay: number | string | null; driver_name: string | null; week_start: string }>(
     "weekly-target payroll", () => supabase
       .from("payroll_records")
-      .select("total_pay, driver_name")
+      .select("total_pay, driver_name, week_start")
       .eq("org_id", orgId)
-      .eq("week_start", weekStart)
+      .gte("week_start", weeks[0])
+      .lte("week_start", weeks[weeks.length - 1])
       .is("superseded_at", null));
-  return rows
-    .filter(r => !excluded.nameSet.has((r.driver_name ?? "").trim()))
-    .reduce((s, r) => s + Number(r.total_pay ?? 0), 0);
+  for (const r of rows) {
+    if (excluded.nameSet.has((r.driver_name ?? "").trim())) continue;
+    byWeek.set(r.week_start, (byWeek.get(r.week_start) ?? 0) + Number(r.total_pay ?? 0));
+  }
+  return byWeek;
 }
 
 /** Fleet odometer miles (max − min per ELD truck), owner-op trucks out. */
@@ -341,11 +354,14 @@ const payRate = (rows: LoadEcon[]): number | null => {
 
 export async function computeWeeklyTarget(
   orgId: string,
-  opts: { week?: string; today?: string; settings?: WeeklyTargetSettings } = {},
+  opts: { from?: string; to?: string; today?: string; settings?: WeeklyTargetSettings } = {},
 ): Promise<WeeklyTargetResponse> {
   const today = opts.today ?? iso(Date.now());
-  const weekFrom = saturdayOf(opts.week ?? today);
-  const weekTo = addDays(weekFrom, 6);
+  // The dashboard's selected period; the current Sat–Fri week by default.
+  const weekFrom = opts.from ?? saturdayOf(today);
+  const weekTo = opts.to ?? addDays(weekFrom, 6);
+  const days = Math.round((parseDay(weekTo) - parseDay(weekFrom)) / DAY) + 1;
+  const weeks = payrollWeeks(weekFrom, weekTo);
   const calTo = addDays(saturdayOf(today), -1);
   const calFrom = addDays(calTo, -(CALIBRATION_WEEKS * 7 - 1));
 
@@ -378,7 +394,7 @@ export async function computeWeeklyTarget(
     adjustmentsTotal(orgId, calFrom, calTo, excluded),
     loadEconomics(orgId, weekFrom, weekTo, excluded, excludedAssets, terminal, true),
     weekFrom <= today ? eldMiles(orgId, weekFrom, weekTo < today ? weekTo : today, excludedAssets) : Promise.resolve(null),
-    finalizedPayroll(orgId, weekFrom, excluded),
+    finalizedPayroll(orgId, weeks, excluded),
     loadEconomics(orgId, basisFrom, basisTo, excluded, excludedAssets, terminal, false),
     eldMiles(orgId, basisFrom, basisTo, excludedAssets),
     fuelTotals(orgId, basisFrom, basisTo),
@@ -483,27 +499,56 @@ export async function computeWeeklyTarget(
   const marginTarget = param(
     trailingMargin == null ? null : Math.round(trailingMargin * 200) / 200, settings.marginTarget, 0.1);
 
-  // ── This week ──
+  // ── The selected period ──
   const wk = totals(weekLoads);
   const local = totals(weekLoads.filter(r => r.cls === "local"));
   const otr = totals(weekLoads.filter(r => r.cls === "otr"));
   const weekComplete = weekTo < today;
-  // Mirrors the dashboard Total Payroll KPI: finalized records once the
-  // week is closed, otherwise driver pay on the week's loads.
-  const driverPaySource: "payroll" | "loads" = weekPayroll > 0 ? "payroll" : "loads";
-  const driverPay = weekPayroll > 0 ? weekPayroll : wk.driverPay;
+  // Mirrors the dashboard Total Payroll KPI: per Sat–Fri week whose Friday
+  // is in the period, finalized records if any, else that week's load pay.
+  let driverPay = 0;
+  let finalizedCount = 0;
+  for (const ws of weeks) {
+    const fin = weekPayroll.get(ws) ?? 0;
+    if (fin > 0) { driverPay += fin; finalizedCount++; continue; }
+    const we = addDays(ws, 6);
+    driverPay += weekLoads.filter(r => r.pickup >= ws && r.pickup <= we).reduce((s, r) => s + r.driverPay, 0);
+  }
+  if (!weeks.length) driverPay = wk.driverPay;
+  const driverPaySource: "payroll" | "loads" | "partial" =
+    weeks.length && finalizedCount === weeks.length ? "payroll" : finalizedCount > 0 ? "partial" : "loads";
 
+  const fixedPeriod = fixedWeekly * days / 7;
   const perMileCost = fuelPrice.value / mpg.value + maintPerMile;
   const totalMiles = wk.loadedMiles * emptyFactor.value;
   const fuel = totalMiles * fuelPrice.value / mpg.value;
   const maintenance = totalMiles * maintPerMile;
   const other = wk.revenue * revenuePctOther;
-  const profit = wk.revenue - driverPay - fuel - maintenance - fixedWeekly - other;
+  const profit = wk.revenue - driverPay - fuel - maintenance - fixedPeriod - other;
 
-  const milesCost = fixedWeekly + totalMiles * perMileCost;
+  const milesCost = fixedPeriod + totalMiles * perMileCost;
   const breakEvenRevenue = milesCost / Math.max(0.05, 1 - payAll - revenuePctOther);
   const targetRevenue = milesCost / Math.max(0.05, 1 - payAll - revenuePctOther - marginTarget.value);
   const perLoaded = (v: number) => (wk.loadedMiles > 0 ? v / wk.loadedMiles : null);
+
+  // Rate per loaded mile. Fixed costs are spread over the period's loaded
+  // miles — but while the period is still being booked, over at least the
+  // usual volume, or a half-booked week would demand an absurd rate.
+  const typicalLoadedMiles = cal.loadedMiles / (CALIBRATION_WEEKS * 7) * days;
+  const loadedMilesBasis = weekComplete ? wk.loadedMiles : Math.max(wk.loadedMiles, typicalLoadedMiles);
+  const keepAfterPay = 1 - payAll - revenuePctOther;
+  const rpm = (margin: number) => loadedMilesBasis > 0
+    ? (perMileCost * emptyFactor.value + fixedPeriod / loadedMilesBasis) / Math.max(0.05, keepAfterPay - margin)
+    : null;
+  const targetRpm = rpm(marginTarget.value);
+  const costPerLoadedMile = targetRpm == null ? null : {
+    driverPay:   payAll * targetRpm,
+    fuel:        fuelPrice.value / mpg.value * emptyFactor.value,
+    maintenance: maintPerMile * emptyFactor.value,
+    fixed:       fixedPeriod / loadedMilesBasis,
+    other:       revenuePctOther * targetRpm,
+    margin:      marginTarget.value * targetRpm,
+  };
 
   // ── OTR rate per loaded mile ──
   // Fixed costs are time-based (leases, insurance, admin), so an OTR run
@@ -515,7 +560,7 @@ export async function computeWeeklyTarget(
   };
 
   return {
-    week: { from: weekFrom, to: weekTo, complete: weekComplete },
+    period: { from: weekFrom, to: weekTo, days, complete: weekComplete },
     calibration: { from: calFrom, to: calTo },
     costBasis: { from: basisFrom, to: basisTo, months, lastMonth: lastFrom ? { from: lastFrom, to: basisTo } : null },
     params: {
@@ -532,11 +577,13 @@ export async function computeWeeklyTarget(
     projection: {
       totalMiles,
       actualMiles: weekEld ? weekEld.miles : null,
-      driverPay, driverPaySource, fuel, maintenance, fixed: fixedWeekly, other, profit,
+      driverPay, driverPaySource, fuel, maintenance, fixed: fixedPeriod, other, profit,
       breakEvenRevenue, targetRevenue,
       revenuePerLoadedMile: perLoaded(wk.revenue),
-      breakEvenPerLoadedMile: perLoaded(breakEvenRevenue),
-      targetPerLoadedMile: perLoaded(targetRevenue),
+      loadedMilesBasis,
+      breakEvenPerLoadedMile: rpm(0),
+      targetPerLoadedMile: targetRpm,
+      costPerLoadedMile,
     },
     otr: {
       breakEvenRplm: otrRplm(fuelPrice.value, 0),
