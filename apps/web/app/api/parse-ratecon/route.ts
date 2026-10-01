@@ -11,7 +11,7 @@ import {
 import { makeUsageTracker, preflightCheck } from '@/lib/aiUsage';
 import { geocodeAll } from '@/lib/geocode';
 import { reconcileLoadPrice, type RateBreakdown } from '@/lib/rateTotal';
-import { cleanBrokerName } from '@/lib/brokerName';
+import { promoteLoadNumber } from '@/lib/loadNumber';
 import type { StopType, GeocodeStatus } from '@/lib/types';
 
 interface RawStop {
@@ -538,11 +538,13 @@ export async function POST(req: NextRequest) {
   // the client doesn't need to see citations.
   delete (parsed as Record<string, unknown>).dateJustifications;
 
-  // Strip legal/industry suffixes from the broker name AI returned so
-  // the title doesn't read "Direct Connect Logistics Inc: …".
-  if (typeof parsed.broker === 'string') {
-    parsed.broker = cleanBrokerName(parsed.broker);
-  }
+  // The broker name is returned EXACTLY as printed on the rate con.
+  // It used to be run through cleanBrokerName() here to keep load
+  // titles short, but that stripped the identifying word before
+  // matchCustomer() ever saw it — "Worldwide Logistics Group" arrived
+  // at the matcher as "Worldwide" and silently linked to Worldwide
+  // Express. Shortening is now purely a render-time concern; see
+  // displayBrokerName() in lib/customerMatch.ts.
 
   // Customer matching lives client-side in generateLoadTitle() and
   // matchCustomer() — they already have the org's full roster in
@@ -569,6 +571,20 @@ export async function POST(req: NextRequest) {
   // fields off this object and has no use for the breakdown.
   const rateBreakdownSeen = parsed.rateBreakdown;
   delete (parsed as Record<string, unknown>).rateBreakdown;
+
+  // ── Load number backstop ────────────────────────────────────────────────────
+  // Same shape as the rate check above: a field hint tells the model
+  // what to do, and a deterministic guard catches the cases where it
+  // doesn't. Brokers label their load number inconsistently — Freight
+  // Tec prints it as "PRO #" — and when the label doesn't say "load",
+  // the number used to land in the reference chips with Load # left
+  // empty for a dispatcher to copy off the PDF by hand. If the parse
+  // found the number at all, it is in the references.
+  const numCheck = promoteLoadNumber(parsed.loadNum, parsed.refNums);
+  if (numCheck.promoted) {
+    parsed.loadNum = numCheck.loadNum;
+    console.warn('[parse-ratecon] load number:', numCheck.note);
+  }
 
   // ── Enrich stops with geocoding ─────────────────────────────────────────────
   const rawStops: RawStop[] = Array.isArray(parsed.stops) ? (parsed.stops as RawStop[]) : [];
@@ -620,6 +636,14 @@ export async function POST(req: NextRequest) {
         corrected: rateCheck.corrected,
         note:      rateCheck.note ?? null,
         breakdown: rateBreakdownSeen ?? null,
+      },
+      // Whether the load number came from the model or was recovered
+      // from the reference numbers — so "why does Load # say that?" is
+      // answerable from the response instead of by re-parsing.
+      loadNumCheck: {
+        promoted:  numCheck.promoted,
+        fromLabel: numCheck.fromLabel ?? null,
+        note:      numCheck.note ?? null,
       },
       // Full debug trace — raw text + parsed JSON from each pass +
       // the discrepancies that triggered escalation + the corrective
