@@ -1642,8 +1642,8 @@ export default function DashboardView() {
                   <KpiCard
                     label="Target RPM"
                     value={target != null ? fmtPerMile(target) : '—'}
-                    sub={p && x?.breakEvenPerLoadedMile != null
-                      ? `at ${pctFmt(p.marginTarget.value)} margin · break-even ${fmtPerMile(x.breakEvenPerLoadedMile)}`
+                    sub={x?.breakEvenPerLoadedMile != null
+                      ? `all loads (local + OTR) · break-even ${fmtPerMile(x.breakEvenPerLoadedMile)}`
                       : 'no loaded miles to price yet'}
                     icon={<Target size={17} />}
                     accent="#1a73e8"
@@ -1656,9 +1656,19 @@ export default function DashboardView() {
                     extra={wtCurrent ? {
                       label: 'OTR target',
                       value: fmtPerMile(wtCurrent.otr.targetRplm),
-                      formula: <>Rate per loaded mile an OTR load needs at this margin. OTR trucks cover more miles per day, so each mile carries less of the daily fixed cost than the fleet average.</>,
+                      formula: <>Rate per loaded mile an OTR load needs at this margin. OTR trucks cover more miles per day, so each mile carries less of the daily fixed cost than the all-loads average. Compare with the OTR RPM tile.</>,
                     } : undefined}
                   >
+                    {wtCurrent && (
+                      <div className="mt-1.5 flex items-baseline justify-between gap-2">
+                        <span className="text-[10.5px] font-semibold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
+                          OTR break-even
+                        </span>
+                        <span className="text-[15px] font-semibold leading-none" style={{ color: 'var(--gc-text-1)' }}>
+                          {fmtPerMile(wtCurrent.otr.breakEvenRplm)}
+                        </span>
+                      </div>
+                    )}
                     {p && (
                       <div className="mt-2.5 pt-2.5" style={divider}>
                         <ParamInput
