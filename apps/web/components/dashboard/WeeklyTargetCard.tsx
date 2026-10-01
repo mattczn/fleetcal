@@ -1,20 +1,21 @@
 'use client';
 
 /**
- * Weekly target — where this Sat–Fri week sits against break-even and a
- * target margin as loads get booked, plus the OTR rate per loaded mile
- * needed at the current diesel price, and a one-load checker for saying
- * no to freight that doesn't pay.
+ * Weekly target — where the dashboard's selected period sits against
+ * break-even and a target margin as loads get booked, plus the OTR rate
+ * per loaded mile needed at the current diesel price, and a one-load
+ * checker for saying no to freight that doesn't pay.
  *
- * All numbers come from GET /v1/weekly-target (lib/weeklyTarget.ts);
- * every model input is computed from the org's own data and can be
- * overridden here (saved to org_settings.weekly_target_settings).
+ * All numbers come from GET /v1/weekly-target (lib/weeklyTarget.ts),
+ * fetched by DashboardView for its period and shared with the Target RPM
+ * and Cost / Loaded Mile tiles. Every model input is computed from the
+ * org's own data and can be overridden here (saved to
+ * org_settings.weekly_target_settings).
  */
 
-import { useCallback, useEffect, useState } from 'react';
-import { ChevronLeft, ChevronRight, RotateCcw, Settings2, Target } from 'lucide-react';
+import { useCallback, useState } from 'react';
+import { RotateCcw, Settings2, Target, X } from 'lucide-react';
 import type { BucketBasis, CostBehavior, WeeklyTargetParam, WeeklyTargetResponse, WeeklyTargetSettings } from '@fleetcal/types';
-import { railway } from '@/lib/railway';
 import InfoDot from '@/components/ui/InfoDot';
 
 const money = (n: number) =>
@@ -22,17 +23,14 @@ const money = (n: number) =>
 const perMile = (n: number | null | undefined) => (n == null ? '—' : `$${n.toFixed(2)}`);
 const pct = (n: number) => `${(n * 100).toFixed(1)}%`;
 
-function shiftWeek(from: string, days: number): string {
-  const d = new Date(`${from}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
-}
-function weekLabel(from: string, to: string): string {
+function periodLabel(from: string, to: string): string {
   const f = (s: string) => new Date(`${s}T00:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
   return `${f(from)} – ${f(to)}`;
 }
 
-type ParamKey = 'fuelPrice' | 'marginTarget' | 'mpg' | 'emptyFactor' | 'otrLoadedShare' | 'otrMilesPerDay' | 'fixedWeekly';
+export type WeeklyTargetPatch = { [K in keyof WeeklyTargetSettings]?: WeeklyTargetSettings[K] | null };
+
+export type ParamKey = 'fuelPrice' | 'marginTarget' | 'mpg' | 'emptyFactor' | 'otrLoadedShare' | 'otrMilesPerDay' | 'fixedWeekly';
 const PARAM_META: Record<ParamKey, { label: string; asPct?: boolean; prefix?: string; step: number; hint: string }> = {
   fuelPrice:      { label: 'Diesel $/gal',      prefix: '$', step: 0.01, hint: 'Default: average all-in price over the last 7 days of fuel transactions.' },
   marginTarget:   { label: 'Target margin',     asPct: true, step: 0.5,  hint: 'Default: your actual operating margin over the cost-basis months (truck purchases excluded).' },
@@ -47,7 +45,7 @@ const BEHAVIOR_LABEL: Record<CostBehavior, string> = {
   fixed: 'Fixed / week', per_mile: 'Per mile', revenue_pct: '% of revenue', exclude: 'Excluded',
 };
 
-function ParamInput({ k, p, disabled, onSave }: {
+export function ParamInput({ k, p, disabled, onSave }: {
   k: ParamKey; p: WeeklyTargetParam; disabled: boolean;
   onSave: (key: ParamKey, value: number | null) => void;
 }) {
@@ -111,35 +109,16 @@ function Row({ label, value, strong, tone }: { label: React.ReactNode; value: st
   );
 }
 
-export default function WeeklyTargetCard() {
-  const [week, setWeek] = useState<string | undefined>(undefined);
-  const [data, setData] = useState<WeeklyTargetResponse | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [reloadKey, setReloadKey] = useState(0);
-  const [saving, setSaving] = useState(false);
+export default function WeeklyTargetCard({ data, error: err, saving, onSave: save }: {
+  /** null while the selected period is loading. */
+  data: WeeklyTargetResponse | null;
+  error: string | null;
+  saving: boolean;
+  onSave: (patch: WeeklyTargetPatch) => void;
+}) {
   const [showInputs, setShowInputs] = useState(false);
   const [chk, setChk] = useState({ revenue: '', loaded: '', empty: '' });
-
-  useEffect(() => {
-    let cancelled = false;
-    railway.getWeeklyTarget(week)
-      .then(r => { if (!cancelled) { setData(r); setErr(null); } })
-      .catch(e => { if (!cancelled) setErr(e instanceof Error ? e.message : 'Failed to load'); });
-    return () => { cancelled = true; };
-  }, [week, reloadKey]);
-
-  const save = useCallback(async (patch: { [K in keyof WeeklyTargetSettings]?: WeeklyTargetSettings[K] | null }) => {
-    setSaving(true);
-    try {
-      await railway.saveWeeklyTargetSettings(patch);
-      setReloadKey(k => k + 1);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Failed to save');
-    } finally {
-      setSaving(false);
-    }
-  }, []);
-  const saveParam = useCallback((k: ParamKey, v: number | null) => { void save({ [k]: v }); }, [save]);
+  const saveParam = useCallback((k: ParamKey, v: number | null) => save({ [k]: v }), [save]);
 
   const card = (children: React.ReactNode) => (
     <div style={{ background: 'var(--gc-surface)', borderRadius: 12, border: '1px solid var(--gc-border)', padding: 20 }}>
@@ -151,6 +130,7 @@ export default function WeeklyTargetCard() {
   if (!data) return card(<div className="h-40 rounded-lg animate-pulse" style={{ background: 'var(--gc-hover)' }} />);
 
   const { params: p, booked: b, projection: x, otr } = data;
+  const isWeek = data.period.days === 7;
   const locked = data.settingsUnavailable || saving;
   const scaleMax = Math.max(x.targetRevenue, b.revenue, x.breakEvenRevenue) * 1.08 || 1;
   const pos = (v: number) => `${Math.min(100, (v / scaleMax) * 100)}%`;
@@ -175,20 +155,18 @@ export default function WeeklyTargetCard() {
     <>
       <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
         <h2 className="text-sm font-semibold flex items-center gap-1.5" style={{ color: 'var(--gc-text-1)' }}>
-          <Target size={15} /> Weekly target
+          <Target size={15} /> {isWeek ? 'Weekly target' : 'Period target'}
           <InfoDot size={12} content={<>
+            Follows the period selected at the top of the dashboard; fixed costs scale with its length.
             Profit = revenue − driver pay (the Total Payroll figure) − other % of revenue − miles × (diesel ÷ MPG + maintenance/mi) − fixed costs.
             Break-even and target use the driver pay % of revenue instead, since they price revenue you haven&rsquo;t booked yet.
             Miles are projected from booked loaded miles × the empty-mile factor. Owner-operator loads are excluded.
             Expect about ±10% on any single week.
           </>} />
         </h2>
-        <div className="flex items-center gap-1">
-          <button type="button" className="p-1 rounded" onClick={() => setWeek(shiftWeek(data.week.from, -7))} aria-label="Previous week"><ChevronLeft size={16} /></button>
-          <span className="text-sm font-medium tabular-nums" style={{ color: 'var(--gc-text-1)' }}>{weekLabel(data.week.from, data.week.to)}</span>
-          <button type="button" className="p-1 rounded" onClick={() => setWeek(shiftWeek(data.week.from, 7))} aria-label="Next week"><ChevronRight size={16} /></button>
-          {week && <button type="button" className="text-xs ml-1 underline" style={{ color: 'var(--gc-text-3)' }} onClick={() => setWeek(undefined)}>This week</button>}
-        </div>
+        <span className="text-sm font-medium tabular-nums" style={{ color: 'var(--gc-text-2)' }}>
+          {periodLabel(data.period.from, data.period.to)}
+        </span>
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
@@ -209,10 +187,10 @@ export default function WeeklyTargetCard() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         <div>
-          <div className="text-[11px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>The week</div>
+          <div className="text-[11px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>{isWeek ? 'The week' : 'The period'}</div>
           <Row label="Projected profit" value={`${money(x.profit)} (${b.revenue > 0 ? pct(x.profit / b.revenue) : '—'})`} strong tone={profitTone} />
           <Row label="Still needed for target" value={stillNeeded > 0 ? money(stillNeeded) : 'Met'} />
-          <Row label={<>Driver pay <span className="text-[11px]">({x.driverPaySource === 'payroll' ? 'finalized payroll' : 'payroll pending'})</span></>} value={money(x.driverPay)} />
+          <Row label={<>Driver pay <span className="text-[11px]">({x.driverPaySource === 'payroll' ? 'finalized payroll' : x.driverPaySource === 'partial' ? 'partly finalized' : 'payroll pending'})</span></>} value={money(x.driverPay)} />
           <Row label={`Fuel (${Math.round(x.totalMiles).toLocaleString()} mi projected)`} value={money(x.fuel)} />
           <Row label="Maintenance" value={money(x.maintenance)} />
           <Row label="Fixed costs" value={money(x.fixed)} />
@@ -226,7 +204,7 @@ export default function WeeklyTargetCard() {
 
         <div>
           <div className="text-[11px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>Revenue per loaded mile</div>
-          <Row label="Booked this week" value={perMile(x.revenuePerLoadedMile)} strong />
+          <Row label={isWeek ? 'Booked this week' : 'Booked this period'} value={perMile(x.revenuePerLoadedMile)} strong />
           <Row label="Break-even" value={perMile(x.breakEvenPerLoadedMile)} />
           <Row label="Target" value={perMile(x.targetPerLoadedMile)} tone="#1a73e8" />
           <div className="text-[11px] font-semibold uppercase tracking-wider mt-3 mb-1" style={{ color: 'var(--gc-text-3)' }}>
@@ -294,6 +272,17 @@ export default function WeeklyTargetCard() {
 
       {showInputs && (
         <div className="mt-3 pt-3" style={{ borderTop: '1px solid var(--gc-border)' }}>
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>Model inputs</span>
+            <button
+              type="button"
+              onClick={() => setShowInputs(false)}
+              className="flex items-center gap-1 text-xs px-2 py-1 rounded-md"
+              style={{ border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)' }}
+            >
+              <X size={13} /> Close
+            </button>
+          </div>
           {data.settingsUnavailable && (
             <div className="text-xs mb-3" style={{ color: '#e37400' }}>
               Overrides can’t be saved until the weekly-target migration has been run. Everything shown is calculated.
@@ -357,6 +346,14 @@ export default function WeeklyTargetCard() {
                 </div>
               ))}
           </div>
+          <button
+            type="button"
+            onClick={() => setShowInputs(false)}
+            className="mt-3 text-xs flex items-center gap-1"
+            style={{ color: 'var(--gc-text-3)' }}
+          >
+            <X size={13} /> Hide model inputs
+          </button>
         </div>
       )}
     </>,

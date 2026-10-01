@@ -1,11 +1,11 @@
 'use client';
 
-import { useMemo, useState, useEffect } from 'react';
+import { useCallback, useMemo, useState, useEffect } from 'react';
 import Link from 'next/link';
 import {
   TrendingUp, Truck, CheckCircle2, DollarSign,
   BarChart2, AlertCircle, Loader2,
-  Wallet, Fuel, Route, Gauge, Info, MapPin, Navigation,
+  Wallet, Fuel, Route, Gauge, Info, MapPin, Navigation, Target, Calculator,
 } from 'lucide-react';
 import Tooltip from '@/components/ui/Tooltip';
 import InfoDot from '@/components/ui/InfoDot';
@@ -25,9 +25,9 @@ import { isActiveInRange, dateKeyOf } from '@/lib/lifecycle';
 import { type Period, PERIODS, getPeriodRange, currentWeekStartISO } from '@/lib/periodRange';
 import { PeriodSelector } from '@/components/ui/PeriodSelector';
 import LoadsReport from '@/components/dashboard/LoadsReport';
-import WeeklyTargetCard from '@/components/dashboard/WeeklyTargetCard';
+import WeeklyTargetCard, { ParamInput, type WeeklyTargetPatch } from '@/components/dashboard/WeeklyTargetCard';
 import type { CalendarEvent } from '@/lib/types';
-import type { LoadSummary } from '@fleetcal/types';
+import type { LoadSummary, WeeklyTargetResponse } from '@fleetcal/types';
 import { usePermissions } from '@/lib/usePermissions';
 import { useModules } from '@/lib/useModules';
 
@@ -148,7 +148,7 @@ function Empty({ label }: { label: string }) {
 // /expenses workspace renders the same bar. Imported below.
 
 function KpiCard({
-  label, value, sub, icon, accent, badge, loading, formula, hoverContent, extra,
+  label, value, sub, icon, accent, badge, loading, formula, hoverContent, extra, children,
 }: {
   label: string; value: string; sub: string;
   icon: React.ReactNode; accent: string;
@@ -176,6 +176,9 @@ function KpiCard({
    *  sub line — e.g. Loaded RPM inside the Total Loaded Miles tile.
    *  Skipped during `loading`. Its own Info tooltip carries the formula. */
   extra?: { label: string; value: string; formula?: React.ReactNode };
+  /** Optional tile body below the extra row (inputs, line items).
+   *  Skipped during `loading`. */
+  children?: React.ReactNode;
 }) {
   return (
     <Card>
@@ -269,6 +272,7 @@ function KpiCard({
                   </span>
                 </div>
               )}
+              {children}
             </>
           );
         })()
@@ -411,6 +415,33 @@ export default function DashboardView() {
     })();
     return () => { cancelled = true; };
   }, [dbReady, periodIso]);
+
+  // ── Weekly target model for the selected period ───────────────────────
+  // One fetch shared by the Weekly target card and the Target RPM /
+  // Cost per Loaded Mile tiles, so a margin saved in either place moves
+  // both. Data for a previous period counts as still loading.
+  const showTargets = moduleEnabled('expenses') && can('expenses.access');
+  const [wt, setWt] = useState<WeeklyTargetResponse | null>(null);
+  const [wtErr, setWtErr] = useState<string | null>(null);
+  const [wtSaving, setWtSaving] = useState(false);
+  const [wtReload, setWtReload] = useState(0);
+  useEffect(() => {
+    if (!dbReady || !showTargets) return;
+    let cancelled = false;
+    railway.getWeeklyTarget({ from: periodIso.fromDate, to: periodIso.toDate })
+      .then(r => { if (!cancelled) { setWt(r); setWtErr(null); } })
+      .catch(e => { if (!cancelled) setWtErr(e instanceof Error ? e.message : 'Failed to load'); });
+    return () => { cancelled = true; };
+  }, [dbReady, showTargets, periodIso, wtReload]);
+  const wtCurrent = wt?.period && wt.period.from === periodIso.fromDate && wt.period.to === periodIso.toDate ? wt : null;
+  const saveWeeklyTarget = useCallback((patch: WeeklyTargetPatch) => {
+    setWtSaving(true);
+    railway.saveWeeklyTargetSettings(patch)
+      .then(() => setWtReload(k => k + 1))
+      .catch(e => setWtErr(e instanceof Error ? e.message : 'Failed to save'))
+      .finally(() => setWtSaving(false));
+  }, []);
+  const wtLocked = !wtCurrent || wtCurrent.settingsUnavailable || wtSaving;
 
   // ── Fuel spend (period total) ─────────────────────────────────────────
   //
@@ -1593,9 +1624,86 @@ export default function DashboardView() {
                 />
               );
             })}
+            {showTargets && (() => {
+              const p = wtCurrent?.params;
+              const x = wtCurrent?.projection;
+              const c = x?.costPerLoadedMile ?? null;
+              const target = x?.targetPerLoadedMile ?? null;
+              const pctFmt = (n: number) => `${(n * 100).toFixed(1)}%`;
+              const costRow = (label: string, v: number, strong?: boolean) => (
+                <div key={label} className="flex items-baseline justify-between gap-2 text-xs py-0.5">
+                  <span style={{ color: 'var(--gc-text-2)' }}>{label}</span>
+                  <span className={`tabular-nums ${strong ? 'font-semibold' : ''}`} style={{ color: 'var(--gc-text-1)' }}>{fmtPerMile(v)}</span>
+                </div>
+              );
+              const divider = { borderTop: '1px solid var(--gc-border-light)' };
+              return (
+                <>
+                  <KpiCard
+                    label="Target RPM"
+                    value={target != null ? fmtPerMile(target) : '—'}
+                    sub={p && x?.breakEvenPerLoadedMile != null
+                      ? `at ${pctFmt(p.marginTarget.value)} margin · break-even ${fmtPerMile(x.breakEvenPerLoadedMile)}`
+                      : 'no loaded miles to price yet'}
+                    icon={<Target size={17} />}
+                    accent="#1a73e8"
+                    loading={!wtCurrent}
+                    formula={
+                      <>
+                        Revenue per loaded mile the period&rsquo;s loads need to average to hit the margin below — compare it with Loaded RPM. Uses the same costs as the Weekly target card: driver pay % of revenue, fuel and maintenance per mile driven (× the empty-mile factor), and fixed costs spread over the period&rsquo;s loaded miles (or your usual weekly volume while the week is still being booked).
+                      </>
+                    }
+                    extra={wtCurrent ? {
+                      label: 'OTR target',
+                      value: fmtPerMile(wtCurrent.otr.targetRplm),
+                      formula: <>Rate per loaded mile an OTR load needs at this margin. OTR trucks cover more miles per day, so each mile carries less of the daily fixed cost than the fleet average.</>,
+                    } : undefined}
+                  >
+                    {p && (
+                      <div className="mt-2.5 pt-2.5" style={divider}>
+                        <ParamInput
+                          key={`marginTarget:${p.marginTarget.value}`}
+                          k="marginTarget"
+                          p={p.marginTarget}
+                          disabled={wtLocked}
+                          onSave={(k, v) => saveWeeklyTarget({ [k]: v })}
+                        />
+                      </div>
+                    )}
+                  </KpiCard>
+                  <KpiCard
+                    label="Cost / Loaded Mile"
+                    value={c ? fmtPerMile(c.driverPay + c.fuel + c.maintenance + c.fixed + c.other) : '—'}
+                    sub={target != null ? `line items at the ${fmtPerMile(target)} target rate` : 'no loaded miles to price yet'}
+                    icon={<Calculator size={17} />}
+                    accent="#e37400"
+                    loading={!wtCurrent}
+                    formula={
+                      <>
+                        What each loaded mile costs — the pieces of Target RPM. Fuel and maintenance are per mile driven × {p ? p.emptyFactor.value.toFixed(2) : 'the empty-mile factor'} driven miles per loaded mile. Fixed costs are spread over {x ? fmtMiles(x.loadedMilesBasis) : 'the period’s loaded miles'}. Driver pay and hotels / load expenses are a share of the rate, so they&rsquo;re shown at the target rate.
+                      </>
+                    }
+                  >
+                    {c && p && target != null && (
+                      <div className="mt-2.5 pt-2" style={divider}>
+                        {costRow(`Driver pay (${pctFmt(p.payPct.all)})`, c.driverPay)}
+                        {costRow('Fuel', c.fuel)}
+                        {costRow('Maintenance', c.maintenance)}
+                        {costRow('Fixed costs', c.fixed)}
+                        {c.other > 0 && costRow('Hotels / load expenses', c.other)}
+                        {costRow(`Margin (${pctFmt(p.marginTarget.value)})`, c.margin)}
+                        <div className="mt-1 pt-1" style={divider}>{costRow('Target RPM', target, true)}</div>
+                      </div>
+                    )}
+                  </KpiCard>
+                </>
+              );
+            })()}
           </div>
 
-          {moduleEnabled('expenses') && can('expenses.access') && <WeeklyTargetCard />}
+          {showTargets && (
+            <WeeklyTargetCard data={wtCurrent} error={wtErr} saving={wtSaving} onSave={saveWeeklyTarget} />
+          )}
 
           {/* Revenue → cost breakdown bar. Full bar width represents
               period revenue; chunks consume the chunk's share. What's

@@ -2015,8 +2015,9 @@ class RailwayClient {
   }
 
   // ── /expenses dashboard ─────────────────────────────────────────────
-  getWeeklyTarget(week?: string) {
-    return this.req<WeeklyTargetResponse>('GET', `/v1/weekly-target${week ? `?week=${encodeURIComponent(week)}` : ''}`);
+  getWeeklyTarget(range: { from: string; to: string }) {
+    const qs = new URLSearchParams({ from: range.from, to: range.to });
+    return this.req<WeeklyTargetResponse>('GET', `/v1/weekly-target?${qs}`);
   }
 
   /** null clears an override back to the computed value. */

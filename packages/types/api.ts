@@ -2261,7 +2261,8 @@ export interface WeeklyTargetClassTotals {
 }
 
 export interface WeeklyTargetResponse {
-  week:      { from: string; to: string; complete: boolean };
+  /** The dashboard's selected period; fixed costs scale by days ÷ 7. */
+  period:    { from: string; to: string; days: number; complete: boolean };
   /** The 8 complete weeks MPG / empty factor / pay % are measured over. */
   calibration: { from: string; to: string };
   /** The closed months fixed / per-mile / revenue-% costs come from. */
@@ -2292,7 +2293,7 @@ export interface WeeklyTargetResponse {
     actualMiles: number | null;
     /** Same figure as the dashboard Total Payroll KPI for this week. */
     driverPay:   number;
-    driverPaySource: 'payroll' | 'loads';
+    driverPaySource: 'payroll' | 'loads' | 'partial';
     fuel:        number;
     maintenance: number;
     fixed:       number;
@@ -2301,8 +2302,15 @@ export interface WeeklyTargetResponse {
     breakEvenRevenue: number;
     targetRevenue:    number;
     revenuePerLoadedMile:  number | null;
+    /** Loaded miles the per-loaded-mile rates spread fixed costs over:
+     *  the period's, or the usual volume while it's still being booked. */
+    loadedMilesBasis:       number;
     breakEvenPerLoadedMile: number | null;
     targetPerLoadedMile:    number | null;
+    /** What makes up targetPerLoadedMile — the parts sum to it. */
+    costPerLoadedMile: {
+      driverPay: number; fuel: number; maintenance: number; fixed: number; other: number; margin: number;
+    } | null;
   };
   otr: {
     breakEvenRplm: number;
