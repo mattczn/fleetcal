@@ -36,8 +36,8 @@ const PARAM_META: Record<ParamKey, { label: string; asPct?: boolean; prefix?: st
   marginTarget:   { label: 'Target margin',     asPct: true, step: 0.5,  hint: 'Default: your actual operating margin over the cost-basis months (truck purchases excluded).' },
   mpg:            { label: 'MPG',               step: 0.01, hint: 'Odometer miles ÷ gallons over the last 8 complete weeks.' },
   emptyFactor:    { label: 'Empty-mile factor', step: 0.01, hint: 'Total odometer miles ÷ booked loaded miles over the last 8 complete weeks. Projects this week’s miles from loads already booked.' },
-  otrLoadedShare: { label: 'OTR loaded share',  asPct: true, step: 1, hint: 'Loaded ÷ total miles on an OTR trip. Lower it if trips often come back empty.' },
-  otrMilesPerDay: { label: 'OTR miles / day',   step: 10,   hint: 'Miles an OTR truck covers per day — spreads the truck’s daily fixed cost over its miles.' },
+  otrLoadedShare: { label: 'OTR loaded share',  asPct: true, step: 1, hint: 'Loaded ÷ total miles on an OTR trip. Lower it if trips often come back empty. Local gets the odometer miles OTR doesn’t account for, so this moves the Local cost per mile too.' },
+  otrMilesPerDay: { label: 'OTR miles / day',   step: 10,   hint: 'Miles an OTR truck covers per day — spreads the truck’s daily fixed cost over its miles. Local carries the fixed cost OTR doesn’t, so this moves the Local cost per mile too.' },
   fixedWeekly:    { label: 'Fixed costs / week', prefix: '$', step: 100, hint: 'Default: fixed-behavior buckets over the last 3 closed months ÷ weeks. Override when a cost just changed.' },
 };
 
@@ -297,6 +297,7 @@ export default function WeeklyTargetCard({ data, error: err, saving, onSave: sav
           </div>
           <div className="text-xs mb-2" style={{ color: 'var(--gc-text-3)' }}>
             Driver pay: {pct(p.payPct.local)} of local revenue, {pct(p.payPct.otr)} of OTR (incl. adjustments) ·
+            {data.classes ? <>driven per loaded mile: local {data.classes.local.drivenPerLoadedMile.toFixed(2)}, OTR {data.classes.otr.drivenPerLoadedMile.toFixed(2)} · </> : null}
             maintenance {perMile(p.maintPerMile)}/mi · {p.trucks} trucks · fixed {money(p.fixedPerTruckDay)}/truck-day ·
             pay & MPG from {data.calibration.from} → {data.calibration.to} · costs from {data.costBasis.months.join(', ') || '—'}
           </div>

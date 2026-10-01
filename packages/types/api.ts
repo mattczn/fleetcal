@@ -2260,6 +2260,16 @@ export interface WeeklyTargetClassTotals {
   driverPay:   number;
 }
 
+export interface WeeklyTargetClassRate {
+  payPct: number;
+  /** Odometer miles driven per loaded mile for this class. */
+  drivenPerLoadedMile: number;
+  breakEven: number;
+  target: number;
+  /** Cost per loaded mile at the target rate — the parts sum to target. */
+  cost: { driverPay: number; fuel: number; maintenance: number; fixed: number; other: number; margin: number };
+}
+
 export interface WeeklyTargetResponse {
   /** The dashboard's selected period; fixed costs scale by days ÷ 7. */
   period:    { from: string; to: string; days: number; complete: boolean };
@@ -2307,11 +2317,9 @@ export interface WeeklyTargetResponse {
     loadedMilesBasis:       number;
     breakEvenPerLoadedMile: number | null;
     targetPerLoadedMile:    number | null;
-    /** What makes up targetPerLoadedMile — the parts sum to it. */
-    costPerLoadedMile: {
-      driverPay: number; fuel: number; maintenance: number; fixed: number; other: number; margin: number;
-    } | null;
   };
+  /** Rate per loaded mile by haul class at the saved margin. */
+  classes: { local: WeeklyTargetClassRate; otr: WeeklyTargetClassRate };
   otr: {
     breakEvenRplm: number;
     targetRplm:    number;

@@ -541,22 +541,44 @@ export async function computeWeeklyTarget(
     ? (perMileCost * emptyFactor.value + fixedPeriod / loadedMilesBasis) / Math.max(0.05, keepAfterPay - margin)
     : null;
   const targetRpm = rpm(marginTarget.value);
-  const costPerLoadedMile = targetRpm == null ? null : {
-    driverPay:   payAll * targetRpm,
-    fuel:        fuelPrice.value / mpg.value * emptyFactor.value,
-    maintenance: maintPerMile * emptyFactor.value,
-    fixed:       fixedPeriod / loadedMilesBasis,
-    other:       revenuePctOther * targetRpm,
-    margin:      marginTarget.value * targetRpm,
-  };
 
-  // ── OTR rate per loaded mile ──
+  // ── Local vs OTR rate per loaded mile ──
   // Fixed costs are time-based (leases, insurance, admin), so an OTR run
   // carries them per truck-DAY, spread over the miles it covers that day.
+  // Local gets what OTR doesn't account for over the calibration weeks:
+  // the remaining odometer miles and the remaining fixed cost, so the two
+  // classes together reconcile to the fleet's actual miles and costs.
   const fixedPerTruckDay = fixedWeekly / (trucks * 7);
-  const otrRplm = (price: number, margin: number) => {
-    const perTotalMile = price / mpg.value + maintPerMile + fixedPerTruckDay / otrMilesPerDay.value;
-    return (perTotalMile / otrLoadedShare.value) / Math.max(0.05, 1 - payOtr - revenuePctOther - margin);
+  const calLocal = totals(calLoads.filter(r => r.cls === "local"));
+  const calOtr = totals(calLoads.filter(r => r.cls === "otr"));
+  const otrDriven = 1 / otrLoadedShare.value;
+  const otrFixedPerLoaded = fixedPerTruckDay / otrMilesPerDay.value * otrDriven;
+  const otrFixedWeekly = (calOtr.loadedMiles / CALIBRATION_WEEKS) * otrFixedPerLoaded;
+  const localWeeklyLoaded = calLocal.loadedMiles / CALIBRATION_WEEKS;
+  const localDriven = calLocal.loadedMiles > 0
+    ? Math.max(1, (calEld.miles - calOtr.loadedMiles * otrDriven) / calLocal.loadedMiles)
+    : emptyFactor.value;
+  const localFixedPerLoaded = localWeeklyLoaded > 0 ? Math.max(0, fixedWeekly - otrFixedWeekly) / localWeeklyLoaded : 0;
+
+  const rateFor = (price: number, pay: number, driven: number, fixedPerLoaded: number, margin: number) =>
+    ((price / mpg.value + maintPerMile) * driven + fixedPerLoaded) / Math.max(0.05, 1 - pay - revenuePctOther - margin);
+  const otrRplm = (price: number, margin: number) => rateFor(price, payOtr, otrDriven, otrFixedPerLoaded, margin);
+  const classRate = (pay: number, driven: number, fixedPerLoaded: number) => {
+    const target = rateFor(fuelPrice.value, pay, driven, fixedPerLoaded, marginTarget.value);
+    return {
+      payPct: pay,
+      drivenPerLoadedMile: driven,
+      breakEven: rateFor(fuelPrice.value, pay, driven, fixedPerLoaded, 0),
+      target,
+      cost: {
+        driverPay:   pay * target,
+        fuel:        fuelPrice.value / mpg.value * driven,
+        maintenance: maintPerMile * driven,
+        fixed:       fixedPerLoaded,
+        other:       revenuePctOther * target,
+        margin:      marginTarget.value * target,
+      },
+    };
   };
 
   return {
@@ -583,7 +605,10 @@ export async function computeWeeklyTarget(
       loadedMilesBasis,
       breakEvenPerLoadedMile: rpm(0),
       targetPerLoadedMile: targetRpm,
-      costPerLoadedMile,
+    },
+    classes: {
+      local: classRate(payLocal, localDriven, localFixedPerLoaded),
+      otr:   classRate(payOtr, otrDriven, otrFixedPerLoaded),
     },
     otr: {
       breakEvenRplm: otrRplm(fuelPrice.value, 0),

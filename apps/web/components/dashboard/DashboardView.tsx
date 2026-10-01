@@ -5,7 +5,7 @@ import Link from 'next/link';
 import {
   TrendingUp, Truck, CheckCircle2, DollarSign,
   BarChart2, AlertCircle, Loader2,
-  Wallet, Fuel, Route, Gauge, Info, MapPin, Navigation, Target, Calculator,
+  Wallet, Fuel, Route, Gauge, Info, MapPin, Navigation, Target,
 } from 'lucide-react';
 import Tooltip from '@/components/ui/Tooltip';
 import InfoDot from '@/components/ui/InfoDot';
@@ -1603,31 +1603,9 @@ export default function DashboardView() {
                 </>
               }
             />
-            {showVolumeKpis && (['local', 'otr'] as const).map(cls => {
-              const h = kpis.haul[cls];
-              return (
-                <KpiCard
-                  key={cls}
-                  label={cls === 'local' ? 'Local RPM' : 'OTR RPM'}
-                  value={h.mi > 0 ? fmtPerMile(h.rev / h.mi) : '—'}
-                  sub={`${h.n} ${cls === 'local' ? 'local' : 'OTR'} load${h.n !== 1 ? 's' : ''} · ${fmtMiles(h.mi)}`}
-                  icon={cls === 'local' ? <MapPin size={17} /> : <Navigation size={17} />}
-                  accent={cls === 'local' ? '#00897b' : '#3949ab'}
-                  loading={loadSummaries === null}
-                  formula={
-                    <>
-                      Revenue ÷ loaded miles for {cls === 'local'
-                        ? <>loads whose <strong>every</strong> stop is within 150 air miles of the home terminal</>
-                        : <>loads with <strong>any</strong> stop more than 150 air miles from the home terminal</>} — the same rule as the HOS short-haul exemption. Loads missing loaded miles are left out.
-                    </>
-                  }
-                />
-              );
-            })}
-            {showTargets && (() => {
+            {(() => {
               const p = wtCurrent?.params;
               const x = wtCurrent?.projection;
-              const c = x?.costPerLoadedMile ?? null;
               const target = x?.targetPerLoadedMile ?? null;
               const pctFmt = (n: number) => `${(n * 100).toFixed(1)}%`;
               const costRow = (label: string, v: number, strong?: boolean) => (
@@ -1639,73 +1617,97 @@ export default function DashboardView() {
               const divider = { borderTop: '1px solid var(--gc-border-light)' };
               return (
                 <>
-                  <KpiCard
-                    label="Target RPM"
-                    value={target != null ? fmtPerMile(target) : '—'}
-                    sub={x?.breakEvenPerLoadedMile != null
-                      ? `all loads (local + OTR) · break-even ${fmtPerMile(x.breakEvenPerLoadedMile)}`
-                      : 'no loaded miles to price yet'}
-                    icon={<Target size={17} />}
-                    accent="#1a73e8"
-                    loading={!wtCurrent}
-                    formula={
-                      <>
-                        Revenue per loaded mile the period&rsquo;s loads need to average to hit the margin below — compare it with Loaded RPM. Uses the same costs as the Weekly target card: driver pay % of revenue, fuel and maintenance per mile driven (× the empty-mile factor), and fixed costs spread over the period&rsquo;s loaded miles (or your usual weekly volume while the week is still being booked).
-                      </>
-                    }
-                    extra={wtCurrent ? {
-                      label: 'OTR target',
-                      value: fmtPerMile(wtCurrent.otr.targetRplm),
-                      formula: <>Rate per loaded mile an OTR load needs at this margin. OTR trucks cover more miles per day, so each mile carries less of the daily fixed cost than the all-loads average. Compare with the OTR RPM tile.</>,
-                    } : undefined}
-                  >
-                    {wtCurrent && (
-                      <div className="mt-1.5 flex items-baseline justify-between gap-2">
-                        <span className="text-[10.5px] font-semibold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
-                          OTR break-even
-                        </span>
-                        <span className="text-[15px] font-semibold leading-none" style={{ color: 'var(--gc-text-1)' }}>
-                          {fmtPerMile(wtCurrent.otr.breakEvenRplm)}
-                        </span>
-                      </div>
-                    )}
-                    {p && (
-                      <div className="mt-2.5 pt-2.5" style={divider}>
-                        <ParamInput
-                          key={`marginTarget:${p.marginTarget.value}`}
-                          k="marginTarget"
-                          p={p.marginTarget}
-                          disabled={wtLocked}
-                          onSave={(k, v) => saveWeeklyTarget({ [k]: v })}
-                        />
-                      </div>
-                    )}
-                  </KpiCard>
-                  <KpiCard
-                    label="Cost / Loaded Mile"
-                    value={c ? fmtPerMile(c.driverPay + c.fuel + c.maintenance + c.fixed + c.other) : '—'}
-                    sub={target != null ? `line items at the ${fmtPerMile(target)} target rate` : 'no loaded miles to price yet'}
-                    icon={<Calculator size={17} />}
-                    accent="#e37400"
-                    loading={!wtCurrent}
-                    formula={
-                      <>
-                        What each loaded mile costs — the pieces of Target RPM. Fuel and maintenance are per mile driven × {p ? p.emptyFactor.value.toFixed(2) : 'the empty-mile factor'} driven miles per loaded mile. Fixed costs are spread over {x ? fmtMiles(x.loadedMilesBasis) : 'the period’s loaded miles'}. Driver pay and hotels / load expenses are a share of the rate, so they&rsquo;re shown at the target rate.
-                      </>
-                    }
-                  >
-                    {c && p && target != null && (
-                      <div className="mt-2.5 pt-2" style={divider}>
-                        {costRow(`Driver pay (${pctFmt(p.payPct.all)})`, c.driverPay)}
-                        {costRow('Fuel', c.fuel)}
-                        {costRow('Maintenance', c.maintenance)}
-                        {costRow('Fixed costs', c.fixed)}
-                        {c.other > 0 && costRow('Hotels / load expenses', c.other)}
-                        {costRow(`Margin (${pctFmt(p.marginTarget.value)})`, c.margin)}
-                        <div className="mt-1 pt-1" style={divider}>{costRow('Target RPM', target, true)}</div>
-                      </div>
-                    )}
-                  </KpiCard>
+                  {showVolumeKpis && (['local', 'otr'] as const).map(cls => {
+                    const h = kpis.haul[cls];
+                    const rate = showTargets ? wtCurrent?.classes?.[cls] : undefined;
+                    return (
+                      <KpiCard
+                        key={cls}
+                        label={cls === 'local' ? 'Local RPM' : 'OTR RPM'}
+                        value={h.mi > 0 ? fmtPerMile(h.rev / h.mi) : '—'}
+                        sub={`${h.n} ${cls === 'local' ? 'local' : 'OTR'} load${h.n !== 1 ? 's' : ''} · ${fmtMiles(h.mi)}`}
+                        icon={cls === 'local' ? <MapPin size={17} /> : <Navigation size={17} />}
+                        accent={cls === 'local' ? '#00897b' : '#3949ab'}
+                        loading={loadSummaries === null}
+                        formula={
+                          <>
+                            Revenue ÷ loaded miles for {cls === 'local'
+                              ? <>loads whose <strong>every</strong> stop is within 150 air miles of the home terminal</>
+                              : <>loads with <strong>any</strong> stop more than 150 air miles from the home terminal</>} — the same rule as the HOS short-haul exemption. Loads missing loaded miles are left out.
+                            {rate && (
+                              <>
+                                {' '}Cost / loaded mile: driver pay is {pctFmt(rate.payPct)} of {cls === 'local' ? 'local' : 'OTR'} revenue (incl. adjustments); fuel and maintenance are per mile driven × {rate.drivenPerLoadedMile.toFixed(2)} driven miles per loaded mile; {cls === 'local'
+                                  ? <>fixed costs are what OTR runs don&rsquo;t cover, spread over your usual local loaded miles</>
+                                  : <>fixed costs are charged per truck-day ÷ OTR miles per day</>}. Pay-based lines are shown at the target rate, so the lines add up to Target RPM.
+                              </>
+                            )}
+                          </>
+                        }
+                      >
+                        {rate && p && (
+                          <div className="mt-2.5 pt-2" style={divider}>
+                            <div className="text-[10.5px] font-semibold uppercase tracking-wider mb-0.5" style={{ color: 'var(--gc-text-3)' }}>
+                              Cost / loaded mile
+                            </div>
+                            {costRow(`Driver pay (${pctFmt(rate.payPct)})`, rate.cost.driverPay)}
+                            {costRow('Fuel', rate.cost.fuel)}
+                            {costRow('Maintenance', rate.cost.maintenance)}
+                            {costRow('Fixed costs', rate.cost.fixed)}
+                            {rate.cost.other > 0 && costRow('Hotels / load expenses', rate.cost.other)}
+                            {costRow(`Margin (${pctFmt(p.marginTarget.value)})`, rate.cost.margin)}
+                            <div className="mt-1 pt-1" style={divider}>
+                              {costRow('Target RPM', rate.target, true)}
+                              {costRow('Break-even RPM', rate.breakEven)}
+                            </div>
+                          </div>
+                        )}
+                      </KpiCard>
+                    );
+                  })}
+                  {showTargets && (
+                    <KpiCard
+                      label="Target RPM"
+                      value={target != null ? fmtPerMile(target) : '—'}
+                      sub={x?.breakEvenPerLoadedMile != null
+                        ? `all loads (local + OTR) · break-even ${fmtPerMile(x.breakEvenPerLoadedMile)}`
+                        : 'no loaded miles to price yet'}
+                      icon={<Target size={17} />}
+                      accent="#1a73e8"
+                      loading={!wtCurrent}
+                      formula={
+                        <>
+                          Revenue per loaded mile the period&rsquo;s loads need to average to hit the margin below — compare it with Loaded RPM. Uses the same costs as the Weekly target card: driver pay % of revenue, fuel and maintenance per mile driven (× the empty-mile factor), and fixed costs spread over the period&rsquo;s loaded miles (or your usual weekly volume while the week is still being booked).
+                        </>
+                      }
+                      extra={wtCurrent ? {
+                        label: 'OTR target',
+                        value: fmtPerMile(wtCurrent.otr.targetRplm),
+                        formula: <>Rate per loaded mile an OTR load needs at this margin. OTR trucks cover more miles per day, so each mile carries less of the daily fixed cost than the all-loads average. Compare with the OTR RPM tile.</>,
+                      } : undefined}
+                    >
+                      {wtCurrent && (
+                        <div className="mt-1.5 flex items-baseline justify-between gap-2">
+                          <span className="text-[10.5px] font-semibold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
+                            OTR break-even
+                          </span>
+                          <span className="text-[15px] font-semibold leading-none" style={{ color: 'var(--gc-text-1)' }}>
+                            {fmtPerMile(wtCurrent.otr.breakEvenRplm)}
+                          </span>
+                        </div>
+                      )}
+                      {p && (
+                        <div className="mt-2.5 pt-2.5" style={divider}>
+                          <ParamInput
+                            key={`marginTarget:${p.marginTarget.value}`}
+                            k="marginTarget"
+                            p={p.marginTarget}
+                            disabled={wtLocked}
+                            onSave={(k, v) => saveWeeklyTarget({ [k]: v })}
+                          />
+                        </div>
+                      )}
+                    </KpiCard>
+                  )}
                 </>
               );
             })()}
