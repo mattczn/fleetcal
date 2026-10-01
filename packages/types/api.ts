@@ -2212,6 +2212,115 @@ export interface LedgerRow {
   mudflap?:   { location: string | null; driverName: string | null; gallons: number | null; assetId: number | null };
 }
 
+export type HaulClass = 'local' | 'otr';
+
+/** How a bucket's spend behaves in the weekly-target model:
+ *  fixed (per week), per_mile (scales with miles driven), revenue_pct
+ *  (scales with revenue), exclude (not an operating cost — capex, draws,
+ *  owner-op payouts). System-role buckets (driver pay, Mudflap fuel)
+ *  are always modeled directly and never take a behavior. */
+export type CostBehavior = 'fixed' | 'per_mile' | 'revenue_pct' | 'exclude';
+
+/** Which closed months a bucket's baseline comes from: the trailing
+ *  3-month average, or only the latest closed month (for a cost that
+ *  just stepped up or down, e.g. rentals being replaced by owned trucks). */
+export type BucketBasis = 'avg' | 'last_month';
+
+/** org_settings.weekly_target_settings. Every numeric field is an
+ *  override of a value the API computes from the org's own data; null
+ *  or absent means "use the computed value". */
+export interface WeeklyTargetSettings {
+  fuelPrice?:      number | null;
+  marginTarget?:   number | null;   // fraction of revenue, e.g. 0.12
+  mpg?:            number | null;
+  emptyFactor?:    number | null;   // total miles ÷ loaded miles
+  otrLoadedShare?: number | null;   // loaded ÷ total miles on OTR trips
+  otrMilesPerDay?: number | null;
+  /** Weekly fixed costs, when the trailing 3-month average is stale
+   *  (e.g. a cost that just dropped). */
+  fixedWeekly?:    number | null;
+  /** Keyed by bucket id; UNCATEGORIZED_BUCKET_ID for unbucketed Ramp.
+   *  A parent's value applies to its sub-buckets unless they set their own. */
+  bucketBehaviors?: Record<string, CostBehavior>;
+  /** Same keying and inheritance as bucketBehaviors; absent = 'avg'. */
+  bucketBasis?:     Record<string, BucketBasis>;
+}
+
+export interface WeeklyTargetParam {
+  value:      number;
+  /** What the data says; null when there wasn't enough data. */
+  computed:   number | null;
+  overridden: boolean;
+}
+
+export interface WeeklyTargetClassTotals {
+  loads:       number;
+  revenue:     number;
+  loadedMiles: number;
+  driverPay:   number;
+}
+
+export interface WeeklyTargetResponse {
+  week:      { from: string; to: string; complete: boolean };
+  /** The 8 complete weeks MPG / empty factor / pay % are measured over. */
+  calibration: { from: string; to: string };
+  /** The closed months fixed / per-mile / revenue-% costs come from. */
+  costBasis:   { from: string; to: string; months: string[]; lastMonth: { from: string; to: string } | null };
+  params: {
+    fuelPrice:      WeeklyTargetParam;
+    mpg:            WeeklyTargetParam;
+    emptyFactor:    WeeklyTargetParam;
+    otrLoadedShare: WeeklyTargetParam;
+    otrMilesPerDay: WeeklyTargetParam;
+    /** computed = the trailing actual operating margin over costBasis. */
+    marginTarget:   WeeklyTargetParam;
+    fixedWeekly:      WeeklyTargetParam;
+    maintPerMile:     number;
+    revenuePctOther:  number;
+    payPct:           { all: number; local: number; otr: number };
+    trucks:           number;
+    fixedPerTruckDay: number;
+  };
+  booked: WeeklyTargetClassTotals & {
+    loadsMissingPay:   number;
+    loadsMissingMiles: number;
+    local: WeeklyTargetClassTotals;
+    otr:   WeeklyTargetClassTotals;
+  };
+  projection: {
+    totalMiles:  number;
+    /** Odometer miles actually driven so far this week (fleet ELD). */
+    actualMiles: number | null;
+    driverPay:   number;
+    fuel:        number;
+    maintenance: number;
+    fixed:       number;
+    other:       number;
+    profit:      number;
+    breakEvenRevenue: number;
+    targetRevenue:    number;
+    revenuePerLoadedMile:  number | null;
+    breakEvenPerLoadedMile: number | null;
+    targetPerLoadedMile:    number | null;
+  };
+  otr: {
+    breakEvenRplm: number;
+    targetRplm:    number;
+    sensitivity: Array<{ fuelPrice: number; breakEvenRplm: number; targetRplm: number }>;
+  };
+  buckets: Array<{
+    id: string; name: string; parentId: string | null;
+    systemRole: string | null; behavior: CostBehavior | 'modeled';
+    basis: BucketBasis;
+    /** Spend over the full cost-basis window / the latest closed month. */
+    basisTotal: number;
+    lastMonthTotal: number;
+  }>;
+  /** True when org_settings.weekly_target_settings doesn't exist yet
+   *  (migration not run) — overrides can't be saved. */
+  settingsUnavailable: boolean;
+}
+
 export interface ExpensesLedgerResponse {
   period: { from: string; to: string };
   rows:   LedgerRow[];
@@ -2976,6 +3085,13 @@ export interface LoadSummary {
   totalLoadedMiles?: number;
   /** Sum of driverPay across all legs. undefined when no leg has driver pay. */
   totalDriverPay?:  number;
+
+  /** 'otr' when any stop is outside the org's short-haul radius (150 air
+   *  miles from org_settings.hos_settings' home terminal), else 'local'.
+   *  Undefined when no terminal is configured or no stop is geocoded. */
+  haulClass?:   HaulClass;
+  /** Air miles from the terminal to the furthest stop. */
+  maxAirMiles?: number;
 
   // ── Full stop list, ordered pickup → delivery (no duplicates).
   //    Convenient for any consumer that wants "the stops" without

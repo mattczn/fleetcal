@@ -61,6 +61,7 @@ import driverDocumentsRoute from "./routes/driver-documents.js";
 import assetDocumentsRoute from "./routes/asset-documents.js";
 import trailerDocumentsRoute from "./routes/trailer-documents.js";
 import reportsRoute from "./routes/reports.js";
+import weeklyTargetRoute from "./routes/weekly-target.js";
 import internalRoute from "./routes/internal.js";
 import movementsRoute from "./routes/movements.js";
 import timelineRoute from "./routes/timeline.js";
@@ -296,6 +297,7 @@ authed.route("/driver-documents", driverDocumentsRoute);
 authed.route("/asset-documents", assetDocumentsRoute);
 authed.route("/trailer-documents", trailerDocumentsRoute);
 authed.route("/reports", reportsRoute);
+authed.route("/weekly-target", weeklyTargetRoute);
 // INTERNAL sales CRM — triple-gated inside the route group
 // (internal-org allowlist → 404, crm module flag, crm.* capabilities).
 authed.route("/crm", crmRoute);

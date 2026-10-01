@@ -41,6 +41,7 @@ import {
 
 import { supabase } from "../lib/supabase.js";
 import { loadExcludedDrivers, loadExcludedAssetIds, isExcludedEvent } from "../lib/reportExclusions.js";
+import { classifyByAirMiles, parseTerminal, type Coord } from "../lib/airMiles.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability } from "../middleware/require.js";
 
@@ -263,7 +264,12 @@ function sumLenient(values: Array<number | null | undefined>): number | undefine
   return tmp.any ? tmp.total : undefined;
 }
 
-function buildLoadSummary(load: LoadRow, events: EventRow[], stopsByEvent: Map<string, Stop[]>): LoadSummary {
+function buildLoadSummary(
+  load: LoadRow,
+  events: EventRow[],
+  stopsByEvent: Map<string, Stop[]>,
+  terminal: Coord | null,
+): LoadSummary {
   const sortedEvents = [...events].sort(
     (a, b) => (a.leg_index ?? 0) - (b.leg_index ?? 0) || a.start.localeCompare(b.start),
   );
@@ -278,6 +284,13 @@ function buildLoadSummary(load: LoadRow, events: EventRow[], stopsByEvent: Map<s
   // instead; it already contains the whole route including the relay
   // handoff markers. Single-leg loads keep the plain flatten.
   const stops: Stop[] = isRelay ? (legs[0]?.stops ?? []) : legs.flatMap(l => l.stops);
+
+  // Same rule and terminal the HOS short-haul classifier uses, so a load
+  // is "OTR" on the dashboard exactly when it would cost the driver the
+  // 150-air-mile exemption.
+  const haul = terminal
+    ? classifyByAirMiles(terminal, stops.map(s => ({ lat: s.lat, lon: s.lng })))
+    : null;
 
   return {
     loadId:           load.id,
@@ -343,6 +356,9 @@ function buildLoadSummary(load: LoadRow, events: EventRow[], stopsByEvent: Map<s
 
     totalLoadedMiles:  sumStrict(sortedEvents.map(e => e.loaded_miles)),
     totalDriverPay:    sumLenient(sortedEvents.map(e => e.driver_pay)),
+
+    haulClass:   haul?.decided ? haul.classification : undefined,
+    maxAirMiles: haul?.decided && haul.maxAirMiles != null ? Math.round(haul.maxAirMiles) : undefined,
 
     stops,
     legs,
@@ -565,11 +581,25 @@ reports.get("/loads", async (c) => {
   }
 
   // ── Stage 4: build LoadSummary[] ───────────────────────────────────
+  // Home terminal for the local/OTR tag. Non-fatal: without one, loads
+  // simply carry no haulClass.
+  const { data: orgSettingsRow, error: orgSettingsErr } = await supabase
+    .from("org_settings")
+    .select("hos_settings")
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (orgSettingsErr) {
+    console.warn("[GET /v1/reports/loads] hos_settings fetch failed (non-fatal):", orgSettingsErr.message);
+  }
+  const terminal = parseTerminal(
+    (orgSettingsRow as { hos_settings?: { homeTerminalLat?: unknown; homeTerminalLon?: unknown } } | null)?.hos_settings,
+  );
+
   let summaries: LoadSummary[] = [];
   for (const load of allLoads) {
     const evs = eventsByLoad.get(load.id) ?? [];
     if (evs.length === 0) continue; // orphan load with no events — skip
-    const s = buildLoadSummary(load, evs, stopsByEvent);
+    const s = buildLoadSummary(load, evs, stopsByEvent, terminal);
     s.podUploadedAt = podUploadedAtByLoad.get(load.id);
     summaries.push(s);
   }

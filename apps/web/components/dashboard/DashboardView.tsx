@@ -5,7 +5,7 @@ import Link from 'next/link';
 import {
   TrendingUp, Truck, CheckCircle2, DollarSign,
   BarChart2, AlertCircle, Loader2,
-  Wallet, Fuel, Route, Gauge, Info,
+  Wallet, Fuel, Route, Gauge, Info, MapPin, Navigation,
 } from 'lucide-react';
 import Tooltip from '@/components/ui/Tooltip';
 import InfoDot from '@/components/ui/InfoDot';
@@ -25,6 +25,7 @@ import { isActiveInRange, dateKeyOf } from '@/lib/lifecycle';
 import { type Period, PERIODS, getPeriodRange, currentWeekStartISO } from '@/lib/periodRange';
 import { PeriodSelector } from '@/components/ui/PeriodSelector';
 import LoadsReport from '@/components/dashboard/LoadsReport';
+import WeeklyTargetCard from '@/components/dashboard/WeeklyTargetCard';
 import type { CalendarEvent } from '@/lib/types';
 import type { LoadSummary } from '@fleetcal/types';
 import { usePermissions } from '@/lib/usePermissions';
@@ -768,7 +769,20 @@ export default function DashboardView() {
       // drivers this period" answer.
       const driverPay = loadSummaries.reduce((s, l) => s + (l.totalDriverPay ?? 0), 0);
       const miles     = loadSummaries.reduce((s, l) => s + (l.totalLoadedMiles ?? 0), 0);
-      return { revenue, loads, delivered, delivRate, avgRevPerLoad, avgRevPerAsset, activeAssets, miles, driverPay };
+      // Local vs OTR RPM — haulClass is the server's 150-air-mile rule.
+      // Loads without known loaded miles are left out of BOTH sides so
+      // a missing route cache can't inflate the rate.
+      const haul = { local: { rev: 0, mi: 0, n: 0 }, otr: { rev: 0, mi: 0, n: 0 } };
+      for (const l of loadSummaries) {
+        const mi = l.totalLoadedMiles ?? 0;
+        if (!l.haulClass || mi <= 0) continue;
+        const h = haul[l.haulClass];
+        h.rev += l.totalBillable ?? ((l.loadPrice ?? 0)
+          + (l.accessorials ?? []).reduce((acc, a) => acc + (a.billable ? (a.amount ?? 0) : 0), 0));
+        h.mi += mi;
+        h.n += 1;
+      }
+      return { revenue, loads, delivered, delivRate, avgRevPerLoad, avgRevPerAsset, activeAssets, miles, driverPay, haul };
     }
     // ─ Fallback while the load-shaped report is still in flight ─
     const revenue = deduped.reduce((s, e) => s + eventRevenue(e), 0);
@@ -781,7 +795,8 @@ export default function DashboardView() {
     const avgRevPerAsset = activeAssets > 0 ? revenue / activeAssets : 0;
     const miles      = 0;
     const driverPay  = filtered.reduce((s, e) => s + (e.driverPay ?? 0), 0);
-    return { revenue, loads, delivered, delivRate, avgRevPerLoad, avgRevPerAsset, activeAssets, miles, driverPay };
+    const haul = { local: { rev: 0, mi: 0, n: 0 }, otr: { rev: 0, mi: 0, n: 0 } };
+    return { revenue, loads, delivered, delivRate, avgRevPerLoad, avgRevPerAsset, activeAssets, miles, driverPay, haul };
   }, [loadSummaries, deduped, filtered]);
 
   // ── Revenue by asset ──────────────────────────────────────────────────
@@ -1557,7 +1572,30 @@ export default function DashboardView() {
                 </>
               }
             />
+            {showVolumeKpis && (['local', 'otr'] as const).map(cls => {
+              const h = kpis.haul[cls];
+              return (
+                <KpiCard
+                  key={cls}
+                  label={cls === 'local' ? 'Local RPM' : 'OTR RPM'}
+                  value={h.mi > 0 ? fmtPerMile(h.rev / h.mi) : '—'}
+                  sub={`${h.n} ${cls === 'local' ? 'local' : 'OTR'} load${h.n !== 1 ? 's' : ''} · ${fmtMiles(h.mi)}`}
+                  icon={cls === 'local' ? <MapPin size={17} /> : <Navigation size={17} />}
+                  accent={cls === 'local' ? '#00897b' : '#3949ab'}
+                  loading={loadSummaries === null}
+                  formula={
+                    <>
+                      Revenue ÷ loaded miles for {cls === 'local'
+                        ? <>loads whose <strong>every</strong> stop is within 150 air miles of the home terminal</>
+                        : <>loads with <strong>any</strong> stop more than 150 air miles from the home terminal</>} — the same rule as the HOS short-haul exemption. Loads missing loaded miles are left out.
+                    </>
+                  }
+                />
+              );
+            })}
           </div>
+
+          {moduleEnabled('expenses') && can('expenses.access') && <WeeklyTargetCard />}
 
           {/* Revenue → cost breakdown bar. Full bar width represents
               period revenue; chunks consume the chunk's share. What's

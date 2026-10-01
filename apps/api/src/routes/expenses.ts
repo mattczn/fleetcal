@@ -43,7 +43,7 @@ expenses.use("*", requireModule("expenses"), requireCapability("expenses.access"
 
 // ── Window helpers ──────────────────────────────────────────────────────
 
-interface Window { from: string; to: string; fromTs: string; toTs: string; days: number; }
+export interface Window { from: string; to: string; fromTs: string; toTs: string; days: number; }
 
 function parseWindow(url: URL): Window {
   const q = (k: string) => url.searchParams.get(k);
@@ -164,12 +164,12 @@ interface BucketRow {
   system_role: string | null;
 }
 
-interface Snapshot {
+export interface Snapshot {
   perBucket: Map<string, { total: number; count: number }>;
   uncategorized: { total: number; count: number };
 }
 
-async function snapshot(orgId: string, w: Window, bucketIds: Set<string>): Promise<Snapshot> {
+export async function snapshot(orgId: string, w: Window, bucketIds: Set<string>): Promise<Snapshot> {
   const perBucket = new Map<string, { total: number; count: number }>();
   const add = (id: string | null | undefined, amount: number) => {
     if (!id || !bucketIds.has(id)) return;

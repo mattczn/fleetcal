@@ -93,6 +93,7 @@ import type {
   MatchRampTransactionRequest, MatchRampTransactionResponse,
   MarkRampNotApplicableResponse, RunRampSyncResponse,
   ExpensesSummaryResponse, ExpensesActivityResponse,
+  WeeklyTargetResponse, WeeklyTargetSettings,
   ListRecurringExpensesResponse, CreateRecurringExpenseRequest,
   UpdateRecurringExpenseRequest, RecurringExpenseResponse,
   ListExpenseEntriesRequest, ListExpenseEntriesResponse,
@@ -2014,6 +2015,15 @@ class RailwayClient {
   }
 
   // ── /expenses dashboard ─────────────────────────────────────────────
+  getWeeklyTarget(week?: string) {
+    return this.req<WeeklyTargetResponse>('GET', `/v1/weekly-target${week ? `?week=${encodeURIComponent(week)}` : ''}`);
+  }
+
+  /** null clears an override back to the computed value. */
+  saveWeeklyTargetSettings(patch: { [K in keyof WeeklyTargetSettings]?: WeeklyTargetSettings[K] | null }) {
+    return this.req<{ settings: WeeklyTargetSettings }>('PUT', '/v1/weekly-target/settings', patch);
+  }
+
   getExpensesSummary(query: { from?: string; to?: string } = {}) {
     const qs = new URLSearchParams();
     if (query.from) qs.set('from', query.from);
