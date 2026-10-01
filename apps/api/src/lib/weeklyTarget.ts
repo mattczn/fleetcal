@@ -200,6 +200,21 @@ async function adjustmentsTotal(orgId: string, from: string, to: string, exclude
     .reduce((s, r) => s + Number(r.amount ?? 0), 0);
 }
 
+/** Same number as the dashboard's Total Payroll KPI for a finalized week:
+ *  current (non-superseded) payroll records, owner-ops out. 0 = pending. */
+async function finalizedPayroll(orgId: string, weekStart: string, excluded: ExcludedDrivers): Promise<number> {
+  const rows = await fetchAllRows<{ total_pay: number | string | null; driver_name: string | null }>(
+    "weekly-target payroll", () => supabase
+      .from("payroll_records")
+      .select("total_pay, driver_name")
+      .eq("org_id", orgId)
+      .eq("week_start", weekStart)
+      .is("superseded_at", null));
+  return rows
+    .filter(r => !excluded.nameSet.has((r.driver_name ?? "").trim()))
+    .reduce((s, r) => s + Number(r.total_pay ?? 0), 0);
+}
+
 /** Fleet odometer miles (max − min per ELD truck), owner-op trucks out. */
 async function eldMiles(orgId: string, from: string, to: string, excludedAssets: Set<number>): Promise<{ miles: number; trucks: number }> {
   const { data: assets, error } = await supabase
@@ -353,7 +368,7 @@ export async function computeWeeklyTarget(
 
   const [
     calLoads, calEld, calFuel, calAdj,
-    weekLoads, weekEld, weekAdj,
+    weekLoads, weekEld, weekPayroll,
     basisLoads, basisEld, basisFuel, basisAdj,
     price7, bucketRows, lastEld,
   ] = await Promise.all([
@@ -363,7 +378,7 @@ export async function computeWeeklyTarget(
     adjustmentsTotal(orgId, calFrom, calTo, excluded),
     loadEconomics(orgId, weekFrom, weekTo, excluded, excludedAssets, terminal, true),
     weekFrom <= today ? eldMiles(orgId, weekFrom, weekTo < today ? weekTo : today, excludedAssets) : Promise.resolve(null),
-    adjustmentsTotal(orgId, weekFrom, weekTo, excluded),
+    finalizedPayroll(orgId, weekFrom, excluded),
     loadEconomics(orgId, basisFrom, basisTo, excluded, excludedAssets, terminal, false),
     eldMiles(orgId, basisFrom, basisTo, excludedAssets),
     fuelTotals(orgId, basisFrom, basisTo),
@@ -473,11 +488,10 @@ export async function computeWeeklyTarget(
   const local = totals(weekLoads.filter(r => r.cls === "local"));
   const otr = totals(weekLoads.filter(r => r.cls === "otr"));
   const weekComplete = weekTo < today;
-  const missingPayEst = weekLoads
-    .filter(r => r.payMissing)
-    .reduce((s, r) => s + r.revenue * ((r.cls === "otr" ? payOtr : r.cls === "local" ? payLocal : payAll) - calAdjPct), 0);
-  const adjustments = weekComplete ? weekAdj : Math.max(weekAdj, calAdjPct * wk.revenue);
-  const driverPay = wk.driverPay + missingPayEst + adjustments;
+  // Mirrors the dashboard Total Payroll KPI: finalized records once the
+  // week is closed, otherwise driver pay on the week's loads.
+  const driverPaySource: "payroll" | "loads" = weekPayroll > 0 ? "payroll" : "loads";
+  const driverPay = weekPayroll > 0 ? weekPayroll : wk.driverPay;
 
   const perMileCost = fuelPrice.value / mpg.value + maintPerMile;
   const totalMiles = wk.loadedMiles * emptyFactor.value;
@@ -512,14 +526,13 @@ export async function computeWeeklyTarget(
     },
     booked: {
       ...wk,
-      loadsMissingPay: weekLoads.filter(r => r.payMissing).length,
       loadsMissingMiles: weekLoads.filter(r => r.milesMissing).length,
       local, otr,
     },
     projection: {
       totalMiles,
       actualMiles: weekEld ? weekEld.miles : null,
-      driverPay, fuel, maintenance, fixed: fixedWeekly, other, profit,
+      driverPay, driverPaySource, fuel, maintenance, fixed: fixedWeekly, other, profit,
       breakEvenRevenue, targetRevenue,
       revenuePerLoadedMile: perLoaded(wk.revenue),
       breakEvenPerLoadedMile: perLoaded(breakEvenRevenue),

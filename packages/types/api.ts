@@ -2282,7 +2282,6 @@ export interface WeeklyTargetResponse {
     fixedPerTruckDay: number;
   };
   booked: WeeklyTargetClassTotals & {
-    loadsMissingPay:   number;
     loadsMissingMiles: number;
     local: WeeklyTargetClassTotals;
     otr:   WeeklyTargetClassTotals;
@@ -2291,7 +2290,9 @@ export interface WeeklyTargetResponse {
     totalMiles:  number;
     /** Odometer miles actually driven so far this week (fleet ELD). */
     actualMiles: number | null;
+    /** Same figure as the dashboard Total Payroll KPI for this week. */
     driverPay:   number;
+    driverPaySource: 'payroll' | 'loads';
     fuel:        number;
     maintenance: number;
     fixed:       number;

@@ -177,7 +177,8 @@ export default function WeeklyTargetCard() {
         <h2 className="text-sm font-semibold flex items-center gap-1.5" style={{ color: 'var(--gc-text-1)' }}>
           <Target size={15} /> Weekly target
           <InfoDot size={12} content={<>
-            Profit = revenue × (1 − driver pay % − other %) − miles × (diesel ÷ MPG + maintenance/mi) − fixed costs.
+            Profit = revenue − driver pay (the Total Payroll figure) − other % of revenue − miles × (diesel ÷ MPG + maintenance/mi) − fixed costs.
+            Break-even and target use the driver pay % of revenue instead, since they price revenue you haven&rsquo;t booked yet.
             Miles are projected from booked loaded miles × the empty-mile factor. Owner-operator loads are excluded.
             Expect about ±10% on any single week.
           </>} />
@@ -211,7 +212,7 @@ export default function WeeklyTargetCard() {
           <div className="text-[11px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>The week</div>
           <Row label="Projected profit" value={`${money(x.profit)} (${b.revenue > 0 ? pct(x.profit / b.revenue) : '—'})`} strong tone={profitTone} />
           <Row label="Still needed for target" value={stillNeeded > 0 ? money(stillNeeded) : 'Met'} />
-          <Row label={<>Driver pay{b.loadsMissingPay > 0 && <span className="text-[11px]"> ({b.loadsMissingPay} loads estimated)</span>}</>} value={money(x.driverPay)} />
+          <Row label={<>Driver pay <span className="text-[11px]">({x.driverPaySource === 'payroll' ? 'finalized payroll' : 'payroll pending'})</span></>} value={money(x.driverPay)} />
           <Row label={`Fuel (${Math.round(x.totalMiles).toLocaleString()} mi projected)`} value={money(x.fuel)} />
           <Row label="Maintenance" value={money(x.maintenance)} />
           <Row label="Fixed costs" value={money(x.fixed)} />
