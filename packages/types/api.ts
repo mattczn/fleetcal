@@ -2197,6 +2197,9 @@ export interface LedgerRow {
    *  (ramp txns + manual entries). Payroll/fuel route via system_role;
    *  recurring postings change via their rule. */
   bucketEditable: boolean;
+  /** Uncategorized ramp rows: the bucket earlier charges like this one
+   *  were filed under, and why (counts), for one-click filing. */
+  suggestion?: { bucketId: string; bucketName: string; reason: string };
   /** Matched unit from the memo matcher (ramp) or the fuel card link
    *  (mudflap). Labels resolve client-side from the fixtures. */
   assetId?:    number;

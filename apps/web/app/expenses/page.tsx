@@ -21,7 +21,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Plus, Settings2, ArrowUpRight, ArrowDownRight, ArrowRight,
-  ChevronDown, CornerDownRight, RefreshCw, FolderTree, Wand2, Repeat,
+  ChevronDown, CornerDownRight, RefreshCw, FolderTree, Wand2, Repeat, Check,
 } from 'lucide-react';
 import RequireCap from '@/components/auth/RequireCap';
 import AppShell from '@/components/nav/AppShell';
@@ -432,6 +432,33 @@ function ExpensesPageInner() {
     }
   }, [bucketNameById, fromIso, toIso]);
 
+  // Uncategorized card spend that history can file — one click each, or
+  // all at once.
+  const suggestedRows = useMemo(
+    () => visibleRows.filter(r => r.source === 'ramp' && !r.bucketId && r.suggestion),
+    [visibleRows]);
+  const [acceptingAll, setAcceptingAll] = useState(false);
+  const acceptAllSuggestions = useCallback(async () => {
+    const todo = suggestedRows;
+    if (!todo.length) return;
+    if (!window.confirm(`File ${todo.length} charge${todo.length === 1 ? '' : 's'} under their suggested buckets?`)) return;
+    setAcceptingAll(true);
+    try {
+      await railway.setRampTransactionBuckets(todo.map(r => ({ id: r.refId, bucketId: r.suggestion!.bucketId })));
+      const filed = new Map(todo.map(r => [r.rowKey, r.suggestion!]));
+      setRows(prev => prev.map(x => {
+        const sg = filed.get(x.rowKey);
+        return sg ? { ...x, bucketId: sg.bucketId, bucketName: bucketNameById.get(sg.bucketId) ?? sg.bucketName } : x;
+      }));
+      const summary = await railway.getExpensesSummary({ from: fromIso, to: toIso });
+      setBuckets(summary.buckets);
+    } catch {
+      alert('Failed to file the suggested buckets.');
+    } finally {
+      setAcceptingAll(false);
+    }
+  }, [suggestedRows, bucketNameById, fromIso, toIso]);
+
   const runSync = useCallback(async () => {
     setSyncBusy(true);
     setSyncMsg(null);
@@ -521,6 +548,17 @@ function ExpensesPageInner() {
           {r.bucketName ?? <span style={{ color: '#b45309' }}>no bucket — set a system role</span>}
         </span>
       ),
+      subRender: r => !r.bucketId && r.suggestion ? (
+        <button
+          type="button"
+          onClick={e => { e.stopPropagation(); void changeRowBucket(r, r.suggestion!.bucketId); }}
+          title={`Suggested from ${r.suggestion.reason}`}
+          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-semibold"
+          style={{ background: '#e8f0fe', color: '#1a73e8' }}
+        >
+          <Check size={11} /> {r.suggestion.bucketName}
+        </button>
+      ) : null,
     },
     {
       key: 'amount', header: 'Amount', width: 110, align: 'right',
@@ -832,6 +870,18 @@ function ExpensesPageInner() {
               density="compact"
               countLabel="expense"
               pageSize={50}
+              toolbarRight={suggestedRows.length > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => void acceptAllSuggestions()}
+                  disabled={acceptingAll}
+                  className="text-xs font-semibold px-3 py-1.5 rounded inline-flex items-center gap-1.5"
+                  style={{ background: '#1a73e8', color: '#fff', opacity: acceptingAll ? 0.6 : 1 }}
+                  title="File every uncategorized card charge shown under its suggested bucket"
+                >
+                  <Check size={14} /> {acceptingAll ? 'Filing…' : `Accept ${suggestedRows.length} suggestion${suggestedRows.length === 1 ? '' : 's'}`}
+                </button>
+              ) : undefined}
             />
           </main>
         </div>

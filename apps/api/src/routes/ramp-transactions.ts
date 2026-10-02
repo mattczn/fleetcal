@@ -292,6 +292,42 @@ rampTx.patch("/:id/bucket", async (c) => {
   return c.json({ rampTransaction: rowToTx(data as unknown as RampTransactionRow) });
 });
 
+// PATCH /v1/ramp-transactions/buckets — file many txns at once (the
+// expenses ledger's "accept all suggestions"). Body: { items: [{ id, bucketId }] }.
+rampTx.patch("/buckets", async (c) => {
+  const orgId = c.get("orgId");
+  const body = await c.req.json<{ items?: Array<{ id?: unknown; bucketId?: unknown }> }>().catch(() => null);
+  const items = (body?.items ?? []).filter(
+    (i): i is { id: string; bucketId: string } => typeof i.id === "string" && typeof i.bucketId === "string");
+  if (!items.length || items.length > 1000) {
+    return c.json({ error: "bad_request", detail: "items must be 1–1000 { id, bucketId } pairs" }, 400);
+  }
+  const bucketIds = [...new Set(items.map(i => i.bucketId))];
+  const { data: buckets, error: bErr } = await supabase
+    .from("expense_buckets")
+    .select("id")
+    .eq("org_id", orgId)
+    .is("deleted_at", null)
+    .in("id", bucketIds);
+  if (bErr) return c.json({ error: "update_failed", detail: bErr.message }, 500);
+  if ((buckets ?? []).length !== bucketIds.length) {
+    return c.json({ error: "bad_request", detail: "a bucketId was not found in this org" }, 400);
+  }
+  let updated = 0;
+  for (const bucketId of bucketIds) {
+    const ids = items.filter(i => i.bucketId === bucketId).map(i => i.id);
+    const { data, error } = await supabase
+      .from("ramp_transactions")
+      .update({ bucket_id: bucketId })
+      .eq("org_id", orgId)
+      .in("id", ids)
+      .select("id");
+    if (error) return c.json({ error: "update_failed", detail: error.message, updated }, 500);
+    updated += (data ?? []).length;
+  }
+  return c.json({ updated });
+});
+
 // POST /v1/ramp-transactions/sync — kick the sweep on demand (parallels
 // Mudflap's manual sync button on the equipment page).
 rampTx.post("/sync", async (c) => {

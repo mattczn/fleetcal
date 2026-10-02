@@ -34,6 +34,7 @@ import { loadExcludedDrivers } from "../lib/reportExclusions.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability, requireModule } from "../middleware/require.js";
 import { TX_COLS, rowToTx, type RampTransactionRow } from "./ramp-transactions.js";
+import { loadRampSuggester } from "../lib/rampBucketSuggest.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const supabase = supabaseTyped as any;
@@ -528,9 +529,16 @@ expenses.get("/ledger", async (c) => {
 
     const rows: LedgerRow[] = [];
 
-    // Ramp card transactions
+    // Ramp card transactions. Uncategorized ones carry a suggested
+    // bucket learned from how earlier charges were filed.
+    const suggest = rampRaw.some(r => !r.bucket_id)
+      ? await loadRampSuggester(orgId, new Set(bucketRows.map(b => b.id)))
+      : null;
     for (const raw of rampRaw) {
       const tx = rowToTx(raw);
+      const s = !tx.bucketId && suggest
+        ? suggest({ merchantName: tx.merchantName ?? null, skCategoryName: tx.skCategoryName ?? null, cardholderName: tx.cardholderName ?? null })
+        : null;
       rows.push({
         rowKey: `ramp:${tx.id}`,
         source: "ramp",
@@ -542,6 +550,7 @@ expenses.get("/ledger", async (c) => {
         bucketId: tx.bucketId ?? null,
         bucketName: tx.bucketId ? (bucketName.get(tx.bucketId) ?? null) : null,
         bucketEditable: true,
+        suggestion: s ? { ...s, bucketName: bucketName.get(s.bucketId) ?? "" } : undefined,
         assetId: tx.assetId,
         trailerId: tx.trailerId,
         ramp: tx,

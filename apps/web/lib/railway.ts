@@ -2013,6 +2013,11 @@ class RailwayClient {
       'PATCH', `/v1/ramp-transactions/${id}/bucket`, { bucketId },
     );
   }
+  /** File many ramp txns in one call (accept-all on the expenses ledger). */
+  setRampTransactionBuckets(items: Array<{ id: string; bucketId: string }>) {
+    return this.req<{ updated: number }>('PATCH', '/v1/ramp-transactions/buckets', { items });
+  }
+
 
   // ── /expenses dashboard ─────────────────────────────────────────────
   getWeeklyTarget(range: { from: string; to: string }) {
