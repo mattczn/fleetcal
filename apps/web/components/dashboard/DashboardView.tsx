@@ -433,7 +433,8 @@ export default function DashboardView() {
       .catch(e => { if (!cancelled) setWtErr(e instanceof Error ? e.message : 'Failed to load'); });
     return () => { cancelled = true; };
   }, [dbReady, showTargets, periodIso, wtReload]);
-  const wtCurrent = wt?.period && wt.period.from === periodIso.fromDate && wt.period.to === periodIso.toDate ? wt : null;
+  const wtCurrent = wt?.period && wt.params.overheadPerTruckDay != null
+    && wt.period.from === periodIso.fromDate && wt.period.to === periodIso.toDate ? wt : null;
   const saveWeeklyTarget = useCallback((patch: WeeklyTargetPatch) => {
     setWtSaving(true);
     railway.saveWeeklyTargetSettings(patch)
@@ -1636,9 +1637,7 @@ export default function DashboardView() {
                               : <>loads with <strong>any</strong> stop more than 150 air miles from the home terminal</>} — the same rule as the HOS short-haul exemption. Loads missing loaded miles are left out.
                             {rate && (
                               <>
-                                {' '}Cost / loaded mile: driver pay is {pctFmt(rate.payPct)} of {cls === 'local' ? 'local' : 'OTR'} revenue (incl. adjustments); fuel and maintenance are per mile driven × {rate.drivenPerLoadedMile.toFixed(2)} driven miles per loaded mile; {cls === 'local'
-                                  ? <>fixed costs are what OTR runs don&rsquo;t cover, spread over your usual local loaded miles</>
-                                  : <>fixed costs are charged per truck-day ÷ OTR miles per day</>}. Pay-based lines are shown at the target rate, so the lines add up to Target RPM.
+                                {' '}Cost / loaded mile: driver pay is {pctFmt(rate.payPct)} of {cls === 'local' ? 'local' : 'OTR'} revenue (incl. adjustments); fuel and maintenance are per mile driven × {rate.drivenPerLoadedMile.toFixed(2)} driven miles per loaded mile; fixed costs are {p ? fmtFull(p.overheadPerTruckDay) : 'the overhead'} per truck-day ÷ {Math.round(rate.loadedPerTruckDay)} loaded miles per {cls === 'local' ? 'local' : 'OTR'} truck-day. Both come from truck GPS over the last 8 complete weeks. Pay-based lines are shown at the target rate, so the lines add up to Target RPM.
                               </>
                             )}
                           </>
@@ -1658,6 +1657,11 @@ export default function DashboardView() {
                             <div className="mt-1 pt-1" style={divider}>
                               {costRow('Target RPM', rate.target, true)}
                               {costRow('Break-even RPM', rate.breakEven)}
+                            </div>
+                            <div className="mt-1.5 text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
+                              {rate.lastWeekLoadedPerTruckDay != null
+                                ? <>Last week {Math.round(rate.lastWeekLoadedPerTruckDay)} loaded mi per truck-day · 8-wk avg {Math.round(rate.loadedPerTruckDay)}</>
+                                : <>{Math.round(rate.loadedPerTruckDay)} loaded mi per truck-day (8-wk avg)</>}
                             </div>
                           </div>
                         )}

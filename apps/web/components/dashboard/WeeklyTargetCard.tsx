@@ -30,14 +30,18 @@ function periodLabel(from: string, to: string): string {
 
 export type WeeklyTargetPatch = { [K in keyof WeeklyTargetSettings]?: WeeklyTargetSettings[K] | null };
 
-export type ParamKey = 'fuelPrice' | 'marginTarget' | 'mpg' | 'emptyFactor' | 'otrLoadedShare' | 'otrMilesPerDay' | 'fixedWeekly';
+export type ParamKey =
+  | 'fuelPrice' | 'marginTarget' | 'mpg' | 'emptyFactor' | 'fixedWeekly'
+  | 'localLoadedPerTruckDay' | 'otrLoadedPerTruckDay' | 'localDrivenPerLoaded' | 'otrDrivenPerLoaded';
 const PARAM_META: Record<ParamKey, { label: string; asPct?: boolean; prefix?: string; step: number; hint: string }> = {
   fuelPrice:      { label: 'Diesel $/gal',      prefix: '$', step: 0.01, hint: 'Default: average all-in price over the last 7 days of fuel transactions.' },
   marginTarget:   { label: 'Target margin',     asPct: true, step: 0.5,  hint: 'Default: your actual operating margin over the cost-basis months (truck purchases excluded).' },
   mpg:            { label: 'MPG',               step: 0.01, hint: 'Odometer miles ÷ gallons over the last 8 complete weeks.' },
   emptyFactor:    { label: 'Empty-mile factor', step: 0.01, hint: 'Total odometer miles ÷ booked loaded miles over the last 8 complete weeks. Projects this week’s miles from loads already booked.' },
-  otrLoadedShare: { label: 'OTR loaded share',  asPct: true, step: 1, hint: 'Loaded ÷ total miles on an OTR trip. Lower it if trips often come back empty. Local gets the odometer miles OTR doesn’t account for, so this moves the Local cost per mile too.' },
-  otrMilesPerDay: { label: 'OTR miles / day',   step: 10,   hint: 'Miles an OTR truck covers per day — spreads the truck’s daily fixed cost over its miles. Local carries the fixed cost OTR doesn’t, so this moves the Local cost per mile too.' },
+  localLoadedPerTruckDay: { label: 'Local loaded mi / truck-day', step: 1, hint: 'Local loaded miles ÷ truck-days spent on local work over the last 8 complete weeks, from truck GPS. Overhead per truck-day ÷ this = local overhead per loaded mile.' },
+  otrLoadedPerTruckDay:   { label: 'OTR loaded mi / truck-day',   step: 5, hint: 'OTR loaded miles ÷ truck-days spent on OTR work (layover days included) over the last 8 complete weeks, from truck GPS.' },
+  localDrivenPerLoaded:   { label: 'Local driven / loaded mi',    step: 0.01, hint: 'Odometer miles local trucks drive per loaded mile — to pickups, back to the yard — from truck GPS. Turns fuel and maintenance per mile into per loaded mile.' },
+  otrDrivenPerLoaded:     { label: 'OTR driven / loaded mi',      step: 0.01, hint: 'Odometer miles on OTR work per loaded mile, empty legs included, from truck GPS.' },
   fixedWeekly:    { label: 'Fixed costs / week', prefix: '$', step: 100, hint: 'Default: fixed-behavior buckets over the last 3 closed months ÷ weeks. Override when a cost just changed.' },
 };
 
@@ -51,7 +55,8 @@ export function ParamInput({ k, p, disabled, onSave }: {
 }) {
   const meta = PARAM_META[k];
   const scale = meta.asPct ? 100 : 1;
-  const shown = (v: number) => (meta.asPct ? (v * 100).toFixed(1) : k === 'fixedWeekly' ? v.toFixed(0) : v.toFixed(k === 'otrMilesPerDay' ? 0 : 2));
+  const whole = k === 'fixedWeekly' || k === 'localLoadedPerTruckDay' || k === 'otrLoadedPerTruckDay';
+  const shown = (v: number) => (meta.asPct ? (v * 100).toFixed(1) : v.toFixed(whole ? 0 : 2));
   // Callers key this component on the saved value, so a fresh value
   // (after save or a reload) remounts it with a fresh draft.
   const [draft, setDraft] = useState(shown(p.value));
@@ -142,13 +147,15 @@ export default function WeeklyTargetCard({ data, error: err, saving, onSave: sav
   const rev = Number(chk.revenue); const loaded = Number(chk.loaded);
   const emptyIn = chk.empty.trim() === '' ? null : Number(chk.empty);
   const check = rev > 0 && loaded > 0 ? (() => {
-    const total = emptyIn != null && Number.isFinite(emptyIn) ? loaded + emptyIn : loaded / p.otrLoadedShare.value;
-    const fixedShare = (total / p.otrMilesPerDay.value) * p.fixedPerTruckDay;
+    const driven = p.otrDrivenPerLoaded.value;
+    const total = emptyIn != null && Number.isFinite(emptyIn) ? loaded + emptyIn : loaded * driven;
+    const truckDays = total / (p.otrLoadedPerTruckDay.value * driven);
+    const fixedShare = truckDays * p.overheadPerTruckDay;
     const keep = 1 - p.payPct.otr - p.revenuePctOther;
     const net = rev * keep - total * perMileCost - fixedShare;
     const breakEven = (total * perMileCost + fixedShare) / keep;
     const target = (total * perMileCost + fixedShare) / Math.max(0.05, keep - p.marginTarget.value);
-    return { total, net, margin: net / rev, breakEven, target, rplm: rev / loaded };
+    return { total, truckDays, net, margin: net / rev, breakEven, target, rplm: rev / loaded };
   })() : null;
 
   return card(
@@ -250,7 +257,7 @@ export default function WeeklyTargetCard({ data, error: err, saving, onSave: sav
               <Row label="Break-even rate" value={money(check.breakEven)} />
               <Row label="Target rate" value={money(check.target)} tone="#1a73e8" />
               <div className="text-[11px] mt-1" style={{ color: 'var(--gc-text-3)' }}>
-                {Math.round(check.total).toLocaleString()} total mi{emptyIn == null ? ` (assumes ${pct(p.otrLoadedShare.value)} loaded — enter empty miles for a one-way)` : ''}
+                {Math.round(check.total).toLocaleString()} total mi · about {check.truckDays.toFixed(1)} truck-days{emptyIn == null ? ` (assumes your usual ${p.otrDrivenPerLoaded.value.toFixed(2)} driven mi per loaded mi — enter empty miles for a one-way)` : ''}
               </div>
             </>
           ) : (
@@ -288,17 +295,16 @@ export default function WeeklyTargetCard({ data, error: err, saving, onSave: sav
               Overrides can’t be saved until the weekly-target migration has been run. Everything shown is calculated.
             </div>
           )}
-          <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-3">
-            <ParamInput key={`mpg:${p.mpg.value}`} k="mpg" p={p.mpg} disabled={locked} onSave={saveParam} />
-            <ParamInput key={`emptyFactor:${p.emptyFactor.value}`} k="emptyFactor" p={p.emptyFactor} disabled={locked} onSave={saveParam} />
-            <ParamInput key={`otrLoadedShare:${p.otrLoadedShare.value}`} k="otrLoadedShare" p={p.otrLoadedShare} disabled={locked} onSave={saveParam} />
-            <ParamInput key={`otrMilesPerDay:${p.otrMilesPerDay.value}`} k="otrMilesPerDay" p={p.otrMilesPerDay} disabled={locked} onSave={saveParam} />
-            <ParamInput key={`fixedWeekly:${p.fixedWeekly.value}`} k="fixedWeekly" p={p.fixedWeekly} disabled={locked} onSave={saveParam} />
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
+            {(['mpg', 'emptyFactor', 'fixedWeekly', 'localLoadedPerTruckDay', 'otrLoadedPerTruckDay', 'localDrivenPerLoaded', 'otrDrivenPerLoaded'] as const).map(k => (
+              <ParamInput key={`${k}:${p[k].value}`} k={k} p={p[k]} disabled={locked} onSave={saveParam} />
+            ))}
           </div>
           <div className="text-xs mb-2" style={{ color: 'var(--gc-text-3)' }}>
             Driver pay: {pct(p.payPct.local)} of local revenue, {pct(p.payPct.otr)} of OTR (incl. adjustments) ·
-            {data.classes ? <>driven per loaded mile: local {data.classes.local.drivenPerLoadedMile.toFixed(2)}, OTR {data.classes.otr.drivenPerLoadedMile.toFixed(2)} · </> : null}
-            maintenance {perMile(p.maintPerMile)}/mi · {p.trucks} trucks · fixed {money(p.fixedPerTruckDay)}/truck-day ·
+            overhead {money(p.overheadPerTruckDay)} per truck-day ({Math.round(p.truckDaysPerWeek)} truck-days a week) ·
+            local / OTR split {p.gpsMeasured ? 'from truck GPS' : 'not measured (no ELD GPS), fleet average used'} ·
+            maintenance {perMile(p.maintPerMile)}/mi ·
             pay & MPG from {data.calibration.from} → {data.calibration.to} · costs from {data.costBasis.months.join(', ') || '—'}
           </div>
           <div className="text-[11px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>

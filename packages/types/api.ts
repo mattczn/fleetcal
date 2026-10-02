@@ -2234,8 +2234,12 @@ export interface WeeklyTargetSettings {
   marginTarget?:   number | null;   // fraction of revenue, e.g. 0.12
   mpg?:            number | null;
   emptyFactor?:    number | null;   // total miles ÷ loaded miles
-  otrLoadedShare?: number | null;   // loaded ÷ total miles on OTR trips
-  otrMilesPerDay?: number | null;
+  /** Loaded miles per truck-day spent on local / OTR work (truck GPS). */
+  localLoadedPerTruckDay?: number | null;
+  otrLoadedPerTruckDay?:   number | null;
+  /** Odometer miles per loaded mile on local / OTR work (truck GPS). */
+  localDrivenPerLoaded?:   number | null;
+  otrDrivenPerLoaded?:     number | null;
   /** Weekly fixed costs, when the trailing 3-month average is stale
    *  (e.g. a cost that just dropped). */
   fixedWeekly?:    number | null;
@@ -2264,6 +2268,9 @@ export interface WeeklyTargetClassRate {
   payPct: number;
   /** Odometer miles driven per loaded mile for this class. */
   drivenPerLoadedMile: number;
+  loadedPerTruckDay: number;
+  /** The calibration window's final week, as a utilization check. */
+  lastWeekLoadedPerTruckDay: number | null;
   breakEven: number;
   target: number;
   /** Cost per loaded mile at the target rate — the parts sum to target. */
@@ -2281,8 +2288,10 @@ export interface WeeklyTargetResponse {
     fuelPrice:      WeeklyTargetParam;
     mpg:            WeeklyTargetParam;
     emptyFactor:    WeeklyTargetParam;
-    otrLoadedShare: WeeklyTargetParam;
-    otrMilesPerDay: WeeklyTargetParam;
+    localLoadedPerTruckDay: WeeklyTargetParam;
+    otrLoadedPerTruckDay:   WeeklyTargetParam;
+    localDrivenPerLoaded:   WeeklyTargetParam;
+    otrDrivenPerLoaded:     WeeklyTargetParam;
     /** computed = the trailing actual operating margin over costBasis. */
     marginTarget:   WeeklyTargetParam;
     fixedWeekly:      WeeklyTargetParam;
@@ -2290,7 +2299,11 @@ export interface WeeklyTargetResponse {
     revenuePctOther:  number;
     payPct:           { all: number; local: number; otr: number };
     trucks:           number;
-    fixedPerTruckDay: number;
+    truckDaysPerWeek: number;
+    /** Fixed costs per week ÷ truck-days per week. */
+    overheadPerTruckDay: number;
+    /** False when there's no ELD GPS to split local from OTR. */
+    gpsMeasured:      boolean;
   };
   booked: WeeklyTargetClassTotals & {
     loadsMissingMiles: number;

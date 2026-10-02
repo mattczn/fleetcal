@@ -19,6 +19,7 @@
  * Every input is measured from the org's own data and can be overridden
  * in org_settings.weekly_target_settings:
  *   MPG, empty factor, pay %       — last 8 complete weeks
+ *   local / OTR truck-days, miles  — truck GPS, same 8 weeks
  *   fixed / per-mile / revenue-%   — last 3 closed months on /expenses,
  *                                    per each bucket's cost behavior
  *   fuel price                     — last 7 days of fuel transactions
@@ -46,7 +47,8 @@ import {
   isExcludedEvent,
   type ExcludedDrivers,
 } from "./reportExclusions.js";
-import { airMilesBetween, classifyByAirMiles, isUsableCoord, parseTerminal, type Coord } from "./airMiles.js";
+import { SHORT_HAUL_RADIUS_MILES, airMilesBetween, classifyByAirMiles, isUsableCoord, parseTerminal, type Coord } from "./airMiles.js";
+import { getHosConfig } from "./hosService.js";
 import { snapshot, type Window as ExpenseWindow } from "../routes/expenses.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -266,6 +268,113 @@ async function eldMiles(orgId: string, from: string, to: string, excludedAssets:
   return { miles, trucks };
 }
 
+interface ClassSplit { local: number; otr: number }
+export interface GpsSplit {
+  /** Truck-days on local vs OTR work; idle days follow each truck's own mix. */
+  truckDays: ClassSplit;
+  drivenMiles: ClassSplit;
+  /** Truck-days in the window's final 7 days, for the utilization check. */
+  lastWeekTruckDays: ClassSplit;
+}
+
+/**
+ * Local vs OTR truck-days and miles from ELD driving periods. A truck-day
+ * is OTR when the truck is anywhere past the short-haul radius that day —
+ * driving or parked on a layover — local when it drove inside it, idle
+ * otherwise. Trucks count from their first to last movement in the window
+ * so rentals returned mid-window don't keep accruing idle days.
+ */
+async function gpsSplit(
+  orgId: string, from: string, to: string,
+  excludedAssets: Set<number>, terminal: Coord | null, timeZone: string,
+): Promise<GpsSplit | null> {
+  if (!terminal) return null;
+  const { data: assets, error } = await supabase
+    .from("assets")
+    .select("id, motive_vehicle_id")
+    .eq("org_id", orgId)
+    .not("motive_vehicle_id", "is", null);
+  if (error) throw new Error(`weekly-target gps assets: ${error.message}`);
+  const vehicles = new Set(
+    ((assets ?? []) as Array<{ id: number; motive_vehicle_id: string | number }>)
+      .filter(a => !excludedAssets.has(a.id))
+      .map(a => String(a.motive_vehicle_id)),
+  );
+  type Period = {
+    vehicle_id: string | number; start_time: string; miles: number | null;
+    origin_lat: number | null; origin_lon: number | null;
+    destination_lat: number | null; destination_lon: number | null;
+  };
+  // A week of lookback finds where each truck was parked going in.
+  const periods = await fetchAllRows<Period>("weekly-target gps", () => supabase
+    .from("motive_driving_periods")
+    .select("vehicle_id, start_time, miles, origin_lat, origin_lon, destination_lat, destination_lon")
+    .eq("org_id", orgId)
+    .gte("start_time", `${addDays(from, -7)}T00:00:00Z`)
+    .lt("start_time", `${addDays(to, 2)}T00:00:00Z`));
+
+  const dayOf = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" });
+  const byVehicle = new Map<string, Array<Period & { day: string }>>();
+  for (const p of periods) {
+    const v = String(p.vehicle_id);
+    if (!vehicles.has(v)) continue;
+    const arr = byVehicle.get(v) ?? [];
+    arr.push({ ...p, day: dayOf.format(new Date(p.start_time)) });
+    byVehicle.set(v, arr);
+  }
+  if (!byVehicle.size) return null;
+
+  const lastWeekFrom = addDays(to, -6);
+  const out: GpsSplit = {
+    truckDays: { local: 0, otr: 0 }, drivenMiles: { local: 0, otr: 0 }, lastWeekTruckDays: { local: 0, otr: 0 },
+  };
+  for (const ps of byVehicle.values()) {
+    ps.sort((a, b) => a.start_time.localeCompare(b.start_time));
+    const inWindow = ps.filter(p => p.day >= from && p.day <= to);
+    if (!inWindow.length) continue;
+    const byDay = new Map<string, typeof ps>();
+    for (const p of inWindow) byDay.set(p.day, [...(byDay.get(p.day) ?? []), p]);
+
+    let pos: Coord | null = null;
+    for (const p of ps) {
+      if (p.day >= from) break;
+      if (p.destination_lat != null && p.destination_lon != null) pos = { lat: p.destination_lat, lon: p.destination_lon };
+    }
+    const tally = { local: 0, otr: 0, idle: 0, lwLocal: 0, lwOtr: 0, lwIdle: 0, localMi: 0, otrMi: 0 };
+    const firstDay = ps[0].day < from ? from : inWindow[0].day;
+    for (let d = firstDay; d <= inWindow[inWindow.length - 1].day; d = addDays(d, 1)) {
+      const pts: Coord[] = pos ? [pos] : [];
+      let miles = 0;
+      for (const p of byDay.get(d) ?? []) {
+        miles += Number(p.miles ?? 0);
+        if (p.origin_lat != null && p.origin_lon != null) pts.push({ lat: p.origin_lat, lon: p.origin_lon });
+        if (p.destination_lat != null && p.destination_lon != null) {
+          pos = { lat: p.destination_lat, lon: p.destination_lon };
+          pts.push(pos);
+        }
+      }
+      const away = pts.some(pt => airMilesBetween(terminal, pt) > SHORT_HAUL_RADIUS_MILES);
+      const cls = away ? "otr" : miles >= 5 ? "local" : "idle";
+      const lastWeek = d >= lastWeekFrom;
+      if (cls === "otr") { tally.otr++; tally.otrMi += miles; if (lastWeek) tally.lwOtr++; }
+      else {
+        tally.localMi += miles;
+        if (cls === "local") { tally.local++; if (lastWeek) tally.lwLocal++; }
+        else { tally.idle++; if (lastWeek) tally.lwIdle++; }
+      }
+    }
+    const active = tally.local + tally.otr;
+    const localShare = active > 0 ? tally.local / active : 0.5;
+    out.truckDays.local += tally.local + tally.idle * localShare;
+    out.truckDays.otr += tally.otr + tally.idle * (1 - localShare);
+    out.lastWeekTruckDays.local += tally.lwLocal + tally.lwIdle * localShare;
+    out.lastWeekTruckDays.otr += tally.lwOtr + tally.lwIdle * (1 - localShare);
+    out.drivenMiles.local += tally.localMi;
+    out.drivenMiles.otr += tally.otrMi;
+  }
+  return out.truckDays.local + out.truckDays.otr > 0 ? out : null;
+}
+
 async function fuelTotals(orgId: string, from: string, to: string): Promise<{ spend: number; gallons: number }> {
   const rows = await fetchAllRows<{ total_charged: number | string | null; diesel_gallons: number | string | null }>(
     "weekly-target fuel", () => supabase
@@ -350,6 +459,89 @@ const payRate = (rows: LoadEcon[]): number | null => {
   return rev > 0 ? paid.reduce((s, r) => s + r.driverPay, 0) / rev : null;
 };
 
+// ── Calibration (cached) ────────────────────────────────────────────────
+
+/** Everything measured over the trailing windows. Only changes when a
+ *  week or month closes, so it's cached rather than re-read per view;
+ *  settings are applied on top per request, so overrides act at once. */
+interface Calibration {
+  calFrom: string; calTo: string;
+  months: string[]; basisFrom: string; basisTo: string; lastFrom: string | null;
+  calLoads: LoadEcon[]; calEld: { miles: number; trucks: number };
+  calFuel: { spend: number; gallons: number }; calAdj: number;
+  basisLoads: LoadEcon[]; basisEld: { miles: number; trucks: number };
+  basisFuel: { spend: number; gallons: number }; basisAdj: number;
+  lastEld: { miles: number; trucks: number } | null;
+  bucketRows: Array<{ id: string; parent_id: string | null; name: string; system_role: string | null }>;
+  snap: Awaited<ReturnType<typeof snapshot>>;
+  snapLast: Awaited<ReturnType<typeof snapshot>> | null;
+  gps: GpsSplit | null;
+}
+
+const CALIBRATION_TTL_MS = 60 * 60 * 1000;
+// Per-process: the API runs as a single replica (see the in-process crons).
+const calibrationCache = new Map<string, { at: number; value: Promise<Calibration> }>();
+
+async function measure(
+  orgId: string, today: string,
+  excluded: ExcludedDrivers, excludedAssets: Set<number>, terminal: Coord | null,
+): Promise<Calibration> {
+  const calTo = addDays(saturdayOf(today), -1);
+  const calFrom = addDays(calTo, -(CALIBRATION_WEEKS * 7 - 1));
+  const [months, hos] = await Promise.all([closedMonths(orgId, today), getHosConfig(orgId)]);
+  const basisFrom = months.length ? `${months[0]}-01` : calFrom;
+  const basisTo = months.length
+    ? iso(Date.UTC(Number(months[months.length - 1].slice(0, 4)), Number(months[months.length - 1].slice(5, 7)), 0))
+    : calTo;
+  const lastFrom = months.length ? `${months[months.length - 1]}-01` : null;
+
+  const [
+    calLoads, calEld, calFuel, calAdj,
+    basisLoads, basisEld, basisFuel, basisAdj,
+    bucketRows, lastEld, gps,
+  ] = await Promise.all([
+    loadEconomics(orgId, calFrom, calTo, excluded, excludedAssets, terminal, true),
+    eldMiles(orgId, calFrom, calTo, excludedAssets),
+    fuelTotals(orgId, calFrom, calTo),
+    adjustmentsTotal(orgId, calFrom, calTo, excluded),
+    loadEconomics(orgId, basisFrom, basisTo, excluded, excludedAssets, terminal, false),
+    eldMiles(orgId, basisFrom, basisTo, excludedAssets),
+    fuelTotals(orgId, basisFrom, basisTo),
+    adjustmentsTotal(orgId, basisFrom, basisTo, excluded),
+    fetchAllRows<{ id: string; parent_id: string | null; name: string; system_role: string | null }>(
+      "weekly-target buckets", () => supabase
+        .from("expense_buckets")
+        .select("id, parent_id, name, system_role")
+        .eq("org_id", orgId)
+        .is("deleted_at", null)),
+    lastFrom ? eldMiles(orgId, lastFrom, basisTo, excludedAssets) : Promise.resolve(null),
+    gpsSplit(orgId, calFrom, calTo, excludedAssets, terminal, hos.timeZone),
+  ]);
+  const bucketIds = new Set(bucketRows.map(b => b.id));
+  const [snap, snapLast] = await Promise.all([
+    snapshot(orgId, mkWindow(basisFrom, basisTo), bucketIds),
+    lastFrom ? snapshot(orgId, mkWindow(lastFrom, basisTo), bucketIds) : Promise.resolve(null),
+  ]);
+  return {
+    calFrom, calTo, months, basisFrom, basisTo, lastFrom,
+    calLoads, calEld, calFuel, calAdj, basisLoads, basisEld, basisFuel, basisAdj,
+    lastEld, bucketRows, snap, snapLast, gps,
+  };
+}
+
+function calibration(
+  orgId: string, today: string,
+  excluded: ExcludedDrivers, excludedAssets: Set<number>, terminal: Coord | null,
+): Promise<Calibration> {
+  const key = `${orgId}|${today.slice(0, 7)}|${saturdayOf(today)}`;
+  const hit = calibrationCache.get(key);
+  if (hit && Date.now() - hit.at < CALIBRATION_TTL_MS) return hit.value;
+  const value = measure(orgId, today, excluded, excludedAssets, terminal);
+  calibrationCache.set(key, { at: Date.now(), value });
+  value.catch(() => calibrationCache.delete(key));
+  return value;
+}
+
 // ── The model ───────────────────────────────────────────────────────────
 
 export async function computeWeeklyTarget(
@@ -362,52 +554,30 @@ export async function computeWeeklyTarget(
   const weekTo = opts.to ?? addDays(weekFrom, 6);
   const days = Math.round((parseDay(weekTo) - parseDay(weekFrom)) / DAY) + 1;
   const weeks = payrollWeeks(weekFrom, weekTo);
-  const calTo = addDays(saturdayOf(today), -1);
-  const calFrom = addDays(calTo, -(CALIBRATION_WEEKS * 7 - 1));
 
-  const [stored, excluded, excludedAssets, months] = await Promise.all([
+  const [stored, excluded, excludedAssets] = await Promise.all([
     readSettings(orgId),
     loadExcludedDrivers(orgId),
     loadExcludedAssetIds(orgId),
-    closedMonths(orgId, today),
   ]);
   const { terminal, unavailable } = stored;
   // opts.settings previews unsaved overrides on top of the stored ones.
   const settings: WeeklyTargetSettings = opts.settings
     ? mergeSettings(stored.settings, opts.settings as Record<string, unknown>)
     : stored.settings;
-  const basisFrom = months.length ? `${months[0]}-01` : calFrom;
-  const basisTo = months.length
-    ? iso(Date.UTC(Number(months[months.length - 1].slice(0, 4)), Number(months[months.length - 1].slice(5, 7)), 0))
-    : calTo;
-  const lastFrom = months.length ? `${months[months.length - 1]}-01` : null;
 
-  const [
-    calLoads, calEld, calFuel, calAdj,
-    weekLoads, weekEld, weekPayroll,
-    basisLoads, basisEld, basisFuel, basisAdj,
-    price7, bucketRows, lastEld,
-  ] = await Promise.all([
-    loadEconomics(orgId, calFrom, calTo, excluded, excludedAssets, terminal, true),
-    eldMiles(orgId, calFrom, calTo, excludedAssets),
-    fuelTotals(orgId, calFrom, calTo),
-    adjustmentsTotal(orgId, calFrom, calTo, excluded),
+  const [cal_, weekLoads, weekEld, weekPayroll, price7] = await Promise.all([
+    calibration(orgId, today, excluded, excludedAssets, terminal),
     loadEconomics(orgId, weekFrom, weekTo, excluded, excludedAssets, terminal, true),
     weekFrom <= today ? eldMiles(orgId, weekFrom, weekTo < today ? weekTo : today, excludedAssets) : Promise.resolve(null),
     finalizedPayroll(orgId, weeks, excluded),
-    loadEconomics(orgId, basisFrom, basisTo, excluded, excludedAssets, terminal, false),
-    eldMiles(orgId, basisFrom, basisTo, excludedAssets),
-    fuelTotals(orgId, basisFrom, basisTo),
-    adjustmentsTotal(orgId, basisFrom, basisTo, excluded),
     fuelTotals(orgId, addDays(today, -6), today),
-    fetchAllRows<{ id: string; parent_id: string | null; name: string; system_role: string | null }>(
-      "weekly-target buckets", () => supabase
-        .from("expense_buckets")
-        .select("id, parent_id, name, system_role")
-        .eq("org_id", orgId)
-        .is("deleted_at", null)),
-    lastFrom ? eldMiles(orgId, lastFrom, basisTo, excludedAssets) : Promise.resolve(null),
   ]);
+  const {
+    calFrom, calTo, months, basisFrom, basisTo, lastFrom,
+    calLoads, calEld, calFuel, calAdj, basisLoads, basisEld, basisFuel, basisAdj,
+    lastEld, bucketRows, snap, snapLast, gps,
+  } = cal_;
 
   // ── Calibration (last 8 complete weeks) ──
   const cal = totals(calLoads);
@@ -422,19 +592,27 @@ export async function computeWeeklyTarget(
   const mpg = param(calFuel.gallons > 0 && calEld.miles > 0 ? calEld.miles / calFuel.gallons : null, settings.mpg, 6.5);
   const emptyFactor = param(cal.loadedMiles > 0 && calEld.miles > 0 ? calEld.miles / cal.loadedMiles : null, settings.emptyFactor, 1);
   const trucks = Math.max(1, calEld.trucks);
-  // Without a measured OTR trip pattern, fall back to fleet averages —
-  // conservative (they include local empty running), and labelled as
-  // computed so the card can show they're worth setting.
-  const otrLoadedShare = param(emptyFactor.value > 0 ? 1 / emptyFactor.value : null, settings.otrLoadedShare, 1);
-  const otrMilesPerDay = param(
-    calEld.miles > 0 ? calEld.miles / (trucks * CALIBRATION_WEEKS * 7) : null, settings.otrMilesPerDay, 400);
+
+  // ── Local vs OTR time and miles (truck GPS) ──
+  // Loaded miles per truck-day turns overhead per truck-day into overhead
+  // per loaded mile; driven per loaded mile does the same for fuel and
+  // maintenance. Without GPS both classes fall back to the fleet average.
+  const calLocal = totals(calLoads.filter(r => r.cls === "local"));
+  const calOtr = totals(calLoads.filter(r => r.cls === "otr"));
+  const fleetLoadedPerTruckDay = cal.loadedMiles / (trucks * CALIBRATION_WEEKS * 7);
+  const perDay = (loaded: number, truckDays: number | undefined) => (truckDays && loaded > 0 ? loaded / truckDays : null);
+  const drivenPer = (driven: number | undefined, loaded: number) => (driven && loaded > 0 ? driven / loaded : null);
+  const localLoadedPerTruckDay = param(perDay(calLocal.loadedMiles, gps?.truckDays.local), settings.localLoadedPerTruckDay, fleetLoadedPerTruckDay);
+  const otrLoadedPerTruckDay = param(perDay(calOtr.loadedMiles, gps?.truckDays.otr), settings.otrLoadedPerTruckDay, fleetLoadedPerTruckDay);
+  const localDrivenPerLoaded = param(drivenPer(gps?.drivenMiles.local, calLocal.loadedMiles), settings.localDrivenPerLoaded, emptyFactor.value);
+  const otrDrivenPerLoaded = param(drivenPer(gps?.drivenMiles.otr, calOtr.loadedMiles), settings.otrDrivenPerLoaded, emptyFactor.value);
+  const truckDaysPerWeek = gps ? (gps.truckDays.local + gps.truckDays.otr) / CALIBRATION_WEEKS : trucks * 7;
+  const lastWeekFrom = addDays(calTo, -6);
+  const lastWeekLoaded = (cls: HaulClass) => calLoads
+    .filter(r => r.cls === cls && r.pickup >= lastWeekFrom)
+    .reduce((s, r) => s + r.loadedMiles, 0);
 
   // ── Cost basis (last closed months) ──
-  const bucketIds = new Set(bucketRows.map(b => b.id));
-  const [snap, snapLast] = await Promise.all([
-    snapshot(orgId, mkWindow(basisFrom, basisTo), bucketIds),
-    lastFrom ? snapshot(orgId, mkWindow(lastFrom, basisTo), bucketIds) : Promise.resolve(null),
-  ]);
   const byId = new Map(bucketRows.map(b => [b.id, b]));
   const behaviors = settings.bucketBehaviors ?? {};
   const bases = settings.bucketBasis ?? {};
@@ -543,31 +721,27 @@ export async function computeWeeklyTarget(
   const targetRpm = rpm(marginTarget.value);
 
   // ── Local vs OTR rate per loaded mile ──
-  // Fixed costs are time-based (leases, insurance, admin), so an OTR run
-  // carries them per truck-DAY, spread over the miles it covers that day.
-  // Local gets what OTR doesn't account for over the calibration weeks:
-  // the remaining odometer miles and the remaining fixed cost, so the two
-  // classes together reconcile to the fleet's actual miles and costs.
-  const fixedPerTruckDay = fixedWeekly / (trucks * 7);
-  const calLocal = totals(calLoads.filter(r => r.cls === "local"));
-  const calOtr = totals(calLoads.filter(r => r.cls === "otr"));
-  const otrDriven = 1 / otrLoadedShare.value;
-  const otrFixedPerLoaded = fixedPerTruckDay / otrMilesPerDay.value * otrDriven;
-  const otrFixedWeekly = (calOtr.loadedMiles / CALIBRATION_WEEKS) * otrFixedPerLoaded;
-  const localWeeklyLoaded = calLocal.loadedMiles / CALIBRATION_WEEKS;
-  const localDriven = calLocal.loadedMiles > 0
-    ? Math.max(1, (calEld.miles - calOtr.loadedMiles * otrDriven) / calLocal.loadedMiles)
-    : emptyFactor.value;
-  const localFixedPerLoaded = localWeeklyLoaded > 0 ? Math.max(0, fixedWeekly - otrFixedWeekly) / localWeeklyLoaded : 0;
+  // Overhead accrues per truck-day, so each class carries it for the time
+  // its loads tie up a truck: overhead per truck-day ÷ loaded miles per
+  // truck-day. Over the calibration weeks the two classes add back up to
+  // the fleet's fixed costs and odometer miles.
+  const overheadPerTruckDay = fixedWeekly / truckDaysPerWeek;
+  const localDriven = localDrivenPerLoaded.value;
+  const otrDriven = otrDrivenPerLoaded.value;
+  const otrFixedPerLoaded = overheadPerTruckDay / otrLoadedPerTruckDay.value;
 
   const rateFor = (price: number, pay: number, driven: number, fixedPerLoaded: number, margin: number) =>
     ((price / mpg.value + maintPerMile) * driven + fixedPerLoaded) / Math.max(0.05, 1 - pay - revenuePctOther - margin);
   const otrRplm = (price: number, margin: number) => rateFor(price, payOtr, otrDriven, otrFixedPerLoaded, margin);
-  const classRate = (pay: number, driven: number, fixedPerLoaded: number) => {
+  const classRate = (cls: HaulClass, pay: number, driven: number, loadedPerTruckDay: number) => {
+    const fixedPerLoaded = overheadPerTruckDay / loadedPerTruckDay;
     const target = rateFor(fuelPrice.value, pay, driven, fixedPerLoaded, marginTarget.value);
+    const lwDays = gps?.lastWeekTruckDays[cls] ?? 0;
     return {
       payPct: pay,
       drivenPerLoadedMile: driven,
+      loadedPerTruckDay,
+      lastWeekLoadedPerTruckDay: lwDays > 0 ? lastWeekLoaded(cls) / lwDays : null,
       breakEven: rateFor(fuelPrice.value, pay, driven, fixedPerLoaded, 0),
       target,
       cost: {
@@ -586,10 +760,11 @@ export async function computeWeeklyTarget(
     calibration: { from: calFrom, to: calTo },
     costBasis: { from: basisFrom, to: basisTo, months, lastMonth: lastFrom ? { from: lastFrom, to: basisTo } : null },
     params: {
-      fuelPrice, mpg, emptyFactor, otrLoadedShare, otrMilesPerDay, marginTarget,
+      fuelPrice, mpg, emptyFactor, marginTarget,
+      localLoadedPerTruckDay, otrLoadedPerTruckDay, localDrivenPerLoaded, otrDrivenPerLoaded,
       fixedWeekly: fixed, maintPerMile, revenuePctOther,
       payPct: { all: payAll, local: payLocal, otr: payOtr },
-      trucks, fixedPerTruckDay,
+      trucks, truckDaysPerWeek, overheadPerTruckDay, gpsMeasured: gps != null,
     },
     booked: {
       ...wk,
@@ -607,8 +782,8 @@ export async function computeWeeklyTarget(
       targetPerLoadedMile: targetRpm,
     },
     classes: {
-      local: classRate(payLocal, localDriven, localFixedPerLoaded),
-      otr:   classRate(payOtr, otrDriven, otrFixedPerLoaded),
+      local: classRate("local", payLocal, localDriven, localLoadedPerTruckDay.value),
+      otr:   classRate("otr", payOtr, otrDriven, otrLoadedPerTruckDay.value),
     },
     otr: {
       breakEvenRplm: otrRplm(fuelPrice.value, 0),
@@ -630,8 +805,10 @@ const RANGES: Record<Exclude<keyof WeeklyTargetSettings, "bucketBehaviors" | "bu
   marginTarget:   [-0.5, 0.9],
   mpg:            [2, 15],
   emptyFactor:    [1, 3],
-  otrLoadedShare: [0.3, 1],
-  otrMilesPerDay: [50, 1000],
+  localLoadedPerTruckDay: [5, 1500],
+  otrLoadedPerTruckDay:   [5, 1500],
+  localDrivenPerLoaded:   [1, 5],
+  otrDrivenPerLoaded:     [1, 5],
   fixedWeekly:    [0, 1_000_000],
 };
 const BEHAVIORS: CostBehavior[] = ["fixed", "per_mile", "revenue_pct", "exclude"];
@@ -677,7 +854,10 @@ export function validateSettingsPatch(body: unknown): { patch?: Record<string, u
 }
 
 export function mergeSettings(current: WeeklyTargetSettings, patch: Record<string, unknown>): WeeklyTargetSettings {
-  const next: Record<string, unknown> = { ...current };
+  // Only known keys carry over, so retired settings drop out on the next save.
+  const next: Record<string, unknown> = Object.fromEntries(
+    Object.entries(current).filter(([k]) => k in RANGES || k === "bucketBehaviors" || k === "bucketBasis"),
+  );
   for (const [k, v] of Object.entries(patch)) {
     if (k === "bucketBehaviors" || k === "bucketBasis") continue;
     if (v === null) delete next[k]; else next[k] = v;
