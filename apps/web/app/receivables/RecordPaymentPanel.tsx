@@ -25,6 +25,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { X, Paperclip, Trash2, FileText, AlertTriangle, Check, Flag, CalendarClock } from 'lucide-react';
 import { railway } from '@/lib/railway';
+import WriteOffControl from './WriteOffControl';
 import type {
   ReceivableInvoice, InvoicePayment, PaymentProof,
   PaymentMethod, PaymentVarianceReason, PaymentProofKind, InvoiceFlagReason,
@@ -45,9 +46,10 @@ const METHODS: { value: PaymentMethod; label: string }[] = [
 ];
 
 const VARIANCE_REASONS: { value: PaymentVarianceReason; label: string }[] = [
-  { value: 'quick_pay',   label: 'Quick Pay (broker discount)' },
-  { value: 'short_pay',   label: 'Short Pay' },
-  { value: 'deduction',   label: 'Deduction / Chargeback' },
+  { value: 'quick_pay',        label: 'Quick Pay (broker discount)' },
+  { value: 'short_pay',        label: 'Short Pay' },
+  { value: 'deduction',        label: 'Deduction / Chargeback' },
+  { value: 'rate_discrepancy', label: 'Rate discrepancy (we billed a different rate)' },
   { value: 'overpayment', label: 'Overpayment' },
   { value: 'other',       label: 'Other' },
 ];
@@ -283,6 +285,11 @@ export default function RecordPaymentPanel({ row, onSaved, onClose }: RecordPaym
   }
 
   const settled = balance <= CENT;
+  /** The allocation a shortfall came out of. Largest rather than latest: on
+   *  an invoice settled by several payments the fee came off the big one. */
+  const largestPayment = payments.length
+    ? payments.reduce((a, b) => (a.amount >= b.amount ? a : b))
+    : null;
 
   return (
     <>
@@ -328,6 +335,24 @@ export default function RecordPaymentPanel({ row, onSaved, onClose }: RecordPaym
                 {fmtMoney(balance)}
               </span>
             </div>
+
+            {/* Close out the remainder of a payment ALREADY recorded.
+                variance_reason rides on an allocation at creation, so until
+                now a short payment could never be explained after the fact —
+                the only route was delete and re-record, which nobody does.
+                Hence 43 invoices sitting open with no reason on any of them. */}
+            {!settled && applied > CENT && largestPayment && (
+              <div className="flex justify-end mt-2 pt-2"
+                   style={{ borderTop: '1px solid var(--gc-border-light)' }}>
+                <WriteOffControl
+                  invoiceId={row.id}
+                  paymentId={largestPayment.id}
+                  remaining={balance}
+                  direction="down"
+                  onDone={() => { void load(); onSaved(); }}
+                />
+              </div>
+            )}
           </div>
 
           {err && (

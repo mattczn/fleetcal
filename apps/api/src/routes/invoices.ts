@@ -85,7 +85,7 @@ const supaAny = supabase as any;
 const PAYMENT_METHODS: readonly PaymentMethod[] =
   ["ach", "check", "wire", "factoring", "other"];
 const VARIANCE_REASONS: readonly PaymentVarianceReason[] =
-  ["quick_pay", "short_pay", "deduction", "overpayment", "other"];
+  ["quick_pay", "short_pay", "deduction", "rate_discrepancy", "overpayment", "other"];
 
 /** Re-read an invoice after the allocation ledger moved it. Every
  *  allocation write returns the invoice so the client can update a row
@@ -1268,6 +1268,17 @@ invoices.post("/:id/send", requireCapability("accounting.send_invoice"), async (
   if (!data) return c.json({ error: "invalid_state", detail: "invoice not in draft state" } satisfies ApiErrorResponse, 409);
   const sentInvoice = rowToInvoice(data as unknown as InvoiceRow);
 
+  // Mirror onto loads.billing_status so the load leaves the Released
+  // bucket. Generation already sets 'invoiced', so for a plain
+  // draft→sent this is a no-op. It matters when something rewound the
+  // load to 'verified' in between — regenerate does exactly that for a
+  // sent invoice (see the `wasSent` branch below) and its comment
+  // promised "the next Send call will flip it back", which nothing
+  // actually did. Result: correcting the customer on an invoiced load
+  // rewound it to Released and no amount of re-sending brought it
+  // back.
+  await setBillingStatus(sentInvoice.loadId, orgId, "invoiced", undefined);
+
   // Archive the packet PDF that was actually sent (for email) or the
   // current packet (for manual/portal). Best-effort — the API has
   // already done its real work; failure here just leaves the docs
@@ -1745,6 +1756,10 @@ invoices.post("/batch-generate", async (c) => {
           .single();
         if (upd) {
           const sentInv = rowToInvoice(upd as unknown as InvoiceRow);
+          // Same reason as the single-invoice send: usually a no-op,
+          // but it recovers a load that regenerate rewound to
+          // 'verified' after generation.
+          await setBillingStatus(sentInv.loadId, orgId, "invoiced", undefined);
           try {
             await persistInvoicePacket({ invoice: sentInv, orgId, prebuilt: packet });
           } catch { /* best-effort */ }
@@ -2093,6 +2108,9 @@ invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async
       console.warn("[batch-send] flip-to-sent failed for", inv.invoiceNumber, error);
     } else {
       const sentInv = rowToInvoice(data as unknown as InvoiceRow);
+      // Same reason as the single-invoice send: usually a no-op, but it
+      // recovers a load that regenerate rewound to 'verified'.
+      await setBillingStatus(sentInv.loadId, orgId, "invoiced", undefined);
       try {
         await persistInvoicePacket({ invoice: sentInv, orgId, prebuilt: packet });
       } catch (persistErr) {

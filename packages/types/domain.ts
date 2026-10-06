@@ -1485,6 +1485,11 @@ export type PaymentVarianceReason =
   | 'quick_pay'    // broker's early-payment discount
   | 'short_pay'    // paid less, no reason given
   | 'deduction'    // chargeback, lumper, detention dispute
+  // We invoiced one rate and they paid another — the booking and the
+  // billing disagreed. Distinct from short_pay (which blames the broker)
+  // and deduction (which says they took something off): nobody needs
+  // calling, the fix is in how the load was booked.
+  | 'rate_discrepancy'
   | 'overpayment'  // paid more than billed
   | 'other';
 
