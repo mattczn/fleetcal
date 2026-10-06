@@ -103,6 +103,11 @@ export default function RecordPaymentPanel({ row, onSaved, onClose }: RecordPaym
   const [flagNote,    setFlagNote]    = useState(row.flaggedNote ?? '');
   const [promisedOn,  setPromisedOn]  = useState(row.promisedPayDate ?? '');
   const [flagBusy,    setFlagBusy]    = useState(false);
+  /** Ticked on a short pay the operator hasn't accepted. Settles the invoice
+   *  AND flags it, so the money leaves the aging report without leaving the
+   *  chase. Defaults ON — if you're recording a shortfall you didn't agree
+   *  to, wanting it back is the likelier intent. */
+  const [chaseIt,     setChaseIt]     = useState(true);
 
   const flagDirty =
     (flagReason || '') !== (row.flaggedReason ?? '') ||
@@ -221,6 +226,23 @@ export default function RecordPaymentPanel({ row, onSaved, onClose }: RecordPaym
         ...(hasVariance ? { varianceReason: effectiveReason } : {}),
         ...(note.trim() ? { note: note.trim() } : {}),
       });
+
+      // Settling and chasing are not opposites. The invoice closes at what
+      // arrived so the aging report stays honest, and the flag carries the
+      // outstanding difference onto the follow-up list — which is where it
+      // belongs, rather than sitting in AR pretending to be collectible.
+      if (hasVariance && variance < 0 && chaseIt && effectiveReason !== 'quick_pay') {
+        try {
+          await railway.flagInvoice(row.id, {
+            flaggedReason: 'disputed',
+            flaggedNote: `Short ${fmtMoney(Math.abs(variance))} on a ${fmtMoney(amount)} payment`
+              + `${method ? ` (${method})` : ''} — chasing the difference`,
+          });
+        } catch (e) {
+          // The money is recorded; failing to flag must not undo that.
+          console.warn('[record payment] could not flag as disputed', e);
+        }
+      }
 
       // Reset the form but keep the panel open — recording a second
       // partial against the same invoice is a normal next action.
@@ -481,6 +503,39 @@ export default function RecordPaymentPanel({ row, onSaved, onClose }: RecordPaym
                       style={inputStyle}>
                 {VARIANCE_REASONS.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
               </select>
+
+              {/* Closing a short-paid invoice is NOT accepting the shortfall.
+                  Nothing here said so, and a reason labelled "Short Pay" that
+                  settles the invoice reads as writing the money off — which
+                  is why these sat open instead. The invoice records what
+                  ARRIVED; a later payment is just another allocation. */}
+              <div className="text-[11px] leading-snug mt-2" style={{ color: '#92400e' }}>
+                {variance < 0 ? (
+                  <>
+                    This closes the invoice at <strong>{fmtMoney(amount)}</strong> — what
+                    actually arrived. It does <strong>not</strong> write off the{' '}
+                    {fmtMoney(Math.abs(variance))}: if they pay it later, record it
+                    here and the invoice fills back in.
+                  </>
+                ) : (
+                  <>Recorded as an overpayment. The invoice stays settled; the excess is visible as the gap.</>
+                )}
+              </div>
+
+              {/* Still chasing it? Say so here rather than leaving the invoice
+                  open as the only way to remember. Keeping it open was costing
+                  the aging report its meaning. */}
+              {variance < 0 && effectiveReason !== 'quick_pay' && (
+                <label className="flex items-start gap-2 mt-2 cursor-pointer"
+                       style={{ fontSize: 11.5, color: '#92400e' }}>
+                  <input type="checkbox" checked={chaseIt} className="mt-0.5"
+                         onChange={e => setChaseIt(e.target.checked)} />
+                  <span>
+                    I&rsquo;m still chasing this {fmtMoney(Math.abs(variance))} — flag the
+                    invoice as <strong>disputed</strong> so it stays on my follow-up list.
+                  </span>
+                </label>
+              )}
             </div>
           )}
 
