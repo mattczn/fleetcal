@@ -36,6 +36,7 @@ import StopsSection from './StopsSection';
 import RelayLegsEditor, { RelayLegView, RelayHandoffView, RelayHandoffPhoto } from './RelayLegsEditor';
 import { legRoleFor, legLabel, byLegIndex, handoffIndexes, handoffTimesOf, isHandoffStop } from '@fleetcal/types';
 import { AuditHistory, appendAuditEntry, buildAuditEntry } from '@/lib/auditEntry';
+import InvoiceDeliveryHistory from './InvoiceDeliveryHistory';
 import { legStraightMiles } from '@/lib/legMiles';
 import {
   PAY_BASIS_LABEL, autoPayFor, fmtPct, payPctOf, proratePayAcrossLegs,
@@ -2231,6 +2232,27 @@ export default function EventModal() {
     })();
     return () => { cancelled = true; };
   }, [showPdfViewer, modalEventId, orgId, loadDocuments.length, loadInvoices.length, events, canDo]);
+
+  // Invoices, fetched when the HISTORY is opened rather than on modal open.
+  //
+  // The fetch above is gated behind the PDF viewer precisely to avoid a
+  // round trip every time someone opens a load. Expanding the history is a
+  // deliberate act and a rare one, so paying for it there costs nothing on
+  // the common path and makes the send facts available where they're asked
+  // for. No-ops if the PDF viewer already loaded them.
+  useEffect(() => {
+    if (!historyExpanded || !modalEventId || !orgId) return;
+    if (loadInvoices.length > 0) return;
+    const ev = events.find(e => e.id === modalEventId);
+    if (!ev?.loadId || !canDo('accounting.access')) return;
+    let cancelled = false;
+    void (async () => {
+      const { railway } = await import('@/lib/railway');
+      const res = await railway.listInvoices({ loadId: ev.loadId! }).catch(() => ({ invoices: [] }));
+      if (!cancelled) setLoadInvoices(res.invoices);
+    })();
+    return () => { cancelled = true; };
+  }, [historyExpanded, modalEventId, orgId, loadInvoices.length, events, canDo]);
 
   // When a doc gets selected, use the pre-fetched signed URL if we have one.
   useEffect(() => {
@@ -7819,6 +7841,14 @@ export default function EventModal() {
                 </div>
                 {historyExpanded && hasHistory && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 10 }}>
+                    {/* "Billing status changed to invoiced" records a state
+                        change in FleetCal. It does not answer what someone
+                        actually asks months later — did this reach the broker,
+                        when, and at what address. */}
+                    <InvoiceDeliveryHistory
+                      invoices={loadInvoices}
+                      timeZone={calendarTimezone}
+                    />
                     <AuditHistory
                       entries={auditLog}
                       ctx={{
