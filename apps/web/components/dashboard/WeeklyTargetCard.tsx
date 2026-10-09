@@ -105,6 +105,35 @@ export function ParamInput({ k, p, disabled, onSave }: {
   );
 }
 
+// Driver pay on the profit line: the Total Payroll figure as it stands, or
+// the average pay % applied to booked revenue — an estimate of where the
+// week lands before payroll is finalized. Remembered per browser.
+type PayMode = 'current' | 'average';
+const PAY_MODE_KEY = 'dashboard.weeklyTarget.payMode';
+
+function PayModeToggle({ mode, avgPct, onChange }: { mode: PayMode; avgPct: number; onChange: (m: PayMode) => void }) {
+  return (
+    <span className="inline-flex rounded-md overflow-hidden text-[11px] align-middle" style={{ border: '1px solid var(--gc-border)' }}>
+      {(['current', 'average'] as const).map(m => (
+        <button
+          key={m}
+          type="button"
+          aria-pressed={mode === m}
+          onClick={() => onChange(m)}
+          className="px-1.5 py-px"
+          style={{
+            background: mode === m ? 'var(--gc-hover)' : 'transparent',
+            color: mode === m ? 'var(--gc-text-1)' : 'var(--gc-text-3)',
+            fontWeight: mode === m ? 600 : 400,
+          }}
+        >
+          {m === 'current' ? 'Current' : `Avg ${pct(avgPct)}`}
+        </button>
+      ))}
+    </span>
+  );
+}
+
 function Row({ label, value, strong, tone }: { label: React.ReactNode; value: string; strong?: boolean; tone?: string }) {
   return (
     <div className="flex items-baseline justify-between gap-3 text-sm py-0.5">
@@ -124,6 +153,15 @@ export default function WeeklyTargetCard({ data, error: err, saving, onSave: sav
   const [showInputs, setShowInputs] = useState(false);
   const [chk, setChk] = useState({ revenue: '', loaded: '', empty: '' });
   const saveParam = useCallback((k: ParamKey, v: number | null) => save({ [k]: v }), [save]);
+  const [payMode, setPayMode] = useState<PayMode>(() => {
+    try {
+      return typeof window !== 'undefined' && localStorage.getItem(PAY_MODE_KEY) === 'average' ? 'average' : 'current';
+    } catch { return 'current'; }
+  });
+  const choosePayMode = (m: PayMode) => {
+    setPayMode(m);
+    try { localStorage.setItem(PAY_MODE_KEY, m); } catch { /* storage blocked — the toggle still works this visit */ }
+  };
 
   const card = (children: React.ReactNode) => (
     <div style={{ background: 'var(--gc-surface)', borderRadius: 12, border: '1px solid var(--gc-border)', padding: 20 }}>
@@ -139,7 +177,10 @@ export default function WeeklyTargetCard({ data, error: err, saving, onSave: sav
   const locked = data.settingsUnavailable || saving;
   const scaleMax = Math.max(x.targetRevenue, b.revenue, x.breakEvenRevenue) * 1.08 || 1;
   const pos = (v: number) => `${Math.min(100, (v / scaleMax) * 100)}%`;
-  const profitTone = x.profit >= 0 ? '#1e8e3e' : '#d93025';
+  const currentPayPct = b.revenue > 0 ? x.driverPay / b.revenue : null;
+  const driverPay = payMode === 'average' ? b.revenue * p.payPct.all : x.driverPay;
+  const profit = x.profit + x.driverPay - driverPay;
+  const profitTone = profit >= 0 ? '#1e8e3e' : '#d93025';
   const stillNeeded = Math.max(0, x.targetRevenue - b.revenue);
   const perMileCost = p.fuelPrice.value / p.mpg.value + p.maintPerMile;
 
@@ -165,8 +206,9 @@ export default function WeeklyTargetCard({ data, error: err, saving, onSave: sav
           <Target size={15} /> {isWeek ? 'Weekly target' : 'Period target'}
           <InfoDot size={12} content={<>
             Follows the period selected at the top of the dashboard; fixed costs scale with its length.
-            Profit = revenue − driver pay (the Total Payroll figure) − other % of revenue − miles × (diesel ÷ MPG + maintenance/mi) − fixed costs.
-            Break-even and target use the driver pay % of revenue instead, since they price revenue you haven&rsquo;t booked yet.
+            Profit = revenue − driver pay − other % of revenue − miles × (diesel ÷ MPG + maintenance/mi) − fixed costs.
+            Driver pay is either Current (the Total Payroll figure) or Avg (your average pay % of revenue over the last 8 complete weeks × booked revenue), which estimates the week before payroll adjustments are made.
+            Break-even and target always use the average pay %, since they price revenue you haven&rsquo;t booked yet.
             Miles are projected from booked loaded miles × the empty-mile factor. Owner-operator loads are excluded.
             Expect about ±10% on any single week.
           </>} />
@@ -195,9 +237,17 @@ export default function WeeklyTargetCard({ data, error: err, saving, onSave: sav
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         <div>
           <div className="text-[11px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>{isWeek ? 'The week' : 'The period'}</div>
-          <Row label="Projected profit" value={`${money(x.profit)} (${b.revenue > 0 ? pct(x.profit / b.revenue) : '—'})`} strong tone={profitTone} />
+          <Row label="Projected profit" value={`${money(profit)} (${b.revenue > 0 ? pct(profit / b.revenue) : '—'})`} strong tone={profitTone} />
           <Row label="Still needed for target" value={stillNeeded > 0 ? money(stillNeeded) : 'Met'} />
-          <Row label={<>Driver pay <span className="text-[11px]">({x.driverPaySource === 'payroll' ? 'finalized payroll' : x.driverPaySource === 'partial' ? 'partly finalized' : 'payroll pending'})</span></>} value={money(x.driverPay)} />
+          <Row
+            label={<span className="inline-flex items-center gap-1.5 flex-wrap">Driver pay <PayModeToggle mode={payMode} avgPct={p.payPct.all} onChange={choosePayMode} /></span>}
+            value={money(driverPay)}
+          />
+          <div className="text-[11px] mb-0.5" style={{ color: 'var(--gc-text-3)' }}>
+            {payMode === 'average'
+              ? <>Average pay % of revenue, {data.calibration.from} → {data.calibration.to} (adjustments included) · current {money(x.driverPay)}</>
+              : <>{x.driverPaySource === 'payroll' ? 'Finalized payroll' : x.driverPaySource === 'partial' ? 'Partly finalized' : 'Payroll pending'}{currentPayPct != null && <> · {pct(currentPayPct)} of revenue</>}</>}
+          </div>
           <Row label={`Fuel (${Math.round(x.totalMiles).toLocaleString()} mi projected)`} value={money(x.fuel)} />
           <Row label="Maintenance" value={money(x.maintenance)} />
           <Row label="Fixed costs" value={money(x.fixed)} />
