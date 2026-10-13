@@ -1130,6 +1130,14 @@ function PreviewErrorPanel({
 // Pinned to match the version in package.json — sidesteps Next.js webpack
 // .mjs bundling bugs by loading pdfjs from jsdelivr at runtime.
 const PDFJS_VERSION = '5.6.205';
+/**
+ * The LEGACY build — see the note in components/pdf/PdfCanvas.tsx.
+ * pdf.js v5 calls `Uint8Array.prototype.toHex()`, which browsers only
+ * finished shipping during 2025; on an older one the worker fails with
+ * "n.toHex is not a function" and every PDF shows "Could not render".
+ * The legacy bundle carries the polyfills.
+ */
+const PDFJS_BASE = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/legacy/build`;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let pdfJsPromise: Promise<any> | null = null;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1137,7 +1145,7 @@ function loadPdfJsFromCDN(): Promise<any> {
   if (pdfJsPromise) return pdfJsPromise;
   // `Function('return import(...)')` evaluates the import() at runtime so webpack
   // never sees it — guaranteed to skip bundler analysis.
-  const url = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/build/pdf.min.mjs`;
+  const url = `${PDFJS_BASE}/pdf.min.mjs`;
   pdfJsPromise = new Function('u', 'return import(u)')(url);
   return pdfJsPromise!;
 }
@@ -1168,7 +1176,7 @@ function PdfCanvas({ dataUrl, onRetry }: { dataUrl: string; onRetry?: () => void
       // produce "Object.defineProperty called on non-object" with v5).
       const pdfjsLib = await loadPdfJsFromCDN();
       if (!pdfjsLib.GlobalWorkerOptions.workerSrc)
-        pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/build/pdf.worker.min.mjs`;
+        pdfjsLib.GlobalWorkerOptions.workerSrc = `${PDFJS_BASE}/pdf.worker.min.mjs`;
 
       const src = dataUrl.startsWith('http') || dataUrl.startsWith('blob:')
         ? { url: dataUrl }

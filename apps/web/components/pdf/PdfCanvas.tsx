@@ -17,6 +17,25 @@ import { useEffect, useRef, useState } from 'react';
 import { Loader2, RefreshCw } from 'lucide-react';
 
 const PDFJS_VERSION = '5.6.205';
+
+/**
+ * The LEGACY build, not the default one.
+ *
+ * pdf.js v5 calls `Uint8Array.prototype.toHex()` and `toBase64()`,
+ * which browsers only finished shipping during 2025 (MDN: Baseline
+ * 2025, available across current browsers from September 2025). On
+ * anything older the worker dies with "n.toHex is not a function",
+ * surfaced to the user as the useless "Could not render PDF /
+ * UnknownErrorException" — a dispatcher on a Chrome that hadn't
+ * restarted in a while couldn't open a single rate con. The legacy
+ * bundle ships the core-js polyfills for those methods, so it renders
+ * on the browsers people actually have. It costs ~300KB over the
+ * default build, paid once per session on a CDN-cached file.
+ *
+ * Both the API and the worker must come from the same build —
+ * mismatching them is its own class of failure.
+ */
+const PDFJS_BASE = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/legacy/build`;
 const ZOOM_STEPS = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -24,7 +43,7 @@ let pdfJsPromise: Promise<any> | null = null;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function loadPdfJsFromCDN(): Promise<any> {
   if (pdfJsPromise) return pdfJsPromise;
-  const url = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/build/pdf.min.mjs`;
+  const url = `${PDFJS_BASE}/pdf.min.mjs`;
   pdfJsPromise = new Function('u', 'return import(u)')(url);
   return pdfJsPromise!;
 }
@@ -99,7 +118,7 @@ export default function PdfCanvas({ dataUrl, onRetry, toolbarStyle, canvasBg = '
     (async () => {
       const pdfjsLib = await loadPdfJsFromCDN();
       if (!pdfjsLib.GlobalWorkerOptions.workerSrc)
-        pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/build/pdf.worker.min.mjs`;
+        pdfjsLib.GlobalWorkerOptions.workerSrc = `${PDFJS_BASE}/pdf.worker.min.mjs`;
 
       const src = dataUrl.startsWith('http') || dataUrl.startsWith('blob:')
         ? { url: dataUrl }
