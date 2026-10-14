@@ -62,3 +62,8 @@ yarn-error.log*
 .pnpm-debug.log*
 .vercel
 .logo-backup-*
+
+# Rate-con broker audit output (regenerable; contains broker data)
+apps/web/audit-ratecon-*.csv
+apps/web/audit-ratecon-*.jsonl
+apps/web/review-now.csv
