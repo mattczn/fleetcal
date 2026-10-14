@@ -44,6 +44,13 @@ function wordSet(s: string): Set<string> {
   return new Set(s.split(' ').filter(Boolean));
 }
 
+/** Every word of `a` appears as a WHOLE word in `b`. */
+function isSubset(a: Set<string>, b: Set<string>): boolean {
+  if (a.size === 0) return false;
+  for (const w of a) if (!b.has(w)) return false;
+  return true;
+}
+
 function jaccard(a: Set<string>, b: Set<string>): number {
   if (a.size === 0 && b.size === 0) return 1;
   const intersection = [...a].filter(x => b.has(x)).length;
@@ -96,6 +103,14 @@ function scoreAgainst(extracted: string, candidate: string): number {
   // "Trident" record.
   if (entityKey(extracted) === entityKey(candidate)) return 0.98;
 
+  // Same name, differing only in where the spaces fall —
+  // "FreightPlus" on the tender vs "Freight Plus" in the roster. This
+  // is WHOLE-STRING equality with spaces removed, not a substring
+  // test, so it cannot match two different companies the way
+  // `includes()` did.
+  const squash = (x: string) => entityKey(x).replace(/\s+/g, '');
+  if (squash(extracted) === squash(candidate)) return 0.97;
+
   // If normalization wiped out one or both names (all stop words), fall back to raw
   if (!normEx || !normCand) {
     if (rawCand.includes(rawEx) || rawEx.includes(rawCand)) return 0.85;
@@ -106,8 +121,14 @@ function scoreAgainst(extracted: string, candidate: string): number {
   // strictly weaker than matching the name as written.
   if (normEx === normCand) return 0.95;
 
-  // One fully contains the other
-  if (normCand.includes(normEx) || normEx.includes(normCand)) return 0.9;
+  // One name's words are all present in the other. Compared as WHOLE
+  // WORDS, never as substrings: `normEx.includes(normCand)` was true
+  // for "ak" sitting inside "b-ak-ing", so a King Arthur Baking rate
+  // con auto-linked to AK TRANSPORTATION at 0.90 with no banner. Same
+  // shape put Barakat Transport on AK Transportation. Short customer
+  // names are the dangerous ones, and they are exactly the ones a
+  // substring test matches by accident.
+  if (isSubset(wordSet(normEx), wordSet(normCand)) || isSubset(wordSet(normCand), wordSet(normEx))) return 0.9;
 
   // Jaccard on word sets
   return jaccard(wordSet(normEx), wordSet(normCand)) * 0.95;
@@ -122,6 +143,30 @@ function scoreAgainst(extracted: string, candidate: string): number {
  */
 const AMBIGUITY_MARGIN = 0.02;
 
+/**
+ * Every customer scored against `extracted`, best first. Exported so
+ * tooling can see where a GIVEN customer placed rather than only who
+ * won — the rate-con audit asks "does this document support the link
+ * this load already has?", which the winner alone cannot answer.
+ *
+ * Equal scores are broken by name so the same roster always resolves
+ * the same way. The previous loop kept whichever customer the fetch
+ * happened to return first, which is the non-determinism the
+ * ambiguity guard below was added to contain.
+ */
+export function rankCustomers(
+  extracted: string,
+  customers: Customer[],
+): Array<{ customer: Customer; score: number }> {
+  if (!extracted?.trim() || customers.length === 0) return [];
+  return customers
+    .map(c => ({
+      customer: c,
+      score: Math.max(...[c.name, ...(c.aliases ?? [])].map(a => scoreAgainst(extracted, a))),
+    }))
+    .sort((x, y) => y.score - x.score || x.customer.name.localeCompare(y.customer.name));
+}
+
 export function matchCustomer(
   extracted: string,
   customers: Customer[],
@@ -129,19 +174,9 @@ export function matchCustomer(
   if (!extracted?.trim()) return { status: 'none' };
   if (customers.length === 0) return { status: 'new', extracted: extracted.trim() };
 
-  let best: { customer: Customer; score: number } | null = null;
-  let runnerUp: { customer: Customer; score: number } | null = null;
-
-  for (const c of customers) {
-    const candidates = [c.name, ...c.aliases];
-    const score = Math.max(...candidates.map(a => scoreAgainst(extracted, a)));
-    if (!best || score > best.score) {
-      runnerUp = best;
-      best = { customer: c, score };
-    } else if (!runnerUp || score > runnerUp.score) {
-      runnerUp = { customer: c, score };
-    }
-  }
+  const ranked = rankCustomers(extracted, customers);
+  const best     = ranked[0] ?? null;
+  const runnerUp = ranked[1] ?? null;
 
   if (!best || best.score < 0.35) return { status: 'new', extracted: extracted.trim() };
 
