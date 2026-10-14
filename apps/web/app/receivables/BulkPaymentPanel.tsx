@@ -13,9 +13,15 @@
  * deliberately no "total received" field to divide across the selection:
  * splitting a lump sum by invoice size is guesswork, and it is precisely
  * what made the predecessor system misstate every invoice in a payment
- * whenever a broker deducted against one load. If one invoice in the
- * batch was short-paid, it gets recorded on its own where the variance
- * can be classified against the load it was taken from.
+ * whenever a broker deducted against one load.
+ *
+ * That reasoning collapses at a selection of ONE, where there is nothing
+ * to split — so a single selected invoice gets an amount field and a
+ * variance reason here. It used to send you to the row drawer for that,
+ * except the drawer opens on the row and the checkbox selects, which is
+ * indistinguishable until you have already clicked. Someone marking one
+ * short-paid invoice hit a panel with no amount field and no way to know
+ * another one existed.
  *
  * Used by both the ledger (expanded customer) and the customer view.
  */
@@ -25,7 +31,18 @@ import { X, Paperclip, Check, AlertTriangle, Loader2 } from 'lucide-react';
 import { railway } from '@/lib/railway';
 import type {
   ReceivableInvoice, PaymentProof, PaymentMethod, PaymentProofKind,
+  PaymentVarianceReason,
 } from '@fleetcal/types';
+
+/** Mirrors the row drawer's list. Overpayment is omitted — it can't arise
+ *  from entering less than the balance, which is the only case here. */
+const VARIANCE_REASONS: { value: PaymentVarianceReason; label: string }[] = [
+  { value: 'quick_pay',        label: 'Quick Pay (broker discount)' },
+  { value: 'deduction',        label: 'Deduction / Chargeback' },
+  { value: 'rate_discrepancy', label: 'Rate discrepancy (we billed a different rate)' },
+  { value: 'short_pay',        label: 'Short Pay' },
+  { value: 'other',            label: 'Other' },
+];
 
 const money2 = (n: number) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
@@ -72,7 +89,21 @@ export default function BulkPaymentPanel({
   const [newRef,    setNewRef]    = useState('');
   const [newPayer,  setNewPayer]  = useState('');
   const [newAmount, setNewAmount] = useState('');
+  /** Single-invoice only. Blank means the full balance, same rule the row
+   *  drawer uses, so the two surfaces can't disagree about what empty means. */
+  const [oneAmount, setOneAmount] = useState('');
+  const [oneReason, setOneReason] = useState<PaymentVarianceReason | ''>('');
   const [file,      setFile]      = useState<File | null>(null);
+
+  const single = invoices.length === 1 ? invoices[0] : null;
+  /** What will actually be written for a single invoice. */
+  const singleAmount = single
+    ? (oneAmount.trim() === '' ? single.balance : Number(oneAmount))
+    : 0;
+  const singleShort = single
+    ? Math.round((single.balance - singleAmount) * 100) / 100
+    : 0;
+  const singleValid = !single || (Number.isFinite(singleAmount) && singleAmount > 0);
 
   const total = useMemo(
     () => Math.round(invoices.reduce((s, i) => s + i.balance, 0) * 100) / 100,
@@ -127,8 +158,9 @@ export default function BulkPaymentPanel({
       for (const inv of invoices) {
         try {
           await railway.createInvoicePayment(inv.id, {
-            amount: inv.balance,
+            amount: single ? Math.round(singleAmount * 100) / 100 : inv.balance,
             paidOn,
+            ...(single && oneReason && singleShort > 0.005 ? { varianceReason: oneReason } : {}),
             ...(method ? { method } : {}),
             ...(attachProofId ? { proofId: attachProofId } : {}),
             ...(note.trim() ? { note: note.trim() } : {}),
@@ -194,6 +226,47 @@ export default function BulkPaymentPanel({
             </div>
           </div>
 
+          {/* One invoice: let the amount be set here. Nothing to split, so
+              the reason this panel refuses a total doesn't apply. */}
+          {single && (
+            <div className="rounded-lg border p-3 mb-4" style={{ borderColor: 'var(--gc-border)' }}>
+              <div className="flex items-center justify-between mb-2" style={{ fontSize: 12 }}>
+                <span style={{ fontWeight: 700, color: '#1967d2' }}>{single.invoiceNumber}</span>
+                <span className="tabular-nums" style={{ color: 'var(--gc-text-3)' }}>
+                  owes {money2(single.balance)}
+                </span>
+              </div>
+              <Field label={`Amount received (blank = ${money2(single.balance)})`}>
+                <input type="number" step="0.01" value={oneAmount}
+                       onChange={e => setOneAmount(e.target.value)}
+                       placeholder={single.balance.toFixed(2)} style={inputStyle} />
+              </Field>
+
+              {singleShort > 0.005 && (
+                <div className="mt-2">
+                  <div style={{ fontSize: 11.5, fontWeight: 700, color: '#b45309', marginBottom: 4 }}>
+                    Short by {money2(singleShort)} — what was it?
+                  </div>
+                  <select value={oneReason} style={inputStyle}
+                          onChange={e => setOneReason(e.target.value as PaymentVarianceReason | '')}>
+                    <option value="">Leave the balance open</option>
+                    {VARIANCE_REASONS.map(r => (
+                      <option key={r.value} value={r.value}>{r.label}</option>
+                    ))}
+                  </select>
+                  <div style={{ fontSize: 10.5, color: 'var(--gc-text-3)', marginTop: 4, lineHeight: 1.4 }}>
+                    {oneReason
+                      ? `Closes the invoice at ${money2(singleAmount)} — what arrived. The `
+                        + `${money2(singleShort)} stays visible as the gap, and if they pay it `
+                        + `later it's just another payment.`
+                      : `The invoice stays open owing ${money2(singleShort)}.`}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {!single && (
           <div className="max-h-32 overflow-y-auto mb-4 rounded-lg border" style={{ borderColor: 'var(--gc-border)' }}>
             {invoices.map(inv => (
               <div key={inv.id} className="flex items-center justify-between px-2.5 py-1.5"
@@ -203,6 +276,7 @@ export default function BulkPaymentPanel({
               </div>
             ))}
           </div>
+          )}
 
           {err && (
             <div className="rounded-lg border p-3 mb-4 text-xs"
@@ -325,14 +399,15 @@ export default function BulkPaymentPanel({
             Cancel
           </button>
           <button onClick={() => void handleApply()}
-            disabled={busy || !invoices.length || (proofMode === 'existing' && !proofId)}
+            disabled={busy || !invoices.length || !singleValid
+                      || (proofMode === 'existing' && !proofId)}
             className="text-xs font-semibold px-3 py-1.5 rounded inline-flex items-center gap-1.5"
             style={{
               background: busy ? 'var(--gc-border)' : '#1a73e8', color: '#fff',
               cursor: busy ? 'default' : 'pointer',
             }}>
             {busy && <Loader2 size={12} className="animate-spin" />}
-            Mark {invoices.length} paid · {money2(total)}
+            Mark {invoices.length} paid · {money2(single ? singleAmount : total)}
           </button>
         </div>
       </aside>
