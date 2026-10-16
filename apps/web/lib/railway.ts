@@ -94,6 +94,7 @@ import type {
   MarkRampNotApplicableResponse, RunRampSyncResponse,
   ExpensesSummaryResponse, ExpensesActivityResponse,
   WeeklyTargetResponse, WeeklyTargetSettings,
+  LinkReviewListResponse, LinkReviewEntry, LinkReviewVerdictRequest,
   ListRecurringExpensesResponse, CreateRecurringExpenseRequest,
   UpdateRecurringExpenseRequest, RecurringExpenseResponse,
   ListExpenseEntriesRequest, ListExpenseEntriesResponse,
@@ -1392,10 +1393,10 @@ class RailwayClient {
   clearMovementLink(movementId: string) {
     return this.req<{ link: TimelineLink }>('DELETE', `/v1/timeline/links/${movementId}`);
   }
-  /** Runs Claude over every movement on the asset in [from, to] and
-   *  writes link facts with source='ai_v1'. Skips movements whose
-   *  current link source='manual' so dispatcher edits survive
-   *  re-runs. Returns counts so the UI can show what landed. */
+  /** Re-runs the movement linker for one truck over [from, to] (the
+   *  same rules as the 6-hourly job, source='rule_v1'). Links with
+   *  source='manual' are never touched. Returns counts so the UI can show
+   *  what landed. */
   autoLinkAssetTimeline(assetId: number, from: string, to: string) {
     const qs = new URLSearchParams({ from, to });
     return this.req<{
@@ -2023,6 +2024,27 @@ class RailwayClient {
   getWeeklyTarget(range: { from: string; to: string }) {
     const qs = new URLSearchParams({ from: range.from, to: range.to });
     return this.req<WeeklyTargetResponse>('GET', `/v1/weekly-target?${qs}`);
+  }
+
+  // ── GPS link review (/v1/link-review) ──────────────────────────────
+  /** Legs with their GPS check (leg_actuals) and latest verdict / AI note. */
+  getLinkReview(params: { from: string; to: string; assetId?: number; confidence?: string; issue?: string; unreviewed?: boolean }) {
+    const qs = new URLSearchParams({ from: params.from, to: params.to });
+    if (params.assetId != null) qs.set('assetId', String(params.assetId));
+    if (params.confidence) qs.set('confidence', params.confidence);
+    if (params.issue) qs.set('issue', params.issue);
+    if (params.unreviewed) qs.set('unreviewed', '1');
+    return this.req<LinkReviewListResponse>('GET', `/v1/link-review?${qs}`);
+  }
+
+  /** A person's verdict on a leg's GPS linking — the training data. */
+  reviewLink(eventId: string, body: LinkReviewVerdictRequest) {
+    return this.req<{ review: LinkReviewEntry }>('POST', `/v1/link-review/${eventId}/review`, body);
+  }
+
+  /** Ask the AI what happened on a leg (advisory; changes nothing). */
+  explainLink(eventId: string) {
+    return this.req<{ ai: LinkReviewEntry }>('POST', `/v1/link-review/${eventId}/explain`);
   }
 
   /** null clears an override back to the computed value. */

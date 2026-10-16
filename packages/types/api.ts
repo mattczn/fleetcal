@@ -3239,3 +3239,98 @@ export interface UpdateTimesheetShiftRequest {
   endedAt?:   string | null;
   notes?:     string | null;
 }
+
+// ── Movement-link review (/v1/link-review) ──────────────────────────────
+// What the GPS shows for each calendar leg (leg_actuals, written by the
+// movement linker — docs/movement-linking.md) plus the review history a
+// person builds up by marking legs right or wrong.
+
+export type LinkConfidence = 'high' | 'medium' | 'low';
+export type LinkReviewReason =
+  | 'wrong_truck' | 'stop_pin_wrong' | 'wrong_stop_matched' | 'calendar_time_wrong'
+  | 'missing_stops' | 'miles_wrong' | 'other';
+export type LinkAiCause =
+  | 'truck_swap' | 'stop_pin_wrong' | 'calendar_time_off' | 'missing_stops' | 'consolidated_loads'
+  | 'gps_off' | 'detour_or_errand' | 'linking_error' | 'looks_correct' | 'unclear';
+
+export interface LinkReviewStop {
+  stopId: string;
+  kind: 'pickup' | 'delivery' | 'handoff' | 'stop';
+  label: string;
+  /** GPS arrival / departure (ISO) when the stop was found. */
+  arrive: string | null;
+  depart: string | null;
+  distMi: number | null;
+  offH: number | null;
+  issue: string | null;
+  nearest: { distMi: number; offH: number; at: string | null } | null;
+  otherTrucks: Array<{ assetId: number; name: string; arrive: string | null }>;
+}
+
+export interface LinkAiSuggestion {
+  summary: string;
+  cause: LinkAiCause;
+  fix: string;
+  suggestedTruck: string;
+  confidence: LinkConfidence;
+  model: string;
+}
+
+export interface LinkReviewEntry {
+  id: string;
+  kind: 'human' | 'ai';
+  verdict: 'correct' | 'wrong' | null;
+  reason: string | null;
+  note: string | null;
+  suggestion: LinkAiSuggestion | null;
+  createdByName: string | null;
+  createdAt: string;
+}
+
+export interface LinkReviewItem {
+  eventId: string;
+  loadId: string | null;
+  loadNum: string | null;
+  assetId: number | null;
+  truck: string | null;
+  driverName: string | null;
+  /** Calendar start (naive wall-clock, like events.start). */
+  start: string;
+  revenue: boolean;
+  confidence: LinkConfidence;
+  issues: string[];
+  routeMiles: number | null;
+  loadedMiles: number | null;
+  loadedHours: number | null;
+  deadheadMiles: number | null;
+  deadheadHours: number | null;
+  returnMiles: number | null;
+  returnHours: number | null;
+  dwellHours: number | null;
+  restHours: number | null;
+  truckStart: string | null;
+  truckEnd: string | null;
+  stops: LinkReviewStop[];
+  computedAt: string;
+  /** Latest person's verdict, if any. */
+  review: LinkReviewEntry | null;
+  /** Latest AI explanation, if any. */
+  ai: LinkReviewEntry | null;
+}
+
+export interface LinkReviewListResponse {
+  items: LinkReviewItem[];
+  counts: {
+    byConfidence: Record<LinkConfidence, number>;
+    byIssue: Record<string, number>;
+    reviewed: number;
+  };
+  /** False until the link_reviews migration has run (verdicts can't be saved). */
+  reviewsAvailable: boolean;
+}
+
+export interface LinkReviewVerdictRequest {
+  verdict: 'correct' | 'wrong';
+  reason?: LinkReviewReason;
+  note?: string;
+}

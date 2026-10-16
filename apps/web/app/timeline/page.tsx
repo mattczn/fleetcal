@@ -20,6 +20,9 @@ function TimelinePageInner() {
   const searchParams = useSearchParams();
   const param = searchParams.get('assetId');
   const assetId = param ? Number(param) : null;
+  // From the GPS review list: open that day with that load selected.
+  const date = searchParams.get('date');
+  const focusEventId = searchParams.get('event');
 
   return (
     // Gated on `performance` because the timeline is the deep-dive
@@ -29,7 +32,11 @@ function TimelinePageInner() {
     // URL or via the AssetDetailModal link.
     <RequireCap cap="loads.view" module="performance">
       <DataLoader />
-      <AssetTimelineView assetId={Number.isFinite(assetId) ? assetId : null} />
+      <AssetTimelineView
+        assetId={Number.isFinite(assetId) ? assetId : null}
+        initialDate={date}
+        focusEventId={focusEventId}
+      />
       <EventModal />
     </RequireCap>
   );

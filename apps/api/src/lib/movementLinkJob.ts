@@ -93,7 +93,17 @@ export interface LinkRunResult {
  */
 export async function runMovementLinking(
   orgId: string,
-  opts: { from: string; to: string; now?: number; settleHours?: number; dryRun?: boolean },
+  opts: {
+    from: string;
+    to: string;
+    now?: number;
+    settleHours?: number;
+    dryRun?: boolean;
+    /** Only these trucks (the timeline's "Re-link" buttons). */
+    assetIds?: number[];
+    /** Exact UTC window to write, inside [from, to] (ms). */
+    utcWindow?: { from: number; to: number };
+  },
 ): Promise<LinkRunResult> {
   const out: LinkRunResult = {
     orgId, from: opts.from, to: opts.to, trucks: 0, drives: 0,
@@ -107,17 +117,24 @@ export async function runMovementLinking(
 
   const now = opts.now ?? Date.now();
   const inputs = await loadOrgLinkInputs(orgId, opts.from, opts.to);
-  const winFrom = wallClockToUtc(`${opts.from}T00:00`, inputs.timeZone) ?? 0;
-  const winTo = Math.min(wallClockToUtc(`${opts.to}T23:59`, inputs.timeZone) ?? now, now - (opts.settleHours ?? 6) * HOUR);
+  const winFrom = opts.utcWindow?.from ?? wallClockToUtc(`${opts.from}T00:00`, inputs.timeZone) ?? 0;
+  const winTo = Math.min(
+    opts.utcWindow?.to ?? wallClockToUtc(`${opts.to}T23:59`, inputs.timeZone) ?? now,
+    now - (opts.settleHours ?? 6) * HOUR,
+  );
 
+  // Every truck is aligned (the other-truck hints need the whole fleet's
+  // GPS), but only the requested ones are written.
+  const writeAsset = (id: number) => !opts.assetIds || opts.assetIds.includes(id);
   const runs = inputs.trucks.map((t) => ({ t, res: linkTruck({ drives: t.drives, events: t.events, homes: inputs.homes, rules: LINK_RULES }) }));
   const fleet = runs.map(({ t, res }) => ({ assetId: t.assetId, name: t.name, visits: res.visits }));
-  out.trucks = runs.length;
+  out.trucks = runs.filter(({ t }) => writeAsset(t.assetId)).length;
 
   // ── Leg rows ──
   const legRows: Record<string, unknown>[] = [];
   const settledDrives: Array<{ d: DriveLink; confOf: (id: string | null) => Confidence }> = [];
   for (const { t, res } of runs) {
+    if (!writeAsset(t.assetId)) continue;
     const legById = new Map<string, LegActual>(res.legs.map((l) => [l.eventId, l]));
     const confOf = (id: string | null): Confidence => (id && legById.get(id)?.confidence) || "medium";
     const noGps = !t.hasGps || t.drives.length === 0;
@@ -207,11 +224,47 @@ export async function runMovementLinking(
       .is("superseded_at", null);
     if (error) throw new Error(`movement_links supersede: ${error.message}`);
   }
+  await dedupeCurrent(orgId, ids, stamp);
   for (let i = 0; i < legRows.length; i += CHUNK) {
     const { error } = await supabase.from("leg_actuals").upsert(legRows.slice(i, i + CHUNK), { onConflict: "event_id" });
     if (error) throw new Error(`leg_actuals upsert: ${error.message}`);
   }
   return out;
+}
+
+/**
+ * A movement must have at most one current link. Two writers can race (a
+ * "Re-link" click during the 6-hourly run), so after writing, keep only the
+ * newest current link per movement — or the manual one, if a person set it
+ * mid-run.
+ */
+async function dedupeCurrent(orgId: string, movementIds: string[], stamp: string): Promise<void> {
+  const extra: string[] = [];
+  for (let i = 0; i < movementIds.length; i += 150) {
+    const rows = await fetchAllRows<{ id: string; movement_id: string; asserted_at: string; source: string }>("linker dedupe", () => supabase
+      .from("movement_links")
+      .select("id, movement_id, asserted_at, source")
+      .eq("org_id", orgId)
+      .in("movement_id", movementIds.slice(i, i + 150))
+      .is("superseded_at", null));
+    const byMovement = new Map<string, typeof rows>();
+    for (const r of rows) byMovement.set(r.movement_id, [...(byMovement.get(r.movement_id) ?? []), r]);
+    for (const list of byMovement.values()) {
+      if (list.length < 2) continue;
+      // A person's link always wins; otherwise the newest.
+      list.sort((a, b) =>
+        Number(b.source === "manual") - Number(a.source === "manual")
+        || b.asserted_at.localeCompare(a.asserted_at) || b.id.localeCompare(a.id));
+      extra.push(...list.slice(1).map((r) => r.id));
+    }
+  }
+  for (let i = 0; i < extra.length; i += CHUNK) {
+    const { error } = await supabase.from("movement_links")
+      .update({ superseded_at: stamp })
+      .in("id", extra.slice(i, i + CHUNK))
+      .is("superseded_at", null);
+    if (error) throw new Error(`movement_links dedupe: ${error.message}`);
+  }
 }
 
 function round(n: number | null | undefined): number | null {

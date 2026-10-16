@@ -495,7 +495,7 @@ export default function FleetWeekView() {
             <button type="button" onClick={runFleetRelink} disabled={relinking || visibleAssets.length === 0}
               className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               style={{ background: 'var(--gc-blue)', color: 'white', border: 'none' }}
-              title="Re-run AI auto-link for every truck × every day of the selected week">
+              title="Re-run the GPS linker for every truck × every day of the selected week (links you set by hand are kept)">
               {relinking
                 ? <><Loader2 size={13} className="animate-spin" />Re-linking {progress ? `(${progress.done}/${progress.total})` : '…'}</>
                 : <><RefreshCw size={13} />Re-link week</>}

@@ -184,6 +184,32 @@ cancelled in the calendar are not removed — join `events` and filter
 Backfill or re-run any range:
 `railway run --service @fleetcal/api npx tsx apps/api/scripts/movement-link-backfill.ts <orgId> <from> <to> [--dry-run]`
 
+## Reviewing
+
+- **Timeline** (`/timeline?assetId=…&date=…&event=…`): clicking a load shows
+  its **GPS check** — each stop's GPS arrival/departure vs the calendar,
+  issues, other trucks that were there, miles charged — with **Looks right
+  / Something's wrong** (reason + note) and **Ask AI**. Flagged loads get a
+  dot on the day view. Fixing a single link = click the trip and change it
+  (a `manual` link; the linker never overwrites it). "Re-link day / week"
+  (and the fleet page's bulk re-link) run this engine via
+  `POST /v1/timeline/assets/:id/auto-link` — the old Claude-by-city-name
+  linker is gone.
+- **GPS Review list** (`/timeline/review`): flagged loads across the fleet,
+  filterable by confidence / issue / truck / not-yet-reviewed; each row
+  opens the timeline at that load.
+- **Verdicts** are append-only rows in `link_reviews` (migration
+  `20261016b_link_reviews.sql`) with a snapshot of the leg as reviewed —
+  the training set for tuning the rules. **Ask AI** (`lib/linkExplain.ts`,
+  Claude Opus 5.5, structured output, server-side refusal fallback) reads
+  the stops, the truck's GPS ±12 h, the loads around it and the reviewer's
+  recent "wrong" notes, and returns summary / likely cause / fix; it changes
+  nothing. Calls take ~20 s and are stored as `kind = 'ai'` rows.
+
+Known blind spot: Motive merges a drive with a very short stop (a quick
+trailer swap) into one driving period, so a stop of a few minutes can be
+invisible — the AI flagged one such Las Vegas relay swap in testing.
+
 ## Phases
 
 1. Rules engine + read-only accuracy report, August → now. **(this)**

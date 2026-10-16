@@ -42,6 +42,8 @@ import {
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { parseNaiveIsoInTz } from '@/lib/time-utils';
 import { legLabel, legShortLabel } from '@fleetcal/types';
+import type { LinkReviewItem } from '@fleetcal/types';
+import LegCheckPanel, { CONFIDENCE_STYLE, ISSUE_LABEL } from './LegCheckPanel';
 import type { SavedLocation } from '@/lib/types';
 import TimelineMap from './TimelineMap';
 
@@ -228,7 +230,13 @@ type Selection =
 
 // ── Main view ─────────────────────────────────────────────────────────
 
-export default function AssetTimelineView({ assetId }: { assetId: number | null }) {
+export default function AssetTimelineView({ assetId, initialDate, focusEventId }: {
+  assetId: number | null;
+  /** YYYY-MM-DD to open on (e.g. from the GPS review list); default today. */
+  initialDate?: string | null;
+  /** Calendar entry to select once the day loads. */
+  focusEventId?: string | null;
+}) {
   const router = useRouter();
   const { calendarTimezone, assets, savedLocations, fetchSavedLocations, cardFontScale } = useCalendarStore();
   const tz = calendarTimezone || 'America/Denver';
@@ -273,7 +281,8 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
   }
 
   const todayKey = utcDateKeyInTz(new Date().toISOString(), tz);
-  const [dayKey, setDayKey] = useState<string>(todayKey);
+  const [dayKey, setDayKey] = useState<string>(() =>
+    initialDate && /^\d{4}-\d{2}-\d{2}$/.test(initialDate) ? initialDate : todayKey);
 
   // When the Week-total card on the strip is clicked, this flips true
   // and the per-day Revenue Analysis swaps to the week-aggregate panel.
@@ -326,6 +335,7 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
   const [error, setError]     = useState<string | null>(null);
 
   const [selection, setSelection] = useState<Selection>(null);
+  const pendingFocus = useRef<string | null>(focusEventId ?? null);
   // Bump to force a refetch after editing links / creating manual
   // movements. Cheaper than threading invalidate calls through every
   // child editor.
@@ -483,10 +493,35 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
     // Don't clear selection on refresh — preserves the open side panel
     // after a link edit. Reset only on truck/day change.
     railway.getAssetTimeline(effectiveAssetId, fetchWindow.from, fetchWindow.to)
-      .then((res) => { if (!cancelled) { setData(res); setLoading(false); } })
+      .then((res) => {
+        if (cancelled) return;
+        setData(res);
+        setLoading(false);
+        // Coming from the GPS review list: select that load once its day
+        // has loaded (once — later refreshes keep whatever is selected).
+        const ev = pendingFocus.current ? res.events.find((e) => e.id === pendingFocus.current) : undefined;
+        if (ev) { setSelection({ kind: 'event', event: ev }); pendingFocus.current = null; }
+      })
       .catch((e) => { if (!cancelled) { setError(e instanceof Error ? e.message : 'Failed to load'); setLoading(false); } });
     return () => { cancelled = true; };
   }, [effectiveAssetId, fetchWindow.from, fetchWindow.to, refreshTick]);
+
+  // GPS checks (leg_actuals) for the loads around this day — the detail
+  // panel's "GPS check" section and the review dots on event blocks.
+  const [legChecks, setLegChecks] = useState<Map<string, LinkReviewItem>>(new Map());
+  const [reviewsAvailable, setReviewsAvailable] = useState(true);
+  useEffect(() => {
+    if (effectiveAssetId == null) return;
+    let cancelled = false;
+    railway.getLinkReview({ from: shiftDateKey(dayKey, -2), to: shiftDateKey(dayKey, 1), assetId: effectiveAssetId })
+      .then((res) => {
+        if (cancelled) return;
+        setLegChecks(new Map(res.items.map((it) => [it.eventId, it])));
+        setReviewsAvailable(res.reviewsAvailable);
+      })
+      .catch(() => { if (!cancelled) setLegChecks(new Map()); });
+    return () => { cancelled = true; };
+  }, [effectiveAssetId, dayKey, refreshTick]);
 
   // Fetch the week-summary whenever the asset or week changes. The
   // single useState + cancelled-guard pattern matches the timeline
@@ -704,6 +739,12 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
             title="Compare every truck's weekly revenue side by side">
             Fleet Week →
           </Link>
+          <Link href="/timeline/review"
+            className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold uppercase tracking-wide transition-colors"
+            style={{ color: '#b06000', background: '#fef7e0', border: '1px solid #fef7e0' }}
+            title="Loads whose GPS doesn't line up with the calendar">
+            GPS Review →
+          </Link>
 
           {/* Truck picker — pre-filled from URL, changeable inline. */}
           <div className="flex items-center gap-2 ml-2 px-2 py-1 rounded"
@@ -754,7 +795,7 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
                   background: (autoLinking || weekLinking) ? 'var(--gc-surface-2)' : 'var(--gc-purple, #a142f4)',
                   color: (autoLinking || weekLinking) ? 'var(--gc-text-3)' : '#fff',
                 }}
-                title="Claude classifies each movement on this day's window (skips manually-linked rows)"
+                title="Re-run the GPS linker for this truck-day (links you set by hand are kept)"
               >
                 {autoLinking ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
                 {autoLinking ? 'Linking…' : 'Re-link day'}
@@ -768,7 +809,7 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
                   color: (autoLinking || weekLinking) ? 'var(--gc-text-3)' : '#fff',
                   opacity: weekLinking ? 1 : 0.9,
                 }}
-                title="Fires AI classification for every day in this Sat → Fri week in parallel"
+                title="Re-run the GPS linker for every day of this Sat → Fri week (links you set by hand are kept)"
               >
                 {weekLinking ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
                 {weekLinking
@@ -964,6 +1005,7 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
                           fs={fs}
                           onClick={() => setSelection({ kind: 'event', event: e })}
                           isSelected={selection?.kind === 'event' && selection.event.id === e.id}
+                          check={legChecks.get(e.id)}
                         />
                       ))
                     )}
@@ -1053,6 +1095,8 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
                 onClose={() => setSelection(null)}
                 onMutated={() => setRefreshTick((t) => t + 1)}
                 onSelect={(s) => setSelection(s)}
+                legChecks={legChecks}
+                reviewsAvailable={reviewsAvailable}
               />
             </div>
           </div>
@@ -1088,7 +1132,7 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
 // underneath in white at 85% opacity. Mirrors the calendar's chip so
 // the timeline reads as the same visual language.
 function EventBlock({
-  event, dayKey, color, fs, onClick, isSelected,
+  event, dayKey, color, fs, onClick, isSelected, check,
 }: {
   event: TimelineEvent;
   dayKey: string;
@@ -1096,6 +1140,8 @@ function EventBlock({
   fs: (px: number) => number;
   onClick: () => void;
   isSelected: boolean;
+  /** GPS check — a dot flags loads that don't line up with the GPS. */
+  check?: LinkReviewItem;
 }) {
   const pos = positionForEvent(event.start, event.end, dayKey);
   const isNonRev = event.eventKind === 'non_revenue';
@@ -1143,6 +1189,13 @@ function EventBlock({
           >
             {event.title ?? (isNonRev ? event.nonRevenueType ?? 'Non-revenue' : 'Untitled')}
           </div>
+          {check && check.confidence !== 'high' && !check.review ? (
+            <span
+              className="w-2.5 h-2.5 rounded-full flex-shrink-0 mt-0.5"
+              style={{ background: CONFIDENCE_STYLE[check.confidence].fg, border: '1.5px solid #fff' }}
+              title={`GPS check: ${CONFIDENCE_STYLE[check.confidence].label}${check.issues.length ? ` — ${check.issues.map((i) => ISSUE_LABEL[i] ?? i).join(', ')}` : ''}`}
+            />
+          ) : null}
           {(() => {
             const pos = timelineLegPos(event);
             if (!pos) return null;
@@ -1453,8 +1506,10 @@ function DwellBlock({
 
 function DetailPanel({
   selection, tz, assetColor, events, eventLookup, clusters, linkByMovementId,
-  fs, onClose, onMutated, onSelect,
+  fs, onClose, onMutated, onSelect, legChecks, reviewsAvailable,
 }: {
+  legChecks: Map<string, LinkReviewItem>;
+  reviewsAvailable: boolean;
   selection: Selection;
   tz: string;
   assetColor: string;
@@ -1500,15 +1555,25 @@ function DetailPanel({
             <div>Click a scheduled event or a trip in the timeline to see details and edit its link here.</div>
           </div>
         ) : selection.kind === 'event' ? (
-          <EventDetail
-            event={selection.event}
-            color={assetColor}
-            clusters={clusters}
-            linkByMovementId={linkByMovementId}
-            tz={tz}
-            fs={fs}
-            onSelect={onSelect}
-          />
+          <>
+            <EventDetail
+              event={selection.event}
+              color={assetColor}
+              clusters={clusters}
+              linkByMovementId={linkByMovementId}
+              tz={tz}
+              fs={fs}
+              onSelect={onSelect}
+            />
+            <LegCheckPanel
+              key={selection.event.id}
+              item={legChecks.get(selection.event.id)}
+              reviewsAvailable={reviewsAvailable}
+              tz={tz}
+              fs={fs}
+              onChanged={onMutated}
+            />
+          </>
         ) : (
           <ClusterDetail
             cluster={selection.cluster}
