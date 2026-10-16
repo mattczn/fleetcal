@@ -44,6 +44,7 @@ import { requireCapability, effectiveCanForOrg } from "../middleware/require.js"
 import { appendLoadAudit } from "../lib/auditLog.js";
 import { getUserDisplayName } from "../lib/clerk.js";
 import { ensureEventRouteCached } from "../lib/routeGeometry.js";
+import { replaceEventStops } from "../lib/stops.js";
 
 const events = new Hono<{ Variables: AuthVariables }>();
 
@@ -694,94 +695,18 @@ events.put("/:id/stops", requireCapability("loads.edit"), async (c) => {
     .maybeSingle();
   if (!ev) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
 
-  // ── Preserve driver check-ins across replace ──────────────────────
-  // The destructive delete-then-insert pattern below was silently
-  // wiping `arrived_at` / `arrived_lat` / `arrived_lng` on every load
-  // edit, because the insert object never set them. Snapshot the
-  // existing runtime fields keyed by stop id BEFORE delete, then
-  // when re-inserting we:
-  //   • carry the client-supplied id (which we now allow) so the new
-  //     row keeps the same uuid the driver app + audit log already
-  //     reference, and
-  //   • restore arrived_* from the snapshot rather than trusting
-  //     whatever the dispatcher's form happened to send (the form
-  //     keeps these in state but a future refactor that drops them
-  //     shouldn't lose check-ins again).
-  // New stops the dispatcher just added have ids the snapshot won't
-  // know — they get a fresh uuid and no check-in state, which is
-  // exactly right.
-  type StopSnapshot = { arrived_at: string | null; arrived_lat: number | null; arrived_lng: number | null };
-  const { data: existingStops, error: snapshotErr } = await supabase
-    .from("stops")
-    .select("id, arrived_at, arrived_lat, arrived_lng")
-    .eq("event_id", eventId)
-    .eq("org_id", orgId);
-  if (snapshotErr) {
-    console.error("[PUT /v1/events/:id/stops] snapshot read failed:", snapshotErr);
-    return c.json({ error: "stops_snapshot_failed", detail: snapshotErr.message } satisfies ApiErrorResponse, 500);
-  }
-  const checkInById = new Map<string, StopSnapshot>();
-  for (const row of (existingStops ?? []) as Array<{ id: string } & StopSnapshot>) {
-    if (row.arrived_at || row.arrived_lat != null || row.arrived_lng != null) {
-      checkInById.set(row.id, {
-        arrived_at:  row.arrived_at,
-        arrived_lat: row.arrived_lat,
-        arrived_lng: row.arrived_lng,
-      });
-    }
-  }
-
-  // Delete existing stops, then insert the new ordered set
-  const { error: delErr } = await supabase
-    .from("stops")
-    .delete()
-    .eq("event_id", eventId)
-    .eq("org_id", orgId);
-  if (delErr) {
-    return c.json({ error: "stops_delete_failed", detail: delErr.message } satisfies ApiErrorResponse, 500);
-  }
-
-  if (body.stops.length) {
-    const inserts = body.stops.map((s, idx) => {
-      // Only honor the client id when it matches one we just deleted
-      // — that way a stop the driver checked into keeps its uuid (and
-      // therefore its check-in). Untrusted ids (cross-org, never-seen)
-      // would just collide with the unique-pkey constraint anyway, but
-      // gating on the snapshot avoids the error path entirely.
-      const previous = checkInById.get(s.id);
-      const isExisting = previous !== undefined;
-      return {
-        ...(isExisting ? { id: s.id } : {}),
-        event_id:       eventId,
-        org_id:         orgId,
-        sequence:       idx + 1,
-        type:           s.type,
-        facility_name:  s.facilityName  ?? null,
-        address:        s.address       ?? null,
-        city:           s.city          ?? null,
-        state:          s.state         ?? null,
-        timezone:       s.timezone      ?? null,
-        appt_start:     s.apptStart     ?? null,
-        appt_end:       s.apptEnd       ?? null,
-        schedule_type:  s.scheduleType  ?? null,
-        is_handoff:  s.isHandoff ?? false,
-        handoff_drop_at:  s.handoffDropAt ?? null,
-        handoff_pickup_at:  s.handoffPickupAt ?? null,
-        lat:            s.lat           ?? null,
-        lng:            s.lng           ?? null,
-        instructions:   s.instructions  ?? null,
-        geocode_status: s.geocodeStatus ?? "pending",
-        // Runtime check-in fields — server-side snapshot, NOT body.
-        // Dispatchers can't edit a check-in from this surface.
-        arrived_at:     previous?.arrived_at  ?? null,
-        arrived_lat:    previous?.arrived_lat ?? null,
-        arrived_lng:    previous?.arrived_lng ?? null,
-      };
-    });
-    const { error: insErr } = await supabase.from("stops").insert(inserts);
-    if (insErr) {
-      return c.json({ error: "stops_insert_failed", detail: insErr.message } satisfies ApiErrorResponse, 500);
-    }
+  // One transaction: stops sent back with their id are updated in place
+  // (uuid, driver check-in and movement links survive), dropped stops
+  // are deleted, new ones inserted. A failure changes nothing.
+  //
+  // This was a delete followed by a separate insert. The insert re-sent
+  // `id` only for checked-in stops, and supabase-js fills a bulk insert's
+  // missing keys with NULL — so on any load where the driver had checked
+  // in at some stops but not all, the insert hit `id = NULL`, failed, and
+  // the delete had already wiped every stop (113 legs Jul–Oct 2026).
+  const replaced = await replaceEventStops(orgId, [eventId], body.stops);
+  if (!replaced.ok) {
+    return c.json({ error: "stops_replace_failed", detail: replaced.message } satisfies ApiErrorResponse, replaced.status);
   }
 
   const joined = await fetchEventJoined(eventId, orgId);

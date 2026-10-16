@@ -55,6 +55,7 @@ import {
 
 import { supabase } from "../lib/supabase.js";
 import { ensureEventRouteCached } from "../lib/routeGeometry.js";
+import { fetchStopsByEvent, replaceEventStops } from "../lib/stops.js";
 import { getUserDisplayName } from "../lib/clerk.js";
 import { appendEventAudit, appendLoadAudit } from "../lib/auditLog.js";
 import type { AuthVariables } from "../middleware/clerk.js";
@@ -654,19 +655,19 @@ loads.get("/", async (c) => {
     evOffset += batch.length;
   }
 
-  // Fetch stops in one query for all events
+  // Stops for every event, chunked + paged. This used to be one query
+  // with every event id in the URL and its error ignored: past ~640
+  // events (the calendar's 28-day window is ~950) the gateway rejected
+  // the URL and every load came back with no stops; under that, the
+  // 1000-row cap cut some loads short. An editor seeded from a short
+  // list deletes the stops it never saw when it saves, so fail loudly.
   const eventIds = (rows as unknown as Array<Record<string, unknown>>).map((r) => r.id as string);
-  const stopsByEvent = new Map<string, Stop[]>();
-  if (eventIds.length) {
-    const { data: stopRows } = await supabase
-      .from("stops")
-      .select(STOP_COLS)
-      .in("event_id", eventIds);
-    for (const s of (stopRows ?? []) as unknown as StopRow[]) {
-      const arr = stopsByEvent.get(s.event_id) ?? [];
-      arr.push(rowToStop(s));
-      stopsByEvent.set(s.event_id, arr);
-    }
+  let stopsByEvent: Map<string, Stop[]>;
+  try {
+    stopsByEvent = await fetchStopsByEvent(eventIds);
+  } catch (err) {
+    console.error("[GET /v1/loads] stops read failed:", err);
+    return c.json({ error: "list_failed", detail: (err as Error).message } satisfies ApiErrorResponse, 500);
   }
 
   // documentCounts is now stored on loads.document_counts (kept in
@@ -1945,39 +1946,12 @@ loads.post("/:id/split-relay", requireCapability("loads.edit"), async (c) => {
   //    shares the same stops; relay-type stops are the handoff markers
   //    (marker i divides leg i from leg i+1). UIs derive each leg's
   //    window from its leg_index + the markers' positions.
+  //    One transaction (see replaceEventStops) — a failure leaves every
+  //    leg's previous stops in place instead of none.
   const legIds = finalOrder.map((l) => l.id);
-  await supabase.from("stops").delete().in("event_id", legIds).eq("org_id", orgId);
-
-  const buildStopRows = (eventId: string) => body.mergedStops.map((s, idx) => ({
-    event_id:       eventId,
-    org_id:         orgId,
-    sequence:       idx + 1,
-    type:           s.type,
-    facility_name:  s.facilityName  ?? null,
-    address:        s.address       ?? null,
-    city:           s.city          ?? null,
-    state:          s.state         ?? null,
-    timezone:       s.timezone      ?? null,
-    appt_start:     s.apptStart     ?? null,
-    appt_end:       s.apptEnd       ?? null,
-    schedule_type:  s.scheduleType  ?? null,
-    is_handoff:  s.isHandoff ?? false,
-    handoff_drop_at:  s.handoffDropAt ?? null,
-    handoff_pickup_at:  s.handoffPickupAt ?? null,
-    lat:            s.lat           ?? null,
-    lng:            s.lng           ?? null,
-    instructions:   s.instructions  ?? null,
-    geocode_status: s.geocodeStatus ?? "pending",
-  }));
-  const stopRows = legIds.flatMap((id) => buildStopRows(id));
-
-  if (stopRows.length) {
-    const { error: stopErr } = await supabase.from("stops").insert(stopRows);
-    if (stopErr) {
-      console.error("[POST /v1/loads/:id/split-relay] stops insert failed:", stopErr);
-      // Best-effort: orphan stops are bad but recovery is hard here.
-      return c.json({ error: "stops_insert_failed", detail: stopErr.message } satisfies ApiErrorResponse, 500);
-    }
+  const replaced = await replaceEventStops(orgId, legIds, body.mergedStops);
+  if (!replaced.ok) {
+    return c.json({ error: "stops_replace_failed", detail: replaced.message } satisfies ApiErrorResponse, replaced.status);
   }
 
   // 5. Handoff photos: a new marker was inserted at ordinal h (its
@@ -2589,36 +2563,12 @@ loads.put("/:id/legs", requireCapability("loads.edit"), async (c) => {
   // ── 3. Write the full stop list to every leg ──────────────────────────
   //     Each leg stores the whole route; per-leg windows are derived from
   //     leg_index + the handoff boundaries (see routeGeometry.legStops).
-  await supabase.from("stops").delete().in("event_id", legIds).eq("org_id", orgId);
-  const stopRows = legIds.flatMap((eventId) =>
-    body.stops.map((s, idx) => ({
-      event_id:          eventId,
-      org_id:            orgId,
-      sequence:          idx + 1,
-      type:              s.type,
-      facility_name:     s.facilityName  ?? null,
-      address:           s.address       ?? null,
-      city:              s.city          ?? null,
-      state:             s.state         ?? null,
-      timezone:          s.timezone      ?? null,
-      appt_start:        s.apptStart     ?? null,
-      appt_end:          s.apptEnd       ?? null,
-      schedule_type:     s.scheduleType  ?? null,
-      is_handoff:        s.isHandoff     ?? false,
-      handoff_drop_at:   s.handoffDropAt ?? null,
-      handoff_pickup_at: s.handoffPickupAt ?? null,
-      lat:               s.lat           ?? null,
-      lng:               s.lng           ?? null,
-      instructions:      s.instructions  ?? null,
-      geocode_status:    s.geocodeStatus ?? "pending",
-    })),
-  );
-  if (stopRows.length > 0) {
-    const { error: stopErr } = await supabase.from("stops").insert(stopRows);
-    if (stopErr) {
-      console.error("[PUT /v1/loads/:id/legs] stops insert failed:", stopErr);
-      return c.json({ error: "stops_insert_failed", detail: stopErr.message } satisfies ApiErrorResponse, 500);
-    }
+  //     One transaction (see replaceEventStops): stops keep their ids and
+  //     driver check-ins on every leg, and a failure leaves the previous
+  //     stops in place instead of none.
+  const replaced = await replaceEventStops(orgId, legIds, body.stops);
+  if (!replaced.ok) {
+    return c.json({ error: "stops_replace_failed", detail: replaced.message } satisfies ApiErrorResponse, replaced.status);
   }
 
   // ── 4. Drop handoff photos whose handoff no longer exists ─────────────

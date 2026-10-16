@@ -3385,6 +3385,15 @@ export default function EventModal() {
     // modal with the inline banner instead.
     if (getDateOrderError()) return;
 
+    // A new revenue load needs a real stop. Loads used to save without
+    // any — a +1 Week / Duplicate taken while the source's stops hadn't
+    // loaded yet copied an empty list — and surfaced later as loads with
+    // no route, no check-ins and nothing for the driver to follow.
+    if (!isEdit && eventKind === 'revenue' && !stops.some(s => s.type !== 'relay')) {
+      showSaveBlocked('Add at least one stop before saving — every load needs a pickup or delivery.');
+      return;
+    }
+
     // Capability gate — match the API's enforcement so a read-only
     // role (e.g. maintenance opening a revenue load) can't trigger a
     // PATCH that the server will 403. Without this, the local Zustand
@@ -5401,6 +5410,10 @@ export default function EventModal() {
   const handleBatchSave = (opts?: { skipGeocodeCheck?: boolean }) => {
     if (!title.trim() || !startDate || !endDate) return;
     if (getDateOrderError()) return;
+    if (eventKind !== 'non_revenue' && !stops.some(s => s.type !== 'relay')) {
+      showSaveBlocked('Add at least one stop before saving — every load needs a pickup or delivery.');
+      return;
+    }
     if (brokerMatch.status === 'new') { setBrokerSaveBlocked(true); return; }
     if (!opts?.skipGeocodeCheck && stops.some(s => s.geocodeStatus === 'failed')) {
       setGeocodeBlock('batch');
@@ -7532,6 +7545,24 @@ export default function EventModal() {
                       }}>
                         <RefreshCw size={12} style={{ animation: 'spin 0.8s linear infinite' }} />
                         Fetching stops…
+                      </div>
+                    )}
+                    {isEdit && eventKind === 'revenue' && modalEventId && !refetchingEventIds.has(modalEventId)
+                      && !stops.some(s => s.type !== 'relay') && (
+                      // A saved load with no stops is always a data problem
+                      // (the 2026 stop-wipe bug left 113 of them) — make it
+                      // impossible to miss rather than showing a quiet
+                      // "+ Add Stop" empty state.
+                      <div role="alert" style={{
+                        display: 'flex', alignItems: 'center', gap: 8,
+                        padding: '8px 12px', marginBottom: 12,
+                        borderRadius: 8,
+                        background: '#fef2f2',
+                        border: '1px solid #fca5a5',
+                        fontSize: 12, color: '#991b1b', fontWeight: 600,
+                      }}>
+                        <AlertTriangle size={13} style={{ color: '#dc2626', flexShrink: 0 }} />
+                        This load has no stops. Re-enter the pickup and delivery from the rate con.
                       </div>
                     )}
                     <StopsSection

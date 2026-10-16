@@ -2032,6 +2032,10 @@ export type Database = {
         Args: { p_org_id: string }
         Returns: number
       }
+      replace_event_stops: {
+        Args: { p_org_id: string; p_event_ids: string[]; p_stops: Json }
+        Returns: number
+      }
     }
     Enums: {
       [_ in never]: never
