@@ -4,8 +4,10 @@ How FleetCal ties a truck's GPS (Motive driving periods, mirrored into
 `movements`) to the calendar, and how the result feeds cost and
 profitability calculations.
 
-Status: rules engine + read-only accuracy report (phase 1). Nothing is
-written to the database yet.
+Status: phase 2 — results are saved (movement_links + leg_actuals) by a job
+that re-links every truck's last 10 days every 6 hours
+(`jobs/movementLinkSweep.ts` → `lib/movementLinkJob.ts`), once migration
+`20261016_leg_actuals.sql` has been run.
 
 ## Ground rules (Matt, 2026-10-16)
 
@@ -153,6 +155,34 @@ local 1.80, OTR 1.21. Runs in ~15 s for the whole fleet.
 A load's cost = driver pay (calendar) + fuel & maintenance × (loaded +
 charged deadhead + return) + hours × overhead rate. The rate-check tool uses
 layer-5 averages to price a load before it happens.
+
+## How results are stored
+
+Links use the vocabulary the truck timeline, fleet performance and per-day
+P&L already read, source `rule_v1`:
+
+| Engine role | movement_links |
+|---|---|
+| loaded (and non-revenue) | `loaded`, loaded_event_id (non-revenue entries aren't revenue events, so readers leave those miles out of revenue math) |
+| deadhead | `transition`, from_event_id = previous leg, to_event_id = this leg |
+| return | `transition`, from_event_id = last leg, no to |
+| dwell | `dwell`, loaded_event_id + dwell_stop_id |
+| rest / idle | `rest` |
+| unexplained | `unrelated` |
+| uncertain / outside window / GPS gap | no link (an earlier `rule_v1` guess is withdrawn) |
+
+Only changed links are written; a `manual` link is never touched; old facts
+are superseded, not deleted (bulk supersedes leave `superseded_by` null).
+Drives that ended < 6 h ago wait for the next run. Loads carried together
+are linked to the first load aboard; the even split lives in leg_actuals.
+
+`leg_actuals` holds one row per leg (miles, hours, truck start/end, stop
+arrivals with issues and other-truck hints). Rows for legs later deleted or
+cancelled in the calendar are not removed — join `events` and filter
+`deleted_at` / `status`.
+
+Backfill or re-run any range:
+`railway run --service @fleetcal/api npx tsx apps/api/scripts/movement-link-backfill.ts <orgId> <from> <to> [--dry-run]`
 
 ## Phases
 

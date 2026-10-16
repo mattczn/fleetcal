@@ -85,6 +85,7 @@ import { trackCronRun } from "./lib/cronRun.js";
 import { runFuelAutoMatchSweep } from "./jobs/fuelAutoMatchSweep.js";
 import { runMudflapSyncSweep } from "./jobs/mudflapSyncSweep.js";
 import { runRampSyncSweep } from "./jobs/rampSyncSweep.js";
+import { runMovementLinkSweep } from "./jobs/movementLinkSweep.js";
 import { runCrmFmcsaSyncSweep } from "./jobs/crmFmcsaSyncSweep.js";
 import { runCrmSendSweep } from "./jobs/crmSendSweep.js";
 import { crmRoute } from "./routes/crm.js";
@@ -647,6 +648,43 @@ async function fireRampSync(label: string): Promise<void> {
 }
 setTimeout(() => void fireRampSync("startup pass"), RAMP_SYNC_STARTUP_DELAY).unref();
 setInterval(() => void fireRampSync("tick"), RAMP_SYNC_INTERVAL_MS).unref();
+
+// ── Movement linking ──────────────────────────────────────────────────
+//
+// Re-links the last 10 days of every truck's Motive GPS against the
+// calendar (loaded / deadhead / return / dwell …) and refreshes
+// leg_actuals. Only changed links are written and manual links are never
+// touched, so the rolling window is cheap and self-correcting as the
+// calendar gets fixed. No-ops until the leg_actuals migration exists.
+// See jobs/movementLinkSweep.ts and docs/movement-linking.md.
+//
+// Single-replica caveat: same as the other in-process crons. A double
+// run writes the same facts twice at worst — the second sees them as
+// unchanged.
+
+const MOVEMENT_LINK_INTERVAL_MS   = Number(process.env.MOVEMENT_LINK_INTERVAL_MS ?? 6 * 60 * 60 * 1000);
+const MOVEMENT_LINK_STARTUP_DELAY = Number(process.env.MOVEMENT_LINK_STARTUP_DELAY_MS ?? 10 * 60 * 1000);
+
+async function fireMovementLink(label: string): Promise<void> {
+  try {
+    await trackCronRun("movement-link", async () => {
+      const results = await runMovementLinkSweep();
+      for (const r of results) {
+        if (r.skipped) console.log(`[movement-link] ${label} ${r.orgId}: skipped — ${r.skipped}`);
+        else console.log(
+          `[movement-link] ${label} ${r.orgId} ${r.from}→${r.to}: trucks=${r.trucks} drives=${r.drives} ` +
+          `written=${r.linksWritten} cleared=${r.linksCleared} unchanged=${r.linksUnchanged} manual=${r.manualKept} ` +
+          `legs=${r.legs} (high ${r.confidence.high} / medium ${r.confidence.medium} / low ${r.confidence.low})`,
+        );
+      }
+      return { meta: { orgs: results.length, results } };
+    });
+  } catch (err) {
+    console.error(`[movement-link] ${label} failed:`, err);
+  }
+}
+setTimeout(() => void fireMovementLink("startup pass"), MOVEMENT_LINK_STARTUP_DELAY).unref();
+setInterval(() => void fireMovementLink("tick"), MOVEMENT_LINK_INTERVAL_MS).unref();
 
 // ── Fuel auto-match sweep ──────────────────────────────────────────────
 //

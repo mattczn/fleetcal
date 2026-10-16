@@ -188,6 +188,11 @@ export interface LegActual {
   returnHours: number;
   dwellHours: number;
   restHours: number;
+  /** The truck's time on this leg (UTC ms): leaving for its deadhead (or
+   *  arriving at its first stop) through the end of its return (or leaving
+   *  its last stop). Null when nothing on the leg was found. */
+  truckStart: number | null;
+  truckEnd: number | null;
   confidence: "high" | "medium" | "low";
   issues: LegIssue[];
 }
@@ -658,11 +663,20 @@ export function linkTruck(input: {
     }
     if (detour(dh) || detour(ret)) issues.push("detour");
     const tight = anchors.every((a) => (a.distMi ?? Infinity) <= rules.geofenceMi && (a.offH ?? Infinity) <= rules.timeFreeH);
+    // Non-revenue entries without stops (most trailer moves / OOS) are
+    // linked by time, which is all they need — not a review item.
     const confidence: LegActual["confidence"] =
-      !allAnchored ? "low" : tight && milesOk && !issues.includes("detour") ? "high" : "medium";
+      !e.revenue && e.stops.length === 0 ? "medium"
+      : !allAnchored ? "low" : tight && milesOk && !issues.includes("detour") ? "high" : "medium";
+    const times = [
+      ...anchors.flatMap((a) => [a.arrive, a.depart]),
+      ...[...loaded.drives, ...dh.drives, ...ret.drives].flatMap((d) => [d.start, d.end]),
+    ].filter((t): t is number => t != null && Number.isFinite(t));
     return {
       eventId: e.id, loadId: e.loadId, loadNum: e.loadNum, revenue: e.revenue, routeMiles: e.routeMiles,
       stops: anchors,
+      truckStart: times.length ? Math.min(...times) : null,
+      truckEnd: times.length ? Math.max(...times) : null,
       loadedMiles: loaded.miles, loadedHours: loaded.hours,
       deadheadMiles: dh.miles, deadheadHours: dh.hours,
       returnMiles: ret.miles, returnHours: ret.hours,
