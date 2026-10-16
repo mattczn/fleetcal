@@ -95,6 +95,7 @@ import type {
   ExpensesSummaryResponse, ExpensesActivityResponse,
   WeeklyTargetResponse, WeeklyTargetSettings,
   LinkReviewListResponse, LinkReviewEntry, LinkReviewVerdictRequest, LoadTrailResponse,
+  TruckProfitPay, TruckProfitResponse,
   ListRecurringExpensesResponse, CreateRecurringExpenseRequest,
   UpdateRecurringExpenseRequest, RecurringExpenseResponse,
   ListExpenseEntriesRequest, ListExpenseEntriesResponse,
@@ -2045,6 +2046,13 @@ class RailwayClient {
   /** The GPS drives linked to a load (deadhead in, loaded, return), for its map. */
   getLoadTrail(eventId: string) {
     return this.req<LoadTrailResponse>('GET', `/v1/link-review/${eventId}/trail`);
+  }
+
+  /** Each load's profit + each truck-day's time-of-day blocks (lib/truckProfit). */
+  getTruckProfit(params: { from: string; to: string; pay: TruckProfitPay; assetId?: number }) {
+    const qs = new URLSearchParams({ from: params.from, to: params.to, pay: params.pay });
+    if (params.assetId != null) qs.set('assetId', String(params.assetId));
+    return this.req<TruckProfitResponse>('GET', `/v1/truck-profit?${qs}`);
   }
 
   /** Ask the AI what happened on a leg (advisory; changes nothing). */

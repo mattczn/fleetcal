@@ -2307,6 +2307,11 @@ export interface WeeklyTargetResponse {
     overheadPerTruckDay: number;
     /** False when there's no ELD GPS to split local from OTR. */
     gpsMeasured:      boolean;
+    /** Truck-days per week on local / OTR work (truck GPS); null without GPS. */
+    truckDaysPerWeekByClass: { local: number; otr: number } | null;
+    /** What hotel / lodging buckets add to the rates above, so a per-load
+     *  view can charge hotels to OTR work only. */
+    hotels: { weekly: number; fixedWeekly: number; perMile: number; revenuePct: number };
   };
   booked: WeeklyTargetClassTotals & {
     loadsMissingMiles: number;
@@ -3382,4 +3387,99 @@ export interface LoadTrailResponse {
   parked: LoadTrailParked[];
   /** Every linked drive in time order (per truck). */
   drives: LoadTrailDrive[];
+}
+
+// ── Truck profit (/timeline fleet grid) ─────────────────────────────────
+// Each load's profit on the dashboard's numbers, with truck overhead
+// charged by time-of-day block (12a–6a, 6a–12p, 12p–6p, 6p–12a) priced
+// by the revenue the fleet earns in that block. See lib/truckProfit.ts.
+
+export type TruckProfitPay = 'current' | 'avg';
+
+export interface TruckProfitCosts {
+  revenue: number;
+  driverPay: number;
+  fuel: number;
+  maintenance: number;
+  /** Block overhead (hotels included on OTR work). */
+  overhead: number;
+  /** Other costs charged as a % of revenue (factoring etc.). */
+  other: number;
+  profit: number;
+}
+
+export interface TruckProfitLeg extends TruckProfitCosts {
+  eventId: string;
+  loadId: string | null;
+  loadNum: string | null;
+  assetId: number;
+  truck: string;
+  driverName: string | null;
+  /** False for non-revenue calendar entries. */
+  revenueLeg: boolean;
+  cls: HaulClass;
+  /** When the truck was on it, org wall-clock "YYYY-MM-DDTHH:mm". */
+  start: string;
+  end: string;
+  /** True when start/end come from linked GPS, false = calendar times. */
+  timesFromGps: boolean;
+  routeMiles: number | null;
+  drivenMiles: number;
+  milesSource: 'gps' | 'estimate';
+  driverPaySource: 'actual' | 'avg';
+  perLoadedMile: number | null;
+  breakEven: number;
+  target: number;
+  confidence: LinkConfidence | null;
+}
+
+export interface TruckProfitBlock {
+  state: 'loaded' | 'non_revenue' | 'idle';
+  cls: HaulClass;
+  /** The block's overhead price. */
+  price: number;
+  /** Revenue − costs spread into this block by hours, minus its overhead. */
+  profit: number;
+  eventIds: string[];
+}
+
+export interface TruckProfitDay extends TruckProfitCosts {
+  date: string;
+  /** null = no work that day. */
+  cls: HaulClass | null;
+  blocks: TruckProfitBlock[];
+  /** Overhead of blocks nothing used (included in overhead). */
+  unused: number;
+}
+
+export interface TruckProfitTruck {
+  assetId: number;
+  name: string;
+  days: TruckProfitDay[];
+  totals: TruckProfitCosts & { unused: number; routeMiles: number; drivenMiles: number };
+}
+
+export interface TruckProfitResponse {
+  from: string;
+  to: string;
+  pay: TruckProfitPay;
+  params: {
+    fuelPrice: number;
+    mpg: number;
+    maintPerMile: number;
+    otherPct: number;
+    payPct: { local: number; otr: number };
+    overheadPerTruckDay: { local: number; otr: number };
+    hotelsPerOtrDay: number;
+    /** Share of a truck-day's overhead per block, by class; each sums to 1. */
+    blockShares: { local: number[]; otr: number[] };
+    blockSharesMeasured: boolean;
+    breakEven: { local: number; otr: number };
+    target: { local: number; otr: number };
+    marginTarget: number;
+    calibration: { from: string; to: string };
+  };
+  trucks: TruckProfitTruck[];
+  legs: TruckProfitLeg[];
+  totals: TruckProfitCosts & { unused: number };
 }

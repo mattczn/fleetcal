@@ -650,12 +650,27 @@ export async function computeWeeklyTarget(
       if (rv > 0) rates.revenuePct += amt / rv;
     }
   };
+  // What hotel buckets add to each rate, so the truck profit view can
+  // charge hotels to OTR work only.
+  const HOTEL = /hotel|lodging|motel/i;
+  const isHotel = (b: { name: string; parent_id: string | null }) =>
+    HOTEL.test(b.name) || (!!b.parent_id && HOTEL.test(byId.get(b.parent_id)?.name ?? ""));
+  const hotels = { weekly: 0, fixedWeekly: 0, perMile: 0, revenuePct: 0 };
   const bucketsOut: WeeklyTargetResponse["buckets"] = bucketRows.map(b => {
     const behavior = behaviorOf(b.id);
     const bb = basisOf(b.id);
     const basisTotal = snap.perBucket.get(b.id)?.total ?? 0;
     const lastMonthTotal = snapLast?.perBucket.get(b.id)?.total ?? 0;
-    if (behavior !== "modeled") apply(behavior, bb, basisTotal, lastMonthTotal);
+    if (behavior !== "modeled") {
+      const before = { ...rates };
+      apply(behavior, bb, basisTotal, lastMonthTotal);
+      if (behavior !== "exclude" && isHotel(b)) {
+        hotels.fixedWeekly += rates.fixedWeekly - before.fixedWeekly;
+        hotels.perMile += rates.perMile - before.perMile;
+        hotels.revenuePct += rates.revenuePct - before.revenuePct;
+        hotels.weekly += bb === "last_month" && snapLast != null ? lastMonthTotal / lastWeeks : basisTotal / basisWeeks;
+      }
+    }
     return { id: b.id, name: b.name, parentId: b.parent_id, systemRole: b.system_role, behavior, basis: bb, basisTotal, lastMonthTotal };
   });
   const uncatBehavior = behaviors[UNCATEGORIZED_BUCKET_ID] ?? "fixed";
@@ -765,6 +780,10 @@ export async function computeWeeklyTarget(
       fixedWeekly: fixed, maintPerMile, revenuePctOther,
       payPct: { all: payAll, local: payLocal, otr: payOtr },
       trucks, truckDaysPerWeek, overheadPerTruckDay, gpsMeasured: gps != null,
+      truckDaysPerWeekByClass: gps
+        ? { local: gps.truckDays.local / CALIBRATION_WEEKS, otr: gps.truckDays.otr / CALIBRATION_WEEKS }
+        : null,
+      hotels,
     },
     booked: {
       ...wk,

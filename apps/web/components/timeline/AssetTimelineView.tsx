@@ -42,8 +42,11 @@ import {
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { parseNaiveIsoInTz } from '@/lib/time-utils';
 import { legLabel, legShortLabel } from '@fleetcal/types';
-import type { LinkReviewItem } from '@fleetcal/types';
+import type { LinkReviewItem, TruckProfitLeg } from '@fleetcal/types';
 import LegCheckPanel, { CONFIDENCE_STYLE, ISSUE_LABEL } from './LegCheckPanel';
+import LegProfitPanel from './LegProfitPanel';
+import { usePermissions } from '@/lib/usePermissions';
+import { useModules } from '@/lib/useModules';
 import type { SavedLocation } from '@/lib/types';
 import TimelineMap from './TimelineMap';
 
@@ -523,6 +526,23 @@ export default function AssetTimelineView({ assetId, initialDate, focusEventId }
     return () => { cancelled = true; };
   }, [effectiveAssetId, dayKey, refreshTick]);
 
+  // Profit for the loads around this day (same numbers as the Truck
+  // Profit grid) — only for people who can see the expense-based costs.
+  const { can } = usePermissions();
+  const { enabled } = useModules();
+  const showProfit = can('expenses.access') && enabled('expenses');
+  const [legProfit, setLegProfit] = useState<Map<string, TruckProfitLeg>>(new Map());
+  useEffect(() => {
+    if (effectiveAssetId == null || !showProfit) return;
+    let cancelled = false;
+    let pay: 'current' | 'avg' = 'current';
+    try { if (localStorage.getItem('timeline.truckProfit.payMode') === 'avg') pay = 'avg'; } catch { /* storage blocked */ }
+    railway.getTruckProfit({ from: shiftDateKey(dayKey, -2), to: shiftDateKey(dayKey, 1), pay, assetId: effectiveAssetId })
+      .then((res) => { if (!cancelled) setLegProfit(new Map(res.legs.map((l) => [l.eventId, l]))); })
+      .catch(() => { if (!cancelled) setLegProfit(new Map()); });
+    return () => { cancelled = true; };
+  }, [effectiveAssetId, dayKey, refreshTick, showProfit]);
+
   // Fetch the week-summary whenever the asset or week changes. The
   // single useState + cancelled-guard pattern matches the timeline
   // fetch above — stale responses for an earlier week don't overwrite.
@@ -733,6 +753,14 @@ export default function AssetTimelineView({ assetId, initialDate, focusEventId }
           {/* Cross-link to the fleet-wide weekly comparison view. Hidden
               on tablets/small screens because the timeline grid is the
               primary use case there. */}
+          {showProfit ? (
+            <Link href="/timeline"
+              className="hidden md:flex items-center gap-1.5 ml-2 px-2.5 py-1 rounded-md text-[11px] font-semibold uppercase tracking-wide transition-colors"
+              style={{ color: '#1e8e3e', background: '#e6f4ea', border: '1px solid #e6f4ea' }}
+              title="What every truck made this week, by time of day">
+              Truck Profit →
+            </Link>
+          ) : null}
           <Link href="/timeline/fleet"
             className="hidden md:flex items-center gap-1.5 ml-2 px-2.5 py-1 rounded-md text-[11px] font-semibold uppercase tracking-wide transition-colors"
             style={{ color: 'var(--gc-blue)', background: 'var(--gc-blue-tint)', border: '1px solid var(--gc-blue-tint)' }}
@@ -1097,6 +1125,7 @@ export default function AssetTimelineView({ assetId, initialDate, focusEventId }
                 onSelect={(s) => setSelection(s)}
                 legChecks={legChecks}
                 reviewsAvailable={reviewsAvailable}
+                legProfit={legProfit}
               />
             </div>
           </div>
@@ -1506,9 +1535,10 @@ function DwellBlock({
 
 function DetailPanel({
   selection, tz, assetColor, events, eventLookup, clusters, linkByMovementId,
-  fs, onClose, onMutated, onSelect, legChecks, reviewsAvailable,
+  fs, onClose, onMutated, onSelect, legChecks, reviewsAvailable, legProfit,
 }: {
   legChecks: Map<string, LinkReviewItem>;
+  legProfit: Map<string, TruckProfitLeg>;
   reviewsAvailable: boolean;
   selection: Selection;
   tz: string;
@@ -1565,6 +1595,7 @@ function DetailPanel({
               fs={fs}
               onSelect={onSelect}
             />
+            <LegProfitPanel leg={legProfit.get(selection.event.id)} fs={fs} />
             <LegCheckPanel
               key={selection.event.id}
               item={legChecks.get(selection.event.id)}
