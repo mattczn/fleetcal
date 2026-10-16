@@ -3334,3 +3334,36 @@ export interface LinkReviewVerdictRequest {
   reason?: LinkReviewReason;
   note?: string;
 }
+
+/** GPS drives linked to a load, for its map (GET /v1/link-review/:eventId/trail). */
+export type LoadTrailRole = 'deadhead' | 'loaded' | 'return' | 'non_revenue';
+
+export interface LoadTrailSegment {
+  role: LoadTrailRole;
+  /** The leg (calendar entry) the drives are charged to. */
+  eventId: string;
+  assetId: number | null;
+  truck: string | null;
+  start: string;
+  end: string;
+  miles: number;
+  path: Array<{ lat: number; lng: number }>;
+  /** False when the road route couldn't be fetched — straight lines between drive endpoints. */
+  roadSnapped: boolean;
+}
+
+/** Where the truck sat along the trail (between linked drives). */
+export interface LoadTrailParked {
+  lat: number;
+  lng: number;
+  arrive: string;
+  depart: string;
+  hours: number;
+  place: string | null;
+  truck: string | null;
+}
+
+export interface LoadTrailResponse {
+  segments: LoadTrailSegment[];
+  parked: LoadTrailParked[];
+}

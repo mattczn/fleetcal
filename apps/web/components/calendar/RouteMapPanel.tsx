@@ -1,8 +1,10 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { X, MapPin, Clock, Truck, CheckCircle2, Activity } from 'lucide-react';
+import { X, MapPin, Clock, Truck, CheckCircle2, Activity, Route } from 'lucide-react';
+import type { LoadTrailResponse, LoadTrailRole } from '@fleetcal/types';
 import type { Stop, StopType } from '@/lib/types';
+import { railway } from '@/lib/railway';
 import { fmtStopWindow } from './StopsSection';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { loadGoogleMaps, MAP_ID } from '@/lib/googleMaps';
@@ -41,7 +43,19 @@ interface Props {
    *  detail page (or anywhere else that wants the map standalone).
    *  Default false preserves the EventModal-side-panel behaviour. */
   embedded?: boolean;
+  /** Calendar entry whose GPS trail to draw (any leg of the load). In
+   *  modal mode it defaults to the open modal's event. */
+  eventId?: string;
 }
+
+// The GPS trail: drives the movement linker charged to this load
+// (docs/movement-linking.md). Dashed = empty miles.
+const TRAIL_STYLE: Record<LoadTrailRole, { color: string; label: string; dashed: boolean }> = {
+  deadhead:    { color: '#f59e0b', label: 'Deadhead in',  dashed: true },
+  loaded:      { color: '#16a34a', label: 'Loaded (GPS)', dashed: false },
+  return:      { color: '#9333ea', label: 'Return',       dashed: true },
+  non_revenue: { color: '#64748b', label: 'Non-revenue',  dashed: true },
+};
 
 interface TruckLocation {
   lat: number;
@@ -71,7 +85,7 @@ const MARKER_COLORS: Record<StopType, string> = {
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? '';
 
-export default function RouteMapPanel({ stops, onClose, motiveVehicleId, embedded = false }: Props) {
+export default function RouteMapPanel({ stops, onClose, motiveVehicleId, embedded = false, eventId }: Props) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef       = useRef<google.maps.Map | null>(null);
   const trafficRef   = useRef<google.maps.TrafficLayer | null>(null);
@@ -82,6 +96,15 @@ export default function RouteMapPanel({ stops, onClose, motiveVehicleId, embedde
   const truckRef = useRef<TruckLocation | null>(null);
   const [etas, setEtas] = useState<Record<string, string | 'loading'>>({});
   const calendarTimezone = useCalendarStore(s => s.calendarTimezone);
+  const modalEventId = useCalendarStore(s => s.modalEventId);
+  const trailEventId = eventId ?? (embedded ? undefined : modalEventId);
+  // Each answer is tagged with the entry it's for, so switching loads
+  // never shows the previous load's trail.
+  const [trailResult, setTrailResult] = useState<{ id: string; data: LoadTrailResponse | null } | null>(null);
+  const trail = trailEventId && trailResult?.id === trailEventId ? trailResult.data : null;
+  const [showTrail, setShowTrail] = useState(true);
+  const trailOverlays = useRef<Array<google.maps.Polyline | google.maps.marker.AdvancedMarkerElement>>([]);
+  const trailFitted = useRef(false);
 
   const geocodedStops = stops.filter(s => s.lat != null && s.lng != null);
 
@@ -241,6 +264,92 @@ export default function RouteMapPanel({ stops, onClose, motiveVehicleId, embedde
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // GPS trail for the load: fetched once per entry, drawn on its own
+  // layer so the toggle can clear it without touching the route.
+  useEffect(() => {
+    if (!trailEventId) return;
+    let cancelled = false;
+    railway.getLoadTrail(trailEventId)
+      .then(res => { if (!cancelled) setTrailResult({ id: trailEventId, data: res }); })
+      .catch(() => { if (!cancelled) setTrailResult({ id: trailEventId, data: null }); });
+    return () => { cancelled = true; };
+  }, [trailEventId]);
+
+  useEffect(() => {
+    if (!mapReady || !trail || !showTrail) return;
+    let cancelled = false;
+    void loadGoogleMaps().then(google => {
+      const map = mapRef.current;
+      if (cancelled || !map) return;
+      const info = new google.maps.InfoWindow();
+      const when = (iso: string) => new Date(iso).toLocaleString('en-US', {
+        timeZone: calendarTimezone || undefined, month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
+      });
+      const bounds = new google.maps.LatLngBounds();
+
+      for (const seg of trail.segments) {
+        const st = TRAIL_STYLE[seg.role];
+        const line = new google.maps.Polyline({
+          map,
+          path: seg.path,
+          zIndex: 1,
+          strokeColor: st.color,
+          strokeOpacity: st.dashed ? 0 : 0.85,
+          strokeWeight: 4,
+          icons: st.dashed
+            ? [{ icon: { path: 'M 0,-1 0,1', strokeOpacity: 0.9, strokeColor: st.color, scale: 3 }, offset: '0', repeat: '14px' }]
+            : undefined,
+        });
+        line.addListener('click', (e: google.maps.MapMouseEvent) => {
+          info.setContent(`
+            <div style="font-size:12px;line-height:1.45;max-width:220px;padding:2px 4px">
+              <div style="font-weight:700;color:${st.color}">${st.label}${seg.truck ? ` · ${seg.truck}` : ''}</div>
+              <div style="color:#555">${when(seg.start)} → ${when(seg.end)}</div>
+              <div style="color:#555">${Math.round(seg.miles)} mi driven</div>
+              ${seg.roadSnapped ? '' : '<div style="color:#888">Drawn straight between GPS points</div>'}
+            </div>`);
+          if (e.latLng) info.setPosition(e.latLng);
+          info.open({ map });
+        });
+        trailOverlays.current.push(line);
+        seg.path.forEach(p => bounds.extend(p));
+      }
+
+      for (const p of trail.parked) {
+        const el = document.createElement('div');
+        el.style.cssText = 'width:10px;height:10px;border-radius:50%;background:#374151;border:2px solid white;box-shadow:0 1px 3px rgba(0,0,0,0.4);cursor:pointer;';
+        const marker = new google.maps.marker.AdvancedMarkerElement({ map, position: { lat: p.lat, lng: p.lng }, content: el, zIndex: 0 });
+        marker.addListener('click', () => {
+          info.setContent(`
+            <div style="font-size:12px;line-height:1.45;max-width:220px;padding:2px 4px">
+              <div style="font-weight:700;color:#374151">Parked ${p.hours} h${p.truck ? ` · ${p.truck}` : ''}</div>
+              <div style="color:#555">${when(p.arrive)} → ${when(p.depart)}</div>
+              ${p.place ? `<div style="color:#888">${p.place}</div>` : ''}
+            </div>`);
+          info.open({ anchor: marker, map });
+        });
+        trailOverlays.current.push(marker);
+      }
+
+      // First draw: widen the view to take in where the truck came from
+      // and went after, along with the stops already in frame.
+      if (!trailFitted.current && !bounds.isEmpty()) {
+        const current = map.getBounds();
+        if (current) bounds.union(current);
+        map.fitBounds(bounds, 60);
+        trailFitted.current = true;
+      }
+    });
+    return () => {
+      cancelled = true;
+      for (const o of trailOverlays.current) {
+        if ('setMap' in o) o.setMap(null);
+        else o.map = null;
+      }
+      trailOverlays.current = [];
+    };
+  }, [mapReady, trail, showTrail, calendarTimezone]);
+
   // Sync the traffic layer's visibility with the toggle.
   useEffect(() => {
     if (trafficRef.current && mapRef.current) {
@@ -358,10 +467,58 @@ export default function RouteMapPanel({ stops, onClose, motiveVehicleId, embedde
           <Activity size={12} />
           Traffic
         </button>
+        {trail && trail.segments.length > 0 ? (
+          <button
+            type="button"
+            onClick={() => setShowTrail(t => !t)}
+            style={{
+              position: 'absolute', top: 92, right: 10, zIndex: 1,
+              display: 'flex', alignItems: 'center', gap: 5,
+              padding: '6px 10px', fontSize: 12, fontWeight: 600,
+              borderRadius: 6, cursor: 'pointer',
+              border: '1px solid rgba(0,0,0,0.15)',
+              background: showTrail ? '#16a34a' : 'rgba(255,255,255,0.95)',
+              color: showTrail ? '#fff' : 'var(--gc-text-2)',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.18)',
+            }}
+            title={showTrail ? 'Hide the GPS trail' : 'Show where the truck actually drove'}
+          >
+            <Route size={12} />
+            GPS trail
+          </button>
+        ) : null}
       </div>
 
       {/* Stop legend */}
       <div style={{ borderTop: '1px solid var(--gc-border)', background: 'var(--gc-surface)', maxHeight: 180, overflowY: 'auto', padding: '10px 12px' }}>
+        {trail ? (
+          <div className="flex items-center gap-3 flex-wrap mb-2" style={{ fontSize: 11, color: 'var(--gc-text-3)' }}>
+            {trail.segments.length === 0 ? (
+              <span>No GPS linked to this load yet — the linker runs every 6 hours.</span>
+            ) : (
+              <>
+                <span style={{ fontWeight: 700, color: 'var(--gc-text-2)' }}>GPS</span>
+                {(Object.keys(TRAIL_STYLE) as LoadTrailRole[]).map(role => {
+                  const miles = trail.segments.filter(s => s.role === role).reduce((n, s) => n + s.miles, 0);
+                  if (!miles) return null;
+                  const st = TRAIL_STYLE[role];
+                  return (
+                    <span key={role} className="flex items-center gap-1">
+                      <span style={{ width: 14, height: 0, borderTop: `3px ${st.dashed ? 'dashed' : 'solid'} ${st.color}` }} />
+                      {st.label} {Math.round(miles)} mi
+                    </span>
+                  );
+                })}
+                {trail.parked.length > 0 ? (
+                  <span className="flex items-center gap-1">
+                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#374151' }} />
+                    parked
+                  </span>
+                ) : null}
+              </>
+            )}
+          </div>
+        ) : null}
         <div className="space-y-1.5">
           {stops.map((stop, idx) => {
             const cfg = TYPE_CONFIG[stop.type] ?? TYPE_CONFIG.stop;

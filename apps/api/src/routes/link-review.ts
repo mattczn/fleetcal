@@ -6,6 +6,7 @@
  *        legs with their GPS check (leg_actuals) + latest verdict / AI note
  *   POST /:eventId/review   { verdict, reason?, note? }  — a person's verdict
  *   POST /:eventId/explain  — ask the AI what happened (advisory)
+ *   GET  /:eventId/trail    — the GPS drives linked to the load, for its map
  *
  * Verdicts are append-only rows in link_reviews with a snapshot of what was
  * reviewed; they're the training set for tuning the linker. Fixing a link
@@ -22,6 +23,7 @@ import { supabase as supabaseTyped } from "../lib/supabase.js";
 import { fetchAllRows } from "../lib/fetchAllRows.js";
 import { getUserDisplayName } from "../lib/clerk.js";
 import { explainLeg, LegNotFoundError } from "../lib/linkExplain.js";
+import { loadTrail, TrailNotFoundError } from "../lib/loadTrail.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability, requireModule } from "../middleware/require.js";
 
@@ -66,24 +68,27 @@ linkReview.get("/", async (c) => {
     stops: LinkReviewStop[]; computed_at: string;
     events: { start: string; title: string | null; driver_name: string | null; event_kind: string; status: string | null; loads: { load_num: string | null } | null };
   };
-  let rows: Row[];
-  try {
-    rows = await fetchAllRows<Row>("link review legs", () => {
-      let q = supabase
-        .from("leg_actuals")
-        .select("event_id, load_id, asset_id, confidence, issues, route_miles, loaded_miles, loaded_hours, deadhead_miles, deadhead_hours, return_miles, return_hours, dwell_hours, rest_hours, truck_start, truck_end, stops, computed_at, events!inner(start, title, driver_name, event_kind, status, deleted_at, loads(load_num))")
-        .eq("org_id", orgId)
-        .is("events.deleted_at", null)
-        .gte("events.start", from)
-        .lte("events.start", `${to}T23:59`);
-      if (assetId != null && Number.isFinite(assetId)) q = q.eq("asset_id", assetId);
-      return q;
-    });
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    return c.json({ error: "leg_actuals_unavailable", detail } satisfies ApiErrorResponse, 409);
+  // Paged by hand: leg_actuals is keyed by event_id (no `id` column), so
+  // fetchAllRows' ORDER BY id doesn't apply.
+  const rows: Row[] = [];
+  for (let off = 0; ; off += 1000) {
+    let q = supabase
+      .from("leg_actuals")
+      .select("event_id, load_id, asset_id, confidence, issues, route_miles, loaded_miles, loaded_hours, deadhead_miles, deadhead_hours, return_miles, return_hours, dwell_hours, rest_hours, truck_start, truck_end, stops, computed_at, events!inner(start, title, driver_name, event_kind, status, deleted_at, loads(load_num))")
+      .eq("org_id", orgId)
+      .is("events.deleted_at", null)
+      .gte("events.start", from)
+      .lte("events.start", `${to}T23:59`);
+    if (assetId != null && Number.isFinite(assetId)) q = q.eq("asset_id", assetId);
+    const { data, error } = await q.order("event_id", { ascending: true }).range(off, off + 999);
+    if (error) {
+      console.error("[link-review list]", error);
+      return c.json({ error: "leg_actuals_unavailable", detail: error.message } satisfies ApiErrorResponse, 409);
+    }
+    rows.push(...((data ?? []) as Row[]));
+    if ((data ?? []).length < 1000) break;
   }
-  rows = rows.filter((r) => r.events.status !== "cancelled");
+  const live = rows.filter((r) => r.events.status !== "cancelled");
 
   const assets = await fetchAllRows<{ id: number; name: string }>("link review assets", () =>
     supabase.from("assets").select("id, name").eq("org_id", orgId));
@@ -93,7 +98,7 @@ linkReview.get("/", async (c) => {
   let reviewsAvailable = true;
   const human = new Map<string, LinkReviewEntry>();
   const ai = new Map<string, LinkReviewEntry>();
-  const ids = rows.map((r) => r.event_id);
+  const ids = live.map((r) => r.event_id);
   for (let i = 0; i < ids.length && reviewsAvailable; i += 150) {
     try {
       const rv = await fetchAllRows<ReviewRow>("link reviews", () => supabase
@@ -111,7 +116,7 @@ linkReview.get("/", async (c) => {
     }
   }
 
-  const all: LinkReviewItem[] = rows.map((r) => ({
+  const all: LinkReviewItem[] = live.map((r) => ({
     eventId: r.event_id,
     loadId: r.load_id,
     loadNum: r.events.loads?.load_num ?? r.events.title ?? null,
@@ -203,6 +208,16 @@ linkReview.post("/:eventId/explain", requireCapability("loads.edit"), async (c) 
     ? { id: "", kind: "ai", verdict: null, reason: result.suggestion.cause, note: null, suggestion: result.suggestion, createdByName: null, createdAt: new Date().toISOString() }
     : toEntry(data as ReviewRow);
   return c.json({ ai: entry });
+});
+
+linkReview.get("/:eventId/trail", async (c) => {
+  try {
+    return c.json(await loadTrail(c.get("orgId"), c.req.param("eventId")));
+  } catch (err) {
+    if (err instanceof TrailNotFoundError) return c.json({ error: "not_found", detail: err.message } satisfies ApiErrorResponse, 404);
+    console.error("[link-review trail]", err);
+    return c.json({ error: "trail_failed", detail: err instanceof Error ? err.message : String(err) } satisfies ApiErrorResponse, 500);
+  }
 });
 
 export default linkReview;

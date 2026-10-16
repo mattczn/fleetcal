@@ -813,6 +813,7 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
                 stops={primaryLeg.stops}
                 motiveVehicleId={primaryLeg.motiveVehicleId}
                 embedded
+                eventId={primaryLeg.id}
               />
             ) : (
               // Placeholder occupies the same footprint as the map so

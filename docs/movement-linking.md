@@ -206,6 +206,14 @@ Backfill or re-run any range:
   recent "wrong" notes, and returns summary / likely cause / fix; it changes
   nothing. Calls take ~20 s and are stored as `kind = 'ai'` rows.
 
+- **Load map** (the calendar modal's Route Map and the load page's map):
+  `GET /v1/link-review/:eventId/trail` (`lib/loadTrail.ts`) returns every
+  drive linked to any leg of the load — deadhead in (dashed amber), loaded
+  (green), return (dashed purple) — grouped into runs per truck and routed
+  along the roads through the drive endpoints with Mapbox (Motive gives
+  only start/end points), plus where the truck parked ≥ 15 min. A "GPS
+  trail" toggle hides it.
+
 Known blind spot: Motive merges a drive with a very short stop (a quick
 trailer swap) into one driving period, so a stop of a few minutes can be
 invisible — the AI flagged one such Las Vegas relay swap in testing.

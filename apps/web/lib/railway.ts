@@ -94,7 +94,7 @@ import type {
   MarkRampNotApplicableResponse, RunRampSyncResponse,
   ExpensesSummaryResponse, ExpensesActivityResponse,
   WeeklyTargetResponse, WeeklyTargetSettings,
-  LinkReviewListResponse, LinkReviewEntry, LinkReviewVerdictRequest,
+  LinkReviewListResponse, LinkReviewEntry, LinkReviewVerdictRequest, LoadTrailResponse,
   ListRecurringExpensesResponse, CreateRecurringExpenseRequest,
   UpdateRecurringExpenseRequest, RecurringExpenseResponse,
   ListExpenseEntriesRequest, ListExpenseEntriesResponse,
@@ -2040,6 +2040,11 @@ class RailwayClient {
   /** A person's verdict on a leg's GPS linking — the training data. */
   reviewLink(eventId: string, body: LinkReviewVerdictRequest) {
     return this.req<{ review: LinkReviewEntry }>('POST', `/v1/link-review/${eventId}/review`, body);
+  }
+
+  /** The GPS drives linked to a load (deadhead in, loaded, return), for its map. */
+  getLoadTrail(eventId: string) {
+    return this.req<LoadTrailResponse>('GET', `/v1/link-review/${eventId}/trail`);
   }
 
   /** Ask the AI what happened on a leg (advisory; changes nothing). */
