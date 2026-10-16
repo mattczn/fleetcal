@@ -91,7 +91,7 @@ export default function RouteMapPanel({ stops, onClose, motiveVehicleId, embedde
   const mapRef       = useRef<google.maps.Map | null>(null);
   const trafficRef   = useRef<google.maps.TrafficLayer | null>(null);
   const truckMarkerRef = useRef<google.maps.marker.AdvancedMarkerElement | null>(null);
-  const [trafficOn, setTrafficOn] = useState(true);
+  const [trafficOn, setTrafficOn] = useState(false);
   const [truckLoc, setTruckLoc] = useState<TruckLocation | null>(null);
   const [mapReady, setMapReady] = useState(false);
   const truckRef = useRef<TruckLocation | null>(null);
@@ -106,7 +106,9 @@ export default function RouteMapPanel({ stops, onClose, motiveVehicleId, embedde
   const [showTrail, setShowTrail] = useState(true);
   const trailOverlays = useRef<Array<google.maps.Polyline | google.maps.marker.AdvancedMarkerElement>>([]);
   const trailFitted = useRef(false);
-  const [showRoute, setShowRoute] = useState(true);
+  // Route shows by default only when there's no linked GPS to show instead.
+  const [routeChoice, setRouteChoice] = useState<boolean | null>(null);
+  const showRoute = routeChoice ?? !(trail && trail.segments.length > 0);
   const showRouteRef = useRef(true);
   const routeLines = useRef<google.maps.Polyline[]>([]);
   const [bottomTab, setBottomTab] = useState<'stops' | 'gps'>('stops');
@@ -524,7 +526,7 @@ export default function RouteMapPanel({ stops, onClose, motiveVehicleId, embedde
         {geocodedStops.length >= 2 ? (
           <button
             type="button"
-            onClick={() => setShowRoute(r => !r)}
+            onClick={() => setRouteChoice(!showRoute)}
             style={{
               position: 'absolute', top: 92, right: 10, zIndex: 1,
               display: 'flex', alignItems: 'center', gap: 5,
