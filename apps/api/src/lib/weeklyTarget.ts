@@ -31,6 +31,7 @@
 
 import type {
   BucketBasis,
+  Stop,
   CostBehavior,
   HaulClass,
   WeeklyTargetClassTotals,
@@ -38,7 +39,7 @@ import type {
   WeeklyTargetResponse,
   WeeklyTargetSettings,
 } from "@fleetcal/types";
-import { UNCATEGORIZED_BUCKET_ID } from "@fleetcal/types";
+import { UNCATEGORIZED_BUCKET_ID, stopsForLeg } from "@fleetcal/types";
 import { supabase as supabaseTyped } from "./supabase.js";
 import { fetchAllRows } from "./fetchAllRows.js";
 import {
@@ -49,6 +50,7 @@ import {
 } from "./reportExclusions.js";
 import { SHORT_HAUL_RADIUS_MILES, airMilesBetween, classifyByAirMiles, isUsableCoord, parseTerminal, type Coord } from "./airMiles.js";
 import { getHosConfig } from "./hosService.js";
+import { H as HOUR_MS, dayStartMs, fetchLegActuals, hoursWithin, legWindow } from "./legTime.js";
 import { snapshot, type Window as ExpenseWindow } from "../routes/expenses.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -79,6 +81,7 @@ interface EventRow {
   id: string;
   load_id: string;
   start: string;
+  end: string | null;
   leg_index: number | null;
   status: string | null;
   driver_id: number | null;
@@ -90,6 +93,11 @@ interface EventRow {
 }
 
 interface LoadEcon {
+  loadId:       string;
+  /** The counted legs, for spreading the load over its truck time (earned). */
+  legs:         Array<{ id: string; legIndex: number; start: string; end: string | null }>;
+  /** The load's full stop list (every relay leg carries it), for classing each leg. */
+  stopList:     Array<{ type: string; is_handoff: boolean | null; lat: number | null; lng: number | null }>;
   pickup:       string;
   revenue:      number;
   loadedMiles:  number;
@@ -112,7 +120,7 @@ async function loadEconomics(
 ): Promise<LoadEcon[]> {
   const events = await fetchAllRows<EventRow>("weekly-target events", () => supabase
     .from("events")
-    .select("id, load_id, start, leg_index, status, driver_id, driver_name, asset_id, driver_pay, loaded_miles, loads!inner(total_billable, load_price, deleted_at)")
+    .select("id, load_id, start, end, leg_index, status, driver_id, driver_name, asset_id, driver_pay, loaded_miles, loads!inner(total_billable, load_price, deleted_at)")
     .eq("org_id", orgId)
     .is("deleted_at", null)
     .eq("event_kind", "revenue")
@@ -141,17 +149,17 @@ async function loadEconomics(
 
   // Relay legs each carry the load's FULL stop list, so the first leg's
   // copy is the whole route.
-  const stopsByEvent = new Map<string, Array<{ sequence: number; lat: number | null; lng: number | null }>>();
+  const stopsByEvent = new Map<string, Array<{ sequence: number; type: string; is_handoff: boolean | null; lat: number | null; lng: number | null }>>();
   if (withStops) {
     const ids = kept.map(k => k.first.id);
     for (let i = 0; i < ids.length; i += STOP_BATCH) {
       const slice = ids.slice(i, i + STOP_BATCH);
       const { data, error } = await supabase
         .from("stops")
-        .select("event_id, sequence, lat, lng")
+        .select("event_id, sequence, type, is_handoff, lat, lng")
         .in("event_id", slice);
       if (error) throw new Error(`weekly-target stops: ${error.message}`);
-      for (const s of (data ?? []) as Array<{ event_id: string; sequence: number; lat: number | null; lng: number | null }>) {
+      for (const s of (data ?? []) as Array<{ event_id: string; sequence: number; type: string; is_handoff: boolean | null; lat: number | null; lng: number | null }>) {
         const arr = stopsByEvent.get(s.event_id) ?? [];
         arr.push(s);
         stopsByEvent.set(s.event_id, arr);
@@ -178,6 +186,9 @@ async function loadEconomics(
 
     const haul = terminal && stops.length ? classifyByAirMiles(terminal, stops) : null;
     return {
+      loadId: first.load_id,
+      legs: legs.map(l => ({ id: l.id, legIndex: l.leg_index ?? 0, start: l.start, end: l.end })),
+      stopList: (stopsByEvent.get(first.id) ?? []).sort((a, b) => a.sequence - b.sequence),
       pickup,
       revenue,
       loadedMiles,
@@ -187,6 +198,47 @@ async function loadEconomics(
       cls: haul?.decided ? haul.classification : null,
     };
   });
+}
+
+/**
+ * "Earned" view of a period: every load whose truck time touches it,
+ * counted for the share of that time inside the period (lib/legTime.ts)
+ * instead of all of it in the week it picked up. Revenue, loaded miles
+ * and load pay scale by that share; the loads, exclusions and amounts are
+ * exactly the booked view's, so over a long span the two add up the same.
+ */
+async function earnedLoads(
+  orgId: string, from: string, to: string,
+  excluded: ExcludedDrivers, excludedAssets: Set<number>, terminal: Coord | null, tz: string,
+): Promise<{ rows: LoadEcon[]; payBetween: (from: string, to: string) => number }> {
+  // A load picked up up to 3 weeks before can still be running; one picked
+  // up just after can have its deadhead inside.
+  const all = await loadEconomics(orgId, addDays(from, -21), addDays(to, 2), excluded, excludedAssets, terminal, true);
+  const actuals = await fetchLegActuals(all.flatMap(r => r.legs.map(l => l.id)));
+  // Each load's truck time, leg by leg; the share inside a window is the
+  // share of the load counted there (legs split by truck time — legTime).
+  const legClass = (r: LoadEcon, legIndex: number): HaulClass => {
+    if (!terminal) return "local";
+    const mine = stopsForLeg(r.stopList.map(s => ({ ...s, type: s.type as Stop["type"], isHandoff: s.is_handoff ?? undefined })), legIndex);
+    const haul = classifyByAirMiles(terminal, mine.map(s => ({ lat: s.lat ?? undefined, lon: s.lng ?? undefined })));
+    return haul.decided ? haul.classification : "local";
+  };
+  const spans = all.map(r => r.legs.map(l =>
+    legWindow({ calStart: l.start, calEnd: l.end, actual: actuals.get(l.id), cls: legClass(r, l.legIndex), tz })));
+  const fraction = (i: number, a: string, b: string) => {
+    const total = spans[i].reduce((s, w) => s + (w.b - w.a), 0);
+    if (total <= 0) return 0;
+    const lo = dayStartMs(a);
+    const hi = dayStartMs(b) + DAY;
+    return spans[i].reduce((s, w) => s + hoursWithin(w.a, w.b, lo, hi) * HOUR_MS, 0) / total;
+  };
+  const rows: LoadEcon[] = [];
+  all.forEach((r, i) => {
+    const f = fraction(i, from, to);
+    if (f > 1e-6) rows.push({ ...r, revenue: r.revenue * f, loadedMiles: r.loadedMiles * f, driverPay: r.driverPay * f });
+  });
+  const payBetween = (a: string, b: string) => all.reduce((s, r, i) => s + r.driverPay * fraction(i, a, b), 0);
+  return { rows, payBetween };
 }
 
 async function adjustmentsTotal(orgId: string, from: string, to: string, excluded: ExcludedDrivers): Promise<number> {
@@ -546,7 +598,7 @@ function calibration(
 
 export async function computeWeeklyTarget(
   orgId: string,
-  opts: { from?: string; to?: string; today?: string; settings?: WeeklyTargetSettings } = {},
+  opts: { from?: string; to?: string; today?: string; settings?: WeeklyTargetSettings; earned?: boolean } = {},
 ): Promise<WeeklyTargetResponse> {
   const today = opts.today ?? iso(Date.now());
   // The dashboard's selected period; the current Sat–Fri week by default.
@@ -566,12 +618,14 @@ export async function computeWeeklyTarget(
     ? mergeSettings(stored.settings, opts.settings as Record<string, unknown>)
     : stored.settings;
 
-  const [cal_, weekLoads, weekEld, weekPayroll, price7] = await Promise.all([
+  const tz = opts.earned ? (await getHosConfig(orgId)).timeZone : "";
+  const [cal_, weekLoads, weekEld, weekPayroll, price7, earnedSet] = await Promise.all([
     calibration(orgId, today, excluded, excludedAssets, terminal),
     loadEconomics(orgId, weekFrom, weekTo, excluded, excludedAssets, terminal, true),
     weekFrom <= today ? eldMiles(orgId, weekFrom, weekTo < today ? weekTo : today, excludedAssets) : Promise.resolve(null),
     finalizedPayroll(orgId, weeks, excluded),
     fuelTotals(orgId, addDays(today, -6), today),
+    opts.earned ? earnedLoads(orgId, weekFrom, weekTo, excluded, excludedAssets, terminal, tz) : Promise.resolve(null),
   ]);
   const {
     calFrom, calTo, months, basisFrom, basisTo, lastFrom,
@@ -693,47 +747,72 @@ export async function computeWeeklyTarget(
     trailingMargin == null ? null : Math.round(trailingMargin * 200) / 200, settings.marginTarget, 0.1);
 
   // ── The selected period ──
-  const wk = totals(weekLoads);
-  const local = totals(weekLoads.filter(r => r.cls === "local"));
-  const otr = totals(weekLoads.filter(r => r.cls === "otr"));
+  // Booked counts each load in full in the week it picked up; earned
+  // counts the share of its truck time inside the period. Same math on
+  // either set of loads; loadPay is a payroll week's load pay when that
+  // week isn't finalized.
   const weekComplete = weekTo < today;
-  // Mirrors the dashboard Total Payroll KPI: per Sat–Fri week whose Friday
-  // is in the period, finalized records if any, else that week's load pay.
-  let driverPay = 0;
-  let finalizedCount = 0;
-  for (const ws of weeks) {
-    const fin = weekPayroll.get(ws) ?? 0;
-    if (fin > 0) { driverPay += fin; finalizedCount++; continue; }
-    const we = addDays(ws, 6);
-    driverPay += weekLoads.filter(r => r.pickup >= ws && r.pickup <= we).reduce((s, r) => s + r.driverPay, 0);
-  }
-  if (!weeks.length) driverPay = wk.driverPay;
-  const driverPaySource: "payroll" | "loads" | "partial" =
-    weeks.length && finalizedCount === weeks.length ? "payroll" : finalizedCount > 0 ? "partial" : "loads";
-
   const fixedPeriod = fixedWeekly * days / 7;
   const perMileCost = fuelPrice.value / mpg.value + maintPerMile;
-  const totalMiles = wk.loadedMiles * emptyFactor.value;
-  const fuel = totalMiles * fuelPrice.value / mpg.value;
-  const maintenance = totalMiles * maintPerMile;
-  const other = wk.revenue * revenuePctOther;
-  const profit = wk.revenue - driverPay - fuel - maintenance - fixedPeriod - other;
+  const project = (rows: LoadEcon[], loadPay: (ws: string, we: string) => number) => {
+    const wk = totals(rows);
+    const local = totals(rows.filter(r => r.cls === "local"));
+    const otr = totals(rows.filter(r => r.cls === "otr"));
+    // Mirrors the dashboard Total Payroll KPI: per Sat–Fri week whose Friday
+    // is in the period, finalized records if any, else that week's load pay.
+    let driverPay = 0;
+    let finalizedCount = 0;
+    for (const ws of weeks) {
+      const fin = weekPayroll.get(ws) ?? 0;
+      if (fin > 0) { driverPay += fin; finalizedCount++; continue; }
+      driverPay += loadPay(ws, addDays(ws, 6));
+    }
+    if (!weeks.length) driverPay = wk.driverPay;
+    const driverPaySource: "payroll" | "loads" | "partial" =
+      weeks.length && finalizedCount === weeks.length ? "payroll" : finalizedCount > 0 ? "partial" : "loads";
 
-  const milesCost = fixedPeriod + totalMiles * perMileCost;
-  const breakEvenRevenue = milesCost / Math.max(0.05, 1 - payAll - revenuePctOther);
-  const targetRevenue = milesCost / Math.max(0.05, 1 - payAll - revenuePctOther - marginTarget.value);
-  const perLoaded = (v: number) => (wk.loadedMiles > 0 ? v / wk.loadedMiles : null);
+    const totalMiles = wk.loadedMiles * emptyFactor.value;
+    const fuel = totalMiles * fuelPrice.value / mpg.value;
+    const maintenance = totalMiles * maintPerMile;
+    const other = wk.revenue * revenuePctOther;
+    const profit = wk.revenue - driverPay - fuel - maintenance - fixedPeriod - other;
 
-  // Rate per loaded mile. Fixed costs are spread over the period's loaded
-  // miles — but while the period is still being booked, over at least the
-  // usual volume, or a half-booked week would demand an absurd rate.
-  const typicalLoadedMiles = cal.loadedMiles / (CALIBRATION_WEEKS * 7) * days;
-  const loadedMilesBasis = weekComplete ? wk.loadedMiles : Math.max(wk.loadedMiles, typicalLoadedMiles);
-  const keepAfterPay = 1 - payAll - revenuePctOther;
-  const rpm = (margin: number) => loadedMilesBasis > 0
-    ? (perMileCost * emptyFactor.value + fixedPeriod / loadedMilesBasis) / Math.max(0.05, keepAfterPay - margin)
-    : null;
-  const targetRpm = rpm(marginTarget.value);
+    const milesCost = fixedPeriod + totalMiles * perMileCost;
+    const breakEvenRevenue = milesCost / Math.max(0.05, 1 - payAll - revenuePctOther);
+    const targetRevenue = milesCost / Math.max(0.05, 1 - payAll - revenuePctOther - marginTarget.value);
+    const perLoaded = (v: number) => (wk.loadedMiles > 0 ? v / wk.loadedMiles : null);
+
+    // Rate per loaded mile. Fixed costs are spread over the period's loaded
+    // miles — but while the period is still being booked, over at least the
+    // usual volume, or a half-booked week would demand an absurd rate.
+    const typicalLoadedMiles = cal.loadedMiles / (CALIBRATION_WEEKS * 7) * days;
+    const loadedMilesBasis = weekComplete ? wk.loadedMiles : Math.max(wk.loadedMiles, typicalLoadedMiles);
+    const keepAfterPay = 1 - payAll - revenuePctOther;
+    const rpm = (margin: number) => loadedMilesBasis > 0
+      ? (perMileCost * emptyFactor.value + fixedPeriod / loadedMilesBasis) / Math.max(0.05, keepAfterPay - margin)
+      : null;
+
+    return {
+      booked: {
+        ...wk,
+        loadsMissingMiles: rows.filter(r => r.milesMissing).length,
+        local, otr,
+      },
+      projection: {
+        totalMiles,
+        actualMiles: weekEld ? weekEld.miles : null,
+        driverPay, driverPaySource, fuel, maintenance, fixed: fixedPeriod, other, profit,
+        breakEvenRevenue, targetRevenue,
+        revenuePerLoadedMile: perLoaded(wk.revenue),
+        loadedMilesBasis,
+        breakEvenPerLoadedMile: rpm(0),
+        targetPerLoadedMile: rpm(marginTarget.value),
+      },
+    };
+  };
+  const booked = project(weekLoads, (ws, we) =>
+    weekLoads.filter(r => r.pickup >= ws && r.pickup <= we).reduce((s, r) => s + r.driverPay, 0));
+  const earned = earnedSet ? project(earnedSet.rows, earnedSet.payBetween) : null;
 
   // ── Local vs OTR rate per loaded mile ──
   // Overhead accrues per truck-day, so each class carries it for the time
@@ -785,21 +864,9 @@ export async function computeWeeklyTarget(
         : null,
       hotels,
     },
-    booked: {
-      ...wk,
-      loadsMissingMiles: weekLoads.filter(r => r.milesMissing).length,
-      local, otr,
-    },
-    projection: {
-      totalMiles,
-      actualMiles: weekEld ? weekEld.miles : null,
-      driverPay, driverPaySource, fuel, maintenance, fixed: fixedPeriod, other, profit,
-      breakEvenRevenue, targetRevenue,
-      revenuePerLoadedMile: perLoaded(wk.revenue),
-      loadedMilesBasis,
-      breakEvenPerLoadedMile: rpm(0),
-      targetPerLoadedMile: targetRpm,
-    },
+    booked: booked.booked,
+    projection: booked.projection,
+    earned,
     classes: {
       local: classRate("local", payLocal, localDriven, localLoadedPerTruckDay.value),
       otr:   classRate("otr", payOtr, otrDriven, otrLoadedPerTruckDay.value),

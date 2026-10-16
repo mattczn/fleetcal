@@ -35,7 +35,7 @@ weeklyTarget.get("/", async (c) => {
     return c.json({ error: "validation_failed", errors: ["period can't be longer than 400 days"] } satisfies ApiErrorResponse, 400);
   }
   try {
-    return c.json(await computeWeeklyTarget(orgId, { from: from || undefined, to: to || undefined }));
+    return c.json(await computeWeeklyTarget(orgId, { from: from || undefined, to: to || undefined, earned: true }));
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     console.error("[GET /v1/weekly-target]", detail);

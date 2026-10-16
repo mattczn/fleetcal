@@ -37,59 +37,20 @@ import { classifyByAirMiles, parseTerminal, type Coord } from "./airMiles.js";
 import { getHosConfig } from "./hosService.js";
 import { computeWeeklyTarget } from "./weeklyTarget.js";
 import { isExcludedEvent, loadExcludedAssetIds, loadExcludedDrivers, type ExcludedDrivers } from "./reportExclusions.js";
+import { H, addDays, dayOf, fetchLegActuals, hoursWithin, legWindow, naiveMs, slicesOf, timeShares, utcToWallMs, wallStr } from "./legTime.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const supabase = supabaseTyped as any;
 
-const H = 3_600_000;
-const DAY = 24 * H;
-const BLOCK_MS = 6 * H;
 /** A leg pays for a block once its truck spends this long of it on the leg. */
 const MIN_BLOCK_HOURS = 1;
-const MAX_LEG_MS = 14 * DAY;
-/** Longer than this at a handoff = the trailer was parked, not a relay meet. */
-const PARKED_HANDOFF_HOURS = 6;
-/** Time allowed to drop or hook a trailer at a parked handoff. */
-const HANDOFF_HOURS = 0.5;
-/** Below this much revenue a class's block shares fall back to even. */
+/** Below this much revenue a class's shares fall back to even. */
 const MIN_SHARE_REVENUE = 5000;
 const EVEN = [0.25, 0.25, 0.25, 0.25];
+const EVEN_DAYS = [1, 1, 1, 1, 1, 1, 1].map((x) => x / 7);
+const dowOf = (date: string) => new Date(`${date}T12:00:00Z`).getUTCDay();
 const CHUNK = 150;
 const SHARES_TTL_MS = 6 * H;
-
-// ── Time helpers ────────────────────────────────────────────────────────
-
-const naiveMs = (s: string) => Date.parse(`${s.slice(0, 16)}:00Z`);
-const wallStr = (ms: number) => new Date(ms).toISOString().slice(0, 16);
-const dayOf = (ms: number) => new Date(ms).toISOString().slice(0, 10);
-const addDays = (d: string, n: number) => dayOf(Date.parse(`${d}T00:00:00Z`) + n * DAY);
-
-const formatters = new Map<string, Intl.DateTimeFormat>();
-function utcToWallMs(iso: string, tz: string): number {
-  let f = formatters.get(tz);
-  if (!f) {
-    f = new Intl.DateTimeFormat("en-US", {
-      timeZone: tz, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
-    });
-    formatters.set(tz, f);
-  }
-  const p: Record<string, string> = {};
-  for (const x of f.formatToParts(new Date(iso))) p[x.type] = x.value;
-  return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute);
-}
-
-interface Slice { date: string; block: number; hours: number }
-/** The (day, block) pieces of a wall-clock interval. */
-function slicesOf(a: number, b: number): Slice[] {
-  const out: Slice[] = [];
-  for (let t = a; t < b;) {
-    const start = Math.floor(t / BLOCK_MS) * BLOCK_MS;
-    const next = Math.min(b, start + BLOCK_MS);
-    out.push({ date: dayOf(start), block: new Date(start).getUTCHours() / 6, hours: (next - t) / H });
-    t = next;
-  }
-  return out;
-}
 
 // ── Legs ────────────────────────────────────────────────────────────────
 
@@ -104,7 +65,10 @@ interface RawLeg {
   revenueLeg: boolean;
   cls: HaulClass;
   revenue: number;
+  /** Recorded pay for this leg, or the load's recorded pay split by truck
+   *  time when it isn't recorded leg by leg; null = nothing recorded. */
   driverPayActual: number | null;
+  driverPaySplit: boolean;
   routeMiles: number | null;
   gpsMiles: number | null;
   a: number;
@@ -114,18 +78,14 @@ interface RawLeg {
 }
 
 interface EventRow {
-  id: string; load_id: string | null; asset_id: number; start: string; end: string | null; leg_index: number | null;
+  id: string; load_id: string | null; asset_id: number | null; start: string; end: string | null; leg_index: number | null;
   status: string | null; event_kind: string; loaded_miles: number | null; driver_pay: number | null;
   driver_id: number | null; driver_name: string | null; title: string | null;
   loads: { load_num: string | null; total_billable: number | null; load_price: number | null; deleted_at: string | null } | null;
 }
-interface ActualRow {
-  event_id: string; truck_start: string | null; truck_end: string | null; route_miles: number | null;
-  loaded_miles: number | null; deadhead_miles: number | null; return_miles: number | null;
-  deadhead_hours: number | null; return_hours: number | null;
-  confidence: LinkConfidence; stops: Array<{ kind?: string; arrive?: string | null; depart?: string | null }> | null;
-}
 interface StopRow { event_id: string; sequence: number; type: string; is_handoff: boolean | null; lat: number | null; lng: number | null }
+
+const EVENT_COLS = "id, load_id, asset_id, start, end, leg_index, status, event_kind, loaded_miles, driver_pay, driver_id, driver_name, title, loads(load_num, total_billable, load_price, deleted_at)";
 
 async function inChunks<T>(ids: string[], run: (chunk: string[]) => Promise<T[]>): Promise<T[]> {
   const out: T[] = [];
@@ -138,11 +98,18 @@ async function plain<T>(label: string, q: PromiseLike<{ data: T[] | null; error:
   return data ?? [];
 }
 
-/** Revenue and non-revenue legs whose calendar time touches [from − 1, to + 1]. */
+/**
+ * Revenue and non-revenue legs whose calendar time touches [from − 1, to + 1].
+ *
+ * A relay load's revenue and its recorded driver pay are split across its
+ * counted legs by truck time (lib/legTime.ts): pay is often entered on one
+ * leg for the whole load, and a 3-mile Vegas pickup leg is hours of truck
+ * time, not 1% of the load. Pay recorded on every leg stays leg by leg.
+ */
 async function loadLegs(orgId: string, from: string, to: string, ctx: Ctx, assetId: number | null): Promise<RawLeg[]> {
   const events = await fetchAllRows<EventRow>("truck profit events", () => {
     let q = supabase.from("events")
-      .select("id, load_id, asset_id, start, end, leg_index, status, event_kind, loaded_miles, driver_pay, driver_id, driver_name, title, loads(load_num, total_billable, load_price, deleted_at)")
+      .select(EVENT_COLS)
       .eq("org_id", orgId)
       .is("deleted_at", null)
       .not("asset_id", "is", null)
@@ -152,126 +119,142 @@ async function loadLegs(orgId: string, from: string, to: string, ctx: Ctx, asset
     if (assetId != null) q = q.eq("asset_id", assetId);
     return q;
   });
-  const live = events.filter((e) =>
+  // Counted the way the dashboard counts loads.
+  const kept = (e: EventRow) =>
     e.status !== "cancelled" && !e.loads?.deleted_at
-    && !ctx.excludedAssets.has(e.asset_id) && !isExcludedEvent(ctx.excluded, e));
+    && !(e.asset_id != null && ctx.excludedAssets.has(e.asset_id)) && !isExcludedEvent(ctx.excluded, e);
+  const live = events.filter(kept);
   if (!live.length) return [];
 
-  const ids = live.map((e) => e.id);
+  // Every counted leg of these loads, for the splits.
   const loadIds = [...new Set(live.map((e) => e.load_id).filter((x): x is string => !!x))];
-  const [siblings, actuals, stops] = await Promise.all([
-    inChunks(loadIds, (c) => plain<{ id: string; load_id: string; loaded_miles: number | null; status: string | null }>("truck profit siblings",
-      supabase.from("events").select("id, load_id, loaded_miles, status").in("load_id", c).is("deleted_at", null))),
-    inChunks(ids, (c) => plain<ActualRow>("truck profit leg actuals",
-      supabase.from("leg_actuals").select("event_id, truck_start, truck_end, route_miles, loaded_miles, deadhead_miles, return_miles, deadhead_hours, return_hours, confidence, stops").in("event_id", c))),
+  const siblings = (await inChunks(loadIds, (c) => plain<EventRow>("truck profit siblings",
+    supabase.from("events").select(EVENT_COLS).in("load_id", c).is("deleted_at", null))))
+    .filter((e) => e.event_kind === "revenue" && kept(e));
+  const byId = new Map<string, EventRow>([...live, ...siblings].map((e) => [e.id, e]));
+  const ids = [...byId.keys()];
+  const [actuals, stops] = await Promise.all([
+    fetchLegActuals(ids),
     inChunks(ids, (c) => plain<StopRow>("truck profit stops",
       supabase.from("stops").select("event_id, sequence, type, is_handoff, lat, lng").in("event_id", c))),
   ]);
-
-  // Revenue split across a relay's legs by route miles (even when unknown).
-  const share = new Map<string, number>();
-  const byLoad = new Map<string, typeof siblings>();
-  for (const s of siblings) if (s.status !== "cancelled") byLoad.set(s.load_id, [...(byLoad.get(s.load_id) ?? []), s]);
-  for (const legs of byLoad.values()) {
-    const miles = legs.map((l) => Number(l.loaded_miles ?? 0));
-    const total = miles.reduce((x, y) => x + y, 0);
-    const known = miles.every((m) => m > 0);
-    legs.forEach((l, i) => share.set(l.id, known && total > 0 ? miles[i] / total : 1 / legs.length));
-  }
-  const actualOf = new Map(actuals.map((r) => [r.event_id, r]));
   const stopsOf = new Map<string, StopRow[]>();
   for (const s of stops) stopsOf.set(s.event_id, [...(stopsOf.get(s.event_id) ?? []), s]);
 
-  return live.map((e) => {
-    const la = actualOf.get(e.id);
+  const legInfo = new Map<string, { cls: HaulClass; a: number; b: number; fromGps: boolean }>();
+  for (const e of byId.values()) {
     const all = (stopsOf.get(e.id) ?? [])
       .sort((x, y) => x.sequence - y.sequence)
       .map((s) => ({ ...s, type: s.type as Stop["type"], isHandoff: s.is_handoff ?? undefined }));
     const mine = stopsForLeg(all, e.leg_index ?? 0);
     const haul = ctx.terminal ? classifyByAirMiles(ctx.terminal, mine.map((s) => ({ lat: s.lat ?? undefined, lon: s.lng ?? undefined }))) : null;
     const cls: HaulClass = haul?.decided ? haul.classification : "local";
+    const w = legWindow({ calStart: e.start, calEnd: e.end, actual: actuals.get(e.id), cls, tz: ctx.tz });
+    legInfo.set(e.id, { cls, a: w.a, b: w.b, fromGps: w.fromGps });
+  }
+
+  // Per load: each counted leg's share of truck time, and its pay.
+  const share = new Map<string, number>();
+  const pay = new Map<string, { amount: number | null; split: boolean }>();
+  const legsOf = new Map<string, EventRow[]>();
+  for (const e of siblings) legsOf.set(e.load_id!, [...(legsOf.get(e.load_id!) ?? []), e]);
+  for (const legs of legsOf.values()) {
+    const sh = timeShares(legs.map((l) => legInfo.get(l.id)!));
+    const recorded = legs.filter((l) => l.driver_pay != null);
+    const total = recorded.reduce((x, l) => x + Number(l.driver_pay), 0);
+    legs.forEach((l, i) => {
+      share.set(l.id, sh[i]);
+      if (recorded.length === legs.length) pay.set(l.id, { amount: Number(l.driver_pay), split: false });
+      else if (recorded.length) pay.set(l.id, { amount: total * sh[i], split: legs.length > 1 });
+      else pay.set(l.id, { amount: null, split: false });
+    });
+  }
+
+  return live.map((e) => {
+    const la = actuals.get(e.id);
+    const info = legInfo.get(e.id)!;
     const revenueLeg = e.event_kind === "revenue";
     const loadRevenue = Number(e.loads?.total_billable ?? e.loads?.load_price ?? 0);
-
-    const gps = !!(la?.truck_start && la?.truck_end);
-    let a = gps ? utcToWallMs(la!.truck_start!, ctx.tz) : naiveMs(e.start);
-    let b = gps ? utcToWallMs(la!.truck_end!, ctx.tz) : e.end ? naiveMs(e.end) : a + H;
-    // A local truck parked away before its first stop or after its last
-    // (left Friday, sat by the shipper all weekend) isn't working the
-    // load: count the drive out, the stops, and the drive home. OTR keeps
-    // its nights out — that time belongs to the trip.
-    const firstArrive = la?.stops?.[0]?.arrive;
-    const lastDepart = la?.stops?.length ? la.stops[la.stops.length - 1]?.depart : null;
-    if (gps && cls === "local" && firstArrive) {
-      const cut = utcToWallMs(firstArrive, ctx.tz) - Number(la!.deadhead_hours ?? 0) * H;
-      if (cut > a && cut < b) a = cut;
-    }
-    if (gps && cls === "local" && lastDepart) {
-      const cut = utcToWallMs(lastDepart, ctx.tz) + Number(la!.return_hours ?? 0) * H;
-      if (cut > a && cut < b) b = cut;
-    }
-    // A relay trailer parked at a handoff (dropped at the yard, taken days
-    // later) isn't either leg's time: the leg ending there ends at the
-    // drop, the one starting there starts at the pickup.
-    const dwellH = (st?: { arrive?: string | null; depart?: string | null }) =>
-      st?.arrive && st?.depart ? (Date.parse(st.depart) - Date.parse(st.arrive)) / H : 0;
-    const firstStop = la?.stops?.[0];
-    const lastStop = la?.stops?.length ? la.stops[la.stops.length - 1] : undefined;
-    if (gps && lastStop?.kind === "handoff" && lastStop.arrive && dwellH(lastStop) > PARKED_HANDOFF_HOURS) {
-      const cut = utcToWallMs(lastStop.arrive, ctx.tz) + HANDOFF_HOURS * H + Number(la!.return_hours ?? 0) * H;
-      if (cut > a && cut < b) b = cut;
-    }
-    if (gps && firstStop?.kind === "handoff" && firstStop.depart && dwellH(firstStop) > PARKED_HANDOFF_HOURS) {
-      const cut = utcToWallMs(firstStop.depart, ctx.tz) - HANDOFF_HOURS * H;
-      if (cut > a && cut < b) a = cut;
-    }
-    if (!(b > a)) b = a + H;
-    if (b - a > MAX_LEG_MS) b = a + MAX_LEG_MS;
-    if (!Number.isFinite(a)) a = b = 0;
-
+    const p = e.load_id && revenueLeg ? pay.get(e.id) : undefined;
     return {
       eventId: e.id,
       loadId: e.load_id,
       loadNum: e.loads?.load_num ?? e.title ?? null,
-      assetId: e.asset_id,
+      assetId: e.asset_id!,
       driverName: e.driver_name,
       revenueLeg,
-      cls,
+      cls: info.cls,
       revenue: revenueLeg ? loadRevenue * (e.load_id ? share.get(e.id) ?? 1 : 1) : 0,
-      driverPayActual: e.driver_pay == null ? null : Number(e.driver_pay),
+      driverPayActual: p ? p.amount : e.driver_pay == null ? null : Number(e.driver_pay),
+      driverPaySplit: p?.split ?? false,
       routeMiles: e.loaded_miles != null ? Number(e.loaded_miles) : la?.route_miles != null ? Number(la.route_miles) : null,
       gpsMiles: la && la.loaded_miles != null
         ? Number(la.loaded_miles) + Number(la.deadhead_miles ?? 0) + Number(la.return_miles ?? 0)
         : null,
-      a, b,
-      timesFromGps: gps,
+      a: info.a,
+      b: info.b,
+      timesFromGps: info.fromGps,
       confidence: la?.confidence ?? null,
     };
-  }).filter((l) => l.b > 0);
+  }).filter((l) => Number.isFinite(l.a) && Number.isFinite(l.b));
 }
 
 // ── Block shares ────────────────────────────────────────────────────────
 
-interface Shares { local: number[]; otr: number[]; measured: boolean; activeAssets: Set<number> }
+/**
+ * Where the fleet earns its revenue in time: the share by day of the week
+ * (0 = Sunday, whole fleet) and the share by block of the day (per class —
+ * local afternoons pay, OTR runs around the clock). A day's price is
+ * overhead per truck-day × 7 × its day share, so every truck's week adds
+ * up to exactly 7 truck-days of overhead; its four blocks split that by
+ * the day's class (OTR if the truck worked an OTR load that day).
+ * (Measured separately: 8 weeks is too thin to price all 28 day × block
+ * combinations on their own.)
+ */
+interface Shares {
+  local: number[]; otr: number[];
+  days: number[];
+  /** Truck-blocks a week spent on OTR loads (≥1 h), for sizing hotels. */
+  otrBlocksPerWeek: number;
+  measured: boolean;
+  activeAssets: Set<number>;
+}
 const sharesCache = new Map<string, { at: number; value: Promise<Shares> }>();
 
 /** Share of revenue earned in each block, per class, over the calibration weeks. */
 async function measureShares(orgId: string, from: string, to: string, ctx: Ctx): Promise<Shares> {
   const legs = await loadLegs(orgId, from, to, ctx, null);
   const rev: Record<HaulClass, number[]> = { local: [0, 0, 0, 0], otr: [0, 0, 0, 0] };
+  const byDay = [0, 0, 0, 0, 0, 0, 0];
+  const otrBlocks = new Set<string>();
   for (const l of legs) {
-    if (!l.revenueLeg || l.revenue <= 0) continue;
+    if (!l.revenueLeg) continue;
     const ss = slicesOf(l.a, l.b);
+    if (l.cls === "otr") {
+      for (const x of ss) if (x.date >= from && x.date <= to && x.hours >= MIN_BLOCK_HOURS) otrBlocks.add(`${l.assetId}|${x.date}|${x.block}`);
+    }
+    if (l.revenue <= 0) continue;
     const total = ss.reduce((s, x) => s + x.hours, 0);
-    for (const s of ss) if (s.date >= from && s.date <= to) rev[l.cls][s.block] += l.revenue * s.hours / total;
+    for (const s of ss) {
+      if (s.date < from || s.date > to) continue;
+      const amt = l.revenue * s.hours / total;
+      rev[l.cls][s.block] += amt;
+      byDay[dowOf(s.date)] += amt;
+    }
   }
-  const norm = (r: number[]) => {
+  const norm = (r: number[], even: number[]) => {
     const t = r.reduce((x, y) => x + y, 0);
-    return t >= MIN_SHARE_REVENUE ? r.map((x) => x / t) : EVEN;
+    return t >= MIN_SHARE_REVENUE ? r.map((x) => x / t) : even;
   };
-  const local = norm(rev.local);
-  const otr = norm(rev.otr);
-  return { local, otr, measured: local !== EVEN || otr !== EVEN, activeAssets: new Set(legs.map((l) => l.assetId)) };
+  const local = norm(rev.local, EVEN);
+  const otr = norm(rev.otr, EVEN);
+  return {
+    local, otr,
+    days: norm(byDay, EVEN_DAYS),
+    otrBlocksPerWeek: otrBlocks.size / ((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / (7 * 24 * H) + 1 / 7),
+    measured: local !== EVEN || otr !== EVEN,
+    activeAssets: new Set(legs.map((l) => l.assetId)),
+  };
 }
 
 function blockShares(orgId: string, from: string, to: string, ctx: Ctx): Promise<Shares> {
@@ -311,34 +294,67 @@ export async function computeTruckProfit(
   ]);
   const ctx: Ctx = { tz: hos.timeZone, terminal: parseTerminal(settings.data?.hos_settings), excluded, excludedAssets };
 
-  // The dashboard's numbers, with hotels moved onto OTR truck-days.
+  // The dashboard's numbers, with hotels moved onto the blocks a truck
+  // spends on OTR loads.
   const p = wt.params;
   const otrDaysPerWeek = p.truckDaysPerWeekByClass?.otr ?? 0;
   const hotels = otrDaysPerWeek > 0 ? p.hotels : { weekly: 0, fixedWeekly: 0, perMile: 0, revenuePct: 0 };
   const hotelsPerOtrDay = otrDaysPerWeek > 0 ? hotels.weekly / otrDaysPerWeek : 0;
   const baseOverhead = Math.max(0, p.fixedWeekly.value - hotels.fixedWeekly) / Math.max(1, p.truckDaysPerWeek);
-  const overhead: Record<HaulClass, number> = { local: baseOverhead, otr: baseOverhead + hotelsPerOtrDay };
   const maintPerMile = Math.max(0, p.maintPerMile - hotels.perMile);
   const otherPct = Math.max(0, p.revenuePctOther - hotels.revenuePct);
   const fuelPerMile = p.fuelPrice.value / p.mpg.value;
   const payPct: Record<HaulClass, number> = { local: p.payPct.local, otr: p.payPct.otr };
   const drivenPer: Record<HaulClass, number> = { local: p.localDrivenPerLoaded.value, otr: p.otrDrivenPerLoaded.value };
 
-  const [shares, raw, assets] = await Promise.all([
+  const [shares, raw, assets, drives] = await Promise.all([
     blockShares(orgId, wt.calibration.from, wt.calibration.to, ctx),
     loadLegs(orgId, from, to, ctx, assetId),
     fetchAllRows<{ id: number; name: string; type: string; hidden: boolean; sort_order: number; motive_vehicle_id: string | null }>("truck profit assets", () =>
       supabase.from("assets").select("id, name, type, hidden, sort_order, motive_vehicle_id").eq("org_id", orgId)),
+    fetchAllRows<{ id: string; asset_id: number; start_time: string; end_time: string | null; miles: number | null }>("truck profit drives", () =>
+      supabase.from("movements").select("id, asset_id, start_time, end_time, miles")
+        .eq("org_id", orgId).eq("source", "motive").is("deleted_at", null)
+        .gte("start_time", `${addDays(from, -1)}T00:00:00Z`).lt("start_time", `${addDays(to, 2)}T00:00:00Z`)),
   ]);
+
+  // Miles driven per truck, day and block from every GPS drive, linked to
+  // a load or not (yard moves and fuel runs cost fuel too). Complete weeks
+  // land within ~1.5% of the odometer the dashboard reads, and unlike its
+  // once-a-day reads they say when the miles happened.
+  const gpsCells = new Map<number, Map<string, number>>();
+  for (const d of drives) {
+    const miles = Number(d.miles ?? 0);
+    if (!(miles > 0)) continue;
+    const a = utcToWallMs(d.start_time, ctx.tz);
+    const b = d.end_time ? utcToWallMs(d.end_time, ctx.tz) : a;
+    const pieces = b > a ? slicesOf(a, b) : [{ date: dayOf(a), block: Math.floor(new Date(a).getUTCHours() / 6), hours: 1 }];
+    const total = pieces.reduce((x, y) => x + y.hours, 0);
+    let cells = gpsCells.get(d.asset_id);
+    if (!cells) { cells = new Map(); gpsCells.set(d.asset_id, cells); }
+    for (const piece of pieces) {
+      if (piece.date < from || piece.date > to) continue;
+      const key = `${piece.date}|${piece.block}`;
+      cells.set(key, (cells.get(key) ?? 0) + miles * piece.hours / total);
+    }
+  }
+
   const shareOf: Record<HaulClass, number[]> = { local: shares.local, otr: shares.otr };
-  const blockPrice = (cls: HaulClass, block: number) => overhead[cls] * shareOf[cls][block];
+  /** dayCls = the class the truck worked that day (see Shares). */
+  const blockPrice = (dayCls: HaulClass, date: string, block: number) =>
+    baseOverhead * 7 * shares.days[dowOf(date)] * shareOf[dayCls][block];
+  // Hotels per block of OTR work, sized so a typical week's OTR blocks add
+  // up to the weekly hotel spend.
+  const hotelsPerBlock = hotels.weekly > 0 && shares.otrBlocksPerWeek > 0
+    ? hotels.weekly / shares.otrBlocksPerWeek
+    : hotelsPerOtrDay / 4;
 
   // Per-leg variable costs.
   const legs = raw.map((l) => {
     let driverPay: number;
-    let driverPaySource: "actual" | "avg";
+    let driverPaySource: "actual" | "split" | "avg";
     if (!l.revenueLeg) { driverPay = l.driverPayActual ?? 0; driverPaySource = "actual"; }
-    else if (pay === "current" && l.driverPayActual != null) { driverPay = l.driverPayActual; driverPaySource = "actual"; }
+    else if (pay === "current" && l.driverPayActual != null) { driverPay = l.driverPayActual; driverPaySource = l.driverPaySplit ? "split" : "actual"; }
     else { driverPay = payPct[l.cls] * l.revenue; driverPaySource = "avg"; }
     const drivenMiles = l.gpsMiles ?? (l.routeMiles ?? 0) * drivenPer[l.cls];
     const slices = slicesOf(l.a, l.b);
@@ -366,6 +382,28 @@ export async function computeTruckProfit(
       cells.set(key, [...(cells.get(key) ?? []), { leg: i, hours: s.hours }]);
     }
   });
+  // The class a truck worked each day: OTR if it spent a block on an OTR
+  // load, local if on any load; days with no work take the truck's usual.
+  const dayClsByTruck = new Map<number, Map<string, HaulClass>>();
+  const usualByTruck = new Map<number, HaulClass>();
+  for (const [truck, cells] of cellsByTruck) {
+    const byDate = new Map<string, HaulClass>();
+    let otrH = 0; let localH = 0;
+    for (const [key, occ] of cells) {
+      for (const o of occ) {
+        if (o.hours < MIN_BLOCK_HOURS) continue;
+        const c = legs[o.leg].cls;
+        if (c === "otr") otrH += o.hours; else localH += o.hours;
+        const date = key.slice(0, 10);
+        if (c === "otr" || !byDate.has(date)) byDate.set(date, c);
+      }
+    }
+    dayClsByTruck.set(truck, byDate);
+    usualByTruck.set(truck, otrH > localH ? "otr" : "local");
+  }
+  const dayClass = (truck: number, date: string): HaulClass =>
+    dayClsByTruck.get(truck)?.get(date) ?? usualByTruck.get(truck) ?? "local";
+
   for (const [truck, cells] of cellsByTruck) {
     const charges = new Map<string, Charge>();
     for (const [key, occ] of cells) {
@@ -373,7 +411,8 @@ export async function computeTruckProfit(
       if (!using.length) continue;
       const lead = using.reduce((m, o) => (o.hours > m.hours ? o : m));
       const cls = legs[lead.leg].cls;
-      const price = blockPrice(cls, Number(key.slice(-1)));
+      const date = key.slice(0, 10);
+      const price = blockPrice(dayClass(truck, date), date, Number(key.slice(-1))) + (cls === "otr" ? hotelsPerBlock : 0);
       const total = using.reduce((s, o) => s + o.hours, 0);
       for (const o of using) legs[o.leg].overhead += price * o.hours / total;
       charges.set(key, { price, cls, using });
@@ -400,20 +439,27 @@ export async function computeTruckProfit(
     .filter((a) => (!!a.motive_vehicle_id && shares.activeAssets.has(a.id)) || legs.some((l) => l.assetId === a.id))
     .sort((a, b) => a.sort_order - b.sort_order);
 
+  // "Current" pay over whole finalized Sat–Fri weeks is the finalized
+  // payroll (the dashboard's Total Payroll): load pay plus adjustments,
+  // spread where the load pay landed. Each load's own panel keeps its pay.
+  const shownIds = new Set(truckRows.map((a) => a.id));
+  const assetHasGps = new Set(truckRows.filter((a) => a.motive_vehicle_id).map((a) => a.id));
+  const wholeWeeks = dowOf(from) === 6 && dowOf(to) === 5;
+  const payrollTotal = pay === "current" && wholeWeeks && wt.projection.driverPaySource === "payroll" ? wt.projection.driverPay : null;
+  const legPayInWindow = legs
+    .filter((l) => shownIds.has(l.assetId) && l.hours > 0)
+    .reduce((sum, l) => sum + l.driverPay * hoursWithin(l.a, l.b, windowA, windowB) / l.hours, 0);
+  const payScale = payrollTotal != null && legPayInWindow > 0 ? payrollTotal / legPayInWindow : 1;
+
   const trucks: TruckProfitTruck[] = truckRows.map((asset) => {
     const cells = cellsByTruck.get(asset.id) ?? new Map<string, Occ[]>();
     const charges = chargesByTruck.get(asset.id) ?? new Map<string, Charge>();
-    const mine = legs.filter((l) => l.assetId === asset.id);
-    // Idle time is priced at the truck's usual class this period.
-    const otrHours = mine.filter((l) => l.cls === "otr").reduce((s, l) => s + l.hours, 0);
-    const localHours = mine.filter((l) => l.cls === "local").reduce((s, l) => s + l.hours, 0);
-    const usual: HaulClass = otrHours > localHours ? "otr" : "local";
 
-    const totals = { ...zero(), unused: 0, routeMiles: 0, drivenMiles: 0 };
+    const gpsMiles = assetHasGps.has(asset.id) ? gpsCells.get(asset.id) ?? new Map<string, number>() : null;
+    const totals = { ...zero(), unused: 0, routeMiles: 0, linkedMiles: 0, gpsMiles: 0 };
     const dayRows: TruckProfitDay[] = days.map((date) => {
-      const touching = [0, 1, 2, 3].flatMap((b) => cells.get(`${date}|${b}`) ?? []).map((o) => legs[o.leg]);
-      const dayCls: HaulClass | null = touching.some((l) => l.cls === "otr") ? "otr" : touching.length ? "local" : null;
-      const day: TruckProfitDay = { date, cls: dayCls, ...zero(), blocks: [], unused: 0 };
+      const worked = dayClsByTruck.get(asset.id)?.get(date) ?? null;
+      const day: TruckProfitDay = { date, cls: worked, ...zero(), blocks: [], unused: 0 };
       for (let b = 0; b < 4; b++) {
         const key = `${date}|${b}`;
         const occ = cells.get(key) ?? [];
@@ -423,11 +469,19 @@ export async function computeTruckProfit(
           const f = l.hours > 0 ? o.hours / l.hours : 0;
           addInto(spread, { ...costsOf(l), overhead: 0, profit: 0 }, f);
           totals.routeMiles += (l.routeMiles ?? 0) * f;
-          totals.drivenMiles += l.drivenMiles * f;
+          totals.linkedMiles += l.drivenMiles * f;
+        }
+        spread.driverPay *= payScale;
+        if (gpsMiles) {
+          // Fuel and wear follow every mile the truck drove, linked or not.
+          const miles = gpsMiles.get(key) ?? 0;
+          totals.gpsMiles += miles;
+          spread.fuel = miles * fuelPerMile;
+          spread.maintenance = miles * maintPerMile;
         }
         const charge = charges.get(key);
-        const cls = charge?.cls ?? dayCls ?? usual;
-        const price = charge?.price ?? blockPrice(cls, b);
+        const cls = charge?.cls ?? dayClass(asset.id, date);
+        const price = charge?.price ?? blockPrice(dayClass(asset.id, date), date, b);
         spread.overhead = price;
         spread.profit = spread.revenue - spread.driverPay - spread.fuel - spread.maintenance - spread.other - price;
         addInto(day, spread);
@@ -449,7 +503,14 @@ export async function computeTruckProfit(
       assetId: asset.id,
       name: asset.name,
       days: dayRows,
-      totals: { ...round(totals), unused: r2(totals.unused), routeMiles: Math.round(totals.routeMiles), drivenMiles: Math.round(totals.drivenMiles) },
+      totals: {
+        ...round(totals),
+        unused: r2(totals.unused),
+        routeMiles: Math.round(totals.routeMiles),
+        linkedMiles: Math.round(totals.linkedMiles),
+        gpsMiles: gpsMiles ? Math.round(totals.gpsMiles) : null,
+        drivenMiles: Math.round(gpsMiles ? totals.gpsMiles : totals.linkedMiles),
+      },
     };
   });
 
@@ -480,8 +541,13 @@ export async function computeTruckProfit(
       confidence: l.confidence,
     }));
 
-  const totals = { ...zero(), unused: 0 };
-  for (const t of trucks) { addInto(totals, t.totals); totals.unused += t.totals.unused; }
+  const totals = { ...zero(), unused: 0, drivenMiles: 0, linkedMiles: 0 };
+  for (const t of trucks) {
+    addInto(totals, t.totals);
+    totals.unused += t.totals.unused;
+    totals.drivenMiles += t.totals.drivenMiles;
+    totals.linkedMiles += t.totals.linkedMiles;
+  }
 
   return {
     from, to, pay,
@@ -491,9 +557,10 @@ export async function computeTruckProfit(
       maintPerMile: Math.round(maintPerMile * 1000) / 1000,
       otherPct: Math.round(otherPct * 10000) / 10000,
       payPct,
-      overheadPerTruckDay: { local: r2(overhead.local), otr: r2(overhead.otr) },
-      hotelsPerOtrDay: r2(hotelsPerOtrDay),
+      overheadPerTruckDay: { local: r2(baseOverhead), otr: r2(baseOverhead) },
+      hotelsPerOtrDay: r2(hotelsPerBlock * 4),
       blockShares: { local: shares.local, otr: shares.otr },
+      dayShares: shares.days,
       blockSharesMeasured: shares.measured,
       breakEven: { local: r2(wt.classes.local.breakEven), otr: r2(wt.classes.otr.breakEven) },
       target: { local: r2(wt.classes.local.target), otr: r2(wt.classes.otr.target) },
@@ -502,6 +569,7 @@ export async function computeTruckProfit(
     },
     trucks,
     legs: legRows,
-    totals: { ...round(totals), unused: r2(totals.unused) },
+    totals: { ...round(totals), unused: r2(totals.unused), drivenMiles: totals.drivenMiles, linkedMiles: totals.linkedMiles },
+    payroll: payrollTotal != null ? { total: r2(payrollTotal), loadPay: r2(legPayInWindow) } : null,
   };
 }

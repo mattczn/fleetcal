@@ -18,7 +18,7 @@ export default function LegProfitPanel({ leg, fs }: { leg: TruckProfitLeg | unde
     : leg.perLoadedMile < leg.breakEven ? RED : leg.perLoadedMile < leg.target ? AMBER : GREEN;
   const rows: Array<[string, number, string?]> = [
     ['Revenue', leg.revenue],
-    ['Driver pay', -leg.driverPay, leg.driverPaySource === 'avg' && leg.revenueLeg ? 'average %' : undefined],
+    ['Driver pay', -leg.driverPay, leg.driverPaySource === 'avg' && leg.revenueLeg ? 'average %' : leg.driverPaySource === 'split' ? "load's pay split by truck time" : undefined],
     ['Fuel', -leg.fuel, `${leg.drivenMiles} mi${leg.milesSource === 'estimate' ? ' (estimated)' : ''}`],
     ['Maintenance', -leg.maintenance],
     ['Truck overhead', -leg.overhead, 'time-of-day blocks'],

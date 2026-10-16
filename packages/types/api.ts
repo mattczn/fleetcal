@@ -2339,6 +2339,13 @@ export interface WeeklyTargetResponse {
     breakEvenPerLoadedMile: number | null;
     targetPerLoadedMile:    number | null;
   };
+  /** The same period counted by work done: each load's share of its truck
+   *  time inside the period (vs booked = all of it in its pickup week).
+   *  Only computed for the dashboard; null elsewhere. */
+  earned?: {
+    booked: WeeklyTargetResponse['booked'];
+    projection: WeeklyTargetResponse['projection'];
+  } | null;
   /** Rate per loaded mile by haul class at the saved margin. */
   classes: { local: WeeklyTargetClassRate; otr: WeeklyTargetClassRate };
   otr: {
@@ -3426,7 +3433,9 @@ export interface TruckProfitLeg extends TruckProfitCosts {
   routeMiles: number | null;
   drivenMiles: number;
   milesSource: 'gps' | 'estimate';
-  driverPaySource: 'actual' | 'avg';
+  /** actual = recorded on this leg; split = the load's recorded pay split
+   *  by truck time; avg = the class's average pay %. */
+  driverPaySource: 'actual' | 'split' | 'avg';
   perLoadedMile: number | null;
   breakEven: number;
   target: number;
@@ -3456,7 +3465,16 @@ export interface TruckProfitTruck {
   assetId: number;
   name: string;
   days: TruckProfitDay[];
-  totals: TruckProfitCosts & { unused: number; routeMiles: number; drivenMiles: number };
+  totals: TruckProfitCosts & {
+    unused: number;
+    routeMiles: number;
+    /** Miles the linked GPS put on this truck's loads (spread into the period). */
+    linkedMiles: number;
+    /** Every GPS drive in the period, linked to a load or not; null without GPS. */
+    gpsMiles: number | null;
+    /** What fuel and maintenance are charged on: all GPS drives, else linked. */
+    drivenMiles: number;
+  };
 }
 
 export interface TruckProfitResponse {
@@ -3473,6 +3491,10 @@ export interface TruckProfitResponse {
     hotelsPerOtrDay: number;
     /** Share of a truck-day's overhead per block, by class; each sums to 1. */
     blockShares: { local: number[]; otr: number[] };
+    /** Share of a truck-week's overhead per day of the week (0 = Sunday), whole fleet; sums to 1.
+     *  A block's price = overhead per truck-day × 7 × day share × the block's share for the
+     *  class the truck worked that day (+ hotels on OTR blocks). */
+    dayShares: number[];
     blockSharesMeasured: boolean;
     breakEven: { local: number; otr: number };
     target: { local: number; otr: number };
@@ -3481,5 +3503,8 @@ export interface TruckProfitResponse {
   };
   trucks: TruckProfitTruck[];
   legs: TruckProfitLeg[];
-  totals: TruckProfitCosts & { unused: number };
+  totals: TruckProfitCosts & { unused: number; drivenMiles: number; linkedMiles: number };
+  /** Set when driver pay ("current") is the finalized payroll for whole
+   *  Sat–Fri weeks: its total and the load pay it was spread over. */
+  payroll: { total: number; loadPay: number } | null;
 }

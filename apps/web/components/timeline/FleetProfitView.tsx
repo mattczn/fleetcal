@@ -160,6 +160,14 @@ export default function FleetProfitView() {
                 <div className="text-[15px] font-semibold tabular-nums" style={{ color: AMBER }}>{money(t!.unused)}</div>
               </div>
             </div>
+            <div className="mb-2 text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
+              {t!.drivenMiles.toLocaleString()} mi driven (all GPS drives — fuel and maintenance are charged on these)
+              {' · '}{t!.linkedMiles.toLocaleString()} mi on loads
+              {t!.drivenMiles > t!.linkedMiles ? ` · ${(t!.drivenMiles - t!.linkedMiles).toLocaleString()} mi not on any load` : ''}
+              {data.payroll
+                ? ` · Driver pay is the finalized payroll ${money(data.payroll.total)} (load pay ${money(data.payroll.loadPay)}${data.payroll.total !== data.payroll.loadPay ? ` ${data.payroll.total > data.payroll.loadPay ? '+' : '−'} ${money(Math.abs(data.payroll.total - data.payroll.loadPay))} adjustments` : ''}, spread where the load pay is)`
+                : ''}
+            </div>
             <BlockPrices data={data} />
 
             {/* Fleet grid */}
@@ -241,7 +249,7 @@ export default function FleetProfitView() {
                 <option value="time">By time</option>
               </select>
               <span className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
-                $/mi is colored against the dashboard&apos;s break-even and target for local or OTR.
+                $/mi is colored against the dashboard&apos;s break-even and target for local or OTR. Relay loads are split across their legs by truck time (revenue and pay).
               </span>
             </div>
             <div className="rounded-lg overflow-x-auto" style={{ border: '1px solid var(--gc-border)', background: 'var(--gc-surface)' }}>
@@ -273,20 +281,23 @@ export default function FleetProfitView() {
   );
 }
 
+const DOW_ORDER = [6, 0, 1, 2, 3, 4, 5]; // Sat → Fri, like the grid
+
 function BlockPrices({ data }: { data: TruckProfitResponse }) {
   const p = data.params;
-  const row = (cls: 'local' | 'otr') => (
-    <span>
-      <b style={{ color: 'var(--gc-text-2)' }}>{cls === 'otr' ? 'OTR' : 'Local'}</b>{' '}
-      {p.blockShares[cls].map((s, i) => `${BLOCK_LABEL[i]} ${money(s * p.overheadPerTruckDay[cls])}`).join(' · ')}
-    </span>
-  );
+  const perDay = p.overheadPerTruckDay.local;
+  const split = (cls: 'local' | 'otr') => p.blockShares[cls].map((s) => `${Math.round(s * 100)}%`).join(' / ');
   return (
-    <div className="flex flex-wrap gap-x-5 gap-y-1 mb-3 text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
-      <span>Block prices (overhead {money(p.overheadPerTruckDay.local)}/truck-day{p.hotelsPerOtrDay > 0 ? `, OTR +${money(p.hotelsPerOtrDay)} hotels` : ''}):</span>
-      {row('local')}
-      {row('otr')}
-      <span>Fuel ${p.fuelPrice.toFixed(2)} ÷ {p.mpg} mpg · maint ${p.maintPerMile.toFixed(3)}/mi</span>
+    <div className="mb-3 text-[11px] space-y-0.5" style={{ color: 'var(--gc-text-3)' }}>
+      <div>
+        <b style={{ color: 'var(--gc-text-2)' }}>Truck overhead by day</b> (avg {money(perDay)}/truck-day, priced by when the fleet earns):{' '}
+        {DOW_ORDER.map((d) => `${DOW[d]} ${money(perDay * 7 * p.dayShares[d])}`).join(' · ')}
+      </div>
+      <div>
+        Split across 12a / 6a / 12p / 6p — local day {split('local')} · OTR day {split('otr')}
+        {p.hotelsPerOtrDay > 0 ? ` · hotels +${money(p.hotelsPerOtrDay)} per day on an OTR load` : ''}
+        {' · '}fuel ${p.fuelPrice.toFixed(2)} ÷ {p.mpg} mpg · maint ${p.maintPerMile.toFixed(3)}/mi
+      </div>
     </div>
   );
 }
@@ -312,8 +323,9 @@ function LegRow({ l }: { l: TruckProfitLeg }) {
         {when(l.start)} → {when(l.end)}{l.timesFromGps ? '' : ' *'}
       </td>
       <td className={num} style={{ color: 'var(--gc-text-1)' }}>{money(l.revenue)}</td>
-      <td className={num} style={{ color: 'var(--gc-text-2)' }} title={l.driverPaySource === 'actual' ? 'Recorded pay' : 'Average pay %'}>
-        {money(l.driverPay)}{l.driverPaySource === 'avg' && l.revenueLeg ? ' ~' : ''}
+      <td className={num} style={{ color: 'var(--gc-text-2)' }}
+        title={l.driverPaySource === 'actual' ? 'Recorded pay for this leg' : l.driverPaySource === 'split' ? "The load's recorded pay, split across its legs by truck time" : 'Average pay %'}>
+        {money(l.driverPay)}{l.driverPaySource === 'avg' && l.revenueLeg ? ' ~' : l.driverPaySource === 'split' ? ' ÷' : ''}
       </td>
       <td className={num} style={{ color: 'var(--gc-text-2)' }}>{money(l.fuel)}</td>
       <td className={num} style={{ color: 'var(--gc-text-2)' }}>{money(l.maintenance)}</td>

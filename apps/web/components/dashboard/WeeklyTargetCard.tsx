@@ -134,6 +134,39 @@ function PayModeToggle({ mode, avgPct, onChange }: { mode: PayMode; avgPct: numb
   );
 }
 
+// Revenue for the period: Booked = every load in full in the week it
+// picked up (closes the books, matches billing); Earned = each load's
+// share of its truck time inside the period, so revenue lands in the week
+// the miles were driven. Remembered per browser.
+type RevenueMode = 'booked' | 'earned';
+const REVENUE_MODE_KEY = 'dashboard.weeklyTarget.revenueMode';
+
+function RevenueModeToggle({ mode, onChange }: { mode: RevenueMode; onChange: (m: RevenueMode) => void }) {
+  return (
+    <span className="inline-flex rounded-md overflow-hidden text-[11px] align-middle" style={{ border: '1px solid var(--gc-border)' }}>
+      {(['booked', 'earned'] as const).map(m => (
+        <button
+          key={m}
+          type="button"
+          aria-pressed={mode === m}
+          onClick={() => onChange(m)}
+          className="px-1.5 py-px"
+          title={m === 'booked'
+            ? 'Every load counted in full in the week it picked up'
+            : 'Each load counted for the share of its truck time inside the period'}
+          style={{
+            background: mode === m ? 'var(--gc-hover)' : 'transparent',
+            color: mode === m ? 'var(--gc-text-1)' : 'var(--gc-text-3)',
+            fontWeight: mode === m ? 600 : 400,
+          }}
+        >
+          {m === 'booked' ? 'Booked' : 'Earned'}
+        </button>
+      ))}
+    </span>
+  );
+}
+
 function Row({ label, value, strong, tone }: { label: React.ReactNode; value: string; strong?: boolean; tone?: string }) {
   return (
     <div className="flex items-baseline justify-between gap-3 text-sm py-0.5">
@@ -162,6 +195,15 @@ export default function WeeklyTargetCard({ data, error: err, saving, onSave: sav
     setPayMode(m);
     try { localStorage.setItem(PAY_MODE_KEY, m); } catch { /* storage blocked — the toggle still works this visit */ }
   };
+  const [revenueMode, setRevenueMode] = useState<RevenueMode>(() => {
+    try {
+      return typeof window !== 'undefined' && localStorage.getItem(REVENUE_MODE_KEY) === 'earned' ? 'earned' : 'booked';
+    } catch { return 'booked'; }
+  });
+  const chooseRevenueMode = (m: RevenueMode) => {
+    setRevenueMode(m);
+    try { localStorage.setItem(REVENUE_MODE_KEY, m); } catch { /* storage blocked — the toggle still works this visit */ }
+  };
 
   const card = (children: React.ReactNode) => (
     <div style={{ background: 'var(--gc-surface)', borderRadius: 12, border: '1px solid var(--gc-border)', padding: 20 }}>
@@ -172,7 +214,11 @@ export default function WeeklyTargetCard({ data, error: err, saving, onSave: sav
   if (err && !data) return card(<div className="text-sm" style={{ color: '#d93025' }}>Weekly target: {err}</div>);
   if (!data) return card(<div className="h-40 rounded-lg animate-pulse" style={{ background: 'var(--gc-hover)' }} />);
 
-  const { params: p, booked: b, projection: x, otr } = data;
+  const { params: p, otr } = data;
+  const earned = revenueMode === 'earned' && data.earned ? data.earned : null;
+  const b = earned ? earned.booked : data.booked;
+  const x = earned ? earned.projection : data.projection;
+  const revenueWord = earned ? 'Earned' : 'Booked';
   const isWeek = data.period.days === 7;
   const locked = data.settingsUnavailable || saving;
   const scaleMax = Math.max(x.targetRevenue, b.revenue, x.breakEvenRevenue) * 1.08 || 1;
@@ -210,11 +256,15 @@ export default function WeeklyTargetCard({ data, error: err, saving, onSave: sav
             Driver pay is either Current (the Total Payroll figure) or Avg (your average pay % of revenue over the last 8 complete weeks × booked revenue), which estimates the week before payroll adjustments are made.
             Break-even and target always use the average pay %, since they price revenue you haven&rsquo;t booked yet.
             Miles are projected from booked loaded miles × the empty-mile factor. Owner-operator loads are excluded.
+            Booked counts every load in full in the week it picked up. Earned counts each load for the share of its truck time inside the period (linked GPS, else the calendar), so a Friday pickup delivered Monday lands mostly in the week it was driven; over several weeks the two add up the same.
             Expect about ±10% on any single week.
           </>} />
         </h2>
-        <span className="text-sm font-medium tabular-nums" style={{ color: 'var(--gc-text-2)' }}>
-          {periodLabel(data.period.from, data.period.to)}
+        <span className="inline-flex items-center gap-2">
+          {data.earned ? <RevenueModeToggle mode={revenueMode} onChange={chooseRevenueMode} /> : null}
+          <span className="text-sm font-medium tabular-nums" style={{ color: 'var(--gc-text-2)' }}>
+            {periodLabel(data.period.from, data.period.to)}
+          </span>
         </span>
       </div>
 
@@ -230,7 +280,7 @@ export default function WeeklyTargetCard({ data, error: err, saving, onSave: sav
         <div className="absolute -inset-y-1 w-0.5" style={{ left: pos(x.targetRevenue), background: '#1a73e8' }} title="Target" />
       </div>
       <div className="flex justify-between text-[11px] mb-4" style={{ color: 'var(--gc-text-3)' }}>
-        <span>Booked {money(b.revenue)} · {b.loads} loads</span>
+        <span>{revenueWord} {money(b.revenue)} · {b.loads} loads{earned ? ' (in part or whole)' : ''}</span>
         <span>Break-even {money(x.breakEvenRevenue)} · <span style={{ color: '#1a73e8' }}>Target {money(x.targetRevenue)}</span></span>
       </div>
 
@@ -261,7 +311,7 @@ export default function WeeklyTargetCard({ data, error: err, saving, onSave: sav
 
         <div>
           <div className="text-[11px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>Revenue per loaded mile</div>
-          <Row label={isWeek ? 'Booked this week' : 'Booked this period'} value={perMile(x.revenuePerLoadedMile)} strong />
+          <Row label={`${revenueWord} this ${isWeek ? 'week' : 'period'}`} value={perMile(x.revenuePerLoadedMile)} strong />
           <Row label="Break-even" value={perMile(x.breakEvenPerLoadedMile)} />
           <Row label="Target" value={perMile(x.targetPerLoadedMile)} tone="#1a73e8" />
           <div className="text-[11px] font-semibold uppercase tracking-wider mt-3 mb-1" style={{ color: 'var(--gc-text-3)' }}>
