@@ -8,7 +8,7 @@
  * along the way. See docs/movement-linking.md.
  */
 
-import type { LoadTrailParked, LoadTrailResponse, LoadTrailRole, LoadTrailSegment } from "@fleetcal/types";
+import type { LoadTrailDrive, LoadTrailParked, LoadTrailResponse, LoadTrailRole, LoadTrailSegment } from "@fleetcal/types";
 import { env } from "./env.js";
 import { supabase as supabaseTyped } from "./supabase.js";
 import { fetchAllRows } from "./fetchAllRows.js";
@@ -22,7 +22,7 @@ const MAX_WAYPOINTS = 25; // Mapbox Directions limit
 
 interface LinkRow { movement_id: string; role: string; loaded_event_id: string | null; from_event_id: string | null; to_event_id: string | null }
 interface MoveRow {
-  id: string; asset_id: number; start_time: string; end_time: string | null; miles: number | null; destination: string | null;
+  id: string; asset_id: number; start_time: string; end_time: string | null; miles: number | null; origin: string | null; destination: string | null;
   origin_lat: number | null; origin_lon: number | null; destination_lat: number | null; destination_lon: number | null;
 }
 
@@ -84,13 +84,13 @@ export async function loadTrail(orgId: string, eventId: string): Promise<LoadTra
   }
   for (const l of inbound) if (l.role === "transition" && l.to_event_id) roleOf.set(l.movement_id, { role: "deadhead", leg: l.to_event_id });
   for (const l of outbound) if (l.role === "transition" && l.from_event_id) roleOf.set(l.movement_id, { role: "return", leg: l.from_event_id });
-  if (roleOf.size === 0) return { segments: [], parked: [] };
+  if (roleOf.size === 0) return { segments: [], parked: [], drives: [] };
 
   const ids = [...roleOf.keys()];
   const moves: MoveRow[] = [];
   for (let i = 0; i < ids.length; i += 150) {
     moves.push(...await fetchAllRows<MoveRow>("trail movements", () => supabase.from("movements")
-      .select("id, asset_id, start_time, end_time, miles, destination, origin_lat, origin_lon, destination_lat, destination_lon")
+      .select("id, asset_id, start_time, end_time, miles, origin, destination, origin_lat, origin_lon, destination_lat, destination_lon")
       .eq("org_id", orgId).in("id", ids.slice(i, i + 150))));
   }
   moves.sort((a, b) => a.asset_id - b.asset_id || a.start_time.localeCompare(b.start_time));
@@ -147,5 +147,17 @@ export async function loadTrail(orgId: string, eventId: string): Promise<LoadTra
       hours: Math.round(hours * 10) / 10, place: a.destination, truck: truckName.get(a.asset_id) ?? null,
     });
   }
-  return { segments, parked };
+  const drives: LoadTrailDrive[] = moves.map((m) => ({
+    movementId: m.id,
+    role: roleOf.get(m.id)!.role,
+    truck: truckName.get(m.asset_id) ?? null,
+    start: m.start_time,
+    end: m.end_time,
+    miles: m.miles == null ? null : Number(m.miles),
+    origin: m.origin,
+    destination: m.destination,
+    from: pt(m.origin_lat, m.origin_lon),
+    to: pt(m.destination_lat, m.destination_lon),
+  }));
+  return { segments, parked, drives };
 }

@@ -1,10 +1,11 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { X, MapPin, Clock, Truck, CheckCircle2, Activity, Route } from 'lucide-react';
-import type { LoadTrailResponse, LoadTrailRole } from '@fleetcal/types';
+import { X, MapPin, Clock, Truck, CheckCircle2, Activity, Route, Navigation, ChevronLeft, ChevronRight } from 'lucide-react';
+import type { LoadTrailDrive, LoadTrailResponse, LoadTrailRole } from '@fleetcal/types';
 import type { Stop, StopType } from '@/lib/types';
 import { railway } from '@/lib/railway';
+import { extractCity } from '@/lib/clusterMovements';
 import { fmtStopWindow } from './StopsSection';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { loadGoogleMaps, MAP_ID } from '@/lib/googleMaps';
@@ -105,6 +106,14 @@ export default function RouteMapPanel({ stops, onClose, motiveVehicleId, embedde
   const [showTrail, setShowTrail] = useState(true);
   const trailOverlays = useRef<Array<google.maps.Polyline | google.maps.marker.AdvancedMarkerElement>>([]);
   const trailFitted = useRef(false);
+  const [showRoute, setShowRoute] = useState(true);
+  const showRouteRef = useRef(true);
+  const routeLines = useRef<google.maps.Polyline[]>([]);
+  const [bottomTab, setBottomTab] = useState<'stops' | 'gps'>('stops');
+  const [selectedDrive, setSelectedDrive] = useState<string | null>(null);
+  const drives = trail?.drives ?? [];
+  const selectedIdx = drives.findIndex(d => d.movementId === selectedDrive);
+  const selected = selectedIdx >= 0 ? drives[selectedIdx] : null;
 
   const geocodedStops = stops.filter(s => s.lat != null && s.lng != null);
 
@@ -231,7 +240,11 @@ export default function RouteMapPanel({ stops, onClose, motiveVehicleId, embedde
       // location data existed, and the []-deps prevented a re-run.
       // See the truck-marker effect below.
 
-      // Route line
+      // Route line (kept so the Route toggle can hide it)
+      const drawRoute = (path: { lat: number; lng: number }[]) => {
+        routeLines.current = drawRouteLine(map, path);
+        if (!showRouteRef.current) routeLines.current.forEach(l => l.setMap(null));
+      };
       if (geocodedStops.length >= 2) {
         const coordPairs = geocodedStops.map(s => ({ lng: s.lng!, lat: s.lat! }));
         const coordStr = coordPairs.map(c => `${c.lng},${c.lat}`).join(';');
@@ -243,11 +256,11 @@ export default function RouteMapPanel({ stops, onClose, motiveVehicleId, embedde
               const path =
                 data.routes?.[0]?.geometry.coordinates.map(([lng, lat]) => ({ lat, lng })) ??
                 coordPairs.map(c => ({ lat: c.lat, lng: c.lng }));
-              drawRouteLine(map, path);
+              drawRoute(path);
             })
-            .catch(() => drawRouteLine(map, coordPairs.map(c => ({ lat: c.lat, lng: c.lng }))));
+            .catch(() => drawRoute(coordPairs.map(c => ({ lat: c.lat, lng: c.lng }))));
         } else {
-          drawRouteLine(map, coordPairs.map(c => ({ lat: c.lat, lng: c.lng })));
+          drawRoute(coordPairs.map(c => ({ lat: c.lat, lng: c.lng })));
         }
 
         // Fit bounds to stops
@@ -349,6 +362,47 @@ export default function RouteMapPanel({ stops, onClose, motiveVehicleId, embedde
       trailOverlays.current = [];
     };
   }, [mapReady, trail, showTrail, calendarTimezone]);
+
+  // Route toggle. The ref covers a route that finishes drawing later.
+  useEffect(() => {
+    showRouteRef.current = showRoute;
+    routeLines.current.forEach(l => l.setMap(showRoute ? mapRef.current : null));
+  }, [showRoute]);
+
+  // Start/end pins for the movement picked in the list.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!mapReady || !map || !selected) return;
+    const color = TRAIL_STYLE[selected.role].color;
+    const pins: google.maps.marker.AdvancedMarkerElement[] = [];
+    const pin = (p: { lat: number; lng: number }, filled: boolean, title: string) => {
+      const el = document.createElement('div');
+      el.style.cssText = `width:16px;height:16px;border-radius:50%;background:${filled ? color : '#fff'};border:3px solid ${color};box-shadow:0 1px 4px rgba(0,0,0,0.4);`;
+      el.title = title;
+      pins.push(new google.maps.marker.AdvancedMarkerElement({ map, position: p, content: el, zIndex: 5 }));
+    };
+    if (selected.from) pin(selected.from, false, 'Drive started');
+    if (selected.to) pin(selected.to, true, 'Drive ended');
+    return () => { pins.forEach(m => { m.map = null; }); };
+  }, [mapReady, selected]);
+
+  const selectDrive = (idx: number) => {
+    const d = drives[idx];
+    if (!d) return;
+    setSelectedDrive(d.movementId);
+    document.querySelector(`[data-drive="${d.movementId}"]`)?.scrollIntoView({ block: 'nearest' });
+    const map = mapRef.current;
+    const pts = [d.from, d.to].filter((p): p is { lat: number; lng: number } => !!p);
+    if (!map || !pts.length) return;
+    if (pts.length === 2 && distanceMiles(pts[0].lat, pts[0].lng, pts[1].lat, pts[1].lng) > 0.5) {
+      const b = new google.maps.LatLngBounds();
+      pts.forEach(p => b.extend(p));
+      map.fitBounds(b, 80);
+    } else {
+      map.panTo(pts[0]);
+      map.setZoom(14);
+    }
+  };
 
   // Sync the traffic layer's visibility with the toggle.
   useEffect(() => {
@@ -467,12 +521,32 @@ export default function RouteMapPanel({ stops, onClose, motiveVehicleId, embedde
           <Activity size={12} />
           Traffic
         </button>
+        {geocodedStops.length >= 2 ? (
+          <button
+            type="button"
+            onClick={() => setShowRoute(r => !r)}
+            style={{
+              position: 'absolute', top: 92, right: 10, zIndex: 1,
+              display: 'flex', alignItems: 'center', gap: 5,
+              padding: '6px 10px', fontSize: 12, fontWeight: 600,
+              borderRadius: 6, cursor: 'pointer',
+              border: '1px solid rgba(0,0,0,0.15)',
+              background: showRoute ? '#2563eb' : 'rgba(255,255,255,0.95)',
+              color: showRoute ? '#fff' : 'var(--gc-text-2)',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.18)',
+            }}
+            title={showRoute ? 'Hide the planned route' : 'Show the planned route'}
+          >
+            <Navigation size={12} />
+            Route
+          </button>
+        ) : null}
         {trail && trail.segments.length > 0 ? (
           <button
             type="button"
             onClick={() => setShowTrail(t => !t)}
             style={{
-              position: 'absolute', top: 92, right: 10, zIndex: 1,
+              position: 'absolute', top: geocodedStops.length >= 2 ? 128 : 92, right: 10, zIndex: 1,
               display: 'flex', alignItems: 'center', gap: 5,
               padding: '6px 10px', fontSize: 12, fontWeight: 600,
               borderRadius: 6, cursor: 'pointer',
@@ -490,7 +564,7 @@ export default function RouteMapPanel({ stops, onClose, motiveVehicleId, embedde
       </div>
 
       {/* Stop legend */}
-      <div style={{ borderTop: '1px solid var(--gc-border)', background: 'var(--gc-surface)', maxHeight: 180, overflowY: 'auto', padding: '10px 12px' }}>
+      <div style={{ borderTop: '1px solid var(--gc-border)', background: 'var(--gc-surface)', maxHeight: 240, overflowY: 'auto', padding: '10px 12px' }}>
         {trail ? (
           <div className="flex items-center gap-3 flex-wrap mb-2" style={{ fontSize: 11, color: 'var(--gc-text-3)' }}>
             {trail.segments.length === 0 ? (
@@ -519,6 +593,36 @@ export default function RouteMapPanel({ stops, onClose, motiveVehicleId, embedde
             )}
           </div>
         ) : null}
+        {drives.length > 0 ? (
+          <div className="flex items-center gap-1 mb-2">
+            {(['stops', 'gps'] as const).map(t => (
+              <button key={t} type="button" onClick={() => setBottomTab(t)}
+                className="px-2 py-0.5 rounded text-[11px] font-semibold"
+                style={{
+                  background: bottomTab === t ? 'var(--gc-text-1)' : 'var(--gc-surface-2)',
+                  color: bottomTab === t ? 'var(--gc-surface)' : 'var(--gc-text-2)',
+                }}>
+                {t === 'stops' ? `Stops (${stops.length})` : `GPS movements (${drives.length})`}
+              </button>
+            ))}
+            {bottomTab === 'gps' ? (
+              <div className="ml-auto flex items-center gap-1" style={{ fontSize: 11, color: 'var(--gc-text-3)' }}>
+                <button type="button" disabled={selectedIdx <= 0} onClick={() => selectDrive(selectedIdx - 1)}
+                  className="p-0.5 rounded disabled:opacity-30" title="Previous movement">
+                  <ChevronLeft size={14} />
+                </button>
+                <span className="tabular-nums">{selectedIdx >= 0 ? selectedIdx + 1 : '–'} / {drives.length}</span>
+                <button type="button" disabled={selectedIdx >= drives.length - 1} onClick={() => selectDrive(selectedIdx + 1)}
+                  className="p-0.5 rounded disabled:opacity-30" title="Next movement">
+                  <ChevronRight size={14} />
+                </button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+        {bottomTab === 'gps' && drives.length > 0 ? (
+          <TrailDriveList drives={drives} selectedId={selected?.movementId ?? null} onSelect={selectDrive} tz={calendarTimezone || undefined} />
+        ) : (
         <div className="space-y-1.5">
           {stops.map((stop, idx) => {
             const cfg = TYPE_CONFIG[stop.type] ?? TYPE_CONFIG.stop;
@@ -632,25 +736,90 @@ export default function RouteMapPanel({ stops, onClose, motiveVehicleId, embedde
             </div>
           )}
         </div>
+        )}
       </div>
     </div>
   );
 }
 
-function drawRouteLine(map: google.maps.Map, path: { lat: number; lng: number }[]) {
+function fmtSpan(ms: number): string {
+  const min = Math.max(0, Math.round(ms / 60000));
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  if (!h) return `${m}m`;
+  return m ? `${h}h ${m}m` : `${h}h`;
+}
+
+/** Each linked Motive drive in order, with the time parked between them. */
+function TrailDriveList({ drives, selectedId, onSelect, tz }: {
+  drives: LoadTrailDrive[]; selectedId: string | null; onSelect: (idx: number) => void; tz: string | undefined;
+}) {
+  const day = (iso: string) => new Date(iso).toLocaleDateString('en-CA', { timeZone: tz });
+  const at = (iso: string, withDate: boolean) => new Date(iso).toLocaleString('en-US', {
+    timeZone: tz, ...(withDate ? { month: 'short', day: 'numeric' } : {}), hour: 'numeric', minute: '2-digit',
+  });
+  return (
+    <div className="space-y-0.5">
+      {drives.map((d, idx) => {
+        const st = TRAIL_STYLE[d.role];
+        const prev = drives[idx - 1];
+        const parkedMs = prev?.end && prev.truck === d.truck ? Date.parse(d.start) - Date.parse(prev.end) : 0;
+        const from = extractCity(d.origin) ?? '—';
+        const to = extractCity(d.destination) ?? '—';
+        const on = d.movementId === selectedId;
+        return (
+          <div key={d.movementId}>
+            {parkedMs >= 15 * 60000 ? (
+              <div className="flex items-center gap-1.5 pl-3 py-0.5" style={{ fontSize: 11, color: 'var(--gc-text-3)' }}>
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#374151' }} />
+                Parked {fmtSpan(parkedMs)}{prev.destination ? ` · ${extractCity(prev.destination)}` : ''}
+              </div>
+            ) : null}
+            <div
+              data-drive={d.movementId}
+              onClick={() => onSelect(idx)}
+              className="flex items-start gap-2 cursor-pointer"
+              style={{ borderRadius: 6, padding: '3px 6px', margin: '0 -6px', background: on ? 'var(--gc-hover)' : 'transparent' }}
+            >
+              <span style={{ width: 3, alignSelf: 'stretch', borderRadius: 2, background: st.color, flexShrink: 0 }} />
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div className="flex items-center gap-1.5" style={{ fontSize: 12 }}>
+                  <span style={{ fontWeight: 700, color: st.color }}>{st.label.replace(' (GPS)', '')}</span>
+                  {d.truck ? <span style={{ color: 'var(--gc-text-3)' }}>· {d.truck}</span> : null}
+                  <span className="ml-auto tabular-nums" style={{ color: 'var(--gc-text-2)', fontWeight: 600 }}>
+                    {d.miles != null ? `${Math.round(d.miles)} mi` : '—'}
+                  </span>
+                </div>
+                <div className="tabular-nums" style={{ fontSize: 11, color: 'var(--gc-text-2)' }}>
+                  {at(d.start, true)} → {d.end ? at(d.end, day(d.end) !== day(d.start)) : '…'}
+                  {d.end ? ` · ${fmtSpan(Date.parse(d.end) - Date.parse(d.start))}` : ''}
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--gc-text-3)' }}>{from} → {to}</div>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function drawRouteLine(map: google.maps.Map, path: { lat: number; lng: number }[]): google.maps.Polyline[] {
   // White outline beneath blue line for contrast over varied tiles.
-  new google.maps.Polyline({
-    map,
-    path,
-    strokeColor: '#ffffff',
-    strokeOpacity: 0.85,
-    strokeWeight: 6,
-  });
-  new google.maps.Polyline({
-    map,
-    path,
-    strokeColor: '#2563eb',
-    strokeOpacity: 1,
-    strokeWeight: 3.5,
-  });
+  return [
+    new google.maps.Polyline({
+      map,
+      path,
+      strokeColor: '#ffffff',
+      strokeOpacity: 0.85,
+      strokeWeight: 6,
+    }),
+    new google.maps.Polyline({
+      map,
+      path,
+      strokeColor: '#2563eb',
+      strokeOpacity: 1,
+      strokeWeight: 3.5,
+    }),
+  ];
 }

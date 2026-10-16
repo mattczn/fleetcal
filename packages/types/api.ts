@@ -3363,7 +3363,23 @@ export interface LoadTrailParked {
   truck: string | null;
 }
 
+/** One Motive drive linked to the load, for the movement list under the map. */
+export interface LoadTrailDrive {
+  movementId: string;
+  role: LoadTrailRole;
+  truck: string | null;
+  start: string;
+  end: string | null;
+  miles: number | null;
+  origin: string | null;
+  destination: string | null;
+  from: { lat: number; lng: number } | null;
+  to: { lat: number; lng: number } | null;
+}
+
 export interface LoadTrailResponse {
   segments: LoadTrailSegment[];
   parked: LoadTrailParked[];
+  /** Every linked drive in time order (per truck). */
+  drives: LoadTrailDrive[];
 }
