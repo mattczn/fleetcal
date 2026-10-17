@@ -192,6 +192,12 @@ export default function FleetProfitView() {
                           <span style={{ width: 8, height: 8, borderRadius: 2, background: colorOf.get(truck.assetId) ?? 'var(--gc-text-3)' }} />
                           {truck.name}
                         </Link>
+                        {truck.costShare !== 1 ? (
+                          <div className="text-[10px]" style={{ color: 'var(--gc-text-3)' }}
+                            title={`This truck's daily cost is ${Math.round(truck.costShare * 100)}% of a standard truck's`}>
+                            cost {Math.round(truck.costShare * 100)}% of a truck
+                          </div>
+                        ) : null}
                       </td>
                       {truck.days.map((day) => (
                         <td key={day.date} className="px-1.5 py-1.5">
@@ -290,7 +296,7 @@ function BlockPrices({ data }: { data: TruckProfitResponse }) {
   return (
     <div className="mb-3 text-[11px] space-y-0.5" style={{ color: 'var(--gc-text-3)' }}>
       <div>
-        <b style={{ color: 'var(--gc-text-2)' }}>Truck overhead by day</b> (avg {money(perDay)}/truck-day, priced by when the fleet earns):{' '}
+        <b style={{ color: 'var(--gc-text-2)' }}>Truck overhead by day</b> ({money(perDay)} for a standard truck-day, priced by when the fleet earns):{' '}
         {DOW_ORDER.map((d) => `${DOW[d]} ${money(perDay * 7 * p.dayShares[d])}`).join(' · ')}
       </div>
       <div>

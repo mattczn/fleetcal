@@ -2251,6 +2251,10 @@ export interface WeeklyTargetSettings {
   bucketBehaviors?: Record<string, CostBehavior>;
   /** Same keying and inheritance as bucketBehaviors; absent = 'avg'. */
   bucketBasis?:     Record<string, BucketBasis>;
+  /** Truck Profit: a truck's share of a standard truck's daily cost, by
+   *  asset id (e.g. an owned box truck at 0.35). Absent = 1. The fleet's
+   *  fixed costs are re-spread so the total still matches. */
+  truckCostWeights?: Record<string, number>;
 }
 
 export interface WeeklyTargetParam {
@@ -3464,6 +3468,8 @@ export interface TruckProfitDay extends TruckProfitCosts {
 export interface TruckProfitTruck {
   assetId: number;
   name: string;
+  /** Share of a standard truck's daily cost (1 = standard). */
+  costShare: number;
   days: TruckProfitDay[];
   totals: TruckProfitCosts & {
     unused: number;

@@ -35,7 +35,7 @@ import { supabase as supabaseTyped } from "./supabase.js";
 import { fetchAllRows } from "./fetchAllRows.js";
 import { classifyByAirMiles, parseTerminal, type Coord } from "./airMiles.js";
 import { getHosConfig } from "./hosService.js";
-import { computeWeeklyTarget } from "./weeklyTarget.js";
+import { computeWeeklyTarget, readSettings } from "./weeklyTarget.js";
 import { isExcludedEvent, loadExcludedAssetIds, loadExcludedDrivers, type ExcludedDrivers } from "./reportExclusions.js";
 import { H, addDays, dayOf, fetchLegActuals, hoursWithin, legWindow, naiveMs, slicesOf, timeShares, utcToWallMs, wallStr } from "./legTime.js";
 
@@ -285,12 +285,13 @@ export async function computeTruckProfit(
 ): Promise<TruckProfitResponse> {
   const { from, to, pay } = opts;
   const assetId = opts.assetId ?? null;
-  const [wt, hos, settings, excluded, excludedAssets] = await Promise.all([
+  const [wt, hos, settings, excluded, excludedAssets, targetSettings] = await Promise.all([
     computeWeeklyTarget(orgId, { from, to }),
     getHosConfig(orgId),
     supabase.from("org_settings").select("hos_settings").eq("org_id", orgId).maybeSingle(),
     loadExcludedDrivers(orgId),
     loadExcludedAssetIds(orgId),
+    readSettings(orgId),
   ]);
   const ctx: Ctx = { tz: hos.timeZone, terminal: parseTerminal(settings.data?.hos_settings), excluded, excludedAssets };
 
@@ -318,12 +319,22 @@ export async function computeTruckProfit(
         .gte("start_time", `${addDays(from, -1)}T00:00:00Z`).lt("start_time", `${addDays(to, 2)}T00:00:00Z`)),
   ]);
 
-  // Miles driven per truck, day and block from every GPS drive, linked to
-  // a load or not (yard moves and fuel runs cost fuel too). Complete weeks
-  // land within ~1.5% of the odometer the dashboard reads, and unlike its
-  // once-a-day reads they say when the miles happened.
+  // Fuel and wear on GPS trucks: miles on a linked load are spread with
+  // that load (like its revenue), and every other drive — yard moves, fuel
+  // runs, anything not linked — lands when it was driven. Together that's
+  // every GPS mile; complete weeks land within ~1.5% of the odometer.
+  const linkedDrives = new Set<string>();
+  const driveIds = drives.map((d) => d.id);
+  for (let i = 0; i < driveIds.length; i += CHUNK) {
+    const { data, error } = await supabase.from("movement_links").select("movement_id")
+      .eq("org_id", orgId).is("superseded_at", null).in("role", ["loaded", "transition"])
+      .in("movement_id", driveIds.slice(i, i + CHUNK));
+    if (error) throw new Error(`truck profit links: ${error.message}`);
+    for (const r of (data ?? []) as Array<{ movement_id: string }>) linkedDrives.add(r.movement_id);
+  }
   const gpsCells = new Map<number, Map<string, number>>();
   for (const d of drives) {
+    if (linkedDrives.has(d.id)) continue;
     const miles = Number(d.miles ?? 0);
     if (!(miles > 0)) continue;
     const a = utcToWallMs(d.start_time, ctx.tz);
@@ -340,9 +351,21 @@ export async function computeTruckProfit(
   }
 
   const shareOf: Record<HaulClass, number[]> = { local: shares.local, otr: shares.otr };
+  // A truck's share of a standard truck's daily cost (an owned box truck
+  // costs far less); the fixed costs are re-spread over the fleet so the
+  // total doesn't change.
+  const weights = targetSettings.settings.truckCostWeights ?? {};
+  const costShare = (assetId: number) => {
+    const w = Number(weights[String(assetId)]);
+    return Number.isFinite(w) && w >= 0 ? w : 1;
+  };
+  const fleet = assets.filter((a) => !a.hidden && a.type !== "Unassigned" && a.name !== "Unassigned"
+    && !excludedAssets.has(a.id) && !!a.motive_vehicle_id && shares.activeAssets.has(a.id));
+  const shareSum = fleet.reduce((s, a) => s + costShare(a.id), 0);
+  const standardPerDay = baseOverhead * (shareSum > 0 ? fleet.length / shareSum : 1);
   /** dayCls = the class the truck worked that day (see Shares). */
-  const blockPrice = (dayCls: HaulClass, date: string, block: number) =>
-    baseOverhead * 7 * shares.days[dowOf(date)] * shareOf[dayCls][block];
+  const blockPrice = (assetId: number, dayCls: HaulClass, date: string, block: number) =>
+    standardPerDay * costShare(assetId) * 7 * shares.days[dowOf(date)] * shareOf[dayCls][block];
   // Hotels per block of OTR work, sized so a typical week's OTR blocks add
   // up to the weekly hotel spend.
   const hotelsPerBlock = hotels.weekly > 0 && shares.otrBlocksPerWeek > 0
@@ -412,7 +435,7 @@ export async function computeTruckProfit(
       const lead = using.reduce((m, o) => (o.hours > m.hours ? o : m));
       const cls = legs[lead.leg].cls;
       const date = key.slice(0, 10);
-      const price = blockPrice(dayClass(truck, date), date, Number(key.slice(-1))) + (cls === "otr" ? hotelsPerBlock : 0);
+      const price = blockPrice(truck, dayClass(truck, date), date, Number(key.slice(-1))) + (cls === "otr" ? hotelsPerBlock : 0);
       const total = using.reduce((s, o) => s + o.hours, 0);
       for (const o of using) legs[o.leg].overhead += price * o.hours / total;
       charges.set(key, { price, cls, using });
@@ -467,21 +490,25 @@ export async function computeTruckProfit(
         for (const o of occ) {
           const l = legs[o.leg];
           const f = l.hours > 0 ? o.hours / l.hours : 0;
-          addInto(spread, { ...costsOf(l), overhead: 0, profit: 0 }, f);
+          const c = costsOf(l);
+          // On a GPS truck an unlinked leg's estimated miles would double
+          // up with its real drives, which come in as unlinked below.
+          const ownMiles = !gpsMiles || l.gpsMiles != null;
+          addInto(spread, { ...c, fuel: ownMiles ? c.fuel : 0, maintenance: ownMiles ? c.maintenance : 0, overhead: 0, profit: 0 }, f);
           totals.routeMiles += (l.routeMiles ?? 0) * f;
           totals.linkedMiles += l.drivenMiles * f;
+          if (gpsMiles && l.gpsMiles != null) totals.gpsMiles += l.drivenMiles * f;
         }
         spread.driverPay *= payScale;
         if (gpsMiles) {
-          // Fuel and wear follow every mile the truck drove, linked or not.
           const miles = gpsMiles.get(key) ?? 0;
           totals.gpsMiles += miles;
-          spread.fuel = miles * fuelPerMile;
-          spread.maintenance = miles * maintPerMile;
+          spread.fuel += miles * fuelPerMile;
+          spread.maintenance += miles * maintPerMile;
         }
         const charge = charges.get(key);
         const cls = charge?.cls ?? dayClass(asset.id, date);
-        const price = charge?.price ?? blockPrice(dayClass(asset.id, date), date, b);
+        const price = charge?.price ?? blockPrice(asset.id, dayClass(asset.id, date), date, b);
         spread.overhead = price;
         spread.profit = spread.revenue - spread.driverPay - spread.fuel - spread.maintenance - spread.other - price;
         addInto(day, spread);
@@ -502,6 +529,7 @@ export async function computeTruckProfit(
     return {
       assetId: asset.id,
       name: asset.name,
+      costShare: costShare(asset.id),
       days: dayRows,
       totals: {
         ...round(totals),
@@ -557,7 +585,7 @@ export async function computeTruckProfit(
       maintPerMile: Math.round(maintPerMile * 1000) / 1000,
       otherPct: Math.round(otherPct * 10000) / 10000,
       payPct,
-      overheadPerTruckDay: { local: r2(baseOverhead), otr: r2(baseOverhead) },
+      overheadPerTruckDay: { local: r2(standardPerDay), otr: r2(standardPerDay) },
       hotelsPerOtrDay: r2(hotelsPerBlock * 4),
       blockShares: { local: shares.local, otr: shares.otr },
       dayShares: shares.days,

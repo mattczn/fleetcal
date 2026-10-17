@@ -886,7 +886,7 @@ export async function computeWeeklyTarget(
 
 // ── Settings writes ─────────────────────────────────────────────────────
 
-const RANGES: Record<Exclude<keyof WeeklyTargetSettings, "bucketBehaviors" | "bucketBasis">, [number, number]> = {
+const RANGES: Record<Exclude<keyof WeeklyTargetSettings, "bucketBehaviors" | "bucketBasis" | "truckCostWeights">, [number, number]> = {
   fuelPrice:      [1, 20],
   marginTarget:   [-0.5, 0.9],
   mpg:            [2, 15],
@@ -936,16 +936,26 @@ export function validateSettingsPatch(body: unknown): { patch?: Record<string, u
       patch.bucketBasis = bb;
     }
   }
+  if ("truckCostWeights" in b) {
+    const w = b.truckCostWeights;
+    if (!w || typeof w !== "object") errors.push("truckCostWeights must be an object");
+    else {
+      for (const [id, v] of Object.entries(w as Record<string, unknown>)) {
+        if (v !== null && (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 3)) errors.push(`truckCostWeights.${id} must be a number between 0 and 3, or null`);
+      }
+      patch.truckCostWeights = w;
+    }
+  }
   return { patch, errors };
 }
 
 export function mergeSettings(current: WeeklyTargetSettings, patch: Record<string, unknown>): WeeklyTargetSettings {
   // Only known keys carry over, so retired settings drop out on the next save.
   const next: Record<string, unknown> = Object.fromEntries(
-    Object.entries(current).filter(([k]) => k in RANGES || k === "bucketBehaviors" || k === "bucketBasis"),
+    Object.entries(current).filter(([k]) => k in RANGES || k === "bucketBehaviors" || k === "bucketBasis" || k === "truckCostWeights"),
   );
   for (const [k, v] of Object.entries(patch)) {
-    if (k === "bucketBehaviors" || k === "bucketBasis") continue;
+    if (k === "bucketBehaviors" || k === "bucketBasis" || k === "truckCostWeights") continue;
     if (v === null) delete next[k]; else next[k] = v;
   }
   if (patch.bucketBehaviors) {
@@ -961,6 +971,13 @@ export function mergeSettings(current: WeeklyTargetSettings, patch: Record<strin
       if (v === null) delete bb[id]; else bb[id] = v;
     }
     next.bucketBasis = bb;
+  }
+  if (patch.truckCostWeights) {
+    const w: Record<string, number> = { ...(current.truckCostWeights ?? {}) };
+    for (const [id, v] of Object.entries(patch.truckCostWeights as Record<string, number | null>)) {
+      if (v === null) delete w[id]; else w[id] = v;
+    }
+    next.truckCostWeights = w;
   }
   return next as WeeklyTargetSettings;
 }
