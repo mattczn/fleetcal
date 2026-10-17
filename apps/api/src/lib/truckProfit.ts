@@ -451,6 +451,7 @@ export async function computeTruckProfit(
 
   const days: string[] = [];
   for (let d = from; d <= to; d = addDays(d, 1)) days.push(d);
+  const nowWall = utcToWallMs(new Date().toISOString(), ctx.tz);
   const windowA = naiveMs(`${from}T00:00`);
   const windowB = naiveMs(`${addDays(to, 1)}T00:00`);
 
@@ -492,12 +493,14 @@ export async function computeTruckProfit(
           const f = l.hours > 0 ? o.hours / l.hours : 0;
           const c = costsOf(l);
           // On a GPS truck an unlinked leg's estimated miles would double
-          // up with its real drives, which come in as unlinked below.
-          const ownMiles = !gpsMiles || l.gpsMiles != null;
+          // up with its real drives, which come in as unlinked below —
+          // unless it hasn't run yet: then there are no drives, only the
+          // estimate.
+          const ownMiles = !gpsMiles || l.gpsMiles != null || l.a > nowWall;
           addInto(spread, { ...c, fuel: ownMiles ? c.fuel : 0, maintenance: ownMiles ? c.maintenance : 0, overhead: 0, profit: 0 }, f);
           totals.routeMiles += (l.routeMiles ?? 0) * f;
           totals.linkedMiles += l.drivenMiles * f;
-          if (gpsMiles && l.gpsMiles != null) totals.gpsMiles += l.drivenMiles * f;
+          if (gpsMiles && ownMiles) totals.gpsMiles += l.drivenMiles * f;
         }
         spread.driverPay *= payScale;
         if (gpsMiles) {

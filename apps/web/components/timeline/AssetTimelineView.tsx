@@ -536,7 +536,7 @@ export default function AssetTimelineView({ assetId, initialDate, focusEventId }
     if (effectiveAssetId == null || !showProfit) return;
     let cancelled = false;
     let pay: 'current' | 'avg' = 'current';
-    try { if (localStorage.getItem('timeline.truckProfit.payMode') === 'avg') pay = 'avg'; } catch { /* storage blocked */ }
+    try { if (localStorage.getItem('dashboard.weeklyTarget.payMode') === 'average') pay = 'avg'; } catch { /* storage blocked */ }
     railway.getTruckProfit({ from: shiftDateKey(dayKey, -2), to: shiftDateKey(dayKey, 1), pay, assetId: effectiveAssetId })
       .then((res) => { if (!cancelled) setLegProfit(new Map(res.legs.map((l) => [l.eventId, l]))); })
       .catch(() => { if (!cancelled) setLegProfit(new Map()); });

@@ -20,7 +20,9 @@ import AppShell from '@/components/nav/AppShell';
 import { railway } from '@/lib/railway';
 import { useCalendarStore } from '@/store/useCalendarStore';
 
-const PAY_MODE_KEY = 'timeline.truckProfit.payMode';
+/** Shared with the dashboard's weekly target ('current' | 'average'), so
+ *  the same toggle shows the same driver pay in both places. */
+const PAY_MODE_KEY = 'dashboard.weeklyTarget.payMode';
 const BLOCK_LABEL = ['12a–6a', '6a–12p', '12p–6p', '6p–12a'];
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const GREEN = '#1e8e3e';
@@ -55,12 +57,12 @@ export default function FleetProfitView() {
   const [weekStart, setWeekStart] = useState(() => weekStartFor(today));
   const weekEnd = shiftDay(weekStart, 6);
   const [pay, setPay] = useState<TruckProfitPay>(() => {
-    try { return typeof window !== 'undefined' && localStorage.getItem(PAY_MODE_KEY) === 'avg' ? 'avg' : 'current'; }
+    try { return typeof window !== 'undefined' && localStorage.getItem(PAY_MODE_KEY) === 'average' ? 'avg' : 'current'; }
     catch { return 'current'; }
   });
   const choosePay = (m: TruckProfitPay) => {
     setPay(m);
-    try { localStorage.setItem(PAY_MODE_KEY, m); } catch { /* storage blocked — still works this visit */ }
+    try { localStorage.setItem(PAY_MODE_KEY, m === 'avg' ? 'average' : 'current'); } catch { /* storage blocked — still works this visit */ }
   };
   const [sort, setSort] = useState<Sort>('worst');
 
