@@ -2064,6 +2064,11 @@ class RailwayClient {
     return this.req<{ ok: true }>('PUT', '/v1/pay-routes/standard', { routeKey, amount, note: note ?? null });
   }
 
+  /** Name a route (or with null, clear its name). */
+  setRouteName(routeKey: string, name: string | null) {
+    return this.req<{ ok: true }>('PUT', '/v1/pay-routes/name', { routeKey, name });
+  }
+
   renameRoutePlace(placeId: number, name: string) {
     return this.req<{ ok: true }>('PATCH', `/v1/pay-routes/places/${placeId}`, { name });
   }

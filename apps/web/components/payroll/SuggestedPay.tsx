@@ -135,7 +135,9 @@ function SuggestionPopover({ anchor, suggestion: s, current, onUse, onEnter, onL
         <span className="font-semibold" style={{ color: 'var(--gc-text-1)', fontSize: 15 }}>{money(s.amount)}</span>
         <span style={{ color: 'var(--gc-text-3)', fontSize: 11 }}>{KIND_LABEL[s.kind]} · {s.miles} mi</span>
       </div>
-      <div className="mb-1" style={{ color: 'var(--gc-text-1)' }}>{s.routeLabel}</div>
+      {s.routeName ? <div className="font-semibold" style={{ color: 'var(--gc-text-1)' }}>{s.routeName}</div> : null}
+      <div style={{ color: s.routeName ? 'var(--gc-text-3)' : 'var(--gc-text-1)' }}>{s.routeLabel}</div>
+      <div className="mb-1" style={{ color: 'var(--gc-text-2)', fontSize: 11 }}>{s.cities}</div>
       <div className="mb-2">{sourceLine(s)}</div>
       {s.examples.length ? (
         <>

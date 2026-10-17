@@ -3560,6 +3560,10 @@ export interface PayRoute {
   key: string;
   places: number[];
   label: string;
+  /** The name someone gave the route, if any. */
+  name: string | null;
+  /** First stop's city, ST → last stop's city, ST. */
+  cities: string;
   /** null for a standard on a route nothing settled has run yet. */
   kind: RouteLegKind | null;
   miles: number | null;
@@ -3598,6 +3602,8 @@ export interface PaySuggestion {
   note: string | null;
   routeKey: string;
   routeLabel: string;
+  routeName: string | null;
+  cities: string;
   kind: RouteLegKind;
   miles: number;
   /** Paid legs behind the reference (route, area or kind). */

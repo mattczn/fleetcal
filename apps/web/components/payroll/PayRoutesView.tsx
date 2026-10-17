@@ -66,7 +66,7 @@ export default function PayRoutesView() {
     return (data?.routes ?? []).filter((r) =>
       (r.legs >= minLegs || r.standard)
       && (!kind || r.kind === kind)
-      && (!q || r.label.toLowerCase().includes(q) || r.customers.some((c) => c.toLowerCase().includes(q))));
+      && (!q || [r.name ?? '', r.label, r.cities, ...r.customers].some((t) => t.toLowerCase().includes(q))));
   }, [data, search, kind, minLegs]);
 
   const field = { border: '1px solid var(--gc-border)', background: 'var(--gc-surface)', color: 'var(--gc-text-1)' } as const;
@@ -81,7 +81,7 @@ export default function PayRoutesView() {
           </Link>
           <RouteIcon size={20} style={{ color: 'var(--gc-text-1)' }} />
           <h1 className="text-[20px] font-semibold" style={{ color: 'var(--gc-text-1)', letterSpacing: '-0.3px' }}>Routes &amp; standard pay</h1>
-          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search place or customer"
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name, place, city or customer"
             className="rounded px-2 py-1 text-[12px] ml-2" style={{ ...field, width: 220 }} />
           <select value={kind} onChange={(e) => setKind(e.target.value as RouteLegKind | '')} className="rounded px-2 py-1 text-[12px]" style={field}>
             <option value="">Every kind of leg</option>
@@ -141,7 +141,7 @@ export default function PayRoutesView() {
                         </button>
                       </td>
                       <td className="px-3 py-2 align-top">
-                        <div style={{ color: 'var(--gc-text-1)', fontWeight: 600 }}>{r.label}</div>
+                        <RouteTitle route={r} canEdit={canEdit} onSaved={reload} />
                         <div style={{ fontSize: 11, color: 'var(--gc-text-3)' }}>
                           {r.kind ? KIND_LABEL[r.kind] : 'No paid legs yet'}{r.miles != null ? ` · ${r.miles} mi` : ''}
                           {r.customers.length ? ` · ${r.customers.join(', ')}` : ''}
@@ -214,6 +214,54 @@ export default function PayRoutesView() {
         )}
       </div>
     </AppShell>
+  );
+}
+
+/** The route's name (if given) over its place-to-place title, with the
+ *  first and last stop's cities beside it; click Name to set one. */
+function RouteTitle({ route, canEdit, onSaved }: { route: PayRoute; canEdit: boolean; onSaved: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [raw, setRaw] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+  const save = async () => {
+    const next = raw.trim();
+    if (next === (route.name ?? '')) { setEditing(false); return; }
+    try {
+      await railway.setRouteName(route.key, next || null);
+      setEditing(false);
+      onSaved();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Save failed');
+    }
+  };
+  const cities = <span style={{ fontSize: 11, color: 'var(--gc-text-2)', fontWeight: 500 }}>{route.cities}</span>;
+  if (editing) {
+    return (
+      <div className="mb-0.5">
+        <input autoFocus value={raw} onChange={(e) => setRaw(e.target.value)} placeholder="Name this route"
+          onKeyDown={(e) => { if (e.key === 'Enter') void save(); if (e.key === 'Escape') setEditing(false); }}
+          onBlur={() => void save()}
+          className="rounded px-2 py-0.5 text-[13px]" style={{ border: '1px solid var(--gc-border)', background: 'var(--gc-surface)', color: 'var(--gc-text-1)', width: 320 }} />
+        {err ? <div className="text-[11px]" style={{ color: '#c5221f' }}>{err}</div> : null}
+        <div style={{ fontSize: 11, color: 'var(--gc-text-3)' }}>{route.label} · {cities}</div>
+      </div>
+    );
+  }
+  const nameBtn = canEdit ? (
+    <button type="button" onClick={() => { setRaw(route.name ?? ''); setErr(null); setEditing(true); }}
+      className="ml-2 text-[11px] font-normal" style={{ color: 'var(--gc-blue)' }}>
+      {route.name ? 'Rename' : 'Name'}
+    </button>
+  ) : null;
+  return route.name ? (
+    <div className="mb-0.5">
+      <div style={{ color: 'var(--gc-text-1)', fontWeight: 600 }}>{route.name}{nameBtn}</div>
+      <div style={{ fontSize: 11, color: 'var(--gc-text-3)' }}>{route.label} · {cities}</div>
+    </div>
+  ) : (
+    <div className="mb-0.5" style={{ color: 'var(--gc-text-1)', fontWeight: 600 }}>
+      {route.label} <span className="ml-1">{cities}</span>{nameBtn}
+    </div>
   );
 }
 

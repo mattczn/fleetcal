@@ -31,7 +31,11 @@ import { getHosConfig } from "./hosService.js";
 const supabase = supabaseTyped as any;
 
 const PLACE_RADIUS_MI = 0.35;
+/** Yards / relay points take handoff stops this far out (big lots, loose
+ *  pins); any other stop only when it's practically on the yard — a
+ *  shipper half a mile from a yard is its own place. */
 const YARD_RADIUS_MI = 1;
+const YARD_ANY_STOP_MI = 0.15;
 const ROAD_FACTOR = 1.2;
 /** Legs at least this long are line hauls; shorter ones are local. */
 const LONG_LEG_MI = 60;
@@ -74,6 +78,20 @@ interface StopLike {
 const dist = (a: { lat: number; lng: number }, b: { lat: number; lng: number }) =>
   airMilesBetween({ lat: a.lat, lon: a.lng }, { lat: b.lat, lon: b.lng });
 
+/** The nearest place a stop belongs to (see YARD_RADIUS_MI), or null. */
+function matchPlace(places: PlaceRow[], s: StopLike): PlaceRow | null {
+  if (s.lat == null || s.lng == null) return null;
+  const pt = { lat: Number(s.lat), lng: Number(s.lng) };
+  const handoff = isHandoffStop({ type: s.type as Stop["type"], isHandoff: s.isHandoff });
+  let best: PlaceRow | null = null; let bestD = Infinity;
+  for (const p of places) {
+    const d = dist(pt, p);
+    const reach = p.saved_location_id ? (handoff ? Number(p.radius_mi) : YARD_ANY_STOP_MI) : Number(p.radius_mi);
+    if (d <= reach && d < bestD) { best = p; bestD = d; }
+  }
+  return best;
+}
+
 /** Serialize place creation per org so two requests don't make the same place twice. */
 const placeLocks = new Map<string, Promise<unknown>>();
 function withPlaceLock<T>(orgId: string, run: () => Promise<T>): Promise<T> {
@@ -105,20 +123,13 @@ async function placesFor(orgId: string, stops: StopLike[]): Promise<{ placeOf: (
       fresh.push({ tmp: -fresh.length - 1, name: s.name, lat: Number(s.lat), lng: Number(s.lng), radius_mi: YARD_RADIUS_MI, saved_location_id: s.id, city: null, state: null, named_by_user: false });
     }
     const all = () => [...places, ...fresh.map((f) => ({ ...f, id: f.tmp }))];
-    const nearest = (pt: { lat: number; lng: number }) => {
-      let best: PlaceRow | null = null; let bestD = Infinity;
-      for (const p of all()) {
-        const d = dist(pt, p);
-        if (d <= Number(p.radius_mi) && d < bestD) { best = p; bestD = d; }
-      }
-      return best;
-    };
+    const nearest = (s: StopLike) => matchPlace(all(), s);
     // Stable order so the same history always makes the same places.
     const withCoords = stops.filter((s) => s.lat != null && s.lng != null)
       .sort((a, b) => String(a.id ?? "").localeCompare(String(b.id ?? "")));
     for (const s of withCoords) {
       const pt = { lat: Number(s.lat), lng: Number(s.lng) };
-      if (nearest(pt)) continue;
+      if (nearest(s)) continue;
       fresh.push({
         tmp: -fresh.length - 1,
         name: s.facilityName?.trim() || [s.city, s.state].filter(Boolean).join(", ") || `${pt.lat.toFixed(3)}, ${pt.lng.toFixed(3)}`,
@@ -134,16 +145,7 @@ async function placesFor(orgId: string, stops: StopLike[]): Promise<{ placeOf: (
       if (error) throw new RoutePayUnavailableError(`route_places insert failed: ${error.message}`);
       places.push(...(data as PlaceRow[]));
     }
-    const placeOf = (s: StopLike) => {
-      if (s.lat == null || s.lng == null) return null;
-      const pt = { lat: Number(s.lat), lng: Number(s.lng) };
-      let best: PlaceRow | null = null; let bestD = Infinity;
-      for (const p of places) {
-        const d = dist(pt, p);
-        if (d <= Number(p.radius_mi) && d < bestD) { best = p; bestD = d; }
-      }
-      return best;
-    };
+    const placeOf = (s: StopLike) => matchPlace(places, s);
     return { placeOf, places };
   });
 }
@@ -157,7 +159,17 @@ interface LegRoute {
   kind: RouteLegKind;
   miles: number;
   label: string;
+  /** First stop's city, ST → last stop's city, ST. */
+  cities: string;
 }
+
+const cityOf = (s: StopLike | undefined, p: PlaceRow | undefined) => {
+  const city = s?.city?.trim() || p?.city;
+  const state = s?.state?.trim() || p?.state;
+  if (city) return [titleCase(city), state?.toUpperCase()].filter(Boolean).join(", ");
+  return p?.name ?? "?";
+};
+const titleCase = (t: string) => t.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
 
 const areaOf = (p: PlaceRow) => (p.saved_location_id ? `place:${p.id}` : [p.city, p.state].filter(Boolean).join(", ") || `place:${p.id}`);
 
@@ -194,6 +206,7 @@ function legRoute(allStops: StopLike[], legIndex: number, placeOf: (s: StopLike)
     kind,
     miles: Math.round(miles),
     label: ids.map((id) => byId.get(id)!.name).join(" → "),
+    cities: `${cityOf(first, ps[0])} → ${cityOf(last, ps[ps.length - 1])}`,
   };
 }
 
@@ -280,7 +293,7 @@ async function buildHistory(orgId: string): Promise<History> {
       city: s.city, state: s.state, facilityName: s.facility_name,
     }]);
   }
-  const { placeOf, places } = await placesFor(orgId, stops.map((s) => ({ ...s, facilityName: s.facility_name })));
+  const { placeOf, places } = await placesFor(orgId, stops.map((s) => ({ ...s, isHandoff: s.is_handoff ?? undefined, facilityName: s.facility_name })));
 
   const paid: PaidLeg[] = [];
   for (const e of events) {
@@ -342,6 +355,26 @@ async function standards(orgId: string): Promise<Map<string, StandardRow>> {
     supabase.from("route_pay_standards").select("id, route_key, amount, note, set_by_name, set_at").eq("org_id", orgId));
   return new Map(rows.map((r) => [r.route_key, r]));
 }
+/** Route names; empty when the route_names table isn't there yet. */
+async function routeNames(orgId: string): Promise<Map<string, string>> {
+  const { data, error } = await supabase.from("route_names").select("route_key, name").eq("org_id", orgId);
+  if (error) return new Map();
+  return new Map((data as Array<{ route_key: string; name: string }>).map((r) => [r.route_key, r.name]));
+}
+
+export async function setRouteName(orgId: string, routeKey: string, name: string | null, byName: string | null): Promise<void> {
+  if (!name) {
+    const { error } = await supabase.from("route_names").delete().eq("org_id", orgId).eq("route_key", routeKey);
+    if (error) throw new RoutePayUnavailableError(`${error.message} — has 20261017b_route_names.sql been run?`);
+    return;
+  }
+  const { error } = await supabase.from("route_names").upsert(
+    { org_id: orgId, route_key: routeKey, name, set_by_name: byName, set_at: new Date().toISOString() },
+    { onConflict: "org_id,route_key" },
+  );
+  if (error) throw new RoutePayUnavailableError(`${error.message} — has 20261017b_route_names.sql been run?`);
+}
+
 const toStandard = (s: StandardRow | undefined) =>
   s ? { amount: Number(s.amount), note: s.note, setByName: s.set_by_name, setAt: s.set_at } : null;
 
@@ -352,7 +385,7 @@ const toPlace = (p: PlaceRow): RoutePlace => ({
 // ── Public ──────────────────────────────────────────────────────────────
 
 export async function listPayRoutes(orgId: string): Promise<PayRoutesResponse> {
-  const [h, std] = await Promise.all([history(orgId), standards(orgId)]);
+  const [h, std, names] = await Promise.all([history(orgId), standards(orgId), routeNames(orgId)]);
   const routes: PayRoute[] = [];
   const seen = new Set<string>();
   for (const [key, legs] of h.byRoute) {
@@ -360,7 +393,7 @@ export async function listPayRoutes(orgId: string): Promise<PayRoutesResponse> {
     const r = legs[0].route;
     seen.add(key);
     routes.push({
-      key, places: r.placeIds, label: r.label, kind: r.kind, miles: r.miles,
+      key, places: r.placeIds, label: r.label, name: names.get(key) ?? null, cities: r.cities, kind: r.kind, miles: r.miles,
       ...st, standard: toStandard(std.get(key)),
     });
   }
@@ -369,8 +402,10 @@ export async function listPayRoutes(orgId: string): Promise<PayRoutesResponse> {
   for (const [key, s] of std) {
     if (seen.has(key)) continue;
     const ids = key.split(">").map(Number);
+    const ends = [h.places.find((p) => p.id === ids[0]), h.places.find((p) => p.id === ids[ids.length - 1])];
     routes.push({
-      key, places: ids, label: ids.map((id) => placeName.get(id) ?? `#${id}`).join(" → "), kind: null, miles: null,
+      key, places: ids, label: ids.map((id) => placeName.get(id) ?? `#${id}`).join(" → "),
+      name: names.get(key) ?? null, cities: `${cityOf(undefined, ends[0])} → ${cityOf(undefined, ends[1])}`, kind: null, miles: null,
       legs: 0, usual: null, usualShare: null, min: 0, max: 0, lastPaid: null, examples: [], customers: [],
       standard: toStandard(s),
     });
@@ -388,7 +423,7 @@ export async function listPayRoutes(orgId: string): Promise<PayRoutesResponse> {
 const round5 = (n: number) => Math.max(0, Math.round(n / 5) * 5);
 
 export async function suggestPay(orgId: string, req: PaySuggestRequest): Promise<Record<string, PaySuggestion | null>> {
-  const [h, std] = await Promise.all([history(orgId), standards(orgId)]);
+  const [h, std, names] = await Promise.all([history(orgId), standards(orgId), routeNames(orgId)]);
 
   // Legs given by event id: load their leg index and stops.
   const eventIds = req.legs.filter((l) => l.eventId && !l.stops).map((l) => l.eventId!);
@@ -424,7 +459,7 @@ export async function suggestPay(orgId: string, req: PaySuggestRequest): Promise
     const areaLegs = h.byArea.get(route.areaKey) ?? [];
     const routeStats = statsOf(routeLegs);
     const standard = std.get(route.key);
-    const base = { routeKey: route.key, routeLabel: route.label, kind: route.kind, miles: route.miles };
+    const base = { routeKey: route.key, routeLabel: route.label, routeName: names.get(route.key) ?? null, cities: route.cities, kind: route.kind, miles: route.miles };
     if (standard) {
       out[leg.key] = { ...base, amount: Number(standard.amount), source: "standard", note: standard.note,
         legs: routeStats.legs, usual: routeStats.usual, usualShare: routeStats.usualShare, examples: routeStats.examples };

@@ -5,6 +5,7 @@
  *   GET   /                 every route with paid history or a standard
  *   POST  /suggest          { legs: [{ key, eventId? | stops?, legIndex? }] }
  *   PUT   /standard         { routeKey, amount | null, note? } — null clears
+ *   PUT   /name             { routeKey, name | null } — null clears
  *   PATCH /places/:id       { name }
  *
  * Suggestions are for anyone who can see driver pay (they show next to the
@@ -17,7 +18,7 @@ import type { ApiErrorResponse, PaySuggestRequest } from "@fleetcal/types";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireAnyCapability, requireCapability, requireModule } from "../middleware/require.js";
 import { getUserDisplayName } from "../lib/clerk.js";
-import { RoutePayUnavailableError, listPayRoutes, renamePlace, setRouteStandard, suggestPay } from "../lib/routePay.js";
+import { RoutePayUnavailableError, listPayRoutes, renamePlace, setRouteName, setRouteStandard, suggestPay } from "../lib/routePay.js";
 
 const payRoutes = new Hono<{ Variables: AuthVariables }>();
 payRoutes.use("*", requireModule("payroll"));
@@ -67,6 +68,23 @@ payRoutes.put("/standard", requireCapability("payroll.adjust"), async (c) => {
     await setRouteStandard(c.get("orgId"), routeKey, amount, note, {
       id: userId, name: await getUserDisplayName(userId).catch(() => null),
     });
+    return c.json({ ok: true });
+  } catch (err) {
+    const f = fail(err);
+    return c.json(f.body, f.status);
+  }
+});
+
+payRoutes.put("/name", requireCapability("payroll.adjust"), async (c) => {
+  const body = (await c.req.json().catch(() => null)) as { routeKey?: unknown; name?: unknown } | null;
+  const routeKey = typeof body?.routeKey === "string" && /^\d+(>\d+)+$/.test(body.routeKey) ? body.routeKey : null;
+  const name = body?.name === null ? null : typeof body?.name === "string" ? body.name.trim().slice(0, 120) : undefined;
+  if (!routeKey || name === undefined) {
+    return c.json({ error: "validation_failed", errors: ["routeKey and name (text, or null to clear) are required"] } satisfies ApiErrorResponse, 400);
+  }
+  try {
+    const userId = c.get("userId");
+    await setRouteName(c.get("orgId"), routeKey, name || null, await getUserDisplayName(userId).catch(() => null));
     return c.json({ ok: true });
   } catch (err) {
     const f = fail(err);
