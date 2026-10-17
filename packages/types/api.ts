@@ -3508,3 +3508,113 @@ export interface TruckProfitResponse {
    *  Sat–Fri weeks: its total and the load pay it was spread over. */
   payroll: { total: number; loadPay: number } | null;
 }
+
+// ── Route pay (/payroll/routes + suggested pay) ─────────────────────────
+// What a leg should pay the driver, from what settled payroll paid on the
+// same route. See apps/api/src/lib/routePay.ts.
+
+export type RouteLegKind =
+  | 'pickup' | 'delivery' | 'pickup_linehaul' | 'linehaul_delivery' | 'transfer'
+  | 'whole_local' | 'whole_long';
+
+export interface RoutePlace {
+  id: number;
+  name: string;
+  lat: number;
+  lng: number;
+  city: string | null;
+  state: string | null;
+  /** A saved location (yard / relay point). */
+  isYard: boolean;
+}
+
+/** One paid leg, as a reference for a route's pay. */
+export interface PayRouteExample {
+  eventId: string;
+  loadId: string | null;
+  loadNum: string | null;
+  /** The leg's date on the pay stub. */
+  date: string;
+  weekStart: string;
+  driver: string;
+  amount: number;
+}
+
+export interface PayRouteStandard {
+  amount: number;
+  note: string | null;
+  setByName: string | null;
+  setAt: string;
+}
+
+export interface PayRoute {
+  /** Ordered place ids joined by '>'. */
+  key: string;
+  places: number[];
+  label: string;
+  /** null for a standard on a route nothing settled has run yet. */
+  kind: RouteLegKind | null;
+  miles: number | null;
+  /** Paid legs in settled payroll. */
+  legs: number;
+  /** Most common amount over the last 20 paid legs. */
+  usual: number | null;
+  /** How many of those were exactly the usual amount (0–1). */
+  usualShare: number | null;
+  min: number;
+  max: number;
+  lastPaid: string | null;
+  /** Most recent paid legs first. */
+  examples: PayRouteExample[];
+  customers: string[];
+  standard: PayRouteStandard | null;
+}
+
+export interface PayRoutesResponse {
+  places: RoutePlace[];
+  routes: PayRoute[];
+  /** Latest payroll week (week_start) counted — newer weeks aren't settled. */
+  settledThrough: string | null;
+  /** Fallback rule per kind: flat (perMile 0) or base + per mile. */
+  kindRules: Record<RouteLegKind, { base: number; perMile: number; legs: number }>;
+  kindLabels: Record<RouteLegKind, string>;
+}
+
+/** standard = set on the route; route = the route's usual; area = the
+ *  usual between the same areas; kind = the rule for the leg's kind. */
+export type PaySuggestionSource = 'standard' | 'route' | 'area' | 'kind';
+
+export interface PaySuggestion {
+  amount: number;
+  source: PaySuggestionSource;
+  note: string | null;
+  routeKey: string;
+  routeLabel: string;
+  kind: RouteLegKind;
+  miles: number;
+  /** Paid legs behind the reference (route, area or kind). */
+  legs: number;
+  usual: number | null;
+  usualShare: number | null;
+  examples: PayRouteExample[];
+}
+
+export interface PaySuggestStop {
+  lat?: number;
+  lng?: number;
+  type: string;
+  isHandoff?: boolean;
+  city?: string;
+  state?: string;
+  facilityName?: string;
+}
+
+export interface PaySuggestRequest {
+  /** key = the caller's own id for the leg (echoed back). Give eventId for
+   *  a saved leg, or stops (+ legIndex) for one that isn't saved yet. */
+  legs: Array<{ key: string; eventId?: string; stops?: PaySuggestStop[]; legIndex?: number }>;
+}
+
+export interface PaySuggestResponse {
+  suggestions: Record<string, PaySuggestion | null>;
+}

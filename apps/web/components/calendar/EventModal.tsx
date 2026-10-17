@@ -43,6 +43,7 @@ import {
 } from '@/lib/legPay';
 import { errorToast } from '@/lib/errorToast';
 import RouteMapPanel from './RouteMapPanel';
+import { SuggestedPayChip, toSuggestStop, usePaySuggestions } from '@/components/payroll/SuggestedPay';
 import DriverSummaryPanel from './DriverSummaryPanel';
 import NotifyDriverPopover from './NotifyDriverPopover';
 import { uploadRateCon } from '@/lib/storage';
@@ -2033,6 +2034,13 @@ export default function EventModal() {
 
   // Stops (multi-stop routing — populated from rate con parse; UI built separately)
   const [stops, setStops] = useState<Stop[]>([]);
+  // Suggested pay from the route's settled payroll (SuggestedPay). Solo
+  // loads use the whole stop list; relay legs ask in RelayLegsEditor.
+  const soloSuggestLegs = useMemo(() => {
+    const geo = stops.filter(s => s.lat != null && s.lng != null);
+    return geo.length >= 2 ? [{ key: 'solo', stops: stops.map(toSuggestStop), legIndex: 0 }] : [];
+  }, [stops]);
+  const soloPaySuggestion = usePaySuggestions(soloSuggestLegs, canViewDriverPay).get('solo');
   const prevStartDateRef = useRef<string>(''); // tracks previous startDate to compute delta for stop shifting
 
   // Accessorials
@@ -5503,6 +5511,11 @@ export default function EventModal() {
     typeof fieldValues['driverPay'] === 'number' ? fieldValues['driverPay'] : parseFloat(String(fieldValues['driverPay'] ?? '')) || 0,
     soloDriverPayBase,
   );
+  const soloDriverPayNum = (() => {
+    const raw = fieldValues['driverPay'];
+    const n = typeof raw === 'number' ? raw : parseFloat(String(raw ?? ''));
+    return Number.isFinite(n) ? n : null;
+  })();
 
   const recalcDriverPay = () => {
     const auto = autoPayFor(soloDriverPayBase, driverPayPct);
@@ -5522,8 +5535,19 @@ export default function EventModal() {
     setPrevDriverPay(null);
   };
 
-  const driverPayLabelSuffix = driverPayPctValue !== null ? (
+  const soloSuggestionChip = (
+    <SuggestedPayChip
+      suggestion={soloPaySuggestion}
+      current={soloDriverPayNum}
+      disabled={!isRelayContext && soloFinalized.finalized}
+      onUse={(amount) => { driverPayAutoSet.current = false; setDriverPayIsAuto(false); setPrevDriverPay(null); setField('driverPay', amount); }}
+    />
+  );
+  const driverPayLabelSuffix = driverPayPctValue === null ? (
+    <span className="flex items-center gap-1 normal-case tracking-normal font-semibold" style={{ fontSize: 10 }}>{soloSuggestionChip}</span>
+  ) : (
     <span className="flex items-center gap-1 normal-case tracking-normal font-semibold" style={{ fontSize: 10 }}>
+      {soloSuggestionChip}
       <span className="px-1.5 py-0.5 rounded-lg"
         style={{
           background: driverPayIsAuto ? '#dbeafe' : '#f1f3f4',
@@ -5561,7 +5585,7 @@ export default function EventModal() {
         </button>
       )}
     </span>
-  ) : null;
+  );
 
   // ── Relay leg view models ──────────────────────────────────────────
   // Everything the RelayLegsEditor renders, assembled from store legs +
@@ -7480,6 +7504,7 @@ export default function EventModal() {
                     <div style={{ borderTop: '1px solid var(--gc-border-light)', paddingTop: 20 }}>
                       <RelayLegsEditor
                         legs={relayLegViews}
+                        allStops={stops}
                         handoffs={relayHandoffViews}
                         loadPrice={canViewPrice && relayLp > 0 ? relayLp : null}
                         assets={assets}

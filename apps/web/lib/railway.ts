@@ -96,6 +96,7 @@ import type {
   WeeklyTargetResponse, WeeklyTargetSettings,
   LinkReviewListResponse, LinkReviewEntry, LinkReviewVerdictRequest, LoadTrailResponse,
   TruckProfitPay, TruckProfitResponse,
+  PayRoutesResponse, PaySuggestRequest, PaySuggestResponse,
   ListRecurringExpensesResponse, CreateRecurringExpenseRequest,
   UpdateRecurringExpenseRequest, RecurringExpenseResponse,
   ListExpenseEntriesRequest, ListExpenseEntriesResponse,
@@ -2046,6 +2047,25 @@ class RailwayClient {
   /** The GPS drives linked to a load (deadhead in, loaded, return), for its map. */
   getLoadTrail(eventId: string) {
     return this.req<LoadTrailResponse>('GET', `/v1/link-review/${eventId}/trail`);
+  }
+
+  /** Routes with their settled-payroll pay history and standards (lib/routePay). */
+  getPayRoutes() {
+    return this.req<PayRoutesResponse>('GET', '/v1/pay-routes');
+  }
+
+  /** Suggested pay for legs — by event id, or by stops for an unsaved leg. */
+  suggestPay(body: PaySuggestRequest) {
+    return this.req<PaySuggestResponse>('POST', '/v1/pay-routes/suggest', body);
+  }
+
+  /** Set (or with null, clear) a route's standard pay. */
+  setRouteStandard(routeKey: string, amount: number | null, note?: string | null) {
+    return this.req<{ ok: true }>('PUT', '/v1/pay-routes/standard', { routeKey, amount, note: note ?? null });
+  }
+
+  renameRoutePlace(placeId: number, name: string) {
+    return this.req<{ ok: true }>('PATCH', `/v1/pay-routes/places/${placeId}`, { name });
   }
 
   /** Each load's profit + each truck-day's time-of-day blocks (lib/truckProfit). */

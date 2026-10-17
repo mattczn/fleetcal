@@ -29,6 +29,7 @@ import {
 } from '@/lib/auditEntry';
 import DataLoader from '@/components/DataLoader';
 import AppShell from '@/components/nav/AppShell';
+import { PaySuggestionsContext, SuggestedPayChip, usePaySuggestionFor, usePaySuggestions } from './SuggestedPay';
 import type { CalendarEvent } from '@/lib/types';
 
 // ─── Week helpers ─────────────────────────────────────────────────────────────
@@ -258,6 +259,7 @@ function PayCell({ load, legRevenue, legCount, locked }: {
   const showResetLoad = !locked && isRelay && autoForLoad != null && !payMatchesPct(payNum, lp,   driverPayPct);
 
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const suggestion = usePaySuggestionFor(load.id);
   return (
     <span ref={cellRef} data-pay-cell-id={load.id} className="inline-flex items-center gap-1 min-w-0">
       <button
@@ -278,6 +280,8 @@ function PayCell({ load, legRevenue, legCount, locked }: {
         )}
         <Pencil size={11} className="opacity-0 group-hover:opacity-60 transition-opacity shrink-0" style={{ color: 'var(--gc-text-3)' }} />
       </button>
+      <SuggestedPayChip suggestion={suggestion} current={payNum} disabled={locked || saving}
+        onUse={(amount) => { void applyPay(amount, 'manual'); }} />
       {editing && (
         <PayEditPopover
           anchorRef={triggerRef}
@@ -2357,6 +2361,13 @@ export default function PayrollView() {
     return rows;
   }, [weekEvents, adjDriverNames, recordDriverNames, drivers]);
 
+  // Suggested pay for every load leg on the page (routes + settled payroll).
+  const suggestLegs = useMemo(
+    () => driverGroups.flatMap((g) => g.loads.filter((l) => l.loadId).map((l) => ({ key: l.id, eventId: l.id }))),
+    [driverGroups],
+  );
+  const paySuggestions = usePaySuggestions(suggestLegs);
+
   // Total driver pay across every leg — each driver gets paid for
   // their leg, so summing every event's driverPay is the correct
   // "what left our books via loads" answer. NOT the whole payroll —
@@ -2470,7 +2481,13 @@ export default function PayrollView() {
                 {fmtDateFull(sat)} – {fmtDateFull(fri)}
               </p>
             </div>
-            <WeekSelector options={weekOptions} selectedIdx={weekIdx} onChange={setWeekIdx} />
+            <div className="flex items-center gap-3">
+              <Link href="/payroll/routes" className="text-[12px] font-semibold print:hidden" style={{ color: 'var(--gc-blue)' }}
+                title="Every route, what payroll paid on it, and its standard pay">
+                Routes &amp; standard pay →
+              </Link>
+              <WeekSelector options={weekOptions} selectedIdx={weekIdx} onChange={setWeekIdx} />
+            </div>
           </div>
 
           {/* Summary strip */}
@@ -2595,7 +2612,8 @@ export default function PayrollView() {
               </Link>
             </div>
           ) : (
-            driverGroups.map(row => (
+            <PaySuggestionsContext.Provider value={paySuggestions}>
+            {driverGroups.map(row => (
               <DriverCard
                 key={row.driverName}
                 row={row}
@@ -2609,7 +2627,8 @@ export default function PayrollView() {
                 sat={sat}
                 fri={fri}
               />
-            ))
+            ))}
+            </PaySuggestionsContext.Provider>
           )}
 
         </div>

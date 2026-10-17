@@ -16,7 +16,7 @@
  * draftLegs buffers until Save.
  */
 
-import { Fragment, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import { ArrowLeftRight, Plus, Loader2, Route, RotateCcw } from 'lucide-react';
 import { legLabel, handoffTimesOf } from '@fleetcal/types';
 import { StyledSelect } from '@/components/ui/StyledSelect';
@@ -27,6 +27,8 @@ import { useCalendarStore } from '@/store/useCalendarStore';
 import { AssetSelect } from './AssetSelect';
 import { HandoffPhotosButton } from '@/components/calendar/RelayHandoffPhotos';
 import FinalizedPayBanner from '@/components/payroll/FinalizedPayBanner';
+import { SuggestedPayChip, toSuggestStop, usePaySuggestions } from '@/components/payroll/SuggestedPay';
+import type { PaySuggestion, PaySuggestRequest } from '@fleetcal/types';
 import { useLoadPayFinalized } from '@/lib/useLoadPayFinalized';
 import { isActiveOn } from '@/lib/lifecycle';
 import {
@@ -87,6 +89,9 @@ export interface RelayHandoffPhoto {
 interface Props {
   legs: RelayLegView[];
   handoffs: RelayHandoffView[];
+  /** The load's full stop list (every leg carries it) — for each leg's
+   *  suggested pay. */
+  allStops?: Stop[];
   loadPrice: number | null;
   assets: Asset[];
   drivers: Driver[];
@@ -226,9 +231,10 @@ const pctChip = (p: number | null, basis: string, emphasis = false, detail?: str
 
 function LegCard({
   leg, legCount, loadPrice, legRevenue, shareOfMiles, driverPayPct, assets, drivers, startDate,
-  canViewDriverPay, disabled, canonicalDriverName, onChangeLeg, onOpenLeg,
+  canViewDriverPay, disabled, canonicalDriverName, onChangeLeg, onOpenLeg, suggestion,
 }: {
   leg: RelayLegView;
+  suggestion?: PaySuggestion | null;
   legCount: number;
   loadPrice: number | null;
   /** THIS leg's share of the load price — miles-prorated, or an even
@@ -415,7 +421,11 @@ function LegCard({
               disabled={disabled || finalized.finalized}
               disabledTitle={FINALIZED_HINT}
             />
-            <div className="mt-1.5">{payLabelSuffix}</div>
+            <div className="mt-1.5 flex items-center gap-1 flex-wrap">
+              <SuggestedPayChip suggestion={suggestion} current={payNum} disabled={disabled || finalized.finalized}
+                onUse={(amount) => onChangeLeg(leg.key, { pay: amount, paySource: 'manual' })} />
+              {payLabelSuffix}
+            </div>
             <div className="mt-1.5">
               <FinalizedPayBanner
                 driverName={leg.driverName}
@@ -431,13 +441,22 @@ function LegCard({
 }
 
 export default function RelayLegsEditor({
-  legs, handoffs, loadPrice, assets, drivers, startDate,
+  legs, handoffs, allStops, loadPrice, assets, drivers, startDate,
   canViewDriverPay, disabled, driverPayPct, payNotice,
   loadId, handoffPhotos, onSelectPhoto, onPhotosUploaded,
   canonicalDriverName, onChangeLeg, onOpenLeg, onAddHandoff, onAddHandoffForLeg, onRemoveHandoff,
   builderMode, onChangeHandoffTimes, onChangeHandoffStop,
 }: Props) {
   const [confirmIdx, setConfirmIdx] = useState<number | null>(null);
+  // Suggested pay per leg: from the form's stops when they're geocoded
+  // (live while editing, works before save), else the saved leg's.
+  const suggestLegs = useMemo((): PaySuggestRequest['legs'] => {
+    const geo = (allStops ?? []).filter((s) => s.lat != null && s.lng != null).length >= 2;
+    return legs.flatMap((l): PaySuggestRequest['legs'] => geo
+      ? [{ key: l.key, stops: (allStops ?? []).map(toSuggestStop), legIndex: l.legIndex }]
+      : l.eventId ? [{ key: l.key, eventId: l.eventId }] : []);
+  }, [legs, allStops]);
+  const paySuggestions = usePaySuggestions(suggestLegs, canViewDriverPay);
   // Handoff times are stored in HOME_TZ but entered/displayed in the
   // user's view timezone — identical treatment to the stop rows, so a
   // value edited here and read there formats the same.
@@ -632,6 +651,7 @@ export default function RelayLegsEditor({
             )}
             <LegCard
               leg={leg}
+              suggestion={paySuggestions.get(leg.key)}
               legCount={legCount}
               loadPrice={loadPrice}
               legRevenue={revenuePerLeg[i] ?? null}
