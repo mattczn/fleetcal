@@ -77,7 +77,12 @@ export function SuggestedPayChip({ suggestion, current, onUse, disabled }: {
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   if (!suggestion) return null;
   const matches = current != null && Math.abs(current - suggestion.amount) < 0.5;
-  const tone = matches
+  // The kind-of-leg rule is a rough estimate (no paid history on the
+  // route or area) — shown plainly as one, never as a reference.
+  const estimate = suggestion.source === 'kind';
+  const tone = estimate
+    ? { bg: 'var(--gc-surface-2)', fg: 'var(--gc-text-3)', border: 'var(--gc-border)' }
+    : matches
     ? { bg: '#e6f4ea', fg: '#1e8e3e', border: '#ceead6' }
     : current == null
       ? { bg: '#e8f0fe', fg: '#1a73e8', border: '#d2e3fc' }
@@ -88,7 +93,7 @@ export function SuggestedPayChip({ suggestion, current, onUse, disabled }: {
     <span ref={chipRef} onMouseEnter={show} onMouseLeave={hide} className="inline-flex">
       <span className="px-1.5 py-0.5 rounded-lg font-semibold whitespace-nowrap cursor-default"
         style={{ fontSize: 10, background: tone.bg, color: tone.fg, border: `1px solid ${tone.border}` }}>
-        {matches ? `✓ ${suggestion.source === 'standard' ? 'standard' : 'usual'}` : `Suggested ${money(suggestion.amount)}`}
+        {estimate ? `Est. ${money(suggestion.amount)}` : matches ? `✓ ${suggestion.source === 'standard' ? 'standard' : 'usual'}` : `Suggested ${money(suggestion.amount)}`}
       </span>
       {open ? (
         <SuggestionPopover anchor={chipRef} suggestion={suggestion} current={current} onEnter={show} onLeave={hide}
