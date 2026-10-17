@@ -210,7 +210,11 @@ async function loadEconomics(
 async function earnedLoads(
   orgId: string, from: string, to: string,
   excluded: ExcludedDrivers, excludedAssets: Set<number>, terminal: Coord | null, tz: string,
-): Promise<{ rows: LoadEcon[]; payBetween: (from: string, to: string) => number }> {
+): Promise<{
+  rows: LoadEcon[];
+  payBetween: (from: string, to: string) => number;
+  loadedBetween: (from: string, to: string) => number;
+}> {
   // A load picked up up to 3 weeks before can still be running; one picked
   // up just after can have its deadhead inside.
   const all = await loadEconomics(orgId, addDays(from, -21), addDays(to, 2), excluded, excludedAssets, terminal, true);
@@ -238,7 +242,8 @@ async function earnedLoads(
     if (f > 1e-6) rows.push({ ...r, revenue: r.revenue * f, loadedMiles: r.loadedMiles * f, driverPay: r.driverPay * f });
   });
   const payBetween = (a: string, b: string) => all.reduce((s, r, i) => s + r.driverPay * fraction(i, a, b), 0);
-  return { rows, payBetween };
+  const loadedBetween = (a: string, b: string) => all.reduce((s, r, i) => s + r.loadedMiles * fraction(i, a, b), 0);
+  return { rows, payBetween, loadedBetween };
 }
 
 async function adjustmentsTotal(orgId: string, from: string, to: string, excluded: ExcludedDrivers): Promise<number> {
@@ -754,7 +759,9 @@ export async function computeWeeklyTarget(
   const weekComplete = weekTo < today;
   const fixedPeriod = fixedWeekly * days / 7;
   const perMileCost = fuelPrice.value / mpg.value + maintPerMile;
-  const project = (rows: LoadEcon[], loadPay: (ws: string, we: string) => number) => {
+  /** milesOverride: the earned view's miles (odometer for days driven +
+   *  the estimate for the rest); booked always estimates. */
+  const project = (rows: LoadEcon[], loadPay: (ws: string, we: string) => number, milesOverride?: number) => {
     const wk = totals(rows);
     const local = totals(rows.filter(r => r.cls === "local"));
     const otr = totals(rows.filter(r => r.cls === "otr"));
@@ -771,7 +778,7 @@ export async function computeWeeklyTarget(
     const driverPaySource: "payroll" | "loads" | "partial" =
       weeks.length && finalizedCount === weeks.length ? "payroll" : finalizedCount > 0 ? "partial" : "loads";
 
-    const totalMiles = wk.loadedMiles * emptyFactor.value;
+    const totalMiles = milesOverride ?? wk.loadedMiles * emptyFactor.value;
     const fuel = totalMiles * fuelPrice.value / mpg.value;
     const maintenance = totalMiles * maintPerMile;
     const other = wk.revenue * revenuePctOther;
@@ -812,7 +819,13 @@ export async function computeWeeklyTarget(
   };
   const booked = project(weekLoads, (ws, we) =>
     weekLoads.filter(r => r.pickup >= ws && r.pickup <= we).reduce((s, r) => s + r.driverPay, 0));
-  const earned = earnedSet ? project(earnedSet.rows, earnedSet.payBetween) : null;
+  // Earned = what was actually done, so its miles are what the trucks
+  // actually drove (odometer, through today) plus the estimate for loads
+  // still to run in the period.
+  const earnedMiles = earnedSet && weekEld
+    ? weekEld.miles + (weekTo > today ? earnedSet.loadedBetween(addDays(today, 1), weekTo) * emptyFactor.value : 0)
+    : undefined;
+  const earned = earnedSet ? project(earnedSet.rows, earnedSet.payBetween, earnedMiles) : null;
 
   // ── Local vs OTR rate per loaded mile ──
   // Overhead accrues per truck-day, so each class carries it for the time

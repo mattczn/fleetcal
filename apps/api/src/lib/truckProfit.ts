@@ -51,6 +51,8 @@ const EVEN_DAYS = [1, 1, 1, 1, 1, 1, 1].map((x) => x / 7);
 const dowOf = (date: string) => new Date(`${date}T12:00:00Z`).getUTCDay();
 const CHUNK = 150;
 const SHARES_TTL_MS = 6 * H;
+/** Bounds on scaling a truck's GPS miles to its odometer (bad reads). */
+const MAX_ODO_SCALE = 4;
 
 // ── Legs ────────────────────────────────────────────────────────────────
 
@@ -308,7 +310,10 @@ export async function computeTruckProfit(
   const payPct: Record<HaulClass, number> = { local: p.payPct.local, otr: p.payPct.otr };
   const drivenPer: Record<HaulClass, number> = { local: p.localDrivenPerLoaded.value, otr: p.otrDrivenPerLoaded.value };
 
-  const [shares, raw, assets, drives] = await Promise.all([
+  const nowWall = utcToWallMs(new Date().toISOString(), ctx.tz);
+  const today = dayOf(nowWall);
+  const odoTo = to < today ? to : today;
+  const [shares, raw, assets, drives, odoReads] = await Promise.all([
     blockShares(orgId, wt.calibration.from, wt.calibration.to, ctx),
     loadLegs(orgId, from, to, ctx, assetId),
     fetchAllRows<{ id: number; name: string; type: string; hidden: boolean; sort_order: number; motive_vehicle_id: string | null }>("truck profit assets", () =>
@@ -317,7 +322,28 @@ export async function computeTruckProfit(
       supabase.from("movements").select("id, asset_id, start_time, end_time, miles")
         .eq("org_id", orgId).eq("source", "motive").is("deleted_at", null)
         .gte("start_time", `${addDays(from, -1)}T00:00:00Z`).lt("start_time", `${addDays(to, 2)}T00:00:00Z`)),
+    // Odometer, read exactly as the dashboard does (lib/weeklyTarget eldMiles).
+    from <= today
+      ? fetchAllRows<{ id: number; vehicle_id: string | number; odometer_miles: number | string }>("truck profit odometer", () =>
+        supabase.from("motive_odometer_readings").select("id, vehicle_id, odometer_miles")
+          .eq("org_id", orgId).not("odometer_miles", "is", null)
+          .gte("captured_at", `${from}T00:00:00Z`).lte("captured_at", `${addDays(odoTo, 1)}T12:00:00Z`))
+      : Promise.resolve([]),
   ]);
+  // Each truck's odometer miles over the days already driven.
+  const odoByAsset = new Map<number, number>();
+  {
+    const assetOfVehicle = new Map(assets.filter((a) => a.motive_vehicle_id).map((a) => [String(a.motive_vehicle_id), a.id]));
+    const span = new Map<number, [number, number]>();
+    for (const r of odoReads) {
+      const id = assetOfVehicle.get(String(r.vehicle_id));
+      const m = Number(r.odometer_miles);
+      if (id == null || !(m > 0)) continue;
+      const cur = span.get(id);
+      span.set(id, cur ? [Math.min(cur[0], m), Math.max(cur[1], m)] : [m, m]);
+    }
+    for (const [id, [lo, hi]] of span) odoByAsset.set(id, hi - lo);
+  }
 
   // Fuel and wear on GPS trucks: miles on a linked load are spread with
   // that load (like its revenue), and every other drive — yard moves, fuel
@@ -451,7 +477,6 @@ export async function computeTruckProfit(
 
   const days: string[] = [];
   for (let d = from; d <= to; d = addDays(d, 1)) days.push(d);
-  const nowWall = utcToWallMs(new Date().toISOString(), ctx.tz);
   const windowA = naiveMs(`${from}T00:00`);
   const windowB = naiveMs(`${addDays(to, 1)}T00:00`);
 
@@ -481,6 +506,24 @@ export async function computeTruckProfit(
 
     const gpsMiles = assetHasGps.has(asset.id) ? gpsCells.get(asset.id) ?? new Map<string, number>() : null;
     const totals = { ...zero(), unused: 0, routeMiles: 0, linkedMiles: 0, gpsMiles: 0 };
+    // Miles in a block on a GPS truck: linked loads' miles spread with the
+    // load, loads not run yet at their estimate, other drives when driven.
+    const blockMiles = (key: string) => {
+      let m = gpsMiles?.get(key) ?? 0;
+      for (const o of cells.get(key) ?? []) {
+        const l = legs[o.leg];
+        if ((l.gpsMiles != null || l.a > nowWall) && l.hours > 0) m += l.drivenMiles * o.hours / l.hours;
+      }
+      return m;
+    };
+    // Days already driven are scaled to the truck's odometer (what the
+    // dashboard's earned view counts); GPS only decides where they land.
+    let driven = 0;
+    if (gpsMiles) for (const date of days) if (date <= today) for (let b = 0; b < 4; b++) driven += blockMiles(`${date}|${b}`);
+    const odo = odoByAsset.get(asset.id);
+    const odoScale = gpsMiles && odo != null && odo > 0 && driven > 0
+      ? Math.min(MAX_ODO_SCALE, Math.max(1 / MAX_ODO_SCALE, odo / driven))
+      : 1;
     const dayRows: TruckProfitDay[] = days.map((date) => {
       const worked = dayClsByTruck.get(asset.id)?.get(date) ?? null;
       const day: TruckProfitDay = { date, cls: worked, ...zero(), blocks: [], unused: 0 };
@@ -491,23 +534,16 @@ export async function computeTruckProfit(
         for (const o of occ) {
           const l = legs[o.leg];
           const f = l.hours > 0 ? o.hours / l.hours : 0;
-          const c = costsOf(l);
-          // On a GPS truck an unlinked leg's estimated miles would double
-          // up with its real drives, which come in as unlinked below —
-          // unless it hasn't run yet: then there are no drives, only the
-          // estimate.
-          const ownMiles = !gpsMiles || l.gpsMiles != null || l.a > nowWall;
-          addInto(spread, { ...c, fuel: ownMiles ? c.fuel : 0, maintenance: ownMiles ? c.maintenance : 0, overhead: 0, profit: 0 }, f);
+          addInto(spread, { ...costsOf(l), overhead: 0, profit: 0 }, f);
           totals.routeMiles += (l.routeMiles ?? 0) * f;
           totals.linkedMiles += l.drivenMiles * f;
-          if (gpsMiles && ownMiles) totals.gpsMiles += l.drivenMiles * f;
         }
         spread.driverPay *= payScale;
         if (gpsMiles) {
-          const miles = gpsMiles.get(key) ?? 0;
+          const miles = blockMiles(key) * (date <= today ? odoScale : 1);
           totals.gpsMiles += miles;
-          spread.fuel += miles * fuelPerMile;
-          spread.maintenance += miles * maintPerMile;
+          spread.fuel = miles * fuelPerMile;
+          spread.maintenance = miles * maintPerMile;
         }
         const charge = charges.get(key);
         const cls = charge?.cls ?? dayClass(asset.id, date);
