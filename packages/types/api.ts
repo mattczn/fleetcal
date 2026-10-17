@@ -3539,6 +3539,8 @@ export interface PayRouteExample {
   eventId: string;
   loadId: string | null;
   loadNum: string | null;
+  /** The calendar entry's title (falls back to the pay stub's label). */
+  title: string | null;
   /** The leg's date on the pay stub. */
   date: string;
   weekStart: string;

@@ -260,12 +260,12 @@ async function buildHistory(orgId: string): Promise<History> {
   }
 
   const ids = [...byEvent.keys()];
-  const events: Array<{ id: string; leg_index: number | null }> = [];
+  const events: Array<{ id: string; leg_index: number | null; title: string | null }> = [];
   const stops: Array<StopLike & { event_id: string; sequence: number; is_handoff: boolean | null; facility_name: string | null }> = [];
   for (let i = 0; i < ids.length; i += CHUNK) {
     const chunk = ids.slice(i, i + CHUNK);
     const [ev, st] = await Promise.all([
-      supabase.from("events").select("id, leg_index").in("id", chunk),
+      supabase.from("events").select("id, leg_index, title").in("id", chunk),
       supabase.from("stops").select("id, event_id, sequence, type, is_handoff, lat, lng, city, state, facility_name").in("event_id", chunk),
     ]);
     if (ev.error) throw new Error(`route pay events: ${ev.error.message}`);
@@ -288,7 +288,7 @@ async function buildHistory(orgId: string): Promise<History> {
     const route = legRoute(stopsOf.get(e.id) ?? [], e.leg_index ?? 0, placeOf);
     if (!route) continue;
     paid.push({
-      eventId: e.id, loadId: p.loadId, loadNum: p.loadNum, date: p.date, weekStart: p.weekStart,
+      eventId: e.id, loadId: p.loadId, loadNum: p.loadNum, title: e.title?.trim() || p.label, date: p.date, weekStart: p.weekStart,
       driver: p.drivers.join(" + "), amount: Math.round(p.amount * 100) / 100,
       route, customer: p.label?.includes(":") ? p.label.split(":")[0].trim() : null,
     });

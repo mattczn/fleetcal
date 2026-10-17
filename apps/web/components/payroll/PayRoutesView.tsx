@@ -14,6 +14,8 @@ import type { PayRoute, PayRoutesResponse, RouteLegKind } from '@fleetcal/types'
 import AppShell from '@/components/nav/AppShell';
 import { railway } from '@/lib/railway';
 import { usePermissions } from '@/lib/usePermissions';
+import { useCalendarStore } from '@/store/useCalendarStore';
+import type { CalendarEvent } from '@/lib/types';
 import { KIND_LABEL } from './SuggestedPay';
 
 const money = (n: number) => `$${Math.round(n).toLocaleString()}`;
@@ -39,6 +41,24 @@ export default function PayRoutesView() {
   const [kind, setKind] = useState<RouteLegKind | ''>('');
   const [minLegs, setMinLegs] = useState(3);
   const [open, setOpen] = useState<string | null>(null);
+
+  // Open a paid leg's load in the load modal on this page. Older loads
+  // aren't in the calendar's window, so fetch the load into the store first.
+  const mergeEvents = useCalendarStore((st) => st.mergeEvents);
+  const openEditModal = useCalendarStore((st) => st.openEditModal);
+  const [opening, setOpening] = useState<string | null>(null);
+  const openLoad = async (loadId: string, eventId: string) => {
+    setOpening(eventId);
+    try {
+      const { loads } = await railway.getLoad(loadId);
+      mergeEvents(loads as CalendarEvent[]);
+      openEditModal(eventId);
+    } catch (e) {
+      console.error('[routes] open load failed:', e);
+    } finally {
+      setOpening(null);
+    }
+  };
 
   const placeById = useMemo(() => new Map((data?.places ?? []).map((p) => [p.id, p])), [data]);
   const rows = useMemo(() => {
@@ -155,9 +175,15 @@ export default function PayRoutesView() {
                                     {r.examples.map((e) => (
                                       <tr key={e.eventId}>
                                         <td className="pr-3" style={{ color: 'var(--gc-text-3)' }}>{shortDate(e.date)}</td>
-                                        <td className="pr-3">
-                                          {e.loadId ? <Link href={`/loads/${e.loadId}`} style={{ color: 'var(--gc-blue)' }}>#{e.loadNum ?? '—'}</Link> : `#${e.loadNum ?? '—'}`}
+                                        <td className="pr-3 whitespace-nowrap">
+                                          {e.loadId ? (
+                                            <button type="button" onClick={() => void openLoad(e.loadId!, e.eventId)} disabled={opening === e.eventId}
+                                              className="font-semibold" style={{ color: 'var(--gc-blue)' }} title="Open the load">
+                                              {opening === e.eventId ? <Loader2 size={11} className="animate-spin inline" /> : null} #{e.loadNum ?? '—'}
+                                            </button>
+                                          ) : `#${e.loadNum ?? '—'}`}
                                         </td>
+                                        <td className="pr-3 truncate" style={{ color: 'var(--gc-text-1)', maxWidth: 360 }} title={e.title ?? undefined}>{e.title ?? '—'}</td>
                                         <td className="pr-3" style={{ color: 'var(--gc-text-2)' }}>{e.driver}</td>
                                         <td className="text-right font-semibold" style={{ color: 'var(--gc-text-1)' }}>{money(e.amount)}</td>
                                       </tr>
