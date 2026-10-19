@@ -3580,6 +3580,14 @@ export interface PayRoute {
   examples: PayRouteExample[];
   customers: string[];
   standard: PayRouteStandard | null;
+  /** Recent paid amounts (last 20 legs), most common first. */
+  amounts: Array<{ amount: number; count: number }>;
+  /** Recent legs were paid different amounts, or off the standard. */
+  varies: boolean;
+  /** The rate card cell this route trains (or would), if any. */
+  rateCell: string | null;
+  /** Left out of rate card training. */
+  rateExcluded: boolean;
 }
 
 export interface PayRoutesResponse {
@@ -3590,11 +3598,12 @@ export interface PayRoutesResponse {
   /** Fallback rule per kind: flat (perMile 0) or base + per mile. */
   kindRules: Record<RouteLegKind, { base: number; perMile: number; legs: number }>;
   kindLabels: Record<RouteLegKind, string>;
+  rateCard: RateCardResponse;
 }
 
 /** standard = set on the route; route = the route's usual; area = the
  *  usual between the same areas; kind = the rule for the leg's kind. */
-export type PaySuggestionSource = 'standard' | 'route' | 'area' | 'kind';
+export type PaySuggestionSource = 'standard' | 'route' | 'rate' | 'area' | 'kind';
 
 export interface PaySuggestion {
   amount: number;
@@ -3611,6 +3620,85 @@ export interface PaySuggestion {
   usual: number | null;
   usualShare: number | null;
   examples: PayRouteExample[];
+  /** Recent paid amounts on this route, most common first. */
+  amounts: Array<{ amount: number; count: number }>;
+  /** Pay on this route has varied (or strayed from its standard). */
+  varies: boolean;
+  /** What the rate card says for this kind of leg (when it has a cell). */
+  rateValue: number | null;
+  /** Set when the amount came from the rate card: the cell and the routes
+   *  it learned from. */
+  rate?: { key: string; label: string; refs: RateCardRef[]; extraStops: number; extraStopAmount: number } | null;
+}
+
+// ── Rate card: pay for legs on routes with no standard ─────────────────
+// Learned from route standards (and settled pay where none is set):
+// local legs by region × kind × distance band, OTR legs by lane and
+// direction. Cells can be overridden; routes can be left out of training.
+
+export type RateGroup = 'pickup' | 'delivery' | 'whole' | 'transfer';
+
+export interface RateCardRegion {
+  name: string;
+  lat: number;
+  lng: number;
+  /** A leg is local to the region when every stop is within this. */
+  radiusMi: number;
+}
+
+export interface RateCardConfig {
+  regions: RateCardRegion[];
+  /** Local distance band edges in miles, e.g. [10, 30, 65, 105]. */
+  bands: number[];
+  /** Route keys left out of training. */
+  excludeRoutes: string[];
+  /** Routes whose name or customer contains one of these are left out. */
+  excludeNames: string[];
+  /** Cell key → amount, and 'extraStop' → amount per stop past two. */
+  overrides: Record<string, number>;
+}
+
+/** A partial settings change; an override of null clears it. */
+export type RateCardConfigPatch = Partial<Omit<RateCardConfig, 'overrides'>> & { overrides?: Record<string, number | null> };
+
+export interface RateCardRef {
+  routeKey: string;
+  label: string;
+  name: string | null;
+  cities: string;
+  pay: number;
+  legs: number;
+  standard: boolean;
+  stops: number;
+}
+
+export interface RateCardCell {
+  key: string;
+  scope: 'local' | 'lane';
+  region: string | null;
+  group: RateGroup | null;
+  band: string | null;
+  /** 'SLC → Vegas' for lanes. */
+  lane: string | null;
+  label: string;
+  learned: number | null;
+  override: number | null;
+  /** override ?? learned */
+  value: number | null;
+  /** The routes it learns from don't all pay the same. */
+  varies: boolean;
+  refs: RateCardRef[];
+}
+
+export interface RateCardResponse {
+  available: boolean;
+  config: RateCardConfig;
+  cells: RateCardCell[];
+  extraStop: { learned: number | null; override: number | null; value: number };
+  /** Per-mile fallback for OTR lanes with no training routes. */
+  otrPerMile: number | null;
+  /** Route keys left out of training (config + name patterns + bad data). */
+  excluded: string[];
 }
 
 export interface PaySuggestStop {
@@ -3626,7 +3714,11 @@ export interface PaySuggestStop {
 export interface PaySuggestRequest {
   /** key = the caller's own id for the leg (echoed back). Give eventId for
    *  a saved leg, or stops (+ legIndex) for one that isn't saved yet. */
-  legs: Array<{ key: string; eventId?: string; stops?: PaySuggestStop[]; legIndex?: number }>;
+  legs: Array<{
+    key: string; eventId?: string; stops?: PaySuggestStop[]; legIndex?: number;
+    /** Price the stops as one driver running the whole load (handoffs ignored). */
+    wholeLoad?: boolean;
+  }>;
 }
 
 export interface PaySuggestResponse {

@@ -19,13 +19,14 @@
  */
 
 import type {
-  PayRoute, PayRouteExample, PayRoutesResponse, PaySuggestion, PaySuggestRequest, RouteLegKind, RoutePlace, Stop,
+  PayRoute, PayRouteExample, PayRoutesResponse, PaySuggestion, PaySuggestRequest, RateCardConfig, RouteLegKind, RoutePlace, Stop,
 } from "@fleetcal/types";
 import { isHandoffStop, stopsForLeg } from "@fleetcal/types";
 import { supabase as supabaseTyped } from "./supabase.js";
 import { fetchAllRows } from "./fetchAllRows.js";
 import { airMilesBetween } from "./airMiles.js";
 import { getHosConfig } from "./hosService.js";
+import { buildRateCard, readRateConfig, trainingPay, type RateCard, type RatePlace, type RateRoute } from "./rateCard.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const supabase = supabaseTyped as any;
@@ -213,7 +214,12 @@ function legRoute(allStops: StopLike[], legIndex: number, placeOf: (s: StopLike)
 // ── Paid history ────────────────────────────────────────────────────────
 
 interface PaidLeg extends PayRouteExample { route: LegRoute; customer: string | null }
-interface Stats { legs: number; usual: number | null; usualShare: number | null; min: number; max: number; lastPaid: string | null; examples: PayRouteExample[]; customers: string[] }
+interface Stats {
+  legs: number; usual: number | null; usualShare: number | null; min: number; max: number; lastPaid: string | null;
+  examples: PayRouteExample[]; customers: string[];
+  /** Recent paid amounts (last 20 legs), most common first. */
+  amounts: Array<{ amount: number; count: number }>;
+}
 interface History {
   settledThrough: string | null;
   paid: PaidLeg[];
@@ -236,7 +242,9 @@ function statsOf(legs: PaidLeg[]): Stats {
   let usual: number | null = null; let best = 0;
   for (const a of window) { const c = counts.get(a)!; if (c > best) { usual = a; best = c; } }
   const amounts = legs.map((l) => l.amount);
+  const recentAmounts = [...counts.entries()].map(([amount, count]) => ({ amount, count })).sort((a, b) => b.count - a.count || b.amount - a.amount);
   return {
+    amounts: recentAmounts,
     legs: legs.length,
     usual,
     usualShare: window.length ? best / window.length : null,
@@ -382,10 +390,40 @@ const toPlace = (p: PlaceRow): RoutePlace => ({
   id: p.id, name: p.name, lat: p.lat, lng: p.lng, city: p.city, state: p.state, isYard: !!p.saved_location_id,
 });
 
+/** Pay on a route varies when its recent legs were paid different amounts,
+ *  or something other than its standard. */
+const variesOf = (amounts: Array<{ amount: number }>, standard: StandardRow | undefined) =>
+  amounts.length > 1 || (!!standard && amounts.some((a) => Math.abs(a.amount - Number(standard.amount)) >= 0.5));
+
+const toRatePlace = (p: PlaceRow): RatePlace => ({ id: p.id, lat: p.lat, lng: p.lng, name: p.name, city: p.city, state: p.state });
+
+/** The rate card, trained on every route with paid history. */
+async function rateCardFor(
+  orgId: string, h: History, std: Map<string, StandardRow>, names: Map<string, string>, config?: RateCardConfig,
+): Promise<RateCard> {
+  const cfg = config ? { config, available: true } : await readRateConfig(orgId);
+  const placeById = new Map(h.places.map((p) => [p.id, p]));
+  const routes: RateRoute[] = [];
+  for (const [key, legs] of h.byRoute) {
+    const st = statsOf(legs);
+    const r = legs[0].route;
+    const standard = toStandard(std.get(key));
+    routes.push({
+      key, kind: r.kind, miles: r.miles, label: r.label, name: names.get(key) ?? null, cities: r.cities,
+      places: r.placeIds.map((id) => placeById.get(id)).filter((p): p is PlaceRow => !!p).map(toRatePlace),
+      customers: st.customers, legs: st.legs, standard: !!standard,
+      pay: trainingPay({ standard, usual: st.usual, usualShare: st.usualShare, legs: st.legs }),
+    });
+  }
+  return buildRateCard(routes, cfg.config, cfg.available);
+}
+
 // ── Public ──────────────────────────────────────────────────────────────
 
 export async function listPayRoutes(orgId: string): Promise<PayRoutesResponse> {
   const [h, std, names] = await Promise.all([history(orgId), standards(orgId), routeNames(orgId)]);
+  const card = await rateCardFor(orgId, h, std, names);
+  const excluded = new Set(card.response.excluded);
   const routes: PayRoute[] = [];
   const seen = new Set<string>();
   for (const [key, legs] of h.byRoute) {
@@ -395,6 +433,8 @@ export async function listPayRoutes(orgId: string): Promise<PayRoutesResponse> {
     routes.push({
       key, places: r.placeIds, label: r.label, name: names.get(key) ?? null, cities: r.cities, kind: r.kind, miles: r.miles,
       ...st, standard: toStandard(std.get(key)),
+      varies: variesOf(st.amounts, std.get(key)),
+      rateCell: card.cellOf(key), rateExcluded: excluded.has(key),
     });
   }
   // Standards set on routes with no settled pay yet still show.
@@ -406,8 +446,8 @@ export async function listPayRoutes(orgId: string): Promise<PayRoutesResponse> {
     routes.push({
       key, places: ids, label: ids.map((id) => placeName.get(id) ?? `#${id}`).join(" → "),
       name: names.get(key) ?? null, cities: `${cityOf(undefined, ends[0])} → ${cityOf(undefined, ends[1])}`, kind: null, miles: null,
-      legs: 0, usual: null, usualShare: null, min: 0, max: 0, lastPaid: null, examples: [], customers: [],
-      standard: toStandard(s),
+      legs: 0, usual: null, usualShare: null, min: 0, max: 0, lastPaid: null, examples: [], customers: [], amounts: [],
+      standard: toStandard(s), varies: false, rateCell: null, rateExcluded: false,
     });
   }
   routes.sort((a, b) => b.legs - a.legs);
@@ -417,13 +457,24 @@ export async function listPayRoutes(orgId: string): Promise<PayRoutesResponse> {
     settledThrough: h.settledThrough,
     kindRules: h.kindRules,
     kindLabels: KIND_LABEL,
+    rateCard: card.response,
   };
 }
 
 const round5 = (n: number) => Math.max(0, Math.round(n / 5) * 5);
 
-export async function suggestPay(orgId: string, req: PaySuggestRequest): Promise<Record<string, PaySuggestion | null>> {
+/**
+ * Suggested pay per leg: the route's standard, else the route's settled
+ * usual, else the rate card, else the usual between the same areas, else
+ * a rate card estimate, else the rough rule for the leg's kind. (This
+ * order backtested best on a week the history hadn't seen: 63% exact,
+ * 91% within $25.) opts.config is for backtests.
+ */
+export async function suggestPay(
+  orgId: string, req: PaySuggestRequest, opts: { config?: RateCardConfig } = {},
+): Promise<Record<string, PaySuggestion | null>> {
   const [h, std, names] = await Promise.all([history(orgId), standards(orgId), routeNames(orgId)]);
+  const card = await rateCardFor(orgId, h, std, names, opts.config);
 
   // Legs given by event id: load their leg index and stops.
   const eventIds = req.legs.filter((l) => l.eventId && !l.stops).map((l) => l.eventId!);
@@ -447,29 +498,53 @@ export async function suggestPay(orgId: string, req: PaySuggestRequest): Promise
   // New places for stops we haven't seen (so the route has stable ids).
   const allStops: StopLike[] = req.legs.flatMap((l): StopLike[] => l.stops ?? (l.eventId ? stopsOf.get(l.eventId) ?? [] : []));
   const unknown = allStops.filter((s) => s.lat != null && s.lng != null && !h.placeOf(s));
-  const placeOf = unknown.length ? (await placesFor(orgId, unknown)).placeOf : h.placeOf;
+  const fresh = unknown.length ? await placesFor(orgId, unknown) : null;
+  const placeOf = fresh?.placeOf ?? h.placeOf;
+  const placeById = new Map((fresh?.places ?? h.places).map((p) => [p.id, p]));
 
   const out: Record<string, PaySuggestion | null> = {};
   for (const leg of req.legs) {
-    const stops: StopLike[] | undefined = leg.stops ?? (leg.eventId ? stopsOf.get(leg.eventId) : undefined);
-    const legIndex = leg.legIndex ?? (leg.eventId ? legIndexOf.get(leg.eventId) ?? 0 : 0);
+    const given: StopLike[] | undefined = leg.stops ?? (leg.eventId ? stopsOf.get(leg.eventId) : undefined);
+    // One driver doing the whole run: relay points drop out, handoffs are ordinary stops.
+    const stops = leg.wholeLoad && given
+      ? given.filter((st) => st.type !== "relay").map((st) => ({ ...st, isHandoff: false }))
+      : given;
+    const legIndex = leg.wholeLoad ? 0 : leg.legIndex ?? (leg.eventId ? legIndexOf.get(leg.eventId) ?? 0 : 0);
     const route = stops ? legRoute(stops, legIndex, placeOf) : null;
     if (!route) { out[leg.key] = null; continue; }
     const routeLegs = h.byRoute.get(route.key) ?? [];
     const areaLegs = h.byArea.get(route.areaKey) ?? [];
     const routeStats = statsOf(routeLegs);
     const standard = std.get(route.key);
-    const base = { routeKey: route.key, routeLabel: route.label, routeName: names.get(route.key) ?? null, cities: route.cities, kind: route.kind, miles: route.miles };
+    const rate = card.rateFor({
+      places: route.placeIds.map((id) => placeById.get(id)).filter((p): p is PlaceRow => !!p).map(toRatePlace),
+      kind: route.kind, miles: route.miles,
+    });
+    const base = {
+      routeKey: route.key, routeLabel: route.label, routeName: names.get(route.key) ?? null, cities: route.cities, kind: route.kind, miles: route.miles,
+      amounts: routeStats.amounts, varies: variesOf(routeStats.amounts, std.get(route.key)),
+      rateValue: rate && !rate.estimate ? rate.amount : null,
+    };
+    const fromRate = (): PaySuggestion => ({
+      ...base, amount: rate!.amount, source: "rate", note: rate!.estimate ? "estimate" : null,
+      legs: routeStats.legs, usual: routeStats.usual, usualShare: routeStats.usualShare, examples: routeStats.examples,
+      rate: { key: rate!.key, label: rate!.label, refs: rate!.refs.slice(0, 8), extraStops: rate!.extraStops, extraStopAmount: rate!.extraStopAmount },
+    });
+    const routeUsual = routeStats.legs >= MIN_LEGS && routeStats.usual != null;
     if (standard) {
       out[leg.key] = { ...base, amount: Number(standard.amount), source: "standard", note: standard.note,
         legs: routeStats.legs, usual: routeStats.usual, usualShare: routeStats.usualShare, examples: routeStats.examples };
-    } else if (routeStats.legs >= MIN_LEGS && routeStats.usual != null) {
-      out[leg.key] = { ...base, amount: routeStats.usual, source: "route", note: null,
+    } else if (routeUsual) {
+      out[leg.key] = { ...base, amount: routeStats.usual!, source: "route", note: null,
         legs: routeStats.legs, usual: routeStats.usual, usualShare: routeStats.usualShare, examples: routeStats.examples };
+    } else if (rate && !rate.estimate) {
+      out[leg.key] = fromRate();
     } else if (areaLegs.length >= MIN_LEGS) {
       const a = statsOf(areaLegs);
       out[leg.key] = { ...base, amount: a.usual ?? 0, source: "area", note: null,
         legs: a.legs, usual: a.usual, usualShare: a.usualShare, examples: a.examples };
+    } else if (rate) {
+      out[leg.key] = fromRate();
     } else {
       const rule = h.kindRules[route.kind];
       out[leg.key] = rule && rule.legs > 0 ? {

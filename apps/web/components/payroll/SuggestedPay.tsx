@@ -58,6 +58,10 @@ function sourceLine(s: PaySuggestion): string {
       const exact = s.usualShare != null ? Math.round(s.usualShare * window) : null;
       return `Usual pay on this route: ${money(s.amount)}${exact != null ? ` on ${exact} of the last ${window} paid legs` : ''} (${s.legs} paid in all).`;
     }
+    case 'rate':
+      return s.note === 'estimate'
+        ? `Rate card estimate — ${s.rate?.label ?? ''}.`
+        : `Rate card: ${s.rate?.label ?? ''}${s.rate && s.rate.extraStops > 0 ? ` + ${s.rate.extraStops} extra stop${s.rate.extraStops > 1 ? 's' : ''} × ${money(s.rate.extraStopAmount)}` : ''}. This route has no standard yet.`;
     case 'area':
       return `No settled pay on this exact route yet — usual between the same areas, from ${s.legs} paid legs.`;
     case 'kind':
@@ -79,7 +83,7 @@ export function SuggestedPayChip({ suggestion, current, onUse, disabled }: {
   const matches = current != null && Math.abs(current - suggestion.amount) < 0.5;
   // The kind-of-leg rule is a rough estimate (no paid history on the
   // route or area) — shown plainly as one, never as a reference.
-  const estimate = suggestion.source === 'kind';
+  const estimate = suggestion.source === 'kind' || (suggestion.source === 'rate' && suggestion.note === 'estimate');
   const tone = estimate
     ? { bg: 'var(--gc-surface-2)', fg: 'var(--gc-text-3)', border: 'var(--gc-border)' }
     : matches
@@ -139,6 +143,30 @@ function SuggestionPopover({ anchor, suggestion: s, current, onUse, onEnter, onL
       <div style={{ color: s.routeName ? 'var(--gc-text-3)' : 'var(--gc-text-1)' }}>{s.routeLabel}</div>
       <div className="mb-1" style={{ color: 'var(--gc-text-2)', fontSize: 11 }}>{s.cities}</div>
       <div className="mb-2">{sourceLine(s)}</div>
+      {s.varies && s.amounts.length ? (
+        <div className="mb-2" style={{ color: '#b06000' }}>
+          ⚠ Pay on this route has varied: {s.amounts.map((a) => `${money(a.amount)} ×${a.count}`).join(', ')}
+        </div>
+      ) : null}
+      {s.rateValue != null && s.source !== 'rate' && Math.abs(s.rateValue - s.amount) >= 0.5 ? (
+        <div className="mb-2" style={{ color: 'var(--gc-text-3)' }}>Rate card for this kind of leg: {money(s.rateValue)}</div>
+      ) : null}
+      {s.source === 'rate' && s.rate?.refs.length ? (
+        <>
+          <div className="font-semibold uppercase tracking-wider mb-1" style={{ fontSize: 10, color: 'var(--gc-text-3)' }}>Learned from</div>
+          <table className="w-full mb-2" style={{ fontSize: 11 }}>
+            <tbody>
+              {s.rate.refs.slice(0, 6).map((r) => (
+                <tr key={r.routeKey}>
+                  <td className="pr-2 truncate" style={{ maxWidth: 170, color: 'var(--gc-text-1)' }}>{r.name ?? r.label}</td>
+                  <td className="pr-2 truncate" style={{ maxWidth: 110, color: 'var(--gc-text-3)' }}>{r.cities}</td>
+                  <td className="text-right font-semibold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>{money(r.pay)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      ) : null}
       {s.examples.length ? (
         <>
           <div className="font-semibold uppercase tracking-wider mb-1" style={{ fontSize: 10, color: 'var(--gc-text-3)' }}>

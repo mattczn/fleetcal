@@ -9,7 +9,7 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, ChevronDown, ChevronRight, Loader2, Route as RouteIcon } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, ChevronDown, ChevronRight, Loader2, Route as RouteIcon } from 'lucide-react';
 import type { PayRoute, PayRoutesResponse, RouteLegKind } from '@fleetcal/types';
 import AppShell from '@/components/nav/AppShell';
 import { railway } from '@/lib/railway';
@@ -17,6 +17,7 @@ import { usePermissions } from '@/lib/usePermissions';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import type { CalendarEvent } from '@/lib/types';
 import { KIND_LABEL } from './SuggestedPay';
+import RateCardView from './RateCardView';
 
 const money = (n: number) => `$${Math.round(n).toLocaleString()}`;
 const shortDate = (d: string) => new Date(`${d.slice(0, 10)}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
@@ -41,6 +42,8 @@ export default function PayRoutesView() {
   const [kind, setKind] = useState<RouteLegKind | ''>('');
   const [minLegs, setMinLegs] = useState(3);
   const [open, setOpen] = useState<string | null>(null);
+  const [tab, setTab] = useState<'routes' | 'rate'>('routes');
+  const [variesOnly, setVariesOnly] = useState(false);
 
   // Open a paid leg's load in the load modal on this page. Older loads
   // aren't in the calendar's window, so fetch the load into the store first.
@@ -66,8 +69,14 @@ export default function PayRoutesView() {
     return (data?.routes ?? []).filter((r) =>
       (r.legs >= minLegs || r.standard)
       && (!kind || r.kind === kind)
+      && (!variesOnly || r.varies)
       && (!q || [r.name ?? '', r.label, r.cities, ...r.customers].some((t) => t.toLowerCase().includes(q))));
-  }, [data, search, kind, minLegs]);
+  }, [data, search, kind, minLegs, variesOnly]);
+  const toggleTraining = async (r: PayRoute, use: boolean) => {
+    const current = data?.rateCard.config.excludeRoutes ?? [];
+    await railway.setRateConfig({ excludeRoutes: use ? current.filter((k) => k !== r.key) : [...current, r.key] }).catch(() => undefined);
+    reload();
+  };
 
   const field = { border: '1px solid var(--gc-border)', background: 'var(--gc-surface)', color: 'var(--gc-text-1)' } as const;
 
@@ -92,6 +101,18 @@ export default function PayRoutesView() {
             <option value={10}>10+ paid legs</option>
             <option value={1}>Any paid leg</option>
           </select>
+          <label className="flex items-center gap-1.5 text-[12px]" style={{ color: 'var(--gc-text-2)' }}>
+            <input type="checkbox" checked={variesOnly} onChange={(e) => setVariesOnly(e.target.checked)} />
+            Only where pay varies
+          </label>
+        </div>
+        <div className="flex items-center gap-1 mb-3">
+          {(['routes', 'rate'] as const).map((t) => (
+            <button key={t} type="button" onClick={() => setTab(t)} className="px-3 py-1 rounded text-[12px] font-semibold"
+              style={{ background: tab === t ? 'var(--gc-text-1)' : 'var(--gc-surface-2)', color: tab === t ? 'var(--gc-surface)' : 'var(--gc-text-2)' }}>
+              {t === 'routes' ? 'Routes' : 'Rate card'}
+            </button>
+          ))}
         </div>
 
         {data ? (
@@ -117,6 +138,8 @@ export default function PayRoutesView() {
           <div className="flex items-center gap-2 p-6 text-[13px]" style={{ color: 'var(--gc-text-3)' }}>
             <Loader2 size={14} className="animate-spin" /> Loading routes…
           </div>
+        ) : tab === 'rate' ? (
+          <RateCardView card={data.rateCard} canEdit={canEdit} onSaved={reload} />
         ) : (
           <div className="rounded-lg overflow-x-auto" style={{ border: '1px solid var(--gc-border)', background: 'var(--gc-surface)' }}>
             <table className="w-full text-[13px]" style={{ minWidth: 980 }}>
@@ -129,6 +152,7 @@ export default function PayRoutesView() {
                   <th className="px-3 py-2 font-semibold text-right">Range</th>
                   <th className="px-3 py-2 font-semibold">Last paid</th>
                   <th className="px-3 py-2 font-semibold">Standard</th>
+                  <th className="px-3 py-2 font-semibold text-center" title="Use this route to train the rate card">In rate card</th>
                 </tr>
               </thead>
               <tbody>
@@ -153,6 +177,12 @@ export default function PayRoutesView() {
                           <div style={{ fontWeight: 600, color: 'var(--gc-text-1)' }}>{money(r.usual)}</div>
                           <div style={{ fontSize: 11, color: 'var(--gc-text-3)' }}>{r.usualShare != null ? `${Math.round(r.usualShare * 100)}% exactly` : ''}</div>
                         </> : '—'}
+                        {r.varies ? (
+                          <div className="inline-flex items-center gap-1 mt-0.5 px-1.5 rounded text-[10px] font-semibold" style={{ background: '#fef7e0', color: '#b06000' }}
+                            title={`Recent pay: ${r.amounts.map((a) => `${money(a.amount)} ×${a.count}`).join(', ')}${r.standard ? ` · standard ${money(r.standard.amount)}` : ''}`}>
+                            <AlertTriangle size={10} /> Varies
+                          </div>
+                        ) : null}
                       </td>
                       <td className="px-3 py-2 align-top text-right tabular-nums" style={{ color: 'var(--gc-text-2)' }}>
                         {r.legs ? (r.min === r.max ? money(r.min) : `${money(r.min)}–${money(r.max)}`) : '—'}
@@ -161,11 +191,22 @@ export default function PayRoutesView() {
                       <td className="px-3 py-2 align-top">
                         <StandardEditor route={r} canEdit={canEdit} onSaved={reload} />
                       </td>
+                      <td className="px-3 py-2 align-top text-center">
+                        {(() => {
+                          const manual = data.rateCard.config.excludeRoutes.includes(r.key);
+                          const auto = r.rateExcluded && !manual;
+                          return (
+                            <input type="checkbox" checked={!r.rateExcluded} disabled={!canEdit || auto || !data.rateCard.available}
+                              title={auto ? 'Left out automatically (name pattern like DCL, or bad stops)' : 'Use this route to train the rate card'}
+                              onChange={(e) => void toggleTraining(r, e.target.checked)} />
+                          );
+                        })()}
+                      </td>
                     </tr>
                     {open === r.key ? (
                       <tr style={{ borderBottom: '1px solid var(--gc-border)', background: 'var(--gc-bg)' }}>
                         <td />
-                        <td colSpan={6} className="px-3 py-3">
+                        <td colSpan={7} className="px-3 py-3">
                           <div className="flex flex-wrap gap-8">
                             <div>
                               <div className="text-[11px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>Recent paid legs</div>
@@ -206,7 +247,7 @@ export default function PayRoutesView() {
                   </Fragment>
                 ))}
                 {!rows.length ? (
-                  <tr><td colSpan={7} className="px-3 py-6 text-center text-[13px]" style={{ color: 'var(--gc-text-3)' }}>No routes match.</td></tr>
+                  <tr><td colSpan={8} className="px-3 py-6 text-center text-[13px]" style={{ color: 'var(--gc-text-3)' }}>No routes match.</td></tr>
                 ) : null}
               </tbody>
             </table>

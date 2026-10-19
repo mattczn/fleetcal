@@ -440,6 +440,8 @@ function LegCard({
   );
 }
 
+const WHOLE_LOAD_KEY = '__whole_load';
+
 export default function RelayLegsEditor({
   legs, handoffs, allStops, loadPrice, assets, drivers, startDate,
   canViewDriverPay, disabled, driverPayPct, payNotice,
@@ -452,11 +454,20 @@ export default function RelayLegsEditor({
   // (live while editing, works before save), else the saved leg's.
   const suggestLegs = useMemo((): PaySuggestRequest['legs'] => {
     const geo = (allStops ?? []).filter((s) => s.lat != null && s.lng != null).length >= 2;
-    return legs.flatMap((l): PaySuggestRequest['legs'] => geo
+    const perLeg = legs.flatMap((l): PaySuggestRequest['legs'] => geo
       ? [{ key: l.key, stops: (allStops ?? []).map(toSuggestStop), legIndex: l.legIndex }]
       : l.eventId ? [{ key: l.key, eventId: l.eventId }] : []);
+    // And the same stops as one driver doing the whole run, for comparison.
+    return geo && legs.length > 1
+      ? [...perLeg, { key: WHOLE_LOAD_KEY, stops: (allStops ?? []).map(toSuggestStop), wholeLoad: true }]
+      : perLeg;
   }, [legs, allStops]);
   const paySuggestions = usePaySuggestions(suggestLegs, canViewDriverPay);
+  // Adding or moving a relay point changes every leg's route — and the
+  // load's total driver pay with it.
+  const legSuggestions = legs.map((l) => paySuggestions.get(l.key) ?? null);
+  const suggestedTotal = legSuggestions.every((x) => x) ? legSuggestions.reduce((sum, x) => sum + x!.amount, 0) : null;
+  const wholeLoadSuggestion = paySuggestions.get(WHOLE_LOAD_KEY) ?? null;
   // Handoff times are stored in HOME_TZ but entered/displayed in the
   // user's view timezone — identical treatment to the stop rows, so a
   // value edited here and read there formats the same.
@@ -503,6 +514,18 @@ export default function RelayLegsEditor({
           </button>
         )}
       </div>
+
+      {canViewDriverPay && suggestedTotal != null && legCount > 1 ? (
+        <div className="rounded-lg px-3 py-2 text-[12px]" style={{ background: '#ede9fe', color: '#4c1d95' }}
+          title="From each leg's route standard, settled pay or the rate card — see the chip on each leg">
+          Suggested driver pay for this load: <b>{fmt$(suggestedTotal)}</b> across {legCount} legs
+          ({legSuggestions.map((x) => `$${Math.round(x!.amount)}`).join(' + ')})
+          {wholeLoadSuggestion ? (
+            <> · one driver for the whole run: <b>{fmt$(wholeLoadSuggestion.amount)}</b>
+              {suggestedTotal - wholeLoadSuggestion.amount >= 1 ? ` — the relay adds ${fmt$(suggestedTotal - wholeLoadSuggestion.amount)}` : ''}</>
+          ) : null}
+        </div>
+      ) : null}
 
       {/* Pay bookkeeping the dispatcher didn't do by hand — currently
           the re-proration that runs when a solo load is split. Silent

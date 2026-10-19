@@ -6,6 +6,8 @@
  *   POST  /suggest          { legs: [{ key, eventId? | stops?, legIndex? }] }
  *   PUT   /standard         { routeKey, amount | null, note? } — null clears
  *   PUT   /name             { routeKey, name | null } — null clears
+ *   PUT   /rate-config      partial rate card settings (regions, bands,
+ *                           excludeRoutes, excludeNames, overrides)
  *   PATCH /places/:id       { name }
  *
  * Suggestions are for anyone who can see driver pay (they show next to the
@@ -19,6 +21,7 @@ import type { AuthVariables } from "../middleware/clerk.js";
 import { requireAnyCapability, requireCapability, requireModule } from "../middleware/require.js";
 import { getUserDisplayName } from "../lib/clerk.js";
 import { RoutePayUnavailableError, listPayRoutes, renamePlace, setRouteName, setRouteStandard, suggestPay } from "../lib/routePay.js";
+import { mergeRateConfig, readRateConfig, writeRateConfig } from "../lib/rateCard.js";
 
 const payRoutes = new Hono<{ Variables: AuthVariables }>();
 payRoutes.use("*", requireModule("payroll"));
@@ -86,6 +89,23 @@ payRoutes.put("/name", requireCapability("payroll.adjust"), async (c) => {
     const userId = c.get("userId");
     await setRouteName(c.get("orgId"), routeKey, name || null, await getUserDisplayName(userId).catch(() => null));
     return c.json({ ok: true });
+  } catch (err) {
+    const f = fail(err);
+    return c.json(f.body, f.status);
+  }
+});
+
+payRoutes.put("/rate-config", requireCapability("payroll.adjust"), async (c) => {
+  const orgId = c.get("orgId");
+  const { config: current, available } = await readRateConfig(orgId);
+  if (!available) {
+    return c.json({ error: "route_pay_unavailable", detail: "Run 20261019_route_pay_config.sql first." } satisfies ApiErrorResponse, 409);
+  }
+  const { config, errors } = mergeRateConfig(current, await c.req.json().catch(() => null));
+  if (!config) return c.json({ error: "validation_failed", errors } satisfies ApiErrorResponse, 400);
+  try {
+    await writeRateConfig(orgId, config, await getUserDisplayName(c.get("userId")).catch(() => null));
+    return c.json({ config });
   } catch (err) {
     const f = fail(err);
     return c.json(f.body, f.status);

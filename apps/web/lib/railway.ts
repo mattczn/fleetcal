@@ -96,7 +96,7 @@ import type {
   WeeklyTargetResponse, WeeklyTargetSettings,
   LinkReviewListResponse, LinkReviewEntry, LinkReviewVerdictRequest, LoadTrailResponse,
   TruckProfitPay, TruckProfitResponse,
-  PayRoutesResponse, PaySuggestRequest, PaySuggestResponse,
+  PayRoutesResponse, PaySuggestRequest, PaySuggestResponse, RateCardConfig, RateCardConfigPatch,
   ListRecurringExpensesResponse, CreateRecurringExpenseRequest,
   UpdateRecurringExpenseRequest, RecurringExpenseResponse,
   ListExpenseEntriesRequest, ListExpenseEntriesResponse,
@@ -2062,6 +2062,11 @@ class RailwayClient {
   /** Set (or with null, clear) a route's standard pay. */
   setRouteStandard(routeKey: string, amount: number | null, note?: string | null) {
     return this.req<{ ok: true }>('PUT', '/v1/pay-routes/standard', { routeKey, amount, note: note ?? null });
+  }
+
+  /** Change rate card settings (overrides, exclusions, regions, bands). */
+  setRateConfig(patch: RateCardConfigPatch) {
+    return this.req<{ config: RateCardConfig }>('PUT', '/v1/pay-routes/rate-config', patch);
   }
 
   /** Name a route (or with null, clear its name). */
