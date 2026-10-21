@@ -11,6 +11,12 @@ import {
 import { makeUsageTracker, preflightCheck } from '@/lib/aiUsage';
 import { geocodeAll } from '@/lib/geocode';
 import { reconcileLoadPrice, type RateBreakdown } from '@/lib/rateTotal';
+import {
+  stripCarrierRefNums,
+  stripOwnAddressFromStops,
+  type CarrierIdentity,
+} from '@/lib/carrierIdentity';
+import { getSupabaseServer } from '@/lib/supabase-server';
 import { promoteLoadNumber } from '@/lib/loadNumber';
 import type { StopType, GeocodeStatus } from '@/lib/types';
 
@@ -550,6 +556,47 @@ export async function POST(req: NextRequest) {
   // matchCustomer() — they already have the org's full roster in
   // state, so passing it through the server was pure waste.
 
+  // ── Strip the carrier's own identity ────────────────────────────────────────
+  // A rate con is addressed TO us, so our name, address and MC/DOT are
+  // printed on it. The extractor keeps reading them as load data: our
+  // Herriman yard arriving as the pickup on TQL loads that print only a
+  // placeholder city, and our MC/DOT coming back as reference numbers
+  // on every broker's paperwork. The prompt forbids both — the refNums
+  // hint has said "Do NOT include MC numbers, DOT numbers" for months
+  // and they still appear — so this enforces it against what we KNOW
+  // rather than what the model chose. Identity comes from the org's own
+  // invoice settings, so it holds for any org without hardcoding.
+  const identityRemoved: string[] = [];
+  try {
+    const db = getSupabaseServer();
+    const { data: settingsRow } = await db
+      .from('org_settings')
+      .select('invoice_settings')
+      .eq('org_id', orgId)
+      .maybeSingle();
+    const inv = ((settingsRow as { invoice_settings?: Record<string, unknown> } | null)?.invoice_settings ?? {}) as Record<string, unknown>;
+    const identity: CarrierIdentity = {
+      companyName:  inv.companyName  as string | undefined,
+      addressLine1: inv.addressLine1 as string | undefined,
+      city:         inv.city         as string | undefined,
+      state:        inv.state        as string | undefined,
+      zip:          inv.zip          as string | undefined,
+      mcNumber:     inv.mcNumber     as string | undefined,
+      dotNumber:    (inv.dotNumber ?? inv.usdotNumber) as string | undefined,
+    };
+    const refs  = stripCarrierRefNums(parsed.refNums, identity);
+    const stops = stripOwnAddressFromStops(parsed.stops, identity);
+    if (refs.removed.length)  { parsed.refNums = refs.refNums; identityRemoved.push(...refs.removed); }
+    if (stops.removed.length) { parsed.stops   = stops.stops;  identityRemoved.push(...stops.removed); }
+    if (identityRemoved.length) {
+      console.warn('[parse-ratecon] stripped carrier identity:', identityRemoved.join('; '));
+    }
+  } catch (err) {
+    // Never fail a parse over this — a load with one stray reference
+    // number beats no load at all.
+    console.error('[parse-ratecon] carrier-identity strip failed (non-fatal):', err);
+  }
+
   // ── Rate total cross-check ──────────────────────────────────────────────────
   // An itemised rate con ("LineHaul $3,099.15 / Fuel Surcharge $800.85
   // / Total $3,900.00") has a line literally labelled LineHaul, and the
@@ -637,6 +684,9 @@ export async function POST(req: NextRequest) {
         note:      rateCheck.note ?? null,
         breakdown: rateBreakdownSeen ?? null,
       },
+      // Carrier-identity values that were dropped (our MC/DOT as a
+      // reference, our yard as a stop address). Empty on a clean parse.
+      identityRemoved,
       // Whether the load number came from the model or was recovered
       // from the reference numbers — so "why does Load # say that?" is
       // answerable from the response instead of by re-parsing.

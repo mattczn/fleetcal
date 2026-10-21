@@ -162,7 +162,18 @@ export function rankCustomers(
   return customers
     .map(c => ({
       customer: c,
-      score: Math.max(...[c.name, ...(c.aliases ?? [])].map(a => scoreAgainst(extracted, a))),
+      // shortName counts as a name to match on, not just to render.
+      // It is the nickname the dispatcher deliberately recorded for this
+      // customer, and brokers brand themselves with it: a TQL rate con
+      // says "TQL" in its header, its contact block and its email
+      // address, and never once prints "Total Quality Logistics". With
+      // only name + aliases to score against, that scored too low to
+      // link and someone re-picked the customer by hand on every load.
+      score: Math.max(
+        ...[c.name, c.shortName, ...(c.aliases ?? [])]
+          .filter((a): a is string => !!a?.trim())
+          .map(a => scoreAgainst(extracted, a)),
+      ),
     }))
     .sort((x, y) => y.score - x.score || x.customer.name.localeCompare(y.customer.name));
 }

@@ -170,6 +170,35 @@ Fill as many fields as possible. Use an empty string for any field not found —
 
 The "stops" array is REQUIRED. Extract every pickup, delivery, and intermediate stop in the order they appear in the document. Stop type rules: "pickup" = live load (driver waits), "delivery" = live unload, "drop" = drop loaded trailer (no hook of another), "drop_hook" = drop loaded AND hook empty/different, "stop" = intermediate non-loading stop. If a stop is both a pickup and delivery at the same location, create two entries.
 
+WHERE A STOP'S LOCATION COMES FROM — this is the single most common extraction error:
+
+S1. A stop's location is ONLY the text in that stop's own Pick-up
+    Location / Delivery Location / Stop row. Never borrow an address
+    from anywhere else on the page to fill a gap.
+
+S2. This document is ADDRESSED TO the carrier, and the carrier's own
+    address appears on it — commonly in a "Carrier", "Carrier Contact",
+    "Carrier Information" or MC#/DOT# block near the top, next to the
+    carrier's name, MC/DOT number and dispatcher. That address is the
+    trucking company reading this document. It is NEVER a stop.
+
+S3. Some brokers withhold the facility address until the driver is
+    dispatched and print ONLY a city and state as a placeholder:
+
+      Pick-up Location                        Date          Time
+      Commerce City, CO                       10/22/2026    FCFS 08:00 to 14:00
+
+    That is complete and correct. Output city "Commerce City", and
+    leave "address" as an EMPTY STRING. Do NOT fill the address with
+    the carrier's address, the broker's address, or the other stop's
+    address, and do NOT invent a street. An empty address is a true
+    answer; a borrowed one sends a driver to the wrong state.
+
+S4. Sanity check before returning: if a pickup and a delivery share the
+    same street address, or a stop's city does not match the city on
+    its own location row, you have pulled an address from the wrong
+    part of the page. Go back to the stop's own row.
+
 DATE EXTRACTION — read this section TWICE before extracting any date:
 
 The load's "start" is the FIRST stop's appointment time. The load's "end" is the LAST stop's appointment time. The first stop and the load start are the SAME EVENT — they MUST share the same date and time.
