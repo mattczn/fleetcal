@@ -36,6 +36,7 @@ import { fetchAllRows } from "./fetchAllRows.js";
 import { classifyByAirMiles, parseTerminal, type Coord } from "./airMiles.js";
 import { getHosConfig } from "./hosService.js";
 import { computeWeeklyTarget, readSettings } from "./weeklyTarget.js";
+import { fleetOdometerMiles, localDayStartIso } from "./odometerMiles.js";
 import { isExcludedEvent, loadExcludedAssetIds, loadExcludedDrivers, type ExcludedDrivers } from "./reportExclusions.js";
 import { H, addDays, dayOf, fetchLegActuals, hoursWithin, legWindow, naiveMs, slicesOf, timeShares, utcToWallMs, wallStr } from "./legTime.js";
 
@@ -313,7 +314,7 @@ export async function computeTruckProfit(
   const nowWall = utcToWallMs(new Date().toISOString(), ctx.tz);
   const today = dayOf(nowWall);
   const odoTo = to < today ? to : today;
-  const [shares, raw, assets, drives, odoReads] = await Promise.all([
+  const [shares, raw, assets, drives, odometer] = await Promise.all([
     blockShares(orgId, wt.calibration.from, wt.calibration.to, ctx),
     loadLegs(orgId, from, to, ctx, assetId),
     fetchAllRows<{ id: number; name: string; type: string; hidden: boolean; sort_order: number; motive_vehicle_id: string | null }>("truck profit assets", () =>
@@ -322,28 +323,15 @@ export async function computeTruckProfit(
       supabase.from("movements").select("id, asset_id, start_time, end_time, miles")
         .eq("org_id", orgId).eq("source", "motive").is("deleted_at", null)
         .gte("start_time", `${addDays(from, -1)}T00:00:00Z`).lt("start_time", `${addDays(to, 2)}T00:00:00Z`)),
-    // Odometer, read exactly as the dashboard does (lib/weeklyTarget eldMiles).
+    // Each truck's odometer miles over the days already driven — the
+    // dashboard's Total Miles numbers (lib/odometerMiles).
     from <= today
-      ? fetchAllRows<{ id: number; vehicle_id: string | number; odometer_miles: number | string }>("truck profit odometer", () =>
-        supabase.from("motive_odometer_readings").select("id, vehicle_id, odometer_miles")
-          .eq("org_id", orgId).not("odometer_miles", "is", null)
-          .gte("captured_at", `${from}T00:00:00Z`).lte("captured_at", `${addDays(odoTo, 1)}T12:00:00Z`))
-      : Promise.resolve([]),
+      ? fleetOdometerMiles(orgId, localDayStartIso(from, ctx.tz), localDayStartIso(addDays(odoTo, 1), ctx.tz))
+      : Promise.resolve(null),
   ]);
-  // Each truck's odometer miles over the days already driven.
-  const odoByAsset = new Map<number, number>();
-  {
-    const assetOfVehicle = new Map(assets.filter((a) => a.motive_vehicle_id).map((a) => [String(a.motive_vehicle_id), a.id]));
-    const span = new Map<number, [number, number]>();
-    for (const r of odoReads) {
-      const id = assetOfVehicle.get(String(r.vehicle_id));
-      const m = Number(r.odometer_miles);
-      if (id == null || !(m > 0)) continue;
-      const cur = span.get(id);
-      span.set(id, cur ? [Math.min(cur[0], m), Math.max(cur[1], m)] : [m, m]);
-    }
-    for (const [id, [lo, hi]] of span) odoByAsset.set(id, hi - lo);
-  }
+  const odoByAsset = new Map<number, number>(
+    Object.entries(odometer?.perAsset ?? {}).map(([id, miles]) => [Number(id), miles]),
+  );
 
   // Fuel and wear on GPS trucks: miles on a linked load are spread with
   // that load (like its revenue), and every other drive — yard moves, fuel

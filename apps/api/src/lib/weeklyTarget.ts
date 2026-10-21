@@ -51,6 +51,7 @@ import {
 import { SHORT_HAUL_RADIUS_MILES, airMilesBetween, classifyByAirMiles, isUsableCoord, parseTerminal, type Coord } from "./airMiles.js";
 import { getHosConfig } from "./hosService.js";
 import { H as HOUR_MS, dayStartMs, fetchLegActuals, hoursWithin, legWindow } from "./legTime.js";
+import { fleetOdometerMiles, localDayStartIso } from "./odometerMiles.js";
 import { snapshot, type Window as ExpenseWindow } from "../routes/expenses.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -288,41 +289,14 @@ async function finalizedPayroll(orgId: string, weeks: string[], excluded: Exclud
 }
 
 /** Fleet odometer miles (max − min per ELD truck), owner-op trucks out. */
-async function eldMiles(orgId: string, from: string, to: string, excludedAssets: Set<number>): Promise<{ miles: number; trucks: number }> {
-  const { data: assets, error } = await supabase
-    .from("assets")
-    .select("id, motive_vehicle_id")
-    .eq("org_id", orgId)
-    .not("motive_vehicle_id", "is", null);
-  if (error) throw new Error(`weekly-target assets: ${error.message}`);
-  const vehicles = new Set(
-    ((assets ?? []) as Array<{ id: number; motive_vehicle_id: string | number }>)
-      .filter(a => !excludedAssets.has(a.id))
-      .map(a => String(a.motive_vehicle_id)),
-  );
-  const reads = await fetchAllRows<{ vehicle_id: string | number; odometer_miles: number | string }>(
-    "weekly-target odometer", () => supabase
-      .from("motive_odometer_readings")
-      .select("vehicle_id, odometer_miles")
-      .eq("org_id", orgId)
-      .not("odometer_miles", "is", null)
-      .gte("captured_at", `${from}T00:00:00Z`)
-      .lte("captured_at", `${addDays(to, 1)}T12:00:00Z`));
-  const span = new Map<string, [number, number]>();
-  for (const r of reads) {
-    const v = String(r.vehicle_id);
-    const m = Number(r.odometer_miles);
-    if (!vehicles.has(v) || !(m > 0)) continue;
-    const cur = span.get(v);
-    span.set(v, cur ? [Math.min(cur[0], m), Math.max(cur[1], m)] : [m, m]);
-  }
-  let miles = 0; let trucks = 0;
-  for (const [lo, hi] of span.values()) {
-    const d = hi - lo;
-    miles += d;
-    if (d > 100) trucks++;
-  }
-  return { miles, trucks };
+/** Fleet odometer miles over [from, to] (local days) — the same numbers
+ *  as the dashboard's Total Miles card (lib/odometerMiles: reading to
+ *  reading, rental-swap jumps skipped, frozen odometers backed by GPS).
+ *  excludedAssets is applied there too (flagged trucks + owner-ops). */
+async function eldMiles(orgId: string, from: string, to: string, _excludedAssets: Set<number>): Promise<{ miles: number; trucks: number }> {
+  const { timeZone } = await getHosConfig(orgId);
+  const r = await fleetOdometerMiles(orgId, localDayStartIso(from, timeZone), localDayStartIso(addDays(to, 1), timeZone));
+  return { miles: r.totalMiles, trucks: Object.values(r.perAsset).filter((m) => m > 100).length };
 }
 
 interface ClassSplit { local: number; otr: number }
@@ -817,15 +791,27 @@ export async function computeWeeklyTarget(
       },
     };
   };
-  const booked = project(weekLoads, (ws, we) =>
-    weekLoads.filter(r => r.pickup >= ws && r.pickup <= we).reduce((s, r) => s + r.driverPay, 0));
-  // Earned = what was actually done, so its miles are what the trucks
-  // actually drove (odometer, through today) plus the estimate for loads
-  // still to run in the period.
-  const earnedMiles = earnedSet && weekEld
-    ? weekEld.miles + (weekTo > today ? earnedSet.loadedBetween(addDays(today, 1), weekTo) * emptyFactor.value : 0)
-    : undefined;
-  const earned = earnedSet ? project(earnedSet.rows, earnedSet.payBetween, earnedMiles) : null;
+  const bookedLoadPay = (ws: string, we: string) =>
+    weekLoads.filter(r => r.pickup >= ws && r.pickup <= we).reduce((s, r) => s + r.driverPay, 0);
+  const booked = project(weekLoads, bookedLoadPay);
+  // Actual miles: what the odometer says the trucks drove (through today),
+  // plus the estimate for loads still to run in the period. Same odometer
+  // number as the dashboard's Total Miles card.
+  const restFrom = addDays(today, 1);
+  const withActualMiles = (rest: number) => {
+    if (!weekEld) return null;
+    const miles = weekEld.miles + rest;
+    return { miles, driven: weekEld.miles, rest };
+  };
+  const bookedRest = weekTo > today
+    ? weekLoads.filter(r => r.pickup >= restFrom).reduce((s, r) => s + r.loadedMiles, 0) * emptyFactor.value : 0;
+  const bookedActual = withActualMiles(bookedRest);
+  const earned = earnedSet ? project(earnedSet.rows, earnedSet.payBetween) : null;
+  const earnedActual = earnedSet
+    ? withActualMiles(weekTo > today ? earnedSet.loadedBetween(restFrom, weekTo) * emptyFactor.value : 0)
+    : null;
+  const actualVariant = (p: ReturnType<typeof project> | null, a: ReturnType<typeof withActualMiles>, rows: LoadEcon[], pay: (ws: string, we: string) => number) =>
+    p && a ? { projection: { ...project(rows, pay, a.miles).projection, milesDriven: a.driven, milesProjected: a.rest } } : null;
 
   // ── Local vs OTR rate per loaded mile ──
   // Overhead accrues per truck-day, so each class carries it for the time
@@ -879,7 +865,11 @@ export async function computeWeeklyTarget(
     },
     booked: booked.booked,
     projection: booked.projection,
-    earned,
+    projectionActual: actualVariant(booked, bookedActual, weekLoads, bookedLoadPay)?.projection ?? null,
+    earned: earned ? {
+      ...earned,
+      projectionActual: actualVariant(earned, earnedActual, earnedSet!.rows, earnedSet!.payBetween)?.projection ?? null,
+    } : null,
     classes: {
       local: classRate("local", payLocal, localDriven, localLoadedPerTruckDay.value),
       otr:   classRate("otr", payOtr, otrDriven, otrLoadedPerTruckDay.value),

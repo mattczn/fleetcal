@@ -15,7 +15,7 @@ import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability } from "../middleware/require.js";
 import { syncBackfill, syncIncremental, getOrgMotiveKey, snapshotOdometers } from "../lib/motiveIngest.js";
-import { loadExcludedDrivers, loadExcludedAssetIds } from "../lib/reportExclusions.js";
+import { fleetOdometerMiles } from "../lib/odometerMiles.js";
 
 const movements = new Hono<{ Variables: AuthVariables }>();
 
@@ -512,324 +512,31 @@ movements.get("/odometer-summary", async (c) => {
   if (!from || !to) {
     return c.json({ error: "validation_failed", errors: ["from and to required (ISO)"] }, 400);
   }
-
-  // Step 1: which assets have ELDs? `motive_vehicle_id IS NOT NULL` is
-  // the canonical signal. Pull both the asset id AND the Motive vehicle
-  // id — we need the vehicle id to match Motive-sourced readings, since
-  // those rows historically (and currently, until backfill catches up)
-  // have asset_id IS NULL. The 2026-05-29 migration added asset_id but
-  // its own comment punted the ingest update to "eventually", which
-  // meant every daily snapshot kept landing as asset_id=NULL. The
-  // dashboard's Total Miles tile then read 0 for every org with only
-  // Motive-sourced rows.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: assetRows, error: assetErr } = await (supabase as any)
-    .from("assets")
-    .select("id, motive_vehicle_id")
-    .eq("org_id", orgId)
-    .not("motive_vehicle_id", "is", null);
-  if (assetErr) {
-    console.error("[GET /v1/movements/odometer-summary] assets fetch:", assetErr);
-    return c.json({ error: "fetch_failed", detail: assetErr.message }, 500);
-  }
-  let eldAssets = (assetRows ?? []) as Array<{ id: number; motive_vehicle_id: number | null }>;
-
-  // Drop owner-op assets. The carrier's "fleet miles" KPI is supposed
-  // to reflect the carrier's OWN trucks — owner-operators we just bill
-  // for shouldn't roll into the total. We derive owner-op at the asset
-  // level from driver_asset_prefs: an asset is excluded when its
-  // default driver is flagged exclude_from_reports. This mirrors how
-  // /v1/reports/loads excludes their loads from the dashboard's
-  // revenue + loaded-miles KPIs.
-  const excluded = await loadExcludedDrivers(orgId);
-  if (excluded.ids.length > 0) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: prefRows, error: prefErr } = await (supabase as any)
-      .from("driver_asset_prefs")
-      .select("asset_id, driver_id")
-      .eq("org_id", orgId)
-      .in("driver_id", excluded.ids);
-    if (prefErr) {
-      console.error("[GET /v1/movements/odometer-summary] driver_asset_prefs fetch (non-fatal):", prefErr);
+  // One definition shared with the weekly target and the truck profit
+  // grid (lib/odometerMiles): reading to reading, so a Sat–Fri week is all
+  // seven days; impossible steps (rental swaps) skipped; frozen odometers
+  // backed by GPS movements.
+  try {
+    const r = await fleetOdometerMiles(orgId, from, to);
+    if (r.skippedJumps.length > 0) {
+      console.warn("[GET /v1/movements/odometer-summary] skipped implausible odometer steps:", r.skippedJumps);
     }
-    const excludedAssetIds = new Set<number>(
-      ((prefRows ?? []) as Array<{ asset_id: number | null }>)
-        .map(r => r.asset_id)
-        .filter((v): v is number => v != null),
-    );
-    if (excludedAssetIds.size > 0) {
-      eldAssets = eldAssets.filter(a => !excludedAssetIds.has(a.id));
-    }
+    return c.json({
+      totalMiles:    r.totalMiles,
+      eldAssetCount: Object.keys(r.perAsset).length,
+      perAsset:      r.perAsset,
+      /** Per-asset miles source. `'odometer'` = summed ECM odometer
+       *  steps, skipping physically impossible ones (preferred, factual). `'movements'` = sum of Motive GPS
+       *  movement distance (fallback when the odometer froze). The
+       *  dashboard renders an "est." badge for the latter so the
+       *  dispatcher can spot trucks with broken ELDs. */
+      perAssetSource: r.perAssetSource,
+      debug: { eldAssets: r.eldAssetCount, skippedJumps: r.skippedJumps },
+    });
+  } catch (err) {
+    console.error("[GET /v1/movements/odometer-summary] failed:", err);
+    return c.json({ error: "fetch_failed", detail: err instanceof Error ? err.message : String(err) }, 500);
   }
-
-  // Also drop trucks explicitly flagged exclude_from_reports on the asset
-  // itself — the per-truck toggle. This catches a truck run by BOTH an
-  // owner-op and a company driver (where the driver-based rule above
-  // can't), keeping its ELD miles out of Total Miles entirely. Mirrors
-  // the asset filter in /v1/reports/loads so Total Miles and the top-line
-  // KPIs agree on which trucks count.
-  const flaggedAssets = await loadExcludedAssetIds(orgId);
-  if (flaggedAssets.size > 0) {
-    eldAssets = eldAssets.filter(a => !flaggedAssets.has(a.id));
-  }
-
-  if (eldAssets.length === 0) {
-    return c.json({ totalMiles: 0, eldAssetCount: 0, perAsset: {}, perAssetSource: {} });
-  }
-  const eldAssetIds   = eldAssets.map(a => a.id);
-  const eldVehicleIds = eldAssets.map(a => a.motive_vehicle_id).filter((v): v is number => v != null);
-  // Reverse map for grouping rows whose asset_id is NULL — we resolve
-  // them back to the right asset via their Motive vehicle id.
-  //
-  // STRING KEYS, deliberately. Supabase / PostgREST occasionally
-  // returns bigint columns as strings (large-value safety) and
-  // occasionally as numbers — and the two halves of this lookup come
-  // from different table queries, so one side can land as 12345 and
-  // the other as "12345". Map keys compare with === so they don't
-  // match, every row falls into the `unresolvedRows` bucket, and the
-  // dashboard reads 0 even with valid data on both sides. Coerce both
-  // ends to strings and the lookup is bulletproof.
-  const vehicleIdToAssetId = new Map<string, number>();
-  for (const a of eldAssets) {
-    if (a.motive_vehicle_id != null) vehicleIdToAssetId.set(String(a.motive_vehicle_id), a.id);
-  }
-
-  // Step 2: pull readings that match either axis. We deliberately
-  // run TWO queries instead of a single `.or()` with nested
-  // `in.(...)` — PostgREST's OR parsing splits on commas, which can
-  // misinterpret the commas inside the in-list under some versions
-  // and silently return zero rows. Two queries cost the same
-  // wall-clock when run in parallel; deduping by row id in TS is
-  // trivial.
-  type ReadingRow = {
-    id: number; asset_id: number | null; vehicle_id: number | null;
-    captured_at: string;
-    odometer_miles: number | null; true_odometer_miles: number | null;
-  };
-  const select = "id, asset_id, vehicle_id, captured_at, odometer_miles, true_odometer_miles";
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const byAssetIdP = (supabase as any)
-    .from("motive_odometer_readings")
-    .select(select)
-    .eq("org_id", orgId)
-    .in("asset_id", eldAssetIds)
-    .gte("captured_at", from)
-    .lte("captured_at", to);
-  const byVehicleIdP = eldVehicleIds.length > 0
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ? (supabase as any)
-        .from("motive_odometer_readings")
-        .select(select)
-        .eq("org_id", orgId)
-        .in("vehicle_id", eldVehicleIds)
-        .gte("captured_at", from)
-        .lte("captured_at", to)
-    : Promise.resolve({ data: [], error: null });
-  const [
-    { data: rowsAsset,   error: rowsAssetErr },
-    { data: rowsVehicle, error: rowsVehicleErr },
-  ] = await Promise.all([byAssetIdP, byVehicleIdP]);
-  if (rowsAssetErr) {
-    console.error("[GET /v1/movements/odometer-summary] by-asset fetch:", rowsAssetErr);
-    return c.json({ error: "fetch_failed", detail: rowsAssetErr.message }, 500);
-  }
-  if (rowsVehicleErr) {
-    console.error("[GET /v1/movements/odometer-summary] by-vehicle fetch:", rowsVehicleErr);
-    return c.json({ error: "fetch_failed", detail: rowsVehicleErr.message }, 500);
-  }
-
-  // Dedup: rows with both asset_id and vehicle_id set match both queries.
-  const seen = new Set<number>();
-  const rows: ReadingRow[] = [];
-  for (const r of [...(rowsAsset ?? []), ...(rowsVehicle ?? [])] as ReadingRow[]) {
-    if (seen.has(r.id)) continue;
-    seen.add(r.id);
-    rows.push(r);
-  }
-
-  // Step 3: group by RESOLVED asset_id (asset_id when set, otherwise
-  // look up via vehicle_id), then walk each asset's readings in time
-  // order and SUM the gaps between them.
-  //
-  // This used to be `max - min`, which assumes the series only ever
-  // climbs at a truck's pace. It doesn't, and the common reason is
-  // mundane: the P-* assets are Penske rentals, and when one rental
-  // goes back and another arrives the ELD follows the contract, not
-  // the truck. The odometer then steps by the difference between two
-  // vehicles overnight. On 2026-10-21 vehicle 2199017 went 144,892 →
-  // 217,247 and the dashboard billed unit 431985 for 73,198 miles —
-  // most of the fleet's reported total for the week. `max - min`
-  // cannot tell that from a truck that drove.
-  //
-  // Summing gaps makes a discontinuity skippable, and the test for one
-  // is physical: no truck covers more ground than the clock allows.
-  // The ceiling is elapsed time × MAX_PLAUSIBLE_MPH, so it scales with
-  // the gap — a missed sync leaving three days between readings still
-  // accepts three days of driving, while an overnight 72,000-mile step
-  // is rejected whatever the window. Backwards steps (swap onto a
-  // lower-mileage unit, ECM reset) drop out the same way.
-  //
-  // On a swap the discarded step represents no driving at all, so
-  // nothing real is lost — both rentals keep the miles they actually
-  // turned while the ELD was reading them. On a genuine sensor glitch
-  // it gives up that one interval's miles, which is the right trade
-  // against a KPI reading 6× the fleet's real mileage. Step 4's
-  // movements fallback picks a truck back up if its odometer stops
-  // contributing entirely.
-  const MAX_PLAUSIBLE_MPH = 70;
-  // Floor on the window so two readings captured seconds apart (or out
-  // of order within the same sync) still allow a sane step rather than
-  // a near-zero ceiling that rejects everything.
-  const MIN_WINDOW_HOURS = 1;
-
-  type Point = { at: number; miles: number };
-  const pointsByAsset = new Map<number, Point[]>();
-  let countedRows = 0;
-  let unresolvedRows = 0;
-  let nullMilesRows = 0;
-  for (const r of rows) {
-    // Same string-coercion guard as the map build above — see comment
-    // there for why. r.asset_id stays as-is (numeric column we own,
-    // group key is `number`).
-    const assetId = r.asset_id
-      ?? (r.vehicle_id != null ? vehicleIdToAssetId.get(String(r.vehicle_id)) : undefined);
-    if (assetId == null) { unresolvedRows++; continue; }
-    const miles = r.true_odometer_miles ?? r.odometer_miles;
-    if (miles == null) { nullMilesRows++; continue; }
-    const at = Date.parse(r.captured_at);
-    if (!isFinite(at)) { nullMilesRows++; continue; }
-    countedRows++;
-    const list = pointsByAsset.get(assetId);
-    if (list) list.push({ at, miles });
-    else pointsByAsset.set(assetId, [{ at, miles }]);
-  }
-
-  const perAsset:       Record<number, number> = {};
-  const perAssetSource: Record<number, 'odometer' | 'movements'> = {};
-  // Discontinuities we refused, surfaced in the response so a wrong
-  // number is traceable to the reading that caused it instead of
-  // needing a hand query against motive_odometer_readings.
-  const skippedJumps: Array<{ assetId: number; from: number; to: number; at: string }> = [];
-  for (const [assetId, points] of pointsByAsset) {
-    points.sort((a, b) => a.at - b.at);
-    let total = 0;
-    for (let i = 1; i < points.length; i++) {
-      const prev = points[i - 1];
-      const cur  = points[i];
-      const step = cur.miles - prev.miles;
-      if (step <= 0) continue;
-      const hours = Math.max(MIN_WINDOW_HOURS, (cur.at - prev.at) / 3_600_000);
-      if (step > hours * MAX_PLAUSIBLE_MPH) {
-        skippedJumps.push({
-          assetId,
-          from: Math.round(prev.miles),
-          to:   Math.round(cur.miles),
-          at:   new Date(cur.at).toISOString(),
-        });
-        continue;
-      }
-      total += step;
-    }
-    perAsset[assetId]       = total;
-    perAssetSource[assetId] = 'odometer';
-  }
-  if (skippedJumps.length > 0) {
-    console.warn("[GET /v1/movements/odometer-summary] skipped implausible odometer steps:", skippedJumps);
-  }
-
-  // ── Step 4: movements-based fallback for trucks whose odometer
-  // froze. Some ELDs lose their connection to the engine ECM and
-  // start returning the SAME odometer value every day until the
-  // device is reseated/replaced. The truck still moves — Motive's
-  // GPS log keeps producing `movements` rows with real distance — but
-  // our odometer aggregate goes to 0 and the dashboard shows the
-  // truck as inactive when it's actually busy.
-  //
-  // For every ELD asset, sum movements.miles in the same window. If
-  // the odometer says ≤1 mile (essentially zero) AND movements say
-  // the truck actually drove >1 mile, swap in the movements total and
-  // mark the source as `'movements'`. The dashboard surfaces an
-  // "est." badge so the dispatcher knows it's GPS-derived rather than
-  // ECM-truth.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: moveRows, error: moveErr } = await (supabase as any)
-    .from("movements")
-    .select("asset_id, miles")
-    .eq("org_id", orgId)
-    .in("asset_id", eldAssetIds)
-    .gte("start_time", from)
-    .lte("start_time", to);
-  if (moveErr) {
-    console.error("[GET /v1/movements/odometer-summary] movements fetch failed (non-fatal):", moveErr);
-  }
-  const movementsByAsset = new Map<number, number>();
-  for (const r of (moveRows ?? []) as Array<{ asset_id: number | null; miles: number | null }>) {
-    if (r.asset_id == null || r.miles == null) continue;
-    movementsByAsset.set(r.asset_id, (movementsByAsset.get(r.asset_id) ?? 0) + r.miles);
-  }
-
-  // Apply the fallback per asset. Threshold = 1 mile: a real day of
-  // driving easily clears that on both sides; a parked truck (or a
-  // missing-data day) stays at 0 either way.
-  const ODO_DEAD_THRESHOLD_MI = 1;
-  const MOVE_REAL_THRESHOLD_MI = 1;
-  let fallbackCount = 0;
-  for (const assetId of eldAssetIds) {
-    const odoVal  = perAsset[assetId] ?? 0;
-    const moveVal = movementsByAsset.get(assetId) ?? 0;
-    if (odoVal <= ODO_DEAD_THRESHOLD_MI && moveVal > MOVE_REAL_THRESHOLD_MI) {
-      perAsset[assetId]       = moveVal;
-      perAssetSource[assetId] = 'movements';
-      fallbackCount++;
-    }
-  }
-
-  let total = 0;
-  for (const id of Object.keys(perAsset)) total += perAsset[Number(id)] ?? 0;
-
-  // Diagnostic logging — Railway logs will show exactly where the
-  // pipeline collapsed if total ever comes back as 0 again.
-  console.log(
-    `[odometer-summary] org=${orgId} window=${from}→${to} ` +
-    `eldAssets=${eldAssets.length} eldVehicles=${eldVehicleIds.length} ` +
-    `rowsAsset=${(rowsAsset ?? []).length} rowsVehicle=${(rowsVehicle ?? []).length} ` +
-    `deduped=${rows.length} counted=${countedRows} ` +
-    `unresolved=${unresolvedRows} nullMiles=${nullMilesRows} ` +
-    `groups=${pointsByAsset.size} skippedJumps=${skippedJumps.length} ` +
-    `movementsRows=${(moveRows ?? []).length} ` +
-    `fallbackAssets=${fallbackCount} totalMiles=${total}`,
-  );
-
-  return c.json({
-    totalMiles:    total,
-    eldAssetCount: Object.keys(perAsset).length,
-    perAsset,
-    /** Per-asset miles source. `'odometer'` = summed ECM odometer
-     *  steps, skipping physically impossible ones (preferred, factual). `'movements'` = sum of Motive GPS
-     *  movement distance (fallback when the odometer froze). The
-     *  dashboard renders an "est." badge for the latter so the
-     *  dispatcher can spot trucks with broken ELDs. */
-    perAssetSource,
-    // Surface the raw counts so the dashboard (or curl) can see which
-    // pipeline stage is empty without digging into Railway logs.
-    debug: {
-      eldAssets:        eldAssets.length,
-      eldVehicleIds:    eldVehicleIds.length,
-      rowsByAssetId:    (rowsAsset ?? []).length,
-      rowsByVehicleId:  (rowsVehicle ?? []).length,
-      rowsDeduped:      rows.length,
-      countedRows,
-      unresolvedRows,
-      nullMilesRows,
-      groupedAssets:    pointsByAsset.size,
-      // Odometer steps rejected as physically impossible — a rental
-      // swap or a sensor glitch. Non-empty here explains a truck whose
-      // miles look low for the week.
-      skippedJumps,
-      movementsRows:    (moveRows ?? []).length,
-      fallbackAssets:   fallbackCount,
-    },
-  });
 });
 
 // ── Manual odometer snapshot (admin) — useful for testing + first-load

@@ -2342,13 +2342,22 @@ export interface WeeklyTargetResponse {
     loadedMilesBasis:       number;
     breakEvenPerLoadedMile: number | null;
     targetPerLoadedMile:    number | null;
+    /** Set on the actual-miles variants: odometer miles so far, and the
+     *  estimate for loads still to run (0 once the period is over). */
+    milesDriven?: number;
+    milesProjected?: number;
   };
+  /** The projection on actual miles (odometer so far + the estimate for
+   *  loads still to run) instead of loaded × empty factor; null without
+   *  odometer data (a period that hasn't started). */
+  projectionActual?: WeeklyTargetResponse['projection'] | null;
   /** The same period counted by work done: each load's share of its truck
    *  time inside the period (vs booked = all of it in its pickup week).
    *  Only computed for the dashboard; null elsewhere. */
   earned?: {
     booked: WeeklyTargetResponse['booked'];
     projection: WeeklyTargetResponse['projection'];
+    projectionActual?: WeeklyTargetResponse['projection'] | null;
   } | null;
   /** Rate per loaded mile by haul class at the saved margin. */
   classes: { local: WeeklyTargetClassRate; otr: WeeklyTargetClassRate };

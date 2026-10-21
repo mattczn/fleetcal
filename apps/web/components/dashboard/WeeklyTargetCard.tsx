@@ -167,6 +167,40 @@ function RevenueModeToggle({ mode, onChange }: { mode: RevenueMode; onChange: (m
   );
 }
 
+// Miles behind fuel, maintenance and the break-even: Projected = booked
+// loaded miles × the empty-mile factor; Actual = the odometer (the Total
+// Miles card's number) for days already driven + the projection for loads
+// still to run. Remembered per browser.
+type MilesMode = 'projected' | 'actual';
+const MILES_MODE_KEY = 'dashboard.weeklyTarget.milesMode';
+
+function MilesModeToggle({ mode, onChange, actualAvailable }: { mode: MilesMode; onChange: (m: MilesMode) => void; actualAvailable: boolean }) {
+  return (
+    <span className="inline-flex rounded-md overflow-hidden text-[11px] align-middle" style={{ border: '1px solid var(--gc-border)' }}>
+      {(['projected', 'actual'] as const).map(m => (
+        <button
+          key={m}
+          type="button"
+          aria-pressed={mode === m}
+          disabled={m === 'actual' && !actualAvailable}
+          onClick={() => onChange(m)}
+          className="px-1.5 py-px disabled:opacity-40"
+          title={m === 'projected'
+            ? 'Booked loaded miles × the empty-mile factor'
+            : 'Odometer miles for days already driven (the Total Miles card) + the projection for loads still to run'}
+          style={{
+            background: mode === m ? 'var(--gc-hover)' : 'transparent',
+            color: mode === m ? 'var(--gc-text-1)' : 'var(--gc-text-3)',
+            fontWeight: mode === m ? 600 : 400,
+          }}
+        >
+          {m === 'projected' ? 'Projected' : 'Actual'}
+        </button>
+      ))}
+    </span>
+  );
+}
+
 function Row({ label, value, strong, tone }: { label: React.ReactNode; value: string; strong?: boolean; tone?: string }) {
   return (
     <div className="flex items-baseline justify-between gap-3 text-sm py-0.5">
@@ -200,6 +234,15 @@ export default function WeeklyTargetCard({ data, error: err, saving, onSave: sav
       return typeof window !== 'undefined' && localStorage.getItem(REVENUE_MODE_KEY) === 'earned' ? 'earned' : 'booked';
     } catch { return 'booked'; }
   });
+  const [milesMode, setMilesMode] = useState<MilesMode>(() => {
+    try {
+      return typeof window !== 'undefined' && localStorage.getItem(MILES_MODE_KEY) === 'actual' ? 'actual' : 'projected';
+    } catch { return 'projected'; }
+  });
+  const chooseMilesMode = (m: MilesMode) => {
+    setMilesMode(m);
+    try { localStorage.setItem(MILES_MODE_KEY, m); } catch { /* storage blocked — the toggle still works this visit */ }
+  };
   const chooseRevenueMode = (m: RevenueMode) => {
     setRevenueMode(m);
     try { localStorage.setItem(REVENUE_MODE_KEY, m); } catch { /* storage blocked — the toggle still works this visit */ }
@@ -217,7 +260,9 @@ export default function WeeklyTargetCard({ data, error: err, saving, onSave: sav
   const { params: p, otr } = data;
   const earned = revenueMode === 'earned' && data.earned ? data.earned : null;
   const b = earned ? earned.booked : data.booked;
-  const x = earned ? earned.projection : data.projection;
+  const actualProjection = earned ? earned.projectionActual ?? null : data.projectionActual ?? null;
+  const useActual = milesMode === 'actual' && actualProjection != null;
+  const x = useActual ? actualProjection! : earned ? earned.projection : data.projection;
   const revenueWord = earned ? 'Earned' : 'Booked';
   const isWeek = data.period.days === 7;
   const locked = data.settingsUnavailable || saving;
@@ -298,7 +343,17 @@ export default function WeeklyTargetCard({ data, error: err, saving, onSave: sav
               ? <>Average pay % of revenue, {data.calibration.from} → {data.calibration.to} (adjustments included) · current {money(x.driverPay)}</>
               : <>{x.driverPaySource === 'payroll' ? 'Finalized payroll' : x.driverPaySource === 'partial' ? 'Partly finalized' : 'Payroll pending'}{currentPayPct != null && <> · {pct(currentPayPct)} of revenue</>}</>}
           </div>
-          <Row label={`Fuel (${Math.round(x.totalMiles).toLocaleString()} mi projected)`} value={money(x.fuel)} />
+          <Row
+            label={<span className="inline-flex items-center gap-1.5 flex-wrap">
+              Fuel ({useActual
+                ? x.milesProjected
+                  ? `${Math.round(x.milesDriven ?? 0).toLocaleString()} mi driven + ${Math.round(x.milesProjected).toLocaleString()} projected`
+                  : `${Math.round(x.totalMiles).toLocaleString()} mi actual`
+                : `${Math.round(x.totalMiles).toLocaleString()} mi projected`})
+              <MilesModeToggle mode={milesMode} onChange={chooseMilesMode} actualAvailable={actualProjection != null} />
+            </span>}
+            value={money(x.fuel)}
+          />
           <Row label="Maintenance" value={money(x.maintenance)} />
           <Row label="Fixed costs" value={money(x.fixed)} />
           {x.other > 0 && <Row label="Hotels / load expenses" value={money(x.other)} />}
