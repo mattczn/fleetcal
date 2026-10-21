@@ -648,11 +648,42 @@ movements.get("/odometer-summary", async (c) => {
   }
 
   // Step 3: group by RESOLVED asset_id (asset_id when set, otherwise
-  // look up via vehicle_id). Compute max - min per asset.
-  // true_odometer_miles wins when present (Motive provides a
-  // back-calculated true reading that survives sensor resets);
-  // otherwise fall back to the raw odometer_miles.
-  const byAsset = new Map<number, { min: number; max: number }>();
+  // look up via vehicle_id), then walk each asset's readings in time
+  // order and SUM the gaps between them.
+  //
+  // This used to be `max - min`, which assumes the series only ever
+  // climbs at a truck's pace. It doesn't, and the common reason is
+  // mundane: the P-* assets are Penske rentals, and when one rental
+  // goes back and another arrives the ELD follows the contract, not
+  // the truck. The odometer then steps by the difference between two
+  // vehicles overnight. On 2026-10-21 vehicle 2199017 went 144,892 →
+  // 217,247 and the dashboard billed unit 431985 for 73,198 miles —
+  // most of the fleet's reported total for the week. `max - min`
+  // cannot tell that from a truck that drove.
+  //
+  // Summing gaps makes a discontinuity skippable, and the test for one
+  // is physical: no truck covers more ground than the clock allows.
+  // The ceiling is elapsed time × MAX_PLAUSIBLE_MPH, so it scales with
+  // the gap — a missed sync leaving three days between readings still
+  // accepts three days of driving, while an overnight 72,000-mile step
+  // is rejected whatever the window. Backwards steps (swap onto a
+  // lower-mileage unit, ECM reset) drop out the same way.
+  //
+  // On a swap the discarded step represents no driving at all, so
+  // nothing real is lost — both rentals keep the miles they actually
+  // turned while the ELD was reading them. On a genuine sensor glitch
+  // it gives up that one interval's miles, which is the right trade
+  // against a KPI reading 6× the fleet's real mileage. Step 4's
+  // movements fallback picks a truck back up if its odometer stops
+  // contributing entirely.
+  const MAX_PLAUSIBLE_MPH = 70;
+  // Floor on the window so two readings captured seconds apart (or out
+  // of order within the same sync) still allow a sane step rather than
+  // a near-zero ceiling that rejects everything.
+  const MIN_WINDOW_HOURS = 1;
+
+  type Point = { at: number; miles: number };
+  const pointsByAsset = new Map<number, Point[]>();
   let countedRows = 0;
   let unresolvedRows = 0;
   let nullMilesRows = 0;
@@ -665,20 +696,45 @@ movements.get("/odometer-summary", async (c) => {
     if (assetId == null) { unresolvedRows++; continue; }
     const miles = r.true_odometer_miles ?? r.odometer_miles;
     if (miles == null) { nullMilesRows++; continue; }
+    const at = Date.parse(r.captured_at);
+    if (!isFinite(at)) { nullMilesRows++; continue; }
     countedRows++;
-    const cur = byAsset.get(assetId);
-    if (!cur) byAsset.set(assetId, { min: miles, max: miles });
-    else {
-      cur.min = Math.min(cur.min, miles);
-      cur.max = Math.max(cur.max, miles);
-    }
+    const list = pointsByAsset.get(assetId);
+    if (list) list.push({ at, miles });
+    else pointsByAsset.set(assetId, [{ at, miles }]);
   }
 
   const perAsset:       Record<number, number> = {};
   const perAssetSource: Record<number, 'odometer' | 'movements'> = {};
-  for (const [assetId, { min, max }] of byAsset) {
-    perAsset[assetId]       = Math.max(0, max - min);
+  // Discontinuities we refused, surfaced in the response so a wrong
+  // number is traceable to the reading that caused it instead of
+  // needing a hand query against motive_odometer_readings.
+  const skippedJumps: Array<{ assetId: number; from: number; to: number; at: string }> = [];
+  for (const [assetId, points] of pointsByAsset) {
+    points.sort((a, b) => a.at - b.at);
+    let total = 0;
+    for (let i = 1; i < points.length; i++) {
+      const prev = points[i - 1];
+      const cur  = points[i];
+      const step = cur.miles - prev.miles;
+      if (step <= 0) continue;
+      const hours = Math.max(MIN_WINDOW_HOURS, (cur.at - prev.at) / 3_600_000);
+      if (step > hours * MAX_PLAUSIBLE_MPH) {
+        skippedJumps.push({
+          assetId,
+          from: Math.round(prev.miles),
+          to:   Math.round(cur.miles),
+          at:   new Date(cur.at).toISOString(),
+        });
+        continue;
+      }
+      total += step;
+    }
+    perAsset[assetId]       = total;
     perAssetSource[assetId] = 'odometer';
+  }
+  if (skippedJumps.length > 0) {
+    console.warn("[GET /v1/movements/odometer-summary] skipped implausible odometer steps:", skippedJumps);
   }
 
   // ── Step 4: movements-based fallback for trucks whose odometer
@@ -739,7 +795,8 @@ movements.get("/odometer-summary", async (c) => {
     `rowsAsset=${(rowsAsset ?? []).length} rowsVehicle=${(rowsVehicle ?? []).length} ` +
     `deduped=${rows.length} counted=${countedRows} ` +
     `unresolved=${unresolvedRows} nullMiles=${nullMilesRows} ` +
-    `groups=${byAsset.size} movementsRows=${(moveRows ?? []).length} ` +
+    `groups=${pointsByAsset.size} skippedJumps=${skippedJumps.length} ` +
+    `movementsRows=${(moveRows ?? []).length} ` +
     `fallbackAssets=${fallbackCount} totalMiles=${total}`,
   );
 
@@ -747,8 +804,8 @@ movements.get("/odometer-summary", async (c) => {
     totalMiles:    total,
     eldAssetCount: Object.keys(perAsset).length,
     perAsset,
-    /** Per-asset miles source. `'odometer'` = ECM odometer max−min
-     *  (preferred, factual). `'movements'` = sum of Motive GPS
+    /** Per-asset miles source. `'odometer'` = summed ECM odometer
+     *  steps, skipping physically impossible ones (preferred, factual). `'movements'` = sum of Motive GPS
      *  movement distance (fallback when the odometer froze). The
      *  dashboard renders an "est." badge for the latter so the
      *  dispatcher can spot trucks with broken ELDs. */
@@ -764,7 +821,11 @@ movements.get("/odometer-summary", async (c) => {
       countedRows,
       unresolvedRows,
       nullMilesRows,
-      groupedAssets:    byAsset.size,
+      groupedAssets:    pointsByAsset.size,
+      // Odometer steps rejected as physically impossible — a rental
+      // swap or a sensor glitch. Non-empty here explains a truck whose
+      // miles look low for the week.
+      skippedJumps,
       movementsRows:    (moveRows ?? []).length,
       fallbackAssets:   fallbackCount,
     },
