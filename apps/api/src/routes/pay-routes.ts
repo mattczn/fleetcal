@@ -15,6 +15,8 @@
  *   PUT   /lanes            { fromAreaId, toAreaId, kind, amount | null, note? }
  *   PATCH /places/:id       { name }
  *
+ * (Area / lane writes need payroll.adjust, like standards.)
+ *
  * Suggestions are for anyone who can see driver pay (they show next to the
  * pay field on a load as well as on payroll); the routes list and setting
  * standards are payroll's.
