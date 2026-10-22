@@ -9,14 +9,11 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, ChevronDown, ChevronRight, Loader2, Pencil, Plus, Trash2, X } from 'lucide-react';
+import { AlertTriangle, ChevronDown, ChevronRight, ChevronsUp, GripVertical, Loader2, Pencil, Plus, Trash2, X } from 'lucide-react';
 import type { LaneDirection, ObservedLane, PayArea, PayAreaPoint, PayLane, PayMapResponse, RateGroup } from '@fleetcal/types';
 import { railway } from '@/lib/railway';
 import { loadGoogleMaps, MAP_ID } from '@/lib/googleMaps';
 
-const KIND_LABEL: Record<RateGroup, string> = {
-  pickup: 'Pickup → yard', delivery: 'Yard → delivery', whole: 'Whole load (pickup → delivery)', transfer: 'Transfer only (yard → yard)',
-};
 const DIRECTION: Record<LaneDirection, { label: string; bg: string; fg: string; tip: string }> = {
   outbound: { label: 'Outbound', bg: '#fef7e0', fg: '#b06000', tip: 'Leaving a home base' },
   inbound: { label: 'Inbound', bg: '#e6f4ea', fg: '#1e8e3e', tip: 'Coming back to a home base' },
@@ -38,10 +35,28 @@ const centroid = (poly: PayAreaPoint[]) => ({
 });
 const laneKey = (from: number, to: number, kind: RateGroup) => `${from}|${to}|${kind}`;
 
-interface Row {
-  key: string; fromAreaId: number; toAreaId: number; kind: RateGroup;
-  lane: PayLane | null; observed: ObservedLane | null;
-}
+interface Slot { lane: PayLane | null; observed: ObservedLane | null }
+/** A region pair (from area → to area); A → A is local work inside one area. */
+interface Corridor { key: string; fromAreaId: number; toAreaId: number; legs: number }
+
+/** The legs a load between two areas can be split into, in order. Pickup
+ *  and delivery belong to an area (shared by every pair starting/ending
+ *  there); the rest belong to the pair. */
+type Step = { id: string; label: string; from: 'A' | 'B'; to: 'A' | 'B'; kind: RateGroup; shared?: 'A' | 'B' };
+const CROSS_STEPS: Step[] = [
+  { id: 'pickup', label: 'Pickup', from: 'A', to: 'A', kind: 'pickup', shared: 'A' },
+  { id: 'pickup_linehaul', label: 'Pickup + linehaul', from: 'A', to: 'B', kind: 'pickup' },
+  { id: 'linehaul', label: 'Linehaul only (yard → yard)', from: 'A', to: 'B', kind: 'transfer' },
+  { id: 'linehaul_delivery', label: 'Linehaul + delivery', from: 'A', to: 'B', kind: 'delivery' },
+  { id: 'delivery', label: 'Delivery', from: 'B', to: 'B', kind: 'delivery', shared: 'B' },
+  { id: 'full', label: 'Full load (one driver)', from: 'A', to: 'B', kind: 'whole' },
+];
+const LOCAL_STEPS: Step[] = [
+  { id: 'pickup', label: 'Pickup (shipper → yard)', from: 'A', to: 'A', kind: 'pickup' },
+  { id: 'delivery', label: 'Delivery (yard → consignee)', from: 'A', to: 'A', kind: 'delivery' },
+  { id: 'full', label: 'Full load (pickup → delivery)', from: 'A', to: 'A', kind: 'whole' },
+  { id: 'shuttle', label: 'Yard shuttle (yard → yard)', from: 'A', to: 'A', kind: 'transfer' },
+];
 
 export default function PayMapView({ canEdit }: { canEdit: boolean }) {
   const [tick, setTick] = useState(0);
@@ -57,20 +72,37 @@ export default function PayMapView({ canEdit }: { canEdit: boolean }) {
   const data = result?.data ?? null;
 
   const [selectedArea, setSelectedArea] = useState<number | null>(null);
-  const [focusLane, setFocusLane] = useState<string | null>(null);
+  const [openCorridor, setOpenCorridor] = useState<string | null>(null);
+  const [dragKey, setDragKey] = useState<string | null>(null);
   const [drawing, setDrawing] = useState<PayAreaPoint[] | null>(null);
   const [showStops, setShowStops] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
   const areaById = useMemo(() => new Map((data?.areas ?? []).map((a) => [a.id, a])), [data]);
-  const rows = useMemo((): Row[] => {
-    const m = new Map<string, Row>();
-    for (const o of data?.observed ?? []) m.set(laneKey(o.fromAreaId, o.toAreaId, o.kind), { key: laneKey(o.fromAreaId, o.toAreaId, o.kind), fromAreaId: o.fromAreaId, toAreaId: o.toAreaId, kind: o.kind, lane: null, observed: o });
+  const slots = useMemo(() => {
+    const m = new Map<string, Slot>();
+    for (const o of data?.observed ?? []) m.set(laneKey(o.fromAreaId, o.toAreaId, o.kind), { lane: null, observed: o });
     for (const l of data?.lanes ?? []) {
       const k = laneKey(l.fromAreaId, l.toAreaId, l.kind);
-      m.set(k, { ...(m.get(k) ?? { key: k, fromAreaId: l.fromAreaId, toAreaId: l.toAreaId, kind: l.kind, observed: null }), lane: l });
+      m.set(k, { observed: m.get(k)?.observed ?? null, lane: l });
     }
-    return [...m.values()].sort((a, b) => (b.observed?.legs ?? 0) - (a.observed?.legs ?? 0));
+    return m;
+  }, [data]);
+  // Region pairs: yours in the order you ranked them, then the rest busiest first.
+  const corridors = useMemo(() => {
+    const m = new Map<string, Corridor>();
+    const add = (f: number, t: number, legs: number) => {
+      const k = `${f}>${t}`;
+      const c = m.get(k) ?? { key: k, fromAreaId: f, toAreaId: t, legs: 0 };
+      c.legs += legs;
+      m.set(k, c);
+    };
+    for (const o of data?.observed ?? []) add(o.fromAreaId, o.toAreaId, o.legs);
+    for (const l of data?.lanes ?? []) add(l.fromAreaId, l.toAreaId, 0);
+    const order = data?.corridorOrder ?? [];
+    const ranked = order.filter((k) => m.has(k)).map((k) => m.get(k)!);
+    const rest = [...m.values()].filter((c) => !order.includes(c.key)).sort((a, b) => b.legs - a.legs);
+    return { ranked, rest };
   }, [data]);
   const totalLegs = (data?.observed ?? []).reduce((s, o) => s + o.legs, 0) + (data?.legsOutsideAreas ?? 0);
 
@@ -87,7 +119,16 @@ export default function PayMapView({ canEdit }: { canEdit: boolean }) {
     </div>;
   }
 
-  const focus = focusLane ? rows.find((r) => r.key === focusLane) ?? null : null;
+  const focusC = openCorridor ? [...corridors.ranked, ...corridors.rest].find((c) => c.key === openCorridor) ?? null : null;
+  const focus = focusC ? { fromAreaId: focusC.fromAreaId, toAreaId: focusC.toAreaId } : null;
+  const allKeys = [...corridors.ranked, ...corridors.rest].map((c) => c.key);
+  /** Move `key` to just before `before` (or to the top), then save the order. */
+  const moveCorridor = (key: string, before: string | null) => {
+    const rest = allKeys.filter((k) => k !== key);
+    const at = before ? Math.max(0, rest.indexOf(before)) : 0;
+    rest.splice(at, 0, key);
+    void run(() => railway.setRateConfig({ corridorOrder: rest }));
+  };
   const selected = selectedArea != null ? areaById.get(selectedArea) ?? null : null;
 
   return (
@@ -129,20 +170,32 @@ export default function PayMapView({ canEdit }: { canEdit: boolean }) {
           ) : null}
         </div>
 
-        <div className="xl:w-[520px] shrink-0">
-          <div className="text-[13px] font-semibold mb-1" style={{ color: 'var(--gc-text-1)' }}>Lanes</div>
+        <div className="xl:w-[560px] shrink-0">
+          <div className="text-[13px] font-semibold mb-1" style={{ color: 'var(--gc-text-1)' }}>Region to region</div>
           <div className="text-[11px] mb-2" style={{ color: 'var(--gc-text-3)' }}>
-            Pay for a leg from one area to another, by kind. Every lane your settled payroll ran is listed with what it actually paid — set the
-            pay once and it&apos;s suggested for every load on it (a route&apos;s own standard still wins). Stops past two add the rate card&apos;s
-            extra-stop amount.
+            Drag to rank the pairs you care about. Open one to set pay for each way a load between them gets split — pickup and delivery
+            belong to their area, so setting them once covers every pair. A route&apos;s own standard still wins.
           </div>
           <div className="rounded-lg overflow-y-auto" style={{ border: '1px solid var(--gc-border)', background: 'var(--gc-surface)', maxHeight: 640 }}>
-            {rows.length === 0 ? (
-              <div className="p-4 text-[12px]" style={{ color: 'var(--gc-text-3)' }}>Draw areas to see the lanes between them.</div>
-            ) : rows.map((r) => (
-              <LaneRow key={r.key} row={r} areaById={areaById} canEdit={canEdit} focused={focusLane === r.key}
-                onFocus={() => setFocusLane(focusLane === r.key ? null : r.key)}
-                onSave={(amount, extraStop) => run(() => railway.setPayLane({ fromAreaId: r.fromAreaId, toAreaId: r.toAreaId, kind: r.kind, amount, extraStop }))} />
+            {!corridors.ranked.length && !corridors.rest.length ? (
+              <div className="p-4 text-[12px]" style={{ color: 'var(--gc-text-3)' }}>Draw areas to see the region pairs between them.</div>
+            ) : null}
+            {[...corridors.ranked, null, ...corridors.rest].map((c, i) => c === null ? (
+              corridors.rest.length ? (
+                <div key="divider" className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider"
+                  style={{ background: 'var(--gc-surface-2)', color: 'var(--gc-text-3)' }}>
+                  {corridors.ranked.length ? 'Not ranked yet — busiest first' : 'Busiest first — drag to rank'}
+                </div>
+              ) : null
+            ) : (
+              <CorridorRow key={c.key} c={c} rank={i < corridors.ranked.length ? i + 1 : null} data={data} areaById={areaById} slots={slots}
+                canEdit={canEdit} open={openCorridor === c.key} onToggle={() => setOpenCorridor(openCorridor === c.key ? null : c.key)}
+                dragging={dragKey === c.key}
+                onDragStart={() => setDragKey(c.key)} onDragEnd={() => setDragKey(null)}
+                onDrop={() => { if (dragKey && dragKey !== c.key) moveCorridor(dragKey, c.key); setDragKey(null); }}
+                onTop={() => moveCorridor(c.key, null)}
+                onSetLane={(fromAreaId, toAreaId, kind, amount) => run(() => railway.setPayLane({ fromAreaId, toAreaId, kind, amount }))}
+                onSetExtraStop={(areaId, amount) => run(() => railway.setRateConfig({ areaExtraStops: { [String(areaId)]: amount } }))} />
             ))}
           </div>
         </div>
@@ -155,7 +208,7 @@ export default function PayMapView({ canEdit }: { canEdit: boolean }) {
 
 function AreaMap({ data, showStops, selectedArea, onSelectArea, focus, drawing, onDrawPoint, onSaveShape, canEdit }: {
   data: PayMapResponse; showStops: boolean; selectedArea: number | null; onSelectArea: (id: number | null) => void;
-  focus: Row | null; drawing: PayAreaPoint[] | null; onDrawPoint: (p: PayAreaPoint) => void;
+  focus: { fromAreaId: number; toAreaId: number } | null; drawing: PayAreaPoint[] | null; onDrawPoint: (p: PayAreaPoint) => void;
   onSaveShape: (id: number, polygon: PayAreaPoint[]) => void; canEdit: boolean;
 }) {
   const box = useRef<HTMLDivElement>(null);
@@ -338,84 +391,152 @@ function Swatches({ value, onChange }: { value: string; onChange: (c: string) =>
   );
 }
 
-function LaneRow({ row, areaById, canEdit, focused, onFocus, onSave }: {
-  row: Row; areaById: Map<number, PayArea>; canEdit: boolean; focused: boolean; onFocus: () => void;
-  onSave: (amount: number | null, extraStop: number | null) => void;
+function CorridorRow({ c, rank, data, areaById, slots, canEdit, open, onToggle, dragging, onDragStart, onDragEnd, onDrop, onTop, onSetLane, onSetExtraStop }: {
+  c: Corridor; rank: number | null; data: PayMapResponse; areaById: Map<number, PayArea>; slots: Map<string, Slot>; canEdit: boolean;
+  open: boolean; onToggle: () => void; dragging: boolean; onDragStart: () => void; onDragEnd: () => void; onDrop: () => void; onTop: () => void;
+  onSetLane: (fromAreaId: number, toAreaId: number, kind: RateGroup, amount: number | null) => void;
+  onSetExtraStop: (areaId: number, amount: number | null) => void;
 }) {
-  const from = areaById.get(row.fromAreaId);
-  const to = areaById.get(row.toAreaId);
-  const o = row.observed;
-  const suggested = row.lane?.amount ?? o?.standards[0]?.amount ?? o?.amounts[0]?.amount ?? null;
+  const A = areaById.get(c.fromAreaId);
+  const B = areaById.get(c.toAreaId);
+  const local = c.fromAreaId === c.toAreaId;
+  const steps = local ? LOCAL_STEPS : CROSS_STEPS;
+  const idOf = (side: 'A' | 'B') => (side === 'A' ? c.fromAreaId : c.toAreaId);
+  const slotOf = (st: Step) => slots.get(laneKey(idOf(st.from), idOf(st.to), st.kind)) ?? { lane: null, observed: null };
+  const priced = steps.filter((st) => slotOf(st).lane).length;
+  const dir = directionOf(A, B);
+  const [over, setOver] = useState(false);
+  return (
+    <div style={{ borderBottom: '1px solid var(--gc-border)', opacity: dragging ? 0.4 : 1, boxShadow: over ? 'inset 0 2px 0 var(--gc-blue)' : undefined }}
+      draggable={canEdit} onDragStart={onDragStart} onDragEnd={onDragEnd}
+      onDragOver={(e) => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)}
+      onDrop={(e) => { e.preventDefault(); setOver(false); onDrop(); }}>
+      <div className="flex items-center gap-2 px-2 py-2 cursor-pointer" onClick={onToggle} style={{ background: open ? 'var(--gc-bg)' : undefined }}>
+        {canEdit ? <GripVertical size={14} style={{ color: 'var(--gc-text-3)', cursor: 'grab' }} /> : null}
+        <span className="w-5 text-[11px] tabular-nums text-right" style={{ color: 'var(--gc-text-3)' }}>{rank ?? ''}</span>
+        {open ? <ChevronDown size={14} style={{ color: 'var(--gc-text-3)' }} /> : <ChevronRight size={14} style={{ color: 'var(--gc-text-3)' }} />}
+        <div className="min-w-0 flex-1 text-[13px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+          <span style={{ color: A?.color }}>{A?.name ?? '?'}</span> → <span style={{ color: B?.color }}>{B?.name ?? '?'}</span>
+          {dir ? (
+            <span className="ml-1.5 px-1 rounded text-[10px] font-semibold" style={{ background: DIRECTION[dir].bg, color: DIRECTION[dir].fg }} title={DIRECTION[dir].tip}>
+              {DIRECTION[dir].label}
+            </span>
+          ) : null}
+        </div>
+        <span className="text-[11px] tabular-nums whitespace-nowrap" style={{ color: 'var(--gc-text-3)' }}>
+          {c.legs} paid · {priced}/{steps.length} set
+        </span>
+        {canEdit && rank !== 1 ? (
+          <button type="button" title="Move to the top" onClick={(e) => { e.stopPropagation(); onTop(); }} style={{ color: 'var(--gc-text-3)' }}>
+            <ChevronsUp size={14} />
+          </button>
+        ) : null}
+      </div>
+      {open ? (
+        <div className="pb-2" style={{ background: 'var(--gc-bg)' }}>
+          {steps.map((st) => (
+            <StepRow key={st.id} step={st} slot={slotOf(st)} canEdit={canEdit}
+              sharedName={st.shared ? areaById.get(idOf(st.shared))?.name ?? null : null}
+              onSave={(amount) => onSetLane(idOf(st.from), idOf(st.to), st.kind, amount)} />
+          ))}
+          {B ? (
+            <ExtraStopRow area={B} value={data.areaExtraStops[String(B.id)] ?? null} general={data.generalExtraStop} canEdit={canEdit}
+              onSave={(amount) => onSetExtraStop(B.id, amount)} />
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function StepRow({ step, slot, sharedName, canEdit, onSave }: {
+  step: Step; slot: Slot; sharedName: string | null; canEdit: boolean; onSave: (amount: number | null) => void;
+}) {
+  const o = slot.observed;
+  const suggested = slot.lane?.amount ?? o?.standards[0]?.amount ?? o?.amounts[0]?.amount ?? null;
   const [raw, setRaw] = useState(suggested != null ? String(suggested) : '');
+  const [showRefs, setShowRefs] = useState(false);
   const n = Number(raw);
   const valid = raw.trim() !== '' && Number.isFinite(n) && n >= 0;
-  const [extraRaw, setExtraRaw] = useState(row.lane?.extraStop != null ? String(row.lane.extraStop) : '');
-  const extra = extraRaw.trim() === '' ? null : Number(extraRaw);
-  const extraValid = extra == null || (Number.isFinite(extra) && extra >= 0);
-  const changed = n !== row.lane?.amount || extra !== (row.lane?.extraStop ?? null);
   const varies = (o?.amounts.length ?? 0) > 1;
-  const dir = directionOf(from, to);
   return (
-    <div style={{ borderBottom: '1px solid var(--gc-border)', background: focused ? 'var(--gc-bg)' : undefined }}>
-      <div className="flex items-start gap-2 px-3 py-2">
-        <button type="button" onClick={onFocus} className="mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
-          {focused ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-        </button>
+    <div className="px-3 py-1.5 ml-7" style={{ borderTop: '1px solid var(--gc-border)' }}>
+      <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
-          <div className="text-[13px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
-            <span style={{ color: from?.color }}>{from?.name ?? '?'}</span> → <span style={{ color: to?.color }}>{to?.name ?? '?'}</span>
-            <span className="ml-1.5 font-normal text-[11px]" style={{ color: 'var(--gc-text-3)' }}>{KIND_LABEL[row.kind]}</span>
-            {dir ? (
-              <span className="ml-1.5 px-1 rounded text-[10px] font-semibold" style={{ background: DIRECTION[dir].bg, color: DIRECTION[dir].fg }} title={DIRECTION[dir].tip}>
-                {DIRECTION[dir].label}
-              </span>
-            ) : null}
+          <div className="text-[12px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+            {step.label}
+            {sharedName ? <span className="ml-1 font-normal text-[10px]" style={{ color: 'var(--gc-text-3)' }} title="Pickup and delivery belong to the area: this amount applies to every pair that starts / ends there">in {sharedName} · all pairs</span> : null}
           </div>
           <div className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
-            {o ? <>{o.legs} paid legs · paid {o.amounts.slice(0, 3).map((a) => `${money(a.amount)}×${a.count}`).join(', ')}{o.amounts.length > 3 ? '…' : ''}</> : 'No settled pay yet'}
-            {o?.standards.length ? <> · standards {o.standards.slice(0, 3).map((a) => `${money(a.amount)}×${a.routes}`).join(', ')}</> : null}
+            {o ? (
+              <button type="button" onClick={() => setShowRefs((v) => !v)} className="text-left" style={{ color: 'var(--gc-text-3)' }}>
+                {o.legs} paid · {o.amounts.slice(0, 3).map((a) => `${money(a.amount)}×${a.count}`).join(', ')}{o.amounts.length > 3 ? '…' : ''}
+                {o.standards.length ? ` · std ${o.standards.slice(0, 2).map((a) => money(a.amount)).join('/')}` : ''}
+              </button>
+            ) : 'Not run yet'}
             {varies ? <span className="ml-1 inline-flex items-center gap-0.5" style={{ color: '#b06000' }}><AlertTriangle size={10} /> varies</span> : null}
           </div>
         </div>
         <div className="shrink-0 text-right">
-          {row.lane ? (
-            <div className="text-[13px] font-semibold" style={{ color: '#1e8e3e' }}>
-              {money(row.lane.amount)}
-              {row.lane.extraStop != null ? <span className="font-normal text-[11px]" style={{ color: 'var(--gc-text-3)' }}> +{money(row.lane.extraStop)}/stop</span> : null}
-            </div>
-          ) : null}
+          {slot.lane ? <div className="text-[12px] font-semibold" style={{ color: '#1e8e3e' }}>{money(slot.lane.amount)}</div> : null}
           {canEdit ? (
-            <div className="inline-flex items-center gap-1 mt-0.5">
+            <div className="inline-flex items-center gap-1">
               <span className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>$</span>
               <input value={raw} onChange={(e) => setRaw(e.target.value)} inputMode="decimal" className="rounded px-1.5 py-0.5 text-[12px] w-16"
                 style={{ border: '1px solid var(--gc-border)', background: 'var(--gc-surface)', color: 'var(--gc-text-1)' }} />
-              <span className="text-[11px] ml-1" style={{ color: 'var(--gc-text-3)' }} title="Pay per stop past two on this lane (empty = the general extra-stop amount)">+$</span>
-              <input value={extraRaw} onChange={(e) => setExtraRaw(e.target.value)} inputMode="decimal" placeholder="stop" className="rounded px-1.5 py-0.5 text-[12px] w-12"
-                style={{ border: '1px solid var(--gc-border)', background: 'var(--gc-surface)', color: 'var(--gc-text-1)' }} />
-              <button type="button" disabled={!valid || !extraValid || !changed} onClick={() => onSave(n, extra)}
+              <button type="button" disabled={!valid || n === slot.lane?.amount} onClick={() => onSave(n)}
                 className="px-2 py-0.5 rounded text-[11px] font-semibold disabled:opacity-40" style={{ background: 'var(--gc-blue)', color: '#fff' }}>
-                {row.lane ? 'Save' : 'Set'}
+                {slot.lane ? 'Save' : 'Set'}
               </button>
-              {row.lane ? <button type="button" onClick={() => onSave(null, null)} className="px-1 text-[11px]" style={{ color: '#c5221f' }}>Clear</button> : null}
+              {slot.lane ? <button type="button" onClick={() => onSave(null)} className="px-1 text-[11px]" style={{ color: '#c5221f' }}>Clear</button> : null}
             </div>
           ) : null}
         </div>
       </div>
-      {focused && o ? (
-        <div className="px-9 pb-2">
-          <table className="text-[11px] tabular-nums w-full">
-            <tbody>
-              {o.refs.slice(0, 12).map((r) => (
-                <tr key={r.routeKey}>
-                  <td className="pr-2 font-semibold" style={{ color: 'var(--gc-text-1)' }}>{money(r.pay)}</td>
-                  <td className="pr-2 truncate" style={{ maxWidth: 220, color: 'var(--gc-text-1)' }}>{r.name ?? r.label}</td>
-                  <td className="pr-2 truncate" style={{ maxWidth: 150, color: 'var(--gc-text-3)' }}>{r.cities}</td>
-                  <td style={{ color: 'var(--gc-text-3)' }}>{r.legs} paid{r.standard ? ' · std' : ''}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      {showRefs && o ? (
+        <table className="text-[11px] tabular-nums w-full mt-1">
+          <tbody>
+            {o.refs.slice(0, 10).map((r) => (
+              <tr key={r.routeKey}>
+                <td className="pr-2 font-semibold" style={{ color: 'var(--gc-text-1)' }}>{money(r.pay)}</td>
+                <td className="pr-2 truncate" style={{ maxWidth: 220, color: 'var(--gc-text-1)' }}>{r.name ?? r.label}</td>
+                <td className="pr-2 truncate" style={{ maxWidth: 140, color: 'var(--gc-text-3)' }}>{r.cities}</td>
+                <td style={{ color: 'var(--gc-text-3)' }}>{r.legs} paid{r.standard ? ' · std' : ''}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : null}
+    </div>
+  );
+}
+
+function ExtraStopRow({ area, value, general, canEdit, onSave }: {
+  area: PayArea; value: number | null; general: number; canEdit: boolean; onSave: (amount: number | null) => void;
+}) {
+  const [raw, setRaw] = useState(value != null ? String(value) : '');
+  const n = Number(raw);
+  const valid = raw.trim() !== '' && Number.isFinite(n) && n >= 0;
+  return (
+    <div className="px-3 py-1.5 ml-7 flex items-center gap-2" style={{ borderTop: '1px solid var(--gc-border)' }}>
+      <div className="min-w-0 flex-1">
+        <div className="text-[12px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>Extra stop in {area.name}</div>
+        <div className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
+          Per stop past two on a leg ending here{value == null ? ` — using the general ${money(general)}` : ''}
         </div>
+      </div>
+      {value != null ? <span className="text-[12px] font-semibold" style={{ color: '#1e8e3e' }}>{money(value)}</span> : null}
+      {canEdit ? (
+        <span className="inline-flex items-center gap-1">
+          <span className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>$</span>
+          <input value={raw} onChange={(e) => setRaw(e.target.value)} inputMode="decimal" placeholder={String(general)} className="rounded px-1.5 py-0.5 text-[12px] w-16"
+            style={{ border: '1px solid var(--gc-border)', background: 'var(--gc-surface)', color: 'var(--gc-text-1)' }} />
+          <button type="button" disabled={!valid || n === value} onClick={() => onSave(n)}
+            className="px-2 py-0.5 rounded text-[11px] font-semibold disabled:opacity-40" style={{ background: 'var(--gc-blue)', color: '#fff' }}>
+            {value != null ? 'Save' : 'Set'}
+          </button>
+          {value != null ? <button type="button" onClick={() => onSave(null)} className="px-1 text-[11px]" style={{ color: '#c5221f' }}>Clear</button> : null}
+        </span>
       ) : null}
     </div>
   );

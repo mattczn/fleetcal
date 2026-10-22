@@ -463,6 +463,7 @@ function observeLanes(h: History, std: Map<string, StandardRow>, names: Map<stri
 /** Everything the map tab draws: areas, lanes, what settled pay ran, stop dots. */
 export async function payMap(orgId: string): Promise<PayMapResponse> {
   const [h, std, names, al] = await Promise.all([history(orgId), standards(orgId), routeNames(orgId), readAreasAndLanes(orgId)]);
+  const card = await rateCardFor(orgId, h, std, names);
   const locate = areaLocator(al.areas);
   const { observed, outside } = observeLanes(h, std, names, (p) => locate(p ?? null));
   const legsAt = new Map<number, number>();
@@ -476,6 +477,9 @@ export async function payMap(orgId: string): Promise<PayMapResponse> {
       .map((p) => ({ id: p.id, name: p.name, lat: p.lat, lng: p.lng, isYard: !!p.saved_location_id, legs: legsAt.get(p.id) ?? 0 })),
     legsOutsideAreas: outside,
     settledThrough: h.settledThrough,
+    corridorOrder: card.response.config.corridorOrder ?? [],
+    areaExtraStops: card.response.config.areaExtraStops ?? {},
+    generalExtraStop: card.response.extraStop.value,
   };
 }
 
@@ -606,7 +610,8 @@ export async function suggestPay(
         legs: routeStats.legs, usual: routeStats.usual, usualShare: routeStats.usualShare, examples: routeStats.examples };
     } else if (lane && fromArea && toArea) {
       const extraStops = Math.max(0, route.placeIds.length - 2);
-      const extra = lane.extraStop ?? card.response.extraStop.value;
+      // Extra stops: the lane's own rate, else the delivery area's, else the general one.
+      const extra = lane.extraStop ?? card.response.config.areaExtraStops?.[String(toArea.id)] ?? card.response.extraStop.value;
       out[leg.key] = {
         ...base, amount: lane.amount + extraStops * extra, source: "lane", note: lane.note,
         legs: routeStats.legs, usual: routeStats.usual, usualShare: routeStats.usualShare, examples: routeStats.examples,

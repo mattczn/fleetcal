@@ -100,6 +100,25 @@ export function mergeRateConfig(current: RateCardConfig, body: unknown): { confi
       }
     }
   }
+  if ("corridorOrder" in b) {
+    const v = b.corridorOrder;
+    if (!Array.isArray(v) || v.length > 1000 || v.some((x) => typeof x !== "string" || !/^\d+>\d+$/.test(x))) errors.push("corridorOrder must be a list of 'fromAreaId>toAreaId'");
+    else next.corridorOrder = [...new Set(v as string[])];
+  }
+  if ("areaExtraStops" in b) {
+    const o = b.areaExtraStops;
+    if (!o || typeof o !== "object") errors.push("areaExtraStops must be an object");
+    else {
+      const merged: Record<string, number> = { ...(current.areaExtraStops ?? {}) };
+      for (const [id, v] of Object.entries(o as Record<string, unknown>)) {
+        if (!/^\d+$/.test(id)) { errors.push(`areaExtraStops.${id}: not an area id`); continue; }
+        if (v === null) { delete merged[id]; continue; }
+        if (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 10_000) errors.push(`areaExtraStops.${id} must be 0–10000 or null`);
+        else merged[id] = v;
+      }
+      next.areaExtraStops = merged;
+    }
+  }
   return errors.length ? { errors } : { config: next, errors };
 }
 

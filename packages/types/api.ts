@@ -3670,10 +3670,17 @@ export interface RateCardConfig {
   excludeNames: string[];
   /** Cell key → amount, and 'extraStop' → amount per stop past two. */
   overrides: Record<string, number>;
+  /** Map tab: region pairs ('fromAreaId>toAreaId') in the order you ranked them. */
+  corridorOrder?: string[];
+  /** Map tab: pay per stop past two when the leg ends in this area (area id → amount). */
+  areaExtraStops?: Record<string, number>;
 }
 
 /** A partial settings change; an override of null clears it. */
-export type RateCardConfigPatch = Partial<Omit<RateCardConfig, 'overrides'>> & { overrides?: Record<string, number | null> };
+export type RateCardConfigPatch = Partial<Omit<RateCardConfig, 'overrides' | 'areaExtraStops'>> & {
+  overrides?: Record<string, number | null>;
+  areaExtraStops?: Record<string, number | null>;
+};
 
 export interface RateCardRef {
   routeKey: string;
@@ -3795,4 +3802,10 @@ export interface PayMapResponse {
   /** Settled paid legs whose first or last stop is outside every area. */
   legsOutsideAreas: number;
   settledThrough: string | null;
+  /** Your ranking of region pairs ('fromAreaId>toAreaId'). */
+  corridorOrder: string[];
+  /** Extra-stop pay by delivery area (area id → amount). */
+  areaExtraStops: Record<string, number>;
+  /** The general extra-stop amount (rate card). */
+  generalExtraStop: number;
 }
