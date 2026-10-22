@@ -3674,12 +3674,15 @@ export interface RateCardConfig {
   corridorOrder?: string[];
   /** Map tab: pay per stop past two when the leg ends in this area (area id → amount). */
   areaExtraStops?: Record<string, number>;
+  /** Lanes page: the quote target you set for a region pair ('fromAreaId>toAreaId' → $). */
+  pairTargets?: Record<string, number>;
 }
 
 /** A partial settings change; an override of null clears it. */
-export type RateCardConfigPatch = Partial<Omit<RateCardConfig, 'overrides' | 'areaExtraStops'>> & {
+export type RateCardConfigPatch = Partial<Omit<RateCardConfig, 'overrides' | 'areaExtraStops' | 'pairTargets'>> & {
   overrides?: Record<string, number | null>;
   areaExtraStops?: Record<string, number | null>;
+  pairTargets?: Record<string, number | null>;
 };
 
 export interface RateCardRef {
@@ -3759,6 +3762,9 @@ export interface PayArea {
   polygon: PayAreaPoint[];
   /** Where trucks are based: lanes leaving it are outbound, coming back inbound. */
   isHome: boolean;
+  /** The home base this area counts as: itself when it's one, else the home
+   *  area it's drawn inside (SLC Local inside SLC metro), else null. */
+  homeId: number | null;
 }
 
 /** outbound = leaving a home area, inbound = coming back to one, local =
@@ -3808,4 +3814,60 @@ export interface PayMapResponse {
   areaExtraStops: Record<string, number>;
   /** The general extra-stop amount (rate card). */
   generalExtraStop: number;
+}
+
+/** GET /v1/lanes/rates — one region pair (first stop's area → last stop's area). */
+export interface LaneRatePair {
+  key: string;
+  fromAreaId: number;
+  toAreaId: number;
+  direction: LaneDirection;
+  cls: HaulClass;
+  /** Loads in the lookback window. */
+  loads: number;
+  /** What those loads billed. low / high = the middle half. */
+  market: { rate: number; low: number; high: number; miles: number; perMile: number };
+  cost: {
+    driverPay: number;
+    /** standard = your full-load lane pay; paid = median of what was paid; percent = dashboard pay %. */
+    driverPayBasis: 'standard' | 'paid' | 'percent';
+    fuel: number;
+    maintenance: number;
+    overhead: number;
+    hotels: number;
+    drivenMiles: number;
+    hours: number;
+    blocks: number;
+  };
+  breakEven: number;
+  target: number;
+  /** Outbound/inbound with a reverse that also runs: the round trip's target split by market rate. */
+  balancedTarget: number | null;
+  /** The target you set for this pair. */
+  yourTarget: number | null;
+  /** Pickup + linehaul + delivery lane pay, when all three are set. */
+  relayPay: number | null;
+  /** Full-load lane pay, when set. */
+  fullPay: number | null;
+}
+
+export interface LaneRatesResponse {
+  available: boolean;
+  lookbackDays: number;
+  since: string;
+  until: string;
+  pairs: LaneRatePair[];
+  /** Loads whose first or last stop is outside every area (not priced). */
+  loadsOutsideAreas: number;
+  areas: Array<{ id: number; name: string; color: string; isHome: boolean; homeId: number | null }>;
+  params: {
+    fuelPerMile: number;
+    maintPerMile: number;
+    otherPct: number;
+    margin: number;
+    overheadPerTruckDay: number;
+    hotelsPerBlock: number;
+    drivenPer: { local: number; otr: number };
+  };
+  corridorOrder: string[];
 }

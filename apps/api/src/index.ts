@@ -65,6 +65,7 @@ import weeklyTargetRoute from "./routes/weekly-target.js";
 import linkReviewRoute from "./routes/link-review.js";
 import truckProfitRoute from "./routes/truck-profit.js";
 import payRoutesRoute from "./routes/pay-routes.js";
+import lanesRoute from "./routes/lanes.js";
 import internalRoute from "./routes/internal.js";
 import movementsRoute from "./routes/movements.js";
 import timelineRoute from "./routes/timeline.js";
@@ -305,6 +306,7 @@ authed.route("/weekly-target", weeklyTargetRoute);
 authed.route("/link-review", linkReviewRoute);
 authed.route("/truck-profit", truckProfitRoute);
 authed.route("/pay-routes", payRoutesRoute);
+authed.route("/lanes", lanesRoute);
 // INTERNAL sales CRM — triple-gated inside the route group
 // (internal-org allowlist → 404, crm module flag, crm.* capabilities).
 authed.route("/crm", crmRoute);

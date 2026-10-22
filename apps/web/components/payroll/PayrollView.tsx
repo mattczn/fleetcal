@@ -2482,7 +2482,7 @@ export default function PayrollView() {
               </p>
             </div>
             <div className="flex items-center gap-3">
-              <Link href="/payroll/routes" className="text-[12px] font-semibold print:hidden" style={{ color: 'var(--gc-blue)' }}
+              <Link href="/lanes" className="text-[12px] font-semibold print:hidden" style={{ color: 'var(--gc-blue)' }}
                 title="Every route, what payroll paid on it, and its standard pay">
                 Routes &amp; standard pay →
               </Link>

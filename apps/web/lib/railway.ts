@@ -97,7 +97,7 @@ import type {
   LinkReviewListResponse, LinkReviewEntry, LinkReviewVerdictRequest, LoadTrailResponse,
   TruckProfitPay, TruckProfitResponse,
   PayRoutesResponse, PaySuggestRequest, PaySuggestResponse, RateCardConfig, RateCardConfigPatch,
-  PayMapResponse, PayArea, PayAreaPoint, RateGroup,
+  PayMapResponse, PayArea, PayAreaPoint, RateGroup, LaneRatesResponse,
   ListRecurringExpensesResponse, CreateRecurringExpenseRequest,
   UpdateRecurringExpenseRequest, RecurringExpenseResponse,
   ListExpenseEntriesRequest, ListExpenseEntriesResponse,
@@ -2090,6 +2090,16 @@ class RailwayClient {
   /** Change rate card settings (overrides, exclusions, regions, bands). */
   setRateConfig(patch: RateCardConfigPatch) {
     return this.req<{ config: RateCardConfig }>('PUT', '/v1/pay-routes/rate-config', patch);
+  }
+
+  /** Quote targets by region pair (Lanes page). */
+  getLaneRates() {
+    return this.req<LaneRatesResponse>('GET', '/v1/lanes/rates');
+  }
+
+  /** Set (or with null, clear) your quote target for a region pair. */
+  setLaneTarget(key: string, amount: number | null) {
+    return this.req<{ key: string; amount: number | null }>('PUT', '/v1/lanes/targets', { key, amount });
   }
 
   /** Name a route (or with null, clear its name). */

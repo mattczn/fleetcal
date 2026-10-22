@@ -29,7 +29,18 @@ interface LaneRow {
   note: string | null; set_by_name: string | null; set_at: string;
 }
 
-const toArea = (r: AreaRow): PayArea => ({ id: Number(r.id), name: r.name, color: r.color, polygon: r.polygon, isHome: !!r.is_home });
+const toArea = (r: AreaRow): PayArea => ({ id: Number(r.id), name: r.name, color: r.color, polygon: r.polygon, isHome: !!r.is_home, homeId: r.is_home ? Number(r.id) : null });
+
+/** An area drawn inside a home base counts as that base. */
+function withHomes(areas: PayArea[]): PayArea[] {
+  const homes = areas.filter((a) => a.isHome && a.polygon.length >= 3).sort((x, y) => sizeOf(x.polygon) - sizeOf(y.polygon));
+  return areas.map((a) => {
+    if (a.isHome || !a.polygon.length) return a;
+    const c = { lat: a.polygon.reduce((s, p) => s + p.lat, 0) / a.polygon.length, lng: a.polygon.reduce((s, p) => s + p.lng, 0) / a.polygon.length };
+    const home = homes.find((h) => inPolygon(c, h.polygon));
+    return home ? { ...a, homeId: home.id } : a;
+  });
+}
 const toLane = (r: LaneRow): PayLane => ({
   id: Number(r.id), fromAreaId: Number(r.from_area_id), toAreaId: Number(r.to_area_id), kind: r.kind,
   amount: Number(r.amount), extraStop: r.extra_stop == null ? null : Number(r.extra_stop),
@@ -37,9 +48,9 @@ const toLane = (r: LaneRow): PayLane => ({
 });
 
 export function laneDirection(from: PayArea, to: PayArea): LaneDirection {
-  if (from.id === to.id) return "local";
-  if (from.isHome && !to.isHome) return "outbound";
-  if (to.isHome && !from.isHome) return "inbound";
+  if (from.id === to.id || (from.homeId != null && from.homeId === to.homeId)) return "local";
+  if (from.homeId != null && to.homeId == null) return "outbound";
+  if (to.homeId != null && from.homeId == null) return "inbound";
   return "through";
 }
 
@@ -50,7 +61,7 @@ export async function readAreasAndLanes(orgId: string): Promise<{ areas: PayArea
     supabase.from("pay_lanes").select("id, from_area_id, to_area_id, kind, amount, extra_stop, note, set_by_name, set_at").eq("org_id", orgId).order("id"),
   ]);
   if (a.error || l.error) return { areas: [], lanes: [], available: false };
-  return { areas: (a.data as AreaRow[]).map(toArea), lanes: (l.data as LaneRow[]).map(toLane), available: true };
+  return { areas: withHomes((a.data as AreaRow[]).map(toArea)), lanes: (l.data as LaneRow[]).map(toLane), available: true };
 }
 
 // ── Geometry ────────────────────────────────────────────────────────────

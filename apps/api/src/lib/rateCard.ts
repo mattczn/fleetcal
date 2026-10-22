@@ -119,6 +119,20 @@ export function mergeRateConfig(current: RateCardConfig, body: unknown): { confi
       next.areaExtraStops = merged;
     }
   }
+  if ("pairTargets" in b) {
+    const o = b.pairTargets;
+    if (!o || typeof o !== "object") errors.push("pairTargets must be an object");
+    else {
+      const merged: Record<string, number> = { ...(current.pairTargets ?? {}) };
+      for (const [key, v] of Object.entries(o as Record<string, unknown>)) {
+        if (!/^\d+>\d+$/.test(key)) { errors.push(`pairTargets.${key}: not 'fromAreaId>toAreaId'`); continue; }
+        if (v === null) { delete merged[key]; continue; }
+        if (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 100_000) errors.push(`pairTargets.${key} must be 0–100000 or null`);
+        else merged[key] = v;
+      }
+      next.pairTargets = merged;
+    }
+  }
   return errors.length ? { errors } : { config: next, errors };
 }
 

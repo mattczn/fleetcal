@@ -14,17 +14,17 @@ import type { LaneDirection, ObservedLane, PayArea, PayAreaPoint, PayLane, PayMa
 import { railway } from '@/lib/railway';
 import { loadGoogleMaps, MAP_ID } from '@/lib/googleMaps';
 
-const DIRECTION: Record<LaneDirection, { label: string; bg: string; fg: string; tip: string }> = {
+export const DIRECTION: Record<LaneDirection, { label: string; bg: string; fg: string; tip: string }> = {
   outbound: { label: 'Outbound', bg: '#fef7e0', fg: '#b06000', tip: 'Leaving a home base' },
   inbound: { label: 'Inbound', bg: '#e6f4ea', fg: '#1e8e3e', tip: 'Coming back to a home base' },
-  local: { label: 'Local', bg: '#e8f0fe', fg: '#1a73e8', tip: 'Stays inside one area' },
+  local: { label: 'Local', bg: '#e8f0fe', fg: '#1a73e8', tip: 'Stays inside one area or one home base' },
   through: { label: 'Through', bg: 'var(--gc-surface-2)', fg: 'var(--gc-text-2)', tip: 'Neither end is a home base' },
 };
 const directionOf = (from: PayArea | undefined, to: PayArea | undefined): LaneDirection | null => {
   if (!from || !to) return null;
-  if (from.id === to.id) return 'local';
-  if (from.isHome && !to.isHome) return 'outbound';
-  if (to.isHome && !from.isHome) return 'inbound';
+  if (from.id === to.id || (from.homeId != null && from.homeId === to.homeId)) return 'local';
+  if (from.homeId != null && to.homeId == null) return 'outbound';
+  if (to.homeId != null && from.homeId == null) return 'inbound';
   return 'through';
 };
 const COLORS = ['#1a73e8', '#16a34a', '#d97706', '#9333ea', '#dc2626', '#0891b2', '#db2777', '#4b5563'];

@@ -1,40 +1,48 @@
 'use client';
 
 /**
- * /payroll/routes — every route loads run, what settled payroll paid on
- * it, and the standard pay set for it. The standard (or, without one, the
- * usual amount) is what the payroll page and the load form suggest.
- * See apps/api/src/lib/routePay.ts.
+ * /lanes — what to quote between areas (Rates, for anyone who sees load
+ * prices) and, for payroll, the areas, routes and standard pay drivers get
+ * on them. A route's standard (or, without one, the usual amount) is what
+ * the payroll page and the load form suggest. See apps/api/src/lib/routePay.ts
+ * and lib/laneRates.ts.
  */
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
-import { AlertTriangle, ArrowLeft, ChevronDown, ChevronRight, Loader2, Route as RouteIcon } from 'lucide-react';
+import { AlertTriangle, ChevronDown, ChevronRight, Loader2, Route as RouteIcon } from 'lucide-react';
 import type { PayRoute, PayRoutesResponse, RouteLegKind } from '@fleetcal/types';
 import AppShell from '@/components/nav/AppShell';
 import { railway } from '@/lib/railway';
 import { usePermissions } from '@/lib/usePermissions';
+import { useModules } from '@/lib/useModules';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import type { CalendarEvent } from '@/lib/types';
 import { KIND_LABEL } from './SuggestedPay';
 import RateCardView from './RateCardView';
 import PayMapView from './PayMapView';
+import LaneRatesView from './LaneRatesView';
+
+type Tab = 'rates' | 'map' | 'routes' | 'rate';
+const TAB_LABEL: Record<Tab, string> = { rates: 'Rates', map: 'Map', routes: 'Routes', rate: 'Rate card' };
 
 const money = (n: number) => `$${Math.round(n).toLocaleString()}`;
 const shortDate = (d: string) => new Date(`${d.slice(0, 10)}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
 
 export default function PayRoutesView() {
   const { can } = usePermissions();
+  const { enabled: moduleEnabled } = useModules();
+  const canPayroll = can('payroll.access') && moduleEnabled('payroll');
   const canEdit = can('payroll.adjust');
   const [tick, setTick] = useState(0);
   const [result, setResult] = useState<{ tick: number; data?: PayRoutesResponse; error?: string } | null>(null);
   useEffect(() => {
+    if (!canPayroll) return;
     let cancelled = false;
     railway.getPayRoutes()
       .then((data) => { if (!cancelled) setResult({ tick, data }); })
       .catch((e) => { if (!cancelled) setResult({ tick, error: e instanceof Error ? e.message : 'Failed to load' }); });
     return () => { cancelled = true; };
-  }, [tick]);
+  }, [tick, canPayroll]);
   const reload = useCallback(() => setTick((t) => t + 1), []);
   const data = result?.data ?? null;
   const error = result?.error ?? null;
@@ -43,7 +51,8 @@ export default function PayRoutesView() {
   const [kind, setKind] = useState<RouteLegKind | ''>('');
   const [minLegs, setMinLegs] = useState(3);
   const [open, setOpen] = useState<string | null>(null);
-  const [tab, setTab] = useState<'map' | 'routes' | 'rate'>('map');
+  const [tab, setTab] = useState<Tab>('rates');
+  const tabs: Tab[] = canPayroll ? ['rates', 'map', 'routes', 'rate'] : ['rates'];
   const [variesOnly, setVariesOnly] = useState(false);
 
   // Open a paid leg's load in the load modal on this page. Older loads
@@ -85,12 +94,18 @@ export default function PayRoutesView() {
     <AppShell>
       <div className="max-w-[1400px] mx-auto px-6 py-4">
         <div className="flex items-center gap-3 mb-3 flex-wrap">
-          <Link href="/payroll" className="w-8 h-8 rounded-full flex items-center justify-center"
-            style={{ background: 'var(--gc-surface-2)', color: 'var(--gc-text-2)' }} title="Back to payroll">
-            <ArrowLeft size={16} />
-          </Link>
           <RouteIcon size={20} style={{ color: 'var(--gc-text-1)' }} />
-          <h1 className="text-[20px] font-semibold" style={{ color: 'var(--gc-text-1)', letterSpacing: '-0.3px' }}>Routes &amp; standard pay</h1>
+          <h1 className="text-[20px] font-semibold" style={{ color: 'var(--gc-text-1)', letterSpacing: '-0.3px' }}>Lanes</h1>
+          <div className="flex items-center gap-1 ml-2">
+            {tabs.length > 1 ? tabs.map((t) => (
+              <button key={t} type="button" onClick={() => setTab(t)} className="px-3 py-1 rounded text-[12px] font-semibold"
+                style={{ background: tab === t ? 'var(--gc-text-1)' : 'var(--gc-surface-2)', color: tab === t ? 'var(--gc-surface)' : 'var(--gc-text-2)' }}>
+                {TAB_LABEL[t]}
+              </button>
+            )) : null}
+          </div>
+        </div>
+        {tab === 'routes' ? <div className="flex items-center gap-2 mb-3 flex-wrap">
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name, place, city or customer"
             className="rounded px-2 py-1 text-[12px] ml-2" style={{ ...field, width: 220 }} />
           <select value={kind} onChange={(e) => setKind(e.target.value as RouteLegKind | '')} className="rounded px-2 py-1 text-[12px]" style={field}>
@@ -106,17 +121,11 @@ export default function PayRoutesView() {
             <input type="checkbox" checked={variesOnly} onChange={(e) => setVariesOnly(e.target.checked)} />
             Only where pay varies
           </label>
-        </div>
-        <div className="flex items-center gap-1 mb-3">
-          {(['map', 'routes', 'rate'] as const).map((t) => (
-            <button key={t} type="button" onClick={() => setTab(t)} className="px-3 py-1 rounded text-[12px] font-semibold"
-              style={{ background: tab === t ? 'var(--gc-text-1)' : 'var(--gc-surface-2)', color: tab === t ? 'var(--gc-surface)' : 'var(--gc-text-2)' }}>
-              {t === 'map' ? 'Map' : t === 'routes' ? 'Routes' : 'Rate card'}
-            </button>
-          ))}
-        </div>
+        </div> : null}
 
-        {data ? (
+        {tab === 'rates' ? (
+          <LaneRatesView canEdit={can('loads.edit')} />
+        ) : data ? (
           <div className="mb-3 text-[12px] space-y-1" style={{ color: 'var(--gc-text-3)' }}>
             <div>
               From settled payroll through the week of {data.settledThrough ? shortDate(data.settledThrough) : '—'} (weeks finalized
@@ -133,7 +142,7 @@ export default function PayRoutesView() {
           </div>
         ) : null}
 
-        {error ? (
+        {tab === 'rates' ? null : error ? (
           <div className="p-4 rounded text-[13px]" style={{ background: '#fce8e6', color: '#c5221f' }}>{error}</div>
         ) : !data ? (
           <div className="flex items-center gap-2 p-6 text-[13px]" style={{ color: 'var(--gc-text-3)' }}>
