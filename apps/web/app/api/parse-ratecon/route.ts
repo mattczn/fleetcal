@@ -640,18 +640,31 @@ export async function POST(req: NextRequest) {
 
   if (rawStops.length > 0) {
     const sorted = [...rawStops].sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0));
-    const addresses = sorted.map(s => s.address || undefined);
+    // Fall back to the city when there's no street. Brokers who withhold
+    // the facility address until dispatch still print a city, and a city
+    // geocodes to its centre — good enough to place the stop, draw the
+    // route and measure miles. Geocoding nothing leaves the load
+    // unmappable, which is strictly worse than approximate.
+    const addresses = sorted.map(s => s.address?.trim() || s.city?.trim() || undefined);
     const geoResults = await geocodeAll(addresses);
 
     enrichedStops = sorted.map((stop, i) => {
       const geo = geoResults[i];
-      const geocodeStatus: GeocodeStatus = geo ? 'success' : (stop.address ? 'failed' : 'pending');
+      const located = stop.address?.trim() || stop.city?.trim();
+      const geocodeStatus: GeocodeStatus = geo ? 'success' : (located ? 'failed' : 'pending');
       const validSchedule = stop.scheduleType === 'appointment' || stop.scheduleType === 'window' || stop.scheduleType === 'fcfs';
       return {
         sequence:      i + 1,
         type:          (stop.type ?? 'stop') as StopType,
         facilityName:  stop.facilityName || undefined,
-        address:       stop.address       || undefined,
+        // No street? Show the city-level location rather than an empty
+        // box. The stop really is only known to the city until the
+        // broker releases the address, and "North Las Vegas, NV" is
+        // both truthful and what we just geocoded — leaving the field
+        // blank told the dispatcher we'd found nothing.
+        address:       stop.address?.trim()
+                         || [geo?.city ?? stop.city, geo?.state].filter(Boolean).join(', ')
+                         || undefined,
         city:          geo?.city          ?? stop.city ?? undefined,
         state:         geo?.state         ?? undefined,
         lat:           geo?.lat           ?? undefined,

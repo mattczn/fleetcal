@@ -142,7 +142,7 @@ export function buildRateConPrompt(
       "sequence": <integer starting at 1, in order of occurrence in the document>,
       "type": "<pickup | delivery | drop | drop_hook | stop>",
       "facilityName": "<shipper/receiver/facility name, or empty string>",
-      "address": "<full street address including city, state, zip — as complete as possible>",
+      "address": "<full street address including city, state, zip — as complete as possible. When the document gives no street for this stop, put the city/state/ZIP it DOES give, e.g. 'North Las Vegas, NV 89081'. Never empty when a city is named; never filled from another part of the page.>",
       "city": "<just the city name, e.g. 'Spanish Fork' or 'Milford' — no state, no road, no zip>",
       "scheduleType": "<appointment | window | fcfs — pick 'appointment' if a single time, 'window' if a time range, 'fcfs' if 'first come first served' or no fixed time. Empty string if unclear.>",
       "apptStart": "<appointment time or window start in YYYY-MM-DDTHH:mm — LOCAL to THIS stop's clock. If rate con prints '15:00 PDT' at a Vegas stop, output '2026-06-02T15:00'. If it prints '10:00 MDT' at a Draper UT stop, output '2026-06-03T10:00'. NEVER cross-convert between stops. Empty string if no time given.>",
@@ -183,16 +183,29 @@ S2. This document is ADDRESSED TO the carrier, and the carrier's own
     trucking company reading this document. It is NEVER a stop.
 
 S3. Some brokers withhold the facility address until the driver is
-    dispatched and print ONLY a city and state as a placeholder:
+    dispatched and print ONLY a city, state and ZIP as a placeholder:
 
       Pick-up Location                        Date          Time
       Commerce City, CO                       10/22/2026    FCFS 08:00 to 14:00
 
-    That is complete and correct. Output city "Commerce City", and
-    leave "address" as an EMPTY STRING. Do NOT fill the address with
-    the carrier's address, the broker's address, or the other stop's
-    address, and do NOT invent a street. An empty address is a true
-    answer; a borrowed one sends a driver to the wrong state.
+      North Las Vegas, NV 89081
+      (Street Address will be shared upon tracking acceptance.)
+
+    Put WHATEVER LOCATION IS GIVEN into "address" — "Commerce City, CO"
+    or "North Las Vegas, NV 89081". That is a real, geocodable location
+    and it is what maps the load and measures its miles. Set "city" to
+    the city name as well.
+
+    Never leave "address" empty when the document names a city. An
+    empty address means the load cannot be mapped at all.
+
+    What you must NOT do is fill the gap from elsewhere on the page:
+    no carrier address, no broker address, no other stop's address, and
+    no invented street number. A city on its own is a true answer; a
+    borrowed street sends a driver to the wrong state.
+
+    The "street address will be shared" sentence is a note, not a
+    location — put it in this stop's "instructions".
 
 S4. Sanity check before returning: if a pickup and a delivery share the
     same street address, or a stop's city does not match the city on
