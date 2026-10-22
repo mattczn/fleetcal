@@ -3612,7 +3612,7 @@ export interface PayRoutesResponse {
 
 /** standard = set on the route; route = the route's usual; area = the
  *  usual between the same areas; kind = the rule for the leg's kind. */
-export type PaySuggestionSource = 'standard' | 'route' | 'rate' | 'area' | 'kind';
+export type PaySuggestionSource = 'standard' | 'lane' | 'route' | 'rate' | 'area' | 'kind';
 
 export interface PaySuggestion {
   amount: number;
@@ -3635,6 +3635,11 @@ export interface PaySuggestion {
   varies: boolean;
   /** What the rate card says for this kind of leg (when it has a cell). */
   rateValue: number | null;
+  /** Set when the amount came from an area lane you priced. */
+  lane?: {
+    fromArea: string; toArea: string; kind: RateGroup; direction: LaneDirection;
+    base: number; extraStops: number; extraStopAmount: number; refs: RateCardRef[];
+  } | null;
   /** Set when the amount came from the rate card: the cell and the routes
    *  it learned from. */
   rate?: { key: string; label: string; refs: RateCardRef[]; extraStops: number; extraStopAmount: number } | null;
@@ -3732,4 +3737,62 @@ export interface PaySuggestRequest {
 
 export interface PaySuggestResponse {
   suggestions: Record<string, PaySuggestion | null>;
+}
+
+// ── Standard pay by area (/payroll/routes → Map) ───────────────────────
+// Areas drawn on a map and pay per lane (from area → to area × kind).
+// See apps/api/src/lib/payAreas.ts.
+
+export interface PayAreaPoint { lat: number; lng: number }
+
+export interface PayArea {
+  id: number;
+  name: string;
+  color: string;
+  polygon: PayAreaPoint[];
+  /** Where trucks are based: lanes leaving it are outbound, coming back inbound. */
+  isHome: boolean;
+}
+
+/** outbound = leaving a home area, inbound = coming back to one, local =
+ *  within one area, through = neither end is home. */
+export type LaneDirection = 'outbound' | 'inbound' | 'local' | 'through';
+
+export interface PayLane {
+  id: number;
+  fromAreaId: number;
+  toAreaId: number;
+  kind: RateGroup;
+  amount: number;
+  /** Pay per stop past two on this lane; null = the general extra-stop amount. */
+  extraStop: number | null;
+  note: string | null;
+  setByName: string | null;
+  setAt: string;
+}
+
+/** A lane settled payroll has run, whether or not it has pay set. */
+export interface ObservedLane {
+  fromAreaId: number;
+  toAreaId: number;
+  kind: RateGroup;
+  /** Paid legs in settled payroll. */
+  legs: number;
+  /** Recent paid amounts across its routes, most common first. */
+  amounts: Array<{ amount: number; count: number }>;
+  /** Route standards inside it, most common first. */
+  standards: Array<{ amount: number; routes: number }>;
+  refs: RateCardRef[];
+}
+
+export interface PayMapResponse {
+  available: boolean;
+  areas: PayArea[];
+  lanes: PayLane[];
+  observed: ObservedLane[];
+  /** Stop locations with paid legs, for drawing (yards flagged). */
+  places: Array<{ id: number; name: string; lat: number; lng: number; isYard: boolean; legs: number }>;
+  /** Settled paid legs whose first or last stop is outside every area. */
+  legsOutsideAreas: number;
+  settledThrough: string | null;
 }

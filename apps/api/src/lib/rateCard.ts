@@ -39,7 +39,7 @@ export const DEFAULT_RATE_CONFIG: RateCardConfig = {
   regions: [], bands: [10, 30, 65, 105], excludeRoutes: [], excludeNames: [], overrides: {},
 };
 
-const GROUP_OF: Record<RouteLegKind, RateGroup> = {
+export const GROUP_OF: Record<RouteLegKind, RateGroup> = {
   pickup: "pickup", pickup_linehaul: "pickup",
   delivery: "delivery", linehaul_delivery: "delivery",
   whole_local: "whole", whole_long: "whole",

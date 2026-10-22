@@ -18,6 +18,7 @@ import { useCalendarStore } from '@/store/useCalendarStore';
 import type { CalendarEvent } from '@/lib/types';
 import { KIND_LABEL } from './SuggestedPay';
 import RateCardView from './RateCardView';
+import PayMapView from './PayMapView';
 
 const money = (n: number) => `$${Math.round(n).toLocaleString()}`;
 const shortDate = (d: string) => new Date(`${d.slice(0, 10)}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
@@ -42,7 +43,7 @@ export default function PayRoutesView() {
   const [kind, setKind] = useState<RouteLegKind | ''>('');
   const [minLegs, setMinLegs] = useState(3);
   const [open, setOpen] = useState<string | null>(null);
-  const [tab, setTab] = useState<'routes' | 'rate'>('routes');
+  const [tab, setTab] = useState<'map' | 'routes' | 'rate'>('map');
   const [variesOnly, setVariesOnly] = useState(false);
 
   // Open a paid leg's load in the load modal on this page. Older loads
@@ -107,10 +108,10 @@ export default function PayRoutesView() {
           </label>
         </div>
         <div className="flex items-center gap-1 mb-3">
-          {(['routes', 'rate'] as const).map((t) => (
+          {(['map', 'routes', 'rate'] as const).map((t) => (
             <button key={t} type="button" onClick={() => setTab(t)} className="px-3 py-1 rounded text-[12px] font-semibold"
               style={{ background: tab === t ? 'var(--gc-text-1)' : 'var(--gc-surface-2)', color: tab === t ? 'var(--gc-surface)' : 'var(--gc-text-2)' }}>
-              {t === 'routes' ? 'Routes' : 'Rate card'}
+              {t === 'map' ? 'Map' : t === 'routes' ? 'Routes' : 'Rate card'}
             </button>
           ))}
         </div>
@@ -138,6 +139,8 @@ export default function PayRoutesView() {
           <div className="flex items-center gap-2 p-6 text-[13px]" style={{ color: 'var(--gc-text-3)' }}>
             <Loader2 size={14} className="animate-spin" /> Loading routes…
           </div>
+        ) : tab === 'map' ? (
+          <PayMapView canEdit={canEdit} />
         ) : tab === 'rate' ? (
           <RateCardView card={data.rateCard} canEdit={canEdit} onSaved={reload} />
         ) : (

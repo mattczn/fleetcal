@@ -19,14 +19,16 @@
  */
 
 import type {
-  PayRoute, PayRouteExample, PayRoutesResponse, PaySuggestion, PaySuggestRequest, RateCardConfig, RouteLegKind, RoutePlace, Stop,
+  ObservedLane, PayArea, PayMapResponse, PayRoute, PayRouteExample, PayRoutesResponse, PaySuggestion, PaySuggestRequest,
+  RateCardConfig, RateCardRef, RateGroup, RouteLegKind, RoutePlace, Stop,
 } from "@fleetcal/types";
 import { isHandoffStop, stopsForLeg } from "@fleetcal/types";
 import { supabase as supabaseTyped } from "./supabase.js";
 import { fetchAllRows } from "./fetchAllRows.js";
 import { airMilesBetween } from "./airMiles.js";
 import { getHosConfig } from "./hosService.js";
-import { buildRateCard, readRateConfig, trainingPay, type RateCard, type RatePlace, type RateRoute } from "./rateCard.js";
+import { GROUP_OF, buildRateCard, readRateConfig, trainingPay, type RateCard, type RatePlace, type RateRoute } from "./rateCard.js";
+import { areaLocator, laneDirection, readAreasAndLanes } from "./payAreas.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const supabase = supabaseTyped as any;
@@ -418,6 +420,65 @@ async function rateCardFor(
   return buildRateCard(routes, cfg.config, cfg.available);
 }
 
+// ── Area lanes ──────────────────────────────────────────────────────────
+
+const tally = (xs: number[]) => {
+  const m = new Map<number, number>();
+  for (const x of xs) m.set(x, (m.get(x) ?? 0) + 1);
+  return [...m.entries()].sort((a, b) => b[1] - a[1] || b[0] - a[0]);
+};
+
+/** Settled paid legs grouped by the area lane they ran. */
+function observeLanes(h: History, std: Map<string, StandardRow>, names: Map<string, string>, locate: (pt: { lat: number; lng: number } | undefined) => PayArea | null) {
+  const placeById = new Map(h.places.map((p) => [p.id, p]));
+  const lanes = new Map<string, { fromAreaId: number; toAreaId: number; kind: RateGroup; amounts: number[]; standards: number[]; refs: RateCardRef[] }>();
+  let outside = 0;
+  for (const [key, legs] of h.byRoute) {
+    const r = legs[0].route;
+    const from = locate(placeById.get(r.placeIds[0]));
+    const to = locate(placeById.get(r.placeIds[r.placeIds.length - 1]));
+    if (!from || !to) { outside += legs.length; continue; }
+    const kind = GROUP_OF[r.kind];
+    const k = `${from.id}|${to.id}|${kind}`;
+    const lane = lanes.get(k) ?? { fromAreaId: from.id, toAreaId: to.id, kind, amounts: [], standards: [], refs: [] };
+    const st = statsOf(legs);
+    const standard = std.get(key);
+    lane.amounts.push(...legs.map((l) => Math.round(l.amount)));
+    if (standard) lane.standards.push(Number(standard.amount));
+    lane.refs.push({
+      routeKey: key, label: r.label, name: names.get(key) ?? null, cities: r.cities,
+      pay: standard ? Number(standard.amount) : st.usual ?? 0, legs: st.legs, standard: !!standard, stops: r.placeIds.length,
+    });
+    lanes.set(k, lane);
+  }
+  const observed: ObservedLane[] = [...lanes.values()].map((l) => ({
+    fromAreaId: l.fromAreaId, toAreaId: l.toAreaId, kind: l.kind, legs: l.amounts.length,
+    amounts: tally(l.amounts).map(([amount, count]) => ({ amount, count })),
+    standards: tally(l.standards).map(([amount, routes]) => ({ amount, routes })),
+    refs: l.refs.sort((a, b) => b.legs - a.legs),
+  })).sort((a, b) => b.legs - a.legs);
+  return { observed, outside };
+}
+
+/** Everything the map tab draws: areas, lanes, what settled pay ran, stop dots. */
+export async function payMap(orgId: string): Promise<PayMapResponse> {
+  const [h, std, names, al] = await Promise.all([history(orgId), standards(orgId), routeNames(orgId), readAreasAndLanes(orgId)]);
+  const locate = areaLocator(al.areas);
+  const { observed, outside } = observeLanes(h, std, names, (p) => locate(p ?? null));
+  const legsAt = new Map<number, number>();
+  for (const legs of h.byRoute.values()) for (const id of legs[0].route.placeIds) legsAt.set(id, (legsAt.get(id) ?? 0) + legs.length);
+  return {
+    available: al.available,
+    areas: al.areas,
+    lanes: al.lanes,
+    observed,
+    places: h.places.filter((p) => p.saved_location_id || (legsAt.get(p.id) ?? 0) > 0)
+      .map((p) => ({ id: p.id, name: p.name, lat: p.lat, lng: p.lng, isYard: !!p.saved_location_id, legs: legsAt.get(p.id) ?? 0 })),
+    legsOutsideAreas: outside,
+    settledThrough: h.settledThrough,
+  };
+}
+
 // ── Public ──────────────────────────────────────────────────────────────
 
 export async function listPayRoutes(orgId: string): Promise<PayRoutesResponse> {
@@ -473,8 +534,10 @@ const round5 = (n: number) => Math.max(0, Math.round(n / 5) * 5);
 export async function suggestPay(
   orgId: string, req: PaySuggestRequest, opts: { config?: RateCardConfig } = {},
 ): Promise<Record<string, PaySuggestion | null>> {
-  const [h, std, names] = await Promise.all([history(orgId), standards(orgId), routeNames(orgId)]);
+  const [h, std, names, al] = await Promise.all([history(orgId), standards(orgId), routeNames(orgId), readAreasAndLanes(orgId)]);
   const card = await rateCardFor(orgId, h, std, names, opts.config);
+  const locate = areaLocator(al.areas);
+  const laneRefs = al.lanes.length ? observeLanes(h, std, names, (p) => locate(p ?? null)).observed : [];
 
   // Legs given by event id: load their leg index and stops.
   const eventIds = req.legs.filter((l) => l.eventId && !l.stops).map((l) => l.eventId!);
@@ -531,9 +594,28 @@ export async function suggestPay(
       rate: { key: rate!.key, label: rate!.label, refs: rate!.refs.slice(0, 8), extraStops: rate!.extraStops, extraStopAmount: rate!.extraStopAmount },
     });
     const routeUsual = routeStats.legs >= MIN_LEGS && routeStats.usual != null;
+    // Your area lane: first stop's area → last stop's area, by kind.
+    const fromArea = locate(placeById.get(route.placeIds[0]) ?? null);
+    const toArea = locate(placeById.get(route.placeIds[route.placeIds.length - 1]) ?? null);
+    const laneKind = GROUP_OF[route.kind];
+    const lane = fromArea && toArea
+      ? al.lanes.find((l) => l.fromAreaId === fromArea.id && l.toAreaId === toArea.id && l.kind === laneKind) ?? null
+      : null;
     if (standard) {
       out[leg.key] = { ...base, amount: Number(standard.amount), source: "standard", note: standard.note,
         legs: routeStats.legs, usual: routeStats.usual, usualShare: routeStats.usualShare, examples: routeStats.examples };
+    } else if (lane && fromArea && toArea) {
+      const extraStops = Math.max(0, route.placeIds.length - 2);
+      const extra = lane.extraStop ?? card.response.extraStop.value;
+      out[leg.key] = {
+        ...base, amount: lane.amount + extraStops * extra, source: "lane", note: lane.note,
+        legs: routeStats.legs, usual: routeStats.usual, usualShare: routeStats.usualShare, examples: routeStats.examples,
+        lane: {
+          fromArea: fromArea.name, toArea: toArea.name, kind: laneKind, direction: laneDirection(fromArea, toArea),
+          base: lane.amount, extraStops, extraStopAmount: extra,
+          refs: laneRefs.find((o) => o.fromAreaId === fromArea.id && o.toAreaId === toArea.id && o.kind === laneKind)?.refs.slice(0, 8) ?? [],
+        },
+      };
     } else if (routeUsual) {
       out[leg.key] = { ...base, amount: routeStats.usual!, source: "route", note: null,
         legs: routeStats.legs, usual: routeStats.usual, usualShare: routeStats.usualShare, examples: routeStats.examples };

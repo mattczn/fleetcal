@@ -8,6 +8,11 @@
  *   PUT   /name             { routeKey, name | null } — null clears
  *   PUT   /rate-config      partial rate card settings (regions, bands,
  *                           excludeRoutes, excludeNames, overrides)
+ *   GET   /map              areas, lanes, lanes settled pay ran, stop dots
+ *   POST  /areas            { name, color?, polygon }
+ *   PATCH /areas/:id        { name?, color?, polygon? }
+ *   DELETE /areas/:id       (its lanes go with it)
+ *   PUT   /lanes            { fromAreaId, toAreaId, kind, amount | null, note? }
  *   PATCH /places/:id       { name }
  *
  * Suggestions are for anyone who can see driver pay (they show next to the
@@ -15,12 +20,13 @@
  * standards are payroll's.
  */
 
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import type { ApiErrorResponse, PaySuggestRequest } from "@fleetcal/types";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireAnyCapability, requireCapability, requireModule } from "../middleware/require.js";
 import { getUserDisplayName } from "../lib/clerk.js";
-import { RoutePayUnavailableError, listPayRoutes, renamePlace, setRouteName, setRouteStandard, suggestPay } from "../lib/routePay.js";
+import { RoutePayUnavailableError, listPayRoutes, payMap, renamePlace, setRouteName, setRouteStandard, suggestPay } from "../lib/routePay.js";
+import { PayAreasUnavailableError, createArea, deleteArea, setLane, updateArea } from "../lib/payAreas.js";
 import { mergeRateConfig, readRateConfig, writeRateConfig } from "../lib/rateCard.js";
 
 const payRoutes = new Hono<{ Variables: AuthVariables }>();
@@ -110,6 +116,47 @@ payRoutes.put("/rate-config", requireCapability("payroll.adjust"), async (c) => 
     const f = fail(err);
     return c.json(f.body, f.status);
   }
+});
+
+payRoutes.get("/map", requireCapability("payroll.access"), async (c) => {
+  try {
+    return c.json(await payMap(c.get("orgId")));
+  } catch (err) {
+    const f = fail(err);
+    return c.json(f.body, f.status);
+  }
+});
+
+/** Area / lane writes: validation → 400, missing tables → 409. */
+const areaWrite = async (c: Context<{ Variables: AuthVariables }>, run: (byName: string | null) => Promise<unknown>) => {
+  try {
+    const result = await run(await getUserDisplayName(c.get("userId")).catch(() => null));
+    return c.json(result ?? { ok: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.startsWith("validation:")) return c.json({ error: "validation_failed", errors: [msg.slice(12)] } satisfies ApiErrorResponse, 400);
+    if (err instanceof PayAreasUnavailableError) return c.json({ error: "pay_areas_unavailable", detail: msg } satisfies ApiErrorResponse, 409);
+    const f = fail(err);
+    return c.json(f.body, f.status);
+  }
+};
+
+payRoutes.post("/areas", requireCapability("payroll.adjust"), async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  return areaWrite(c, (by) => createArea(c.get("orgId"), body, by).then((area) => ({ area })));
+});
+
+payRoutes.patch("/areas/:id", requireCapability("payroll.adjust"), async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  return areaWrite(c, (by) => updateArea(c.get("orgId"), Number(c.req.param("id")), body, by));
+});
+
+payRoutes.delete("/areas/:id", requireCapability("payroll.adjust"), async (c) =>
+  areaWrite(c, () => deleteArea(c.get("orgId"), Number(c.req.param("id")))));
+
+payRoutes.put("/lanes", requireCapability("payroll.adjust"), async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  return areaWrite(c, (by) => setLane(c.get("orgId"), body, by));
 });
 
 payRoutes.patch("/places/:id", requireCapability("payroll.adjust"), async (c) => {

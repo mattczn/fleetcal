@@ -97,6 +97,7 @@ import type {
   LinkReviewListResponse, LinkReviewEntry, LinkReviewVerdictRequest, LoadTrailResponse,
   TruckProfitPay, TruckProfitResponse,
   PayRoutesResponse, PaySuggestRequest, PaySuggestResponse, RateCardConfig, RateCardConfigPatch,
+  PayMapResponse, PayArea, PayAreaPoint, RateGroup,
   ListRecurringExpensesResponse, CreateRecurringExpenseRequest,
   UpdateRecurringExpenseRequest, RecurringExpenseResponse,
   ListExpenseEntriesRequest, ListExpenseEntriesResponse,
@@ -2062,6 +2063,28 @@ class RailwayClient {
   /** Set (or with null, clear) a route's standard pay. */
   setRouteStandard(routeKey: string, amount: number | null, note?: string | null) {
     return this.req<{ ok: true }>('PUT', '/v1/pay-routes/standard', { routeKey, amount, note: note ?? null });
+  }
+
+  /** Areas, lanes, the lanes settled pay ran, and stop dots for the map. */
+  getPayMap() {
+    return this.req<PayMapResponse>('GET', '/v1/pay-routes/map');
+  }
+
+  createPayArea(body: { name: string; color?: string; polygon: PayAreaPoint[]; isHome?: boolean }) {
+    return this.req<{ area: PayArea }>('POST', '/v1/pay-routes/areas', body);
+  }
+
+  updatePayArea(id: number, body: { name?: string; color?: string; polygon?: PayAreaPoint[]; isHome?: boolean }) {
+    return this.req<{ ok: true }>('PATCH', `/v1/pay-routes/areas/${id}`, body);
+  }
+
+  deletePayArea(id: number) {
+    return this.req<{ ok: true }>('DELETE', `/v1/pay-routes/areas/${id}`);
+  }
+
+  /** Set (or with amount null, clear) the pay for an area lane. */
+  setPayLane(body: { fromAreaId: number; toAreaId: number; kind: RateGroup; amount: number | null; extraStop?: number | null; note?: string | null }) {
+    return this.req<{ ok: true }>('PUT', '/v1/pay-routes/lanes', body);
   }
 
   /** Change rate card settings (overrides, exclusions, regions, bands). */
