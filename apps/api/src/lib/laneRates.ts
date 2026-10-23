@@ -28,6 +28,7 @@ import { computeWeeklyTarget, readSettings } from "./weeklyTarget.js";
 import { areaLocator, laneDirection, readAreasAndLanes } from "./payAreas.js";
 import { readRateConfig } from "./rateCard.js";
 import { fetchLegActuals } from "./legTime.js";
+import { staleCache } from "./staleCache.js";
 import { isExcludedEvent, loadExcludedAssetIds, loadExcludedDrivers } from "./reportExclusions.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -68,7 +69,22 @@ export function laneCostParams(p: WeeklyTargetResponse["params"]) {
   };
 }
 
-export async function laneRates(orgId: string): Promise<LaneRatesResponse> {
+const cache = staleCache(buildLaneRates, 10 * 60_000, 12 * 3_600_000);
+
+/** Lane rates — from memory, rebuilt in the background every few minutes;
+ *  your targets and ranking are read fresh on every call. */
+export async function laneRates(orgId: string, opts: { fresh?: boolean } = {}): Promise<LaneRatesResponse> {
+  const [r, cfg] = await Promise.all([cache.get(orgId, opts), readRateConfig(orgId)]);
+  return {
+    ...r,
+    corridorOrder: cfg.config.corridorOrder ?? [],
+    pairs: r.pairs.map((p) => ({ ...p, yourTarget: cfg.config.pairTargets?.[p.key] ?? null })),
+  };
+}
+/** Rebuild now — areas or lane pay changed. */
+export const invalidateLaneRates = (orgId: string) => cache.invalidate(orgId);
+
+async function buildLaneRates(orgId: string): Promise<LaneRatesResponse> {
   const today = new Date().toISOString().slice(0, 10);
   const since = new Date(Date.now() - LOOKBACK_DAYS * 86_400_000).toISOString().slice(0, 10);
   const [wt, al, cfg, stored, excluded, excludedAssets] = await Promise.all([

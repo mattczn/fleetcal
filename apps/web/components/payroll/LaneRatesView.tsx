@@ -20,16 +20,19 @@ const PAY_BASIS: Record<LaneRatePair['cost']['driverPayBasis'], string> = {
   paid: 'median paid',
   percent: 'dashboard pay %',
 };
+// The last result, so switching tabs shows it at once while it refreshes.
+let lastRates: LaneRatesResponse | null = null;
+
 /** What a quote should aim for: yours, else the round trip's share, else the lane's own. */
 const quoteTarget = (p: LaneRatePair) => p.yourTarget ?? p.balancedTarget ?? p.target;
 
 export default function LaneRatesView({ canEdit }: { canEdit: boolean }) {
   const [tick, setTick] = useState(0);
-  const [result, setResult] = useState<{ data?: LaneRatesResponse; error?: string } | null>(null);
+  const [result, setResult] = useState<{ data?: LaneRatesResponse; error?: string } | null>(() => (lastRates ? { data: lastRates } : null));
   useEffect(() => {
     let cancelled = false;
     railway.getLaneRates()
-      .then((data) => { if (!cancelled) setResult({ data }); })
+      .then((data) => { lastRates = data; if (!cancelled) setResult({ data }); })
       .catch((e) => { if (!cancelled) setResult({ error: e instanceof Error ? e.message : 'Failed to load' }); });
     return () => { cancelled = true; };
   }, [tick]);

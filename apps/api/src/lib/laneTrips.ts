@@ -46,6 +46,7 @@ import { areaLocator, readAreasAndLanes } from "./payAreas.js";
 import { laneCostParams } from "./laneRates.js";
 import { H, fetchLegActuals, legWindow, timeShares, wallStr } from "./legTime.js";
 import { getHosConfig } from "./hosService.js";
+import { staleCache } from "./staleCache.js";
 import { isExcludedEvent, loadExcludedAssetIds, loadExcludedDrivers } from "./reportExclusions.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -58,7 +59,8 @@ const EMPTY_MPH = 50;
 const SHUTTLE_MILES = 50;
 /** Payroll adjustment categories that are pay for the trip, not a load. */
 const TRIP_PAY_CATEGORIES = new Set(["layover", "detention"]);
-const CACHE_MS = 10 * 60_000;
+const FRESH_MS = 10 * 60_000;
+const MAX_AGE_MS = 12 * 3_600_000;
 const CHUNK = 150;
 
 type Pt = { lat: number; lng: number };
@@ -82,17 +84,14 @@ interface DriverLeg {
   loadedMiles: number; shuttleMiles: number; gpsDeadhead: number | null; gpsReturn: number | null;
 }
 
-const cache = new Map<string, { at: number; value: Promise<LaneTripsResponse> }>();
+const cache = staleCache(buildTrips, FRESH_MS, MAX_AGE_MS);
 
-/** Trips for the org, cached for a few minutes (it reads half a year of loads). */
+/** Trips for the org — from memory, rebuilt in the background every few minutes. */
 export function laneTrips(orgId: string, opts: { fresh?: boolean } = {}): Promise<LaneTripsResponse> {
-  const hit = cache.get(orgId);
-  if (hit && !opts.fresh && Date.now() - hit.at < CACHE_MS) return hit.value;
-  const value = buildTrips(orgId);
-  cache.set(orgId, { at: Date.now(), value });
-  value.catch(() => cache.delete(orgId));
-  return value;
+  return cache.get(orgId, opts);
 }
+/** Rebuild now — areas changed. */
+export const invalidateLaneTrips = (orgId: string) => cache.invalidate(orgId);
 
 async function buildTrips(orgId: string): Promise<LaneTripsResponse> {
   const today = new Date().toISOString().slice(0, 10);

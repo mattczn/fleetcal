@@ -2093,8 +2093,8 @@ class RailwayClient {
   }
 
   /** Quote targets by region pair (Lanes page). */
-  getLaneRates() {
-    return this.req<LaneRatesResponse>('GET', '/v1/lanes/rates');
+  getLaneRates(fresh = false) {
+    return this.req<LaneRatesResponse>('GET', `/v1/lanes/rates${fresh ? '?fresh=1' : ''}`);
   }
 
   /** Drivers' trips from a home base and back, grouped into circuits (cached ~10 min; fresh rebuilds). */

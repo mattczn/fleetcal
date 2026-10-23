@@ -30,6 +30,8 @@ import { getUserDisplayName } from "../lib/clerk.js";
 import { RoutePayUnavailableError, listPayRoutes, payMap, renamePlace, setRouteName, setRouteStandard, suggestPay } from "../lib/routePay.js";
 import { PayAreasUnavailableError, createArea, deleteArea, setLane, updateArea } from "../lib/payAreas.js";
 import { mergeRateConfig, readRateConfig, writeRateConfig } from "../lib/rateCard.js";
+import { invalidateLaneRates } from "../lib/laneRates.js";
+import { invalidateLaneTrips } from "../lib/laneTrips.js";
 
 const payRoutes = new Hono<{ Variables: AuthVariables }>();
 payRoutes.use("*", requireModule("payroll"));
@@ -133,6 +135,8 @@ payRoutes.get("/map", requireCapability("payroll.access"), async (c) => {
 const areaWrite = async (c: Context<{ Variables: AuthVariables }>, run: (byName: string | null) => Promise<unknown>) => {
   try {
     const result = await run(await getUserDisplayName(c.get("userId")).catch(() => null));
+    invalidateLaneRates(c.get("orgId"));
+    invalidateLaneTrips(c.get("orgId"));
     return c.json(result ?? { ok: true });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

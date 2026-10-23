@@ -18,6 +18,8 @@ const money = (n: number) => `${n < 0 ? '−' : ''}$${Math.abs(Math.round(n)).to
 const day = (s: string) => new Date(`${s.slice(0, 10)}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
 const LEG_COLORS = ['#1a73e8', '#d97706', '#16a34a', '#9333ea', '#dc2626', '#0891b2'];
 const MAX_COMPARE = 4;
+// The last result, so switching tabs shows it at once while it refreshes.
+let lastTrips: LaneTripsResponse | null = null;
 
 const chain = (nodes: LaneCircuitNode[], open = false) => (
   <span>
@@ -54,12 +56,13 @@ interface CompareItem { id: string; title: React.ReactNode; sub: string; totals:
 
 export default function LaneTripsView({ canEdit }: { canEdit: boolean }) {
   const [fresh, setFresh] = useState(0);
-  const [result, setResult] = useState<{ data?: LaneTripsResponse; error?: string } | null>(null);
+  const [result, setResult] = useState<{ data?: LaneTripsResponse; error?: string } | null>(() => (lastTrips ? { data: lastTrips } : null));
+  const [refreshing, setRefreshing] = useState(false);
   useEffect(() => {
     let cancelled = false;
     railway.getLaneTrips(fresh > 0)
-      .then((data) => { if (!cancelled) setResult({ data }); })
-      .catch((e) => { if (!cancelled) setResult({ error: e instanceof Error ? e.message : 'Failed to load' }); });
+      .then((data) => { lastTrips = data; if (!cancelled) { setResult({ data }); setRefreshing(false); } })
+      .catch((e) => { if (!cancelled) { setResult({ error: e instanceof Error ? e.message : 'Failed to load' }); setRefreshing(false); } });
     return () => { cancelled = true; };
   }, [fresh]);
   const data = result?.data ?? null;
@@ -68,6 +71,7 @@ export default function LaneTripsView({ canEdit }: { canEdit: boolean }) {
   const saveTypes = async (next: TripType[]) => {
     const { tripTypes: saved } = await railway.setTripTypes(next);
     setTypes(saved);
+    if (lastTrips) lastTrips = { ...lastTrips, tripTypes: saved };
   };
 
   const [search, setSearch] = useState('');
@@ -160,9 +164,10 @@ export default function LaneTripsView({ canEdit }: { canEdit: boolean }) {
           <input type="checkbox" checked={showOpen} onChange={(e) => setShowOpen(e.target.checked)} />
           Trips not back yet ({data.openTrips})
         </label>
-        <button type="button" onClick={() => setFresh((n) => n + 1)} className="flex items-center gap-1 text-[12px] ml-auto" style={{ color: 'var(--gc-text-3)' }}
-          title="Rebuild from the latest loads (otherwise up to 10 minutes old)">
-          <RefreshCw size={12} /> Refresh
+        <button type="button" disabled={refreshing} onClick={() => { setRefreshing(true); setFresh((n) => n + 1); }}
+          className="flex items-center gap-1 text-[12px] ml-auto" style={{ color: 'var(--gc-text-3)' }}
+          title="Rebuild from the latest loads now (otherwise it refreshes itself every 10 minutes)">
+          <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''} /> {refreshing ? 'Rebuilding…' : 'Refresh'}
         </button>
       </div>
 

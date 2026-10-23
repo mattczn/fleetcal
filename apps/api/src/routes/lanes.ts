@@ -1,10 +1,12 @@
 /**
  * /v1/lanes — quote targets by region pair (lib/laneRates.ts).
  *
- *   GET  /rates       market, cost, break-even and target per region pair
+ *   GET  /rates       market, cost, break-even and target per region pair; ?fresh=1 skips the cache
  *   PUT  /targets     { key: 'fromAreaId>toAreaId', amount | null } — null clears
- *   GET  /trips       drivers' trips from a home base and back, grouped into
+ *   GET  /trips       drivers' trips from the base and back, grouped into
  *                     circuits (lib/laneTrips.ts); ?fresh=1 skips the cache
+ *
+ * Both are kept in memory and rebuilt in the background (lib/staleCache.ts).
  *   PUT  /trip-types  { tripTypes } — the whole list of named trips
  *
  * For anyone who can see load prices; writes also need loads.edit.
@@ -23,9 +25,11 @@ import { mergeRateConfig, readRateConfig, writeRateConfig } from "../lib/rateCar
 
 const lanes = new Hono<{ Variables: AuthVariables }>();
 
-lanes.get("/rates", requireCapability("loads.view_price"), async (c) => {
+lanes.get("/rates", requireCapability("loads.view_price"), compress(), async (c) => {
   try {
-    return c.json(await laneRates(c.get("orgId")));
+    // Warm trips too — the Trips tab is usually next.
+    laneTrips(c.get("orgId")).catch(() => undefined);
+    return c.json(await laneRates(c.get("orgId"), { fresh: c.req.query("fresh") === "1" }));
   } catch (err) {
     console.error("[lanes] rates failed:", err);
     return c.json({ error: "lane_rates_failed", detail: err instanceof Error ? err.message : String(err) } satisfies ApiErrorResponse, 500);
