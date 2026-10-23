@@ -19,7 +19,9 @@
  *            deadhead / return miles where the leg is linked, else
  *            straight-line × ROAD_FACTOR between the stops (yard moves at
  *            the base are left to local work)
- *   relays   a load's rate is split by truck time across its linehaul legs;
+ *   relays   a load's rate is split across its linehaul legs by what each
+ *            leg's lane usually pays as a whole load (else by miles at the
+ *            load's $/mi) — truck time misprices legs that sit in a yard;
  *            a short relay shuttle (≤ SHUTTLE_MILES) earns nothing itself —
  *            its pay, miles and truck time ride on the linehaul as cost
  *   cost     driver pay (payroll's per-leg amount, else the calendar's,
@@ -44,7 +46,7 @@ import { SHORT_HAUL_RADIUS_MILES, airMilesBetween } from "./airMiles.js";
 import { computeWeeklyTarget, saturdayOf } from "./weeklyTarget.js";
 import { areaLocator, readAreasAndLanes } from "./payAreas.js";
 import { laneCostParams } from "./laneRates.js";
-import { H, fetchLegActuals, legWindow, timeShares, wallStr } from "./legTime.js";
+import { H, fetchLegActuals, legWindow, wallStr } from "./legTime.js";
 import { getHosConfig } from "./hosService.js";
 import { staleCache } from "./staleCache.js";
 import { isExcludedEvent, loadExcludedAssetIds, loadExcludedDrivers } from "./reportExclusions.js";
@@ -57,6 +59,7 @@ const MAX_GAP_DAYS = 4;
 const ROAD_FACTOR = 1.2;
 const EMPTY_MPH = 50;
 const SHUTTLE_MILES = 50;
+const MIN_MARKET_LOADS = 3;
 /** Payroll adjustment categories that are pay for the trip, not a load. */
 const TRIP_PAY_CATEGORIES = new Set(["layover", "detention"]);
 const FRESH_MS = 10 * 60_000;
@@ -78,7 +81,8 @@ type StopRow = { event_id: string; sequence: number; type: Stop["type"]; is_hand
 /** One leg a driver drove, ready to chain. */
 interface DriverLeg {
   ev: Ev; a: number; b: number; path: Pt[]; first: StopRow; last: StopRow;
-  revenue: number; share: number; rate: number; pay: number; payBasis: LaneTripLeg["payBasis"];
+  revenue: number; share: number; shareBasis: LaneTripLeg["shareBasis"]; split: LaneTripLeg["split"];
+  rate: number; pay: number; payBasis: LaneTripLeg["payBasis"];
   /** A relay shuttle: no revenue of its own; its cost rides on the linehaul (relayCost). */
   shuttle: boolean; relayCost: number;
   loadedMiles: number; shuttleMiles: number; gpsDeadhead: number | null; gpsReturn: number | null;
@@ -142,16 +146,36 @@ async function buildTrips(orgId: string): Promise<LaneTripsResponse> {
 
   const [actuals, { byEvent: payByEvent, tripPay }] = await Promise.all([fetchLegActuals(events.map((e) => e.id)), payrollPay(orgId, since)]);
 
-  // Legs by driver. A relay load's rate is split by truck time across its
-  // linehaul legs; short relay shuttles (≤ SHUTTLE_MILES, e.g. a Vegas
-  // pickup to the yard) earn nothing themselves — their pay, miles and truck
-  // time are charged to the linehaul legs instead.
+  // Legs by driver. A relay load's rate is split across its linehaul legs by
+  // what each leg's lane usually pays on its own (Vegas → SLC ≈ $1,600),
+  // else by its miles at the load's rate per mile. Short relay shuttles
+  // (≤ SHUTTLE_MILES, e.g. a Vegas pickup to the yard) earn nothing
+  // themselves — their pay, miles and truck time are charged to the linehaul.
   const byDriver = new Map<string, DriverLeg[]>();
   const perMile = params.fuelPerMile + params.maintPerMile;
+  const placeName = (s: StopRow | undefined) => {
+    if (!s) return "?";
+    const a = locate({ lat: Number(s.lat), lng: Number(s.lng) });
+    return a?.name ?? ([s.city, s.state].filter(Boolean).join(", ") || "?");
+  };
+  const pairKey = (a: StopRow | undefined, b: StopRow | undefined) => {
+    const A = a && locate({ lat: Number(a.lat), lng: Number(a.lng) });
+    const B = b && locate({ lat: Number(b.lat), lng: Number(b.lng) });
+    return A && B ? `${A.id}>${B.id}` : null;
+  };
   const loads = [...byLoad.values()].map((legs) => prepareLoad(legs)).filter((x): x is NonNullable<typeof x> => !!x);
   // What a shuttle usually pays, for shuttles without a recorded amount.
   const shuttlePays = loads.flatMap((x) => x.info.filter((_, i) => x.shuttle[i]).map((y) => y.recorded?.[0]).filter((v): v is number => v != null && v > 0)).sort((a, b) => a - b);
   const typicalShuttlePay = shuttlePays.length ? shuttlePays[Math.floor(shuttlePays.length / 2)] : 100;
+  // What each area pair usually pays as a whole load (3+ loads).
+  const ratesOfPair = new Map<string, number[]>();
+  for (const x of loads) if (x.wholeKey && x.rate > 0) ratesOfPair.set(x.wholeKey, [...(ratesOfPair.get(x.wholeKey) ?? []), x.rate]);
+  const pairMarket = new Map<string, number>();
+  for (const [k, rs] of ratesOfPair) {
+    if (rs.length < MIN_MARKET_LOADS) continue;
+    const s = [...rs].sort((a, b) => a - b);
+    pairMarket.set(k, s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2);
+  }
 
   function prepareLoad(legs: Ev[]) {
     const all = (stopsOf.get(legs[0].id) ?? []).map((s) => ({ ...s, isHandoff: s.is_handoff ?? undefined }));
@@ -159,7 +183,6 @@ async function buildTrips(orgId: string): Promise<LaneTripsResponse> {
     const rate = Number(legs[0].loads?.total_billable ?? legs[0].loads?.load_price ?? 0);
     const everyLegPriced = legs.every((l) => l.driver_pay != null);
     const windows = legs.map((l) => legWindow({ calStart: l.start, calEnd: l.end, actual: actuals.get(l.id), cls: "otr", tz: hos.timeZone }));
-    const timeShare = timeShares(windows);
     const info = legs.map((l, i) => {
       const seg = (legs.length > 1 ? stopsForLeg(all, l.leg_index ?? i) : all).filter((s) => s.lat != null && s.lng != null);
       const path = seg.map((s) => ({ lat: Math.round(Number(s.lat) * 1e4) / 1e4, lng: Math.round(Number(s.lng) * 1e4) / 1e4 }));
@@ -174,11 +197,27 @@ async function buildTrips(orgId: string): Promise<LaneTripsResponse> {
     });
     const shuttle = info.map((x) => legs.length > 1 && x.miles <= SHUTTLE_MILES);
     if (shuttle.every(Boolean)) shuttle.fill(false);
-    return { legs, rate, windows, timeShare, info, shuttle };
+    const located = all.filter((s) => s.lat != null && s.lng != null);
+    return { legs, rate, windows, info, shuttle, wholeKey: pairKey(located[0], located[located.length - 1]) };
   }
 
   for (const { rate, windows, info, shuttle } of loads) {
-    const lineShare = timeShares(windows.map((w, i) => (shuttle[i] ? { a: 0, b: 0 } : w)));
+    // Each linehaul leg's value: its lane's usual rate, else miles × the load's $/mi.
+    const lineMiles = info.reduce((s, x, i) => s + (shuttle[i] ? 0 : x.miles), 0);
+    const valued = info.map((x, i) => {
+      if (shuttle[i]) return { value: 0, basis: "shuttle" as const };
+      if (info.length === 1) return { value: rate, basis: "whole" as const };
+      const market = pairMarket.get(pairKey(x.seg[0], x.seg[x.seg.length - 1]) ?? "");
+      return market != null ? { value: market, basis: "market" as const } : { value: lineMiles > 0 ? (x.miles * rate) / lineMiles : 0, basis: "miles" as const };
+    });
+    const totalValue = valued.reduce((s, v) => s + v.value, 0);
+    const lines = shuttle.filter((x) => !x).length;
+    const lineShare = valued.map((v, i) => (shuttle[i] ? 0 : totalValue > 0 ? v.value / totalValue : 1 / lines));
+    const split: LaneTripLeg["split"] = info.length > 1 ? info.map((x, i) => ({
+      eventId: x.l.id, driver: x.l.driver_name?.trim() || null,
+      from: placeName(x.seg[0]), to: placeName(x.seg[x.seg.length - 1]),
+      value: r0(rate * lineShare[i]), basis: valued[i].basis === "whole" ? "market" : valued[i].basis,
+    })) : null;
     const relayCost = info.reduce((sum, x, i) => {
       if (!shuttle[i]) return sum;
       const pay = x.recorded?.[0] ?? typicalShuttlePay;
@@ -196,7 +235,7 @@ async function buildTrips(orgId: string): Promise<LaneTripsResponse> {
       byDriver.set(driver, [...(byDriver.get(driver) ?? []), {
         ev: l, a: windows[i].a, b: windows[i].b,
         path, first: seg[0], last: seg[seg.length - 1],
-        revenue, share: shuttle[i] ? 0 : lineShare[i], rate, pay, payBasis,
+        revenue, share: shuttle[i] ? 0 : lineShare[i], shareBasis: valued[i].basis, split, rate, pay, payBasis,
         shuttle: shuttle[i], relayCost: shuttle[i] ? 0 : relayCost * lineShare[i],
         loadedMiles: shuttle[i] ? 0 : x.miles, shuttleMiles: shuttle[i] ? x.miles : 0,
         gpsDeadhead: la?.deadhead_miles != null ? Number(la.deadhead_miles) : null,
@@ -271,7 +310,7 @@ async function buildTrips(orgId: string): Promise<LaneTripsResponse> {
         from: fromA?.name ?? [l.first.city, l.first.state].filter(Boolean).join(", "),
         to: toA?.name ?? [l.last.city, l.last.state].filter(Boolean).join(", "),
         fromAreaId: fromA?.id ?? null, toAreaId: toA?.id ?? null,
-        rate: r0(l.rate), share: r2(l.share), revenue: r0(l.revenue), driverPay: r0(l.pay), payBasis: l.payBasis,
+        rate: r0(l.rate), share: r2(l.share), shareBasis: l.shareBasis, split: l.split, revenue: r0(l.revenue), driverPay: r0(l.pay), payBasis: l.payBasis,
         shuttle: l.shuttle, relayCost: r0(l.relayCost),
         loadedMiles: r0(l.loadedMiles || l.shuttleMiles), emptyMilesBefore: r0(before), path: l.path,
       };

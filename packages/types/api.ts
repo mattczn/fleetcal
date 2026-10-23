@@ -3925,9 +3925,13 @@ export interface LaneTripLeg {
   to: string;
   fromAreaId: number | null;
   toAreaId: number | null;
-  /** The load's rate, and this leg's share of it by truck time. */
+  /** The load's rate, and this leg's share of it. */
   rate: number;
   share: number;
+  /** How the share was set: whole load; the leg's lane's usual rate; its miles; a relay shuttle (none). */
+  shareBasis: 'whole' | 'market' | 'miles' | 'shuttle';
+  /** Every leg of a relay load: who drove it and what it was valued at. */
+  split: Array<{ eventId: string; driver: string | null; from: string; to: string; value: number; basis: 'market' | 'miles' | 'shuttle' }> | null;
   revenue: number;
   driverPay: number;
   payBasis: 'payroll' | 'calendar' | 'percent';

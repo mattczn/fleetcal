@@ -148,8 +148,9 @@ export default function LaneTripsView({ canEdit }: { canEdit: boolean }) {
           adds your {Math.round(p.margin * 100)}% margin.
         </div>
         <div>
-          On a relay, the load&apos;s rate is split by truck time between linehaul legs; short shuttles (a Vegas pickup to the yard) earn
-          nothing themselves — their pay, miles and truck time are charged to the linehaul. Name a trip to set its standard driver pay.
+          On a relay, the load&apos;s rate is split between the drivers&apos; linehaul legs by what each leg&apos;s lane usually pays on its own
+          (Vegas → SLC ≈ $1,600), else by miles; short shuttles (a Vegas pickup to the yard) earn nothing themselves — their pay, miles and
+          truck time are charged to the linehaul. Name a trip to set its standard driver pay.
         </div>
       </div>
       <div className="flex items-center gap-2 mb-3 flex-wrap">
@@ -294,8 +295,17 @@ function TripList({ trips, compare, onCompare, onMap, circuitByKey, showChain }:
                   {t.legs.map((l) => (
                     <div key={l.eventId} style={{ color: l.shuttle ? 'var(--gc-text-3)' : 'var(--gc-text-2)' }}>
                       {l.loadNum ? `#${l.loadNum} ` : ''}{l.from} → {l.to}
-                      {l.shuttle ? ' · relay shuttle' : <> · {money(l.rate)}{l.share < 0.99 ? ` (${Math.round(l.share * 100)}%)` : ''}</>}
+                      {l.shuttle ? ' · relay shuttle (its cost rides on the linehaul)'
+                        : l.split ? <> · {money(l.rate)} load, this part {money(l.revenue)}
+                          <span style={{ color: 'var(--gc-text-3)' }} title={l.shareBasis === 'market' ? "What this leg's lane usually pays on its own" : "This leg's miles at the load's rate per mile"}>
+                            {' '}({l.shareBasis === 'market' ? 'lane rate' : 'by miles'})</span></>
+                        : <> · {money(l.rate)}</>}
                       {l.emptyMilesBefore ? <span style={{ color: 'var(--gc-text-3)' }}> · {l.emptyMilesBefore} empty mi before</span> : null}
+                      {l.split ? (
+                        <div className="pl-3" style={{ fontSize: 11, color: 'var(--gc-text-3)' }}>
+                          {l.split.filter((s) => s.eventId !== l.eventId).map((s) => `${s.driver ?? 'No driver'}: ${s.from} → ${s.to}${s.basis === 'shuttle' ? ' (shuttle)' : ` ${money(s.value)}`}`).join(' · ')}
+                        </div>
+                      ) : null}
                     </div>
                   ))}
                 </td>
