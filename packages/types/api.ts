@@ -3676,6 +3676,21 @@ export interface RateCardConfig {
   areaExtraStops?: Record<string, number>;
   /** Lanes page: the quote target you set for a region pair ('fromAreaId>toAreaId' → $). */
   pairTargets?: Record<string, number>;
+  /** Lanes → Trips: named trips and their standard driver pay. */
+  tripTypes?: TripType[];
+}
+
+/** A named trip (e.g. "SLC ↔ Vegas turn") and what a driver is paid for it. */
+export interface TripType {
+  id: string;
+  name: string;
+  /** Circuits recognized as this trip (LaneCircuit.key). */
+  circuitKeys: string[];
+  /** Standard driver pay for each loaded step of the first circuit, in order. */
+  legPay: number[];
+  /** Layover / downtime pay for the trip. */
+  layover: number;
+  note?: string | null;
 }
 
 /** A partial settings change; an override of null clears it. */
@@ -3870,4 +3885,101 @@ export interface LaneRatesResponse {
     drivenPer: { local: number; otr: number };
   };
   corridorOrder: string[];
+}
+
+/** Lanes → Trips: a driver's loads from leaving a home base to getting back. */
+export interface LaneTripTotals {
+  revenue: number;
+  driverPay: number;
+  /** Layover / detention pay (payroll adjustments for the trip, not a load). */
+  layover: number;
+  /** Relay shuttles (other drivers' short pickup/delivery legs) charged to these loads. */
+  relayLegs: number;
+  fuel: number;
+  maintenance: number;
+  overhead: number;
+  hotels: number;
+  other: number;
+  cost: number;
+  profit: number;
+  profitPerDay: number;
+  /** Revenue that would hit your margin on these costs. */
+  targetRevenue: number;
+  vsTarget: number;
+  loadedMiles: number;
+  emptyMiles: number;
+  days: number;
+}
+
+export interface LaneTripLeg {
+  eventId: string;
+  loadId: string;
+  loadNum: string | null;
+  broker: string | null;
+  /** Wall-clock (America/Denver) truck window. */
+  start: string;
+  end: string;
+  from: string;
+  to: string;
+  fromAreaId: number | null;
+  toAreaId: number | null;
+  /** The load's rate, and this leg's share of it by truck time. */
+  rate: number;
+  share: number;
+  revenue: number;
+  driverPay: number;
+  payBasis: 'payroll' | 'calendar' | 'percent';
+  /** A short relay shuttle: no revenue of its own, its cost rides on the linehaul. */
+  shuttle: boolean;
+  /** Shuttles by others on this load, charged to this leg. */
+  relayCost: number;
+  loadedMiles: number;
+  /** Empty miles to this leg's first stop. */
+  emptyMilesBefore: number;
+  path: Array<{ lat: number; lng: number }>;
+}
+
+export interface LaneCircuitNode {
+  key: string;
+  label: string;
+  areaId: number | null;
+  /** Reached empty (no load). */
+  emptyIn: boolean;
+}
+
+export interface LaneTrip {
+  id: string;
+  driver: string;
+  start: string;
+  end: string;
+  /** loaded = the last load came home; empty = drove home empty; open = no next leg yet / gap. */
+  returned: 'loaded' | 'empty' | 'open';
+  cls: HaulClass;
+  circuitKey: string;
+  emptyOut: { miles: number; from: { lat: number; lng: number } } | null;
+  emptyBack: { miles: number; to: { lat: number; lng: number } } | null;
+  legs: LaneTripLeg[];
+  totals: LaneTripTotals;
+}
+
+export interface LaneCircuit {
+  key: string;
+  nodes: LaneCircuitNode[];
+  open: boolean;
+  trips: number;
+  tripIds: string[];
+  /** Per trip, averaged. */
+  avg: LaneTripTotals;
+}
+
+export interface LaneTripsResponse {
+  available: boolean;
+  lookbackDays: number;
+  since: string;
+  until: string;
+  trips: LaneTrip[];
+  circuits: LaneCircuit[];
+  openTrips: number;
+  params: LaneRatesResponse['params'];
+  tripTypes: TripType[];
 }

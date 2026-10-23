@@ -21,7 +21,7 @@
  */
 
 import type {
-  RateCardCell, RateCardConfig, RateCardRef, RateCardRegion, RateCardResponse, RateGroup, RouteLegKind,
+  RateCardCell, RateCardConfig, RateCardRef, RateCardRegion, RateCardResponse, RateGroup, RouteLegKind, TripType,
 } from "@fleetcal/types";
 import { supabase as supabaseTyped } from "./supabase.js";
 import { airMilesBetween } from "./airMiles.js";
@@ -118,6 +118,20 @@ export function mergeRateConfig(current: RateCardConfig, body: unknown): { confi
       }
       next.areaExtraStops = merged;
     }
+  }
+  if ("tripTypes" in b) {
+    const v = b.tripTypes;
+    const num = (x: unknown) => typeof x === "number" && Number.isFinite(x) && x >= 0 && x <= 10_000;
+    const ok = (t: unknown): t is TripType => {
+      const x = t as Partial<TripType> | null;
+      return !!x && typeof x.id === "string" && /^[a-z0-9-]{1,40}$/.test(x.id)
+        && typeof x.name === "string" && x.name.trim().length > 0 && x.name.length <= 80
+        && Array.isArray(x.circuitKeys) && x.circuitKeys.length <= 50 && x.circuitKeys.every((k) => typeof k === "string" && k.length > 0 && k.length <= 400)
+        && Array.isArray(x.legPay) && x.legPay.length <= 20 && x.legPay.every(num)
+        && num(x.layover) && (x.note == null || (typeof x.note === "string" && x.note.length <= 500));
+    };
+    if (!Array.isArray(v) || v.length > 200 || !v.every(ok)) errors.push("tripTypes must be a list of { id, name, circuitKeys, legPay, layover, note? }");
+    else next.tripTypes = (v as TripType[]).map((t) => ({ id: t.id, name: t.name.trim(), circuitKeys: [...new Set(t.circuitKeys)], legPay: t.legPay, layover: t.layover, note: t.note?.trim() || null }));
   }
   if ("pairTargets" in b) {
     const o = b.pairTargets;

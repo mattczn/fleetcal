@@ -97,7 +97,7 @@ import type {
   LinkReviewListResponse, LinkReviewEntry, LinkReviewVerdictRequest, LoadTrailResponse,
   TruckProfitPay, TruckProfitResponse,
   PayRoutesResponse, PaySuggestRequest, PaySuggestResponse, RateCardConfig, RateCardConfigPatch,
-  PayMapResponse, PayArea, PayAreaPoint, RateGroup, LaneRatesResponse,
+  PayMapResponse, PayArea, PayAreaPoint, RateGroup, LaneRatesResponse, LaneTripsResponse, TripType,
   ListRecurringExpensesResponse, CreateRecurringExpenseRequest,
   UpdateRecurringExpenseRequest, RecurringExpenseResponse,
   ListExpenseEntriesRequest, ListExpenseEntriesResponse,
@@ -2095,6 +2095,16 @@ class RailwayClient {
   /** Quote targets by region pair (Lanes page). */
   getLaneRates() {
     return this.req<LaneRatesResponse>('GET', '/v1/lanes/rates');
+  }
+
+  /** Drivers' trips from a home base and back, grouped into circuits (cached ~10 min; fresh rebuilds). */
+  getLaneTrips(fresh = false) {
+    return this.req<LaneTripsResponse>('GET', `/v1/lanes/trips${fresh ? '?fresh=1' : ''}`);
+  }
+
+  /** Save the whole list of named trips. */
+  setTripTypes(tripTypes: TripType[]) {
+    return this.req<{ tripTypes: TripType[] }>('PUT', '/v1/lanes/trip-types', { tripTypes });
   }
 
   /** Set (or with null, clear) your quote target for a region pair. */

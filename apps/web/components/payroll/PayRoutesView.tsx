@@ -21,9 +21,10 @@ import { KIND_LABEL } from './SuggestedPay';
 import RateCardView from './RateCardView';
 import PayMapView from './PayMapView';
 import LaneRatesView from './LaneRatesView';
+import LaneTripsView from './LaneTripsView';
 
-type Tab = 'rates' | 'map' | 'routes' | 'rate';
-const TAB_LABEL: Record<Tab, string> = { rates: 'Rates', map: 'Map', routes: 'Routes', rate: 'Rate card' };
+type Tab = 'rates' | 'trips' | 'map' | 'routes' | 'rate';
+const TAB_LABEL: Record<Tab, string> = { rates: 'Rates', trips: 'Trips', map: 'Map', routes: 'Routes', rate: 'Rate card' };
 
 const money = (n: number) => `$${Math.round(n).toLocaleString()}`;
 const shortDate = (d: string) => new Date(`${d.slice(0, 10)}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
@@ -52,7 +53,7 @@ export default function PayRoutesView() {
   const [minLegs, setMinLegs] = useState(3);
   const [open, setOpen] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('rates');
-  const tabs: Tab[] = canPayroll ? ['rates', 'map', 'routes', 'rate'] : ['rates'];
+  const tabs: Tab[] = canPayroll ? ['rates', 'trips', 'map', 'routes', 'rate'] : ['rates', 'trips'];
   const [variesOnly, setVariesOnly] = useState(false);
 
   // Open a paid leg's load in the load modal on this page. Older loads
@@ -125,6 +126,8 @@ export default function PayRoutesView() {
 
         {tab === 'rates' ? (
           <LaneRatesView canEdit={can('loads.edit')} />
+        ) : tab === 'trips' ? (
+          <LaneTripsView canEdit={can('loads.edit')} />
         ) : data ? (
           <div className="mb-3 text-[12px] space-y-1" style={{ color: 'var(--gc-text-3)' }}>
             <div>
@@ -142,7 +145,7 @@ export default function PayRoutesView() {
           </div>
         ) : null}
 
-        {tab === 'rates' ? null : error ? (
+        {tab === 'rates' || tab === 'trips' ? null : error ? (
           <div className="p-4 rounded text-[13px]" style={{ background: '#fce8e6', color: '#c5221f' }}>{error}</div>
         ) : !data ? (
           <div className="flex items-center gap-2 p-6 text-[13px]" style={{ color: 'var(--gc-text-3)' }}>

@@ -20,7 +20,7 @@
  *              are set, next to the one-driver pay
  */
 
-import type { HaulClass, LaneDirection, LaneRatePair, LaneRatesResponse } from "@fleetcal/types";
+import type { HaulClass, LaneDirection, LaneRatePair, LaneRatesResponse, WeeklyTargetResponse } from "@fleetcal/types";
 import { supabase as supabaseTyped } from "./supabase.js";
 import { fetchAllRows } from "./fetchAllRows.js";
 import { classifyByAirMiles } from "./airMiles.js";
@@ -54,6 +54,20 @@ const r0 = (n: number) => Math.round(n);
 
 interface LoadSample { rate: number; miles: number; pay: number | null; hours: number; cls: HaulClass }
 
+/** The dashboard's cost numbers, per mile / block / truck-day. */
+export function laneCostParams(p: WeeklyTargetResponse["params"]) {
+  const otrBlocksPerWeek = (p.truckDaysPerWeekByClass?.otr ?? 0) * 4;
+  return {
+    fuelPerMile: p.fuelPrice.value / p.mpg.value,
+    maintPerMile: p.maintPerMile,
+    otherPct: p.revenuePctOther,
+    margin: p.marginTarget.value,
+    overheadPerTruckDay: p.overheadPerTruckDay,
+    hotelsPerBlock: otrBlocksPerWeek > 0 ? p.hotels.weekly / otrBlocksPerWeek : 0,
+    drivenPer: { local: p.localDrivenPerLoaded.value, otr: p.otrDrivenPerLoaded.value } as Record<HaulClass, number>,
+  };
+}
+
 export async function laneRates(orgId: string): Promise<LaneRatesResponse> {
   const today = new Date().toISOString().slice(0, 10);
   const since = new Date(Date.now() - LOOKBACK_DAYS * 86_400_000).toISOString().slice(0, 10);
@@ -66,19 +80,15 @@ export async function laneRates(orgId: string): Promise<LaneRatesResponse> {
     loadExcludedAssetIds(orgId),
   ]);
   const p = wt.params;
-  const fuelPerMile = p.fuelPrice.value / p.mpg.value;
-  const otherPct = p.revenuePctOther;
-  const margin = p.marginTarget.value;
+  const params = laneCostParams(p);
+  const { fuelPerMile, otherPct, margin, hotelsPerBlock, drivenPer } = params;
   const blockOverhead = p.overheadPerTruckDay / 4;
-  const otrBlocksPerWeek = (p.truckDaysPerWeekByClass?.otr ?? 0) * 4;
-  const hotelsPerBlock = otrBlocksPerWeek > 0 ? p.hotels.weekly / otrBlocksPerWeek : 0;
-  const drivenPer: Record<HaulClass, number> = { local: p.localDrivenPerLoaded.value, otr: p.otrDrivenPerLoaded.value };
   const terminal = stored.terminal;
 
   const empty: LaneRatesResponse = {
     available: al.available, lookbackDays: LOOKBACK_DAYS, since, until: today, pairs: [], loadsOutsideAreas: 0,
     areas: al.areas.map((a) => ({ id: a.id, name: a.name, color: a.color, isHome: a.isHome, homeId: a.homeId })),
-    params: { fuelPerMile, maintPerMile: p.maintPerMile, otherPct, margin, overheadPerTruckDay: p.overheadPerTruckDay, hotelsPerBlock, drivenPer },
+    params,
     corridorOrder: cfg.config.corridorOrder ?? [],
   };
   if (!al.available || !al.areas.length) return empty;
