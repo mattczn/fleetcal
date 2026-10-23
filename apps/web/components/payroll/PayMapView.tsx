@@ -15,16 +15,18 @@ import { railway } from '@/lib/railway';
 import { loadGoogleMaps, MAP_ID } from '@/lib/googleMaps';
 
 export const DIRECTION: Record<LaneDirection, { label: string; bg: string; fg: string; tip: string }> = {
-  outbound: { label: 'Outbound', bg: '#fef7e0', fg: '#b06000', tip: 'Leaving a home base' },
-  inbound: { label: 'Inbound', bg: '#e6f4ea', fg: '#1e8e3e', tip: 'Coming back to a home base' },
+  outbound: { label: 'Outbound', bg: '#fef7e0', fg: '#b06000', tip: 'Leaving the base' },
+  inbound: { label: 'Inbound', bg: '#e6f4ea', fg: '#1e8e3e', tip: 'Coming back to the base' },
   local: { label: 'Local', bg: '#e8f0fe', fg: '#1a73e8', tip: 'Stays inside one area or one home base' },
-  through: { label: 'Through', bg: 'var(--gc-surface-2)', fg: 'var(--gc-text-2)', tip: 'Neither end is a home base' },
+  through: { label: 'Through', bg: 'var(--gc-surface-2)', fg: 'var(--gc-text-2)', tip: 'Neither end is the base' },
 };
-const directionOf = (from: PayArea | undefined, to: PayArea | undefined): LaneDirection | null => {
+/** Mirrors laneDirection in apps/api/src/lib/payAreas.ts. */
+const directionOf = (from: PayArea | undefined, to: PayArea | undefined, baseId: number | null): LaneDirection | null => {
   if (!from || !to) return null;
   if (from.id === to.id || (from.homeId != null && from.homeId === to.homeId)) return 'local';
-  if (from.homeId != null && to.homeId == null) return 'outbound';
-  if (to.homeId != null && from.homeId == null) return 'inbound';
+  const atBase = (a: PayArea) => (baseId != null ? a.homeId === baseId : a.homeId != null);
+  if (atBase(from) && !atBase(to)) return 'outbound';
+  if (atBase(to) && !atBase(from)) return 'inbound';
   return 'through';
 };
 const COLORS = ['#1a73e8', '#16a34a', '#d97706', '#9333ea', '#dc2626', '#0891b2', '#db2777', '#4b5563'];
@@ -404,7 +406,7 @@ function CorridorRow({ c, rank, data, areaById, slots, canEdit, open, onToggle, 
   const idOf = (side: 'A' | 'B') => (side === 'A' ? c.fromAreaId : c.toAreaId);
   const slotOf = (st: Step) => slots.get(laneKey(idOf(st.from), idOf(st.to), st.kind)) ?? { lane: null, observed: null };
   const priced = steps.filter((st) => slotOf(st).lane).length;
-  const dir = directionOf(A, B);
+  const dir = directionOf(A, B, data.baseId);
   const [over, setOver] = useState(false);
   return (
     <div style={{ borderBottom: '1px solid var(--gc-border)', opacity: dragging ? 0.4 : 1, boxShadow: over ? 'inset 0 2px 0 var(--gc-blue)' : undefined }}

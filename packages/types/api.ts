@@ -3816,6 +3816,8 @@ export interface ObservedLane {
 export interface PayMapResponse {
   available: boolean;
   areas: PayArea[];
+  /** The home area trucks run out of (holds the home terminal); null = every home area. */
+  baseId: number | null;
   lanes: PayLane[];
   observed: ObservedLane[];
   /** Stop locations with paid legs, for drawing (yards flagged). */

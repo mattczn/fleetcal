@@ -156,7 +156,7 @@ export async function laneRates(orgId: string): Promise<LaneRatesResponse> {
     const [fromId, toId] = key.split(">").map(Number);
     const A = areaById.get(fromId)!;
     const B = areaById.get(toId)!;
-    const direction: LaneDirection = laneDirection(A, B);
+    const direction: LaneDirection = laneDirection(A, B, al.baseId);
     // Work inside one area or one base is local wherever it is (Vegas is "OTR" by radius from SLC).
     const cls: HaulClass = direction !== "local" && ss.filter((x) => x.cls === "otr").length * 2 > ss.length ? "otr" : "local";
     const rate = median(ss.map((x) => x.rate))!;
@@ -190,15 +190,11 @@ export async function laneRates(orgId: string): Promise<LaneRatesResponse> {
       relayPay, fullPay: fullStandard,
     });
   }
-  // Round trips: an outbound pair and its inbound reverse (or a run between
-  // two bases and its reverse) share one target, split by what each
-  // direction's market pays.
+  // Round trips: an outbound pair and its inbound reverse share one target,
+  // split by what each direction's market pays.
   const byKey = new Map(pairs.map((x) => [x.key, x]));
   for (const x of pairs) {
-    const A = areaById.get(x.fromAreaId)!;
-    const B = areaById.get(x.toAreaId)!;
-    const roundTrip = x.direction === "outbound" || x.direction === "inbound" || (x.direction === "through" && A.homeId != null && B.homeId != null);
-    if (!roundTrip || x.cls !== "otr") continue;
+    if ((x.direction !== "outbound" && x.direction !== "inbound") || x.cls !== "otr") continue;
     const back = byKey.get(`${x.toAreaId}>${x.fromAreaId}`);
     if (!back || back.cls !== "otr" || x.loads < MIN_BALANCE_LOADS || back.loads < MIN_BALANCE_LOADS) continue;
     const share = x.market.rate / (x.market.rate + back.market.rate);

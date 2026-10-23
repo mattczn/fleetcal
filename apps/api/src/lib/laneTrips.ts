@@ -7,7 +7,9 @@
  * leg they drove; a relay leg is its own segment of the load's stop list
  * and earns the load's rate by its share of truck time (lib/legTime.ts).
  *
- *   starts   a leg leaving a home base, or a leg away from home right after
+ *   base     the home area holding the org's home terminal (SLC); other home
+ *            areas (Vegas) are just places a trip goes
+ *   starts   a leg leaving the base, or a leg away from it right after
  *            the driver's last leg ended at one (an empty run out)
  *   ends     a leg arriving back at the base it left from; or the driver's
  *            next leg starting there (came back empty); or no next leg
@@ -109,7 +111,10 @@ async function buildTrips(orgId: string): Promise<LaneTripsResponse> {
   const params = laneCostParams(wt.params);
   const payPctOtr = wt.params.payPct.otr;
   const empty: LaneTripsResponse = { available: al.available, lookbackDays: LOOKBACK_DAYS, since, until: today, trips: [], circuits: [], openTrips: 0, params, tripTypes: [] };
-  const homes = al.areas.filter((a) => a.isHome);
+  // Trips start and end at the base (the home area holding the home
+  // terminal); other home areas are places trips go, like Vegas.
+  const homes = al.areas.filter((a) => a.isHome && (al.baseId == null || a.id === al.baseId));
+  const isBase = (homeId: number | null) => homeId != null && homes.some((h) => h.id === homeId);
   if (!al.available || !homes.length) return empty;
   const homeCenter = new Map(homes.map((h) => [h.id, {
     lat: h.polygon.reduce((s, p) => s + p.lat, 0) / h.polygon.length,
@@ -203,7 +208,7 @@ async function buildTrips(orgId: string): Promise<LaneTripsResponse> {
 
   const ptOf = (s: StopRow): Pt => ({ lat: Number(s.lat), lng: Number(s.lng) });
   const areaOf = (s: StopRow) => locate(ptOf(s));
-  const homeOf = (s: StopRow) => areaOf(s)?.homeId ?? null;
+  const homeOf = (s: StopRow) => { const h = areaOf(s)?.homeId ?? null; return isBase(h) ? h : null; };
   // A region is the base an area sits in, else the area, else the state.
   const regionOf = (s: StopRow): { key: string; label: string; areaId: number | null } => {
     const a = areaOf(s);

@@ -471,6 +471,7 @@ export async function payMap(orgId: string): Promise<PayMapResponse> {
   return {
     available: al.available,
     areas: al.areas,
+    baseId: al.baseId,
     lanes: al.lanes,
     observed,
     places: h.places.filter((p) => p.saved_location_id || (legsAt.get(p.id) ?? 0) > 0)
@@ -616,7 +617,7 @@ export async function suggestPay(
         ...base, amount: lane.amount + extraStops * extra, source: "lane", note: lane.note,
         legs: routeStats.legs, usual: routeStats.usual, usualShare: routeStats.usualShare, examples: routeStats.examples,
         lane: {
-          fromArea: fromArea.name, toArea: toArea.name, kind: laneKind, direction: laneDirection(fromArea, toArea),
+          fromArea: fromArea.name, toArea: toArea.name, kind: laneKind, direction: laneDirection(fromArea, toArea, al.baseId),
           base: lane.amount, extraStops, extraStopAmount: extra,
           refs: laneRefs.find((o) => o.fromAreaId === fromArea.id && o.toAreaId === toArea.id && o.kind === laneKind)?.refs.slice(0, 8) ?? [],
         },

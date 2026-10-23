@@ -8,14 +8,18 @@
  *   Lane   from area → to area × kind: pickup (shipper → yard), delivery
  *          (yard → consignee), whole (shipper → consignee), transfer only
  *          (yard → yard). A leg's lane comes from its first and last stop.
- *          Its direction follows the home areas (where trucks are based):
- *          outbound leaves one, inbound comes back, local stays in one
- *          area, through touches none. Stops past two add the lane's own
+ *          Its direction follows the base — the home area holding the
+ *          org's home terminal (SLC): outbound leaves it, inbound comes
+ *          back, local stays in one area or one home area, through touches
+ *          neither. Other home areas (Vegas, where a local driver does
+ *          pickups) only keep work inside them local; without a terminal
+ *          every home area is a base. Stops past two add the lane's own
  *          extra-stop amount, else the general one.
  */
 
 import type { LaneDirection, PayArea, PayAreaPoint, PayLane, RateGroup } from "@fleetcal/types";
 import { supabase as supabaseTyped } from "./supabase.js";
+import { parseTerminal } from "./airMiles.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const supabase = supabaseTyped as any;
@@ -47,21 +51,26 @@ const toLane = (r: LaneRow): PayLane => ({
   note: r.note, setByName: r.set_by_name, setAt: r.set_at,
 });
 
-export function laneDirection(from: PayArea, to: PayArea): LaneDirection {
+export function laneDirection(from: PayArea, to: PayArea, baseId: number | null = null): LaneDirection {
   if (from.id === to.id || (from.homeId != null && from.homeId === to.homeId)) return "local";
-  if (from.homeId != null && to.homeId == null) return "outbound";
-  if (to.homeId != null && from.homeId == null) return "inbound";
+  const atBase = (a: PayArea) => (baseId != null ? a.homeId === baseId : a.homeId != null);
+  if (atBase(from) && !atBase(to)) return "outbound";
+  if (atBase(to) && !atBase(from)) return "inbound";
   return "through";
 }
 
-/** Areas and lanes; available=false until the migration has been run. */
-export async function readAreasAndLanes(orgId: string): Promise<{ areas: PayArea[]; lanes: PayLane[]; available: boolean }> {
-  const [a, l] = await Promise.all([
+/** Areas, lanes and the base (see laneDirection); available=false until the migration has been run. */
+export async function readAreasAndLanes(orgId: string): Promise<{ areas: PayArea[]; lanes: PayLane[]; available: boolean; baseId: number | null }> {
+  const [a, l, s] = await Promise.all([
     supabase.from("pay_areas").select("id, name, color, polygon, is_home").eq("org_id", orgId).order("id"),
     supabase.from("pay_lanes").select("id, from_area_id, to_area_id, kind, amount, extra_stop, note, set_by_name, set_at").eq("org_id", orgId).order("id"),
+    supabase.from("org_settings").select("hos_settings").eq("org_id", orgId).maybeSingle(),
   ]);
-  if (a.error || l.error) return { areas: [], lanes: [], available: false };
-  return { areas: withHomes((a.data as AreaRow[]).map(toArea)), lanes: (l.data as LaneRow[]).map(toLane), available: true };
+  if (a.error || l.error) return { areas: [], lanes: [], available: false, baseId: null };
+  const areas = withHomes((a.data as AreaRow[]).map(toArea));
+  const terminal = parseTerminal(s.data?.hos_settings);
+  const base = terminal ? areaLocator(areas.filter((x) => x.isHome))({ lat: terminal.lat, lng: terminal.lon }) : null;
+  return { areas, lanes: (l.data as LaneRow[]).map(toLane), available: true, baseId: base?.id ?? null };
 }
 
 // ── Geometry ────────────────────────────────────────────────────────────
