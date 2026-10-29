@@ -44,6 +44,10 @@ import { railway } from '@/lib/railway';
 import RecordPaymentPanel from './RecordPaymentPanel';
 import BulkPaymentPanel from './BulkPaymentPanel';
 import BulkFlagButton from './BulkFlagButton';
+import {
+  downloadAgingCsv, AGING_EXPORT_LABEL, AGING_EXPORT_HINT,
+  type AgingExportShape,
+} from './agingExport';
 import ApplyPaymentPanel from './ApplyPaymentPanel';
 import type {
   ReceivableInvoice, ReceivableCustomerSummary, ReceivablesTotals, AgingBucket,
@@ -196,6 +200,7 @@ function ReceivablesPageInner() {
   const [selected,   setSelected]   = useState<Set<string>>(new Set());
   const [applyOpen,  setApplyOpen]  = useState(false);
   const [bulkOpen,   setBulkOpen]   = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
 
   // EventModal keys on calendar events, so opening a load means making
   // sure its legs are in the calendar store first. Same fetch-on-demand
@@ -340,38 +345,84 @@ function ReceivablesPageInner() {
     return { count: cell.count, total: cell.balance };
   };
 
-  function exportAging() {
-    const head = ['Customer', 'Open invoices', 'Oldest days over', 'Current', '1-30', '31+', 'Past due', 'Balance'];
-    const body = filtered.map(c => [
-      `"${c.customerName.replace(/"/g, '""')}"`,
-      c.openCount,
-      c.oldestAgingDays ?? '',
-      c.byBucket?.current ?? 0,
-      c.byBucket?.d1_30 ?? 0,
-      c.byBucket?.d31_plus ?? 0,
-      c.overdueBalance,
-      c.openBalance,
-    ].join(','));
-    const blob = new Blob([[head.join(','), ...body].join('\n')], { type: 'text/csv' });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement('a');
-    a.href = url;
-    a.download = `receivables-aging-${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+  /** Invoices behind the customers currently shown, so an export can never
+   *  disagree with the screen. Exporting the whole book from a filtered
+   *  view is the mismatch nobody notices until the totals get quoted. */
+  const filteredInvoices = useMemo(() => {
+    const keys = new Set(filtered.map(c => c.customerId ?? NO_CUSTOMER));
+    return rows.filter(i => keys.has(i.customerId ?? NO_CUSTOMER));
+  }, [filtered, rows]);
+
+  function exportAging(shape: AgingExportShape) {
+    downloadAgingCsv({ customers: filtered, invoices: filteredInvoices, shape });
+    setExportOpen(false);
   }
 
   const rightSlot = (
     <div className="flex items-center gap-2">
-      <button onClick={exportAging}
-        className="inline-flex items-center gap-1.5"
-        style={{
-          height: 32, padding: '0 12px', border: '1px solid var(--gc-border)',
-          borderRadius: 8, background: 'var(--gc-surface)',
-          fontSize: 12, fontWeight: 700, color: 'var(--gc-text-2)',
-        }}>
-        <Download size={13} /> Export aging
-      </button>
+      <div style={{ position: 'relative' }}>
+        <button onClick={() => setExportOpen(v => !v)}
+          className="inline-flex items-center gap-1.5"
+          style={{
+            height: 32, padding: '0 12px',
+            border: `1px solid ${exportOpen ? '#1a73e8' : 'var(--gc-border)'}`,
+            borderRadius: 8,
+            background: exportOpen ? 'var(--gc-blue-light, #e8f0fe)' : 'var(--gc-surface)',
+            fontSize: 12, fontWeight: 700,
+            color: exportOpen ? '#1558d6' : 'var(--gc-text-2)',
+          }}>
+          <Download size={13} /> Export aging
+        </button>
+        {exportOpen && (
+          <>
+            {/* Click-away as a sibling overlay rather than a document
+                listener — the menu is open for seconds, and a global
+                mousedown handler for that is more machinery than it earns. */}
+            <div className="fixed inset-0" style={{ zIndex: 39 }}
+                 onClick={() => setExportOpen(false)} />
+            <div style={{
+              position: 'absolute', right: 0, top: 38, width: 290, zIndex: 40,
+              background: 'var(--gc-surface)', border: '1px solid var(--gc-border)',
+              borderRadius: 12, boxShadow: 'var(--shadow-3)', padding: 6,
+            }}>
+              <div style={{
+                fontSize: 10.5, fontWeight: 800, letterSpacing: '.05em',
+                textTransform: 'uppercase', color: 'var(--gc-text-3)',
+                padding: '6px 8px 4px',
+              }}>
+                {filtered.length} customer{filtered.length === 1 ? '' : 's'} ·{' '}
+                {filteredInvoices.length} invoice{filteredInvoices.length === 1 ? '' : 's'}
+              </div>
+              {(Object.keys(AGING_EXPORT_LABEL) as AgingExportShape[]).map(shape => (
+                <button key={shape} onClick={() => exportAging(shape)}
+                        className="w-full text-left"
+                        style={{ padding: '7px 8px', borderRadius: 8 }}
+                        onMouseOver={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+                        onMouseOut={e => (e.currentTarget.style.background = 'transparent')}>
+                  <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--gc-text-1)' }}>
+                    {AGING_EXPORT_LABEL[shape]}
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--gc-text-3)', lineHeight: 1.4, marginTop: 1 }}>
+                    {AGING_EXPORT_HINT[shape]}
+                  </div>
+                </button>
+              ))}
+              {/* Says what it will contain, because the export follows the
+                  screen's filters and that is easy to forget three clicks
+                  after setting one. */}
+              <div style={{
+                fontSize: 10.5, color: 'var(--gc-text-3)', lineHeight: 1.4,
+                padding: '6px 8px 2px', borderTop: '1px solid var(--gc-border-light)',
+                marginTop: 4,
+              }}>
+                Exports exactly what the page is showing — {scope} invoices
+                {bucket ? `, ${bucket === 'd1_30' ? '1–30 days' : bucket === 'd31_plus' ? '31+ days' : 'current'}` : ''}
+                {searchTerm ? `, matching “${searchTerm}”` : ''}.
+              </div>
+            </div>
+          </>
+        )}
+      </div>
       <button onClick={() => setApplyOpen(true)}
         className="inline-flex items-center gap-1.5"
         style={{
