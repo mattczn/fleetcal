@@ -30,7 +30,7 @@ export const AGING_EXPORT_LABEL: Record<AgingExportShape, string> = {
 
 export const AGING_EXPORT_HINT: Record<AgingExportShape, string> = {
   customer: 'Who owes what, with their aging mix. The collections call list.',
-  invoice:  'Every open invoice with its load, dates and age. For chasing specifics.',
+  invoice:  'Every open invoice with its dates, age and balance.',
   bucket:   'Current / 1–30 / 31+ totals, per customer and overall.',
 };
 
@@ -75,9 +75,8 @@ export function buildAgingCsv(input: AgingExportInput): string {
   }
 
   if (shape === 'invoice') {
-    const head = ['Customer', 'Invoice', 'Load', 'Reference', 'Description',
-                  'Picked up', 'Invoiced', 'Due', 'Days past due', 'Bucket',
-                  'Total', 'Paid', 'Balance', 'Has proof'];
+    const head = ['Customer', 'Invoice', 'Picked up', 'Invoiced', 'Due',
+                  'Days past due', 'Bucket', 'Total', 'Paid', 'Balance'];
     // Oldest first: an invoice list is read to decide who to call, and the
     // decision is made at the top of the page.
     const body = [...invoices]
@@ -85,9 +84,6 @@ export function buildAgingCsv(input: AgingExportInput): string {
       .map(i => line([
         i.customerName ?? '',
         i.invoiceNumber,
-        i.loadNum ?? '',
-        (i.refNums ?? []).join(' / '),
-        i.title ?? '',
         day(i.pickupAt),
         day(i.issuedAt),
         day(i.dueAt),
@@ -98,7 +94,6 @@ export function buildAgingCsv(input: AgingExportInput): string {
         money(i.total),
         money(i.paidAmount),
         money(i.balance),
-        i.hasProof ? 'yes' : 'no',
       ]));
     return [line(head), ...body].join('\n');
   }
