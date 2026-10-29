@@ -1404,6 +1404,23 @@ export const useCalendarStore = create<CalendarStore>()(
       ...(updates.unit !== undefined            ? { unit: updates.unit ?? null } : {}),
       ...(updates.truck !== undefined           ? { truck: updates.truck ?? null } : {}),
       ...(updates.notes !== undefined           ? { notes: updates.notes ?? null } : {}),
+      // Truck-profile fields. These were MISSING from this allowlist while
+      // the API, UpdateAssetRequest, and AssetsModal's saveAll all handled
+      // them — so the optimistic `set` above made the UI look saved and
+      // cleared the dirty flag, the PATCH silently omitted them, and a
+      // refresh rehydrated empty. Fleet-wide evidence: every field listed
+      // here was 0/22 on Curzon's trucks while `unit` (which WAS in the
+      // list) was 22/22.
+      //
+      // Any new editable Asset field must be added here too. An allowlist
+      // that silently drops the rest is the hazard; see also
+      // lib/db.ts updateTrailer, which had the identical gap.
+      ...(updates.make !== undefined            ? { make: updates.make ?? null } : {}),
+      ...(updates.model !== undefined           ? { model: updates.model ?? null } : {}),
+      ...(updates.vin !== undefined             ? { vin: updates.vin ?? null } : {}),
+      ...(updates.licensePlate !== undefined    ? { licensePlate: updates.licensePlate ?? null } : {}),
+      ...(updates.licenseState !== undefined    ? { licenseState: updates.licenseState ?? null } : {}),
+      ...(updates.licenseExpiration !== undefined ? { licenseExpiration: updates.licenseExpiration ?? null } : {}),
       ...(updates.hidden !== undefined          ? { hidden: updates.hidden } : {}),
       ...(updates.excludeFromReports !== undefined ? { excludeFromReports: updates.excludeFromReports } : {}),
       ...(updates.motiveVehicleId !== undefined ? { motiveVehicleId: updates.motiveVehicleId ?? null } : {}),

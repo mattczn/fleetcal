@@ -133,6 +133,15 @@ export async function updateTrailer(id: number, updates: Partial<Omit<Trailer, '
     ...(updates.category !== undefined        ? { category: updates.category } : {}),
     ...(updates.notes !== undefined           ? { notes: updates.notes ?? null } : {}),
     ...(updates.motiveVehicleId !== undefined ? { motiveVehicleId: updates.motiveVehicleId ?? null } : {}),
+    // Same gap the asset store had: TrailersModal sends all of these and
+    // the API accepts all of them, but they were dropped here, so the
+    // trailer profile silently never persisted.
+    ...(updates.make !== undefined            ? { make: updates.make ?? null } : {}),
+    ...(updates.model !== undefined           ? { model: updates.model ?? null } : {}),
+    ...(updates.vin !== undefined             ? { vin: updates.vin ?? null } : {}),
+    ...(updates.licensePlate !== undefined    ? { licensePlate: updates.licensePlate ?? null } : {}),
+    ...(updates.licenseState !== undefined    ? { licenseState: updates.licenseState ?? null } : {}),
+    ...(updates.licenseExpiration !== undefined ? { licenseExpiration: updates.licenseExpiration ?? null } : {}),
   };
   if (Object.keys(body).length === 0) return;
   try { await railway.updateTrailer(id, body); }
