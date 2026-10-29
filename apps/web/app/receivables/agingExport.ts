@@ -129,12 +129,25 @@ export function agingFilename(shape: AgingExportShape, today = new Date()): stri
 }
 
 export function downloadAgingCsv(input: AgingExportInput): void {
-  const csv  = buildAgingCsv(input);
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const csv = buildAgingCsv(input);
+
+  // A BOM, so Excel opens it as UTF-8. Without it a broker name with an
+  // accent or the en-dash in "1–30 days" arrives mojibake'd, and the column
+  // header is the first thing anyone reads.
+  const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');
-  a.href = url;
+  a.href     = url;
   a.download = agingFilename(input.shape, input.today);
+
+  // The anchor must be IN the document and the URL must outlive the click.
+  // A detached anchor is ignored outright by Safari and Firefox, and
+  // revoking the object URL on the same tick can hand the browser a blob
+  // that has already been released — which is how a download arrives empty
+  // rather than not at all.
+  a.style.display = 'none';
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(url);
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
