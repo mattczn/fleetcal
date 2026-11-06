@@ -93,6 +93,7 @@ import { runMovementLinkSweep } from "./jobs/movementLinkSweep.js";
 import { runCrmFmcsaSyncSweep } from "./jobs/crmFmcsaSyncSweep.js";
 import { runCrmSendSweep } from "./jobs/crmSendSweep.js";
 import { crmRoute } from "./routes/crm.js";
+import { shipperCrmRoute } from "./routes/shipperCrm.js";
 import { crmPublicRoute } from "./routes/crm-public.js";
 import paystubsPublicRoute from "./routes/paystubs-public.js";
 import pkg from "../package.json" with { type: "json" };
@@ -310,6 +311,9 @@ authed.route("/lanes", lanesRoute);
 // INTERNAL sales CRM — triple-gated inside the route group
 // (internal-org allowlist → 404, crm module flag, crm.* capabilities).
 authed.route("/crm", crmRoute);
+// Shipper CRM — the carrier's OWN shipper/receiver/warehouse outreach board.
+// Gated inside the group by the shipper_crm module + shipperCrm.access cap.
+authed.route("/shipper-crm", shipperCrmRoute);
 
 // ── Driver routes (Supabase-JWT auth, scoped to one driver) ─────────────
 // Mounted before /v1 to avoid the Clerk middleware. Driver app passes the

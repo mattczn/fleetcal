@@ -237,7 +237,15 @@ export type Capability =
   // org allowlist, so granting them to a customer org's role does
   // nothing.
   | "crm.access"   // see + work the CRM (leads, call queue, outbox)
-  | "crm.manage";  // edit sequences, CRM settings, trigger syncs
+  | "crm.manage"   // edit sequences, CRM settings, trigger syncs
+
+  // Shipper CRM — the carrier's OWN shipper/receiver/warehouse outreach
+  // surface (distinct from the internal sales `crm.*` above, which is
+  // FleetCal selling to carriers). Built from the org's lane history. Gated
+  // by the `shipper_crm` module; admin-only by default (not in the
+  // dispatcher/maintenance sets below), grantable to dispatcher per-org via
+  // role_overrides for a carrier that runs a sales desk.
+  | "shipperCrm.access";
 
 // ── Capability matrix ────────────────────────────────────────────────────
 //
@@ -278,6 +286,7 @@ const EVERY_CAP: Record<Capability, true> = {
   "dashboard.access": true, "reports.access": true, "scorecard.access": true,
   "safety.access": true,
   "crm.access": true, "crm.manage": true,
+  "shipperCrm.access": true,
 };
 
 const ALL_CAPS = Object.keys(EVERY_CAP) as Capability[];
@@ -517,6 +526,7 @@ export const CAPABILITY_CATALOG: CapabilityInfo[] = [
   // change. No effect for customer orgs.
   { cap: "crm.access", label: "CRM access", group: "Sales (CRM)", hint: "See + work the CRM: leads, call queue, outbox. No effect for non-internal orgs." },
   { cap: "crm.manage", label: "Manage CRM sequences + settings", group: "Sales (CRM)" },
+  { cap: "shipperCrm.access", label: "Shipper CRM", group: "Module access", hint: "The shipper/receiver/warehouse outreach board — every facility you've hauled to or from, ranked by frequency, on a map, with a reach-out tracker. Admin-only by default." },
 
   // Org admin.
   { cap: "org.settings.edit",  label: "Edit org settings",    group: "Org admin" },

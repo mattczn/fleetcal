@@ -2023,6 +2023,120 @@ export type Database = {
         }
         Relationships: []
       }
+      facilities: {
+        Row: {
+          address: string | null
+          call_attempts: number
+          city: string | null
+          contact_email: string | null
+          contact_name: string | null
+          contact_phone: string | null
+          created_at: string
+          created_by: string | null
+          geo_key: string
+          hidden: boolean
+          id: string
+          last_call_outcome: string | null
+          last_contacted_at: string | null
+          lat: number | null
+          lng: number | null
+          name: string | null
+          next_action_at: string | null
+          notes: string | null
+          org_id: string
+          owner_user_id: string | null
+          state: string | null
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          address?: string | null
+          call_attempts?: number
+          city?: string | null
+          contact_email?: string | null
+          contact_name?: string | null
+          contact_phone?: string | null
+          created_at?: string
+          created_by?: string | null
+          geo_key: string
+          hidden?: boolean
+          id?: string
+          last_call_outcome?: string | null
+          last_contacted_at?: string | null
+          lat?: number | null
+          lng?: number | null
+          name?: string | null
+          next_action_at?: string | null
+          notes?: string | null
+          org_id: string
+          owner_user_id?: string | null
+          state?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          address?: string | null
+          call_attempts?: number
+          city?: string | null
+          contact_email?: string | null
+          contact_name?: string | null
+          contact_phone?: string | null
+          created_at?: string
+          created_by?: string | null
+          geo_key?: string
+          hidden?: boolean
+          id?: string
+          last_call_outcome?: string | null
+          last_contacted_at?: string | null
+          lat?: number | null
+          lng?: number | null
+          name?: string | null
+          next_action_at?: string | null
+          notes?: string | null
+          org_id?: string
+          owner_user_id?: string | null
+          state?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      facility_activities: {
+        Row: {
+          actor_user_id: string | null
+          body: string | null
+          created_at: string
+          facility_id: string
+          id: string
+          kind: string
+          meta: Json | null
+          org_id: string
+          outcome: string | null
+        }
+        Insert: {
+          actor_user_id?: string | null
+          body?: string | null
+          created_at?: string
+          facility_id: string
+          id?: string
+          kind: string
+          meta?: Json | null
+          org_id: string
+          outcome?: string | null
+        }
+        Update: {
+          actor_user_id?: string | null
+          body?: string | null
+          created_at?: string
+          facility_id?: string
+          id?: string
+          kind?: string
+          meta?: Json | null
+          org_id?: string
+          outcome?: string | null
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
@@ -2031,6 +2145,18 @@ export type Database = {
       allocate_loads_internal_id: {
         Args: { p_org_id: string }
         Returns: number
+      }
+      facilities_rollup: {
+        Args: { p_org_id: string }
+        Returns: Json
+      }
+      facility_loads: {
+        Args: { p_org_id: string; p_geo_key: string }
+        Returns: Json
+      }
+      fleetcal_geo_key: {
+        Args: { p_lat: number; p_lng: number }
+        Returns: string
       }
       replace_event_stops: {
         Args: { p_org_id: string; p_event_ids: string[]; p_stops: Json }

@@ -60,6 +60,8 @@ export type OrgModule =
   | "timesheets"         // clock in/out + location pings for non-driver staff (shop/maintenance). Separate from `payroll`, which pays DRIVERS per load: this is hours-worked for people who aren't paid by the mile, and separate from driver HOS, which is a compliance record rather than a pay record.
   // ── Truck planning (2026-09-18) ─────────────────────────────────────
   | "planning"           // Planned events: dashed placeholders on a truck's calendar column for work that isn't booked yet ("find load SLC → Vegas for Kevin"). Stored in their own table, never visible to drivers. DEFAULT-OFF — Curzon only for now.
+  // ── Shipper outreach CRM (2026-11-05) ───────────────────────────────
+  | "shipper_crm"        // /shipper-crm — every shipper/receiver/warehouse we've hauled to/from, deduped by geocoded location, ranked by how many loads we've run there, plotted on a map, with a reach-out tracker (status + call/email log) on top. Sourced from the stops we already geocode; no new data entry to light it up. DEFAULT-OFF (opt-in per org) and admin-gated via shipperCrm.access.
   | "receivables";       // /receivables — open AR by customer, aging, and the payment-proof ledger. Split from `accounting` deliberately: Billing is "did we invoice it", Receivables is "did they pay and how do we know". A carrier can run the invoice pipeline without wanting a collections desk, and the payment evidence surface is where custom bank/remittance integrations will land.
 
 export const ORG_MODULES: readonly OrgModule[] = [
@@ -84,6 +86,7 @@ export const ORG_MODULES: readonly OrgModule[] = [
   "receivables",
   "hiring",
   "planning",
+  "shipper_crm",
 ] as const;
 
 /** Display labels (singular). Used in Settings → Modules toggles
@@ -110,6 +113,7 @@ export const ORG_MODULE_LABEL: Record<OrgModule, string> = {
   hiring:             "Hiring & onboarding",
   timesheets:         "Shop timesheets",
   planning:           "Truck planning",
+  shipper_crm:        "Shipper CRM",
 };
 
 /** Short description for the Settings → Modules toggle UI. */
@@ -135,6 +139,7 @@ export const ORG_MODULE_BLURB: Record<OrgModule, string> = {
   receivables:        "Collections desk — open AR by customer, aging buckets, and recording payments with the remittance or bank line that proves them. Billing sends the invoice; this tracks getting paid for it.",
   timesheets:         "Clock in / clock out for shop and maintenance staff, with an optional location stamp on each punch. For people paid by the hour rather than by the load — drivers keep using Payroll and HOS.",
   planning:           "Planned events on the calendar — placeholders for loads you still need to find, loads you're expecting, and empty repositioning moves. Dispatchers and admins only; drivers never see them.",
+  shipper_crm:        "Every shipper, receiver, and warehouse you've hauled to or from — deduped by location, ranked by how often you run there, mapped, and with a reach-out tracker (status, follow-up date, call/email log) layered on top. Built from the stops you already geocode, so it fills itself in. Admin-only.",
 };
 
 // ── Check API ─────────────────────────────────────────────────────
@@ -156,6 +161,10 @@ export const DEFAULT_OFF_MODULES: ReadonlySet<OrgModule> = new Set<OrgModule>([
   // Planning ships dark: it's being shaped with one carrier first, so
   // absent flags must read as disabled for everyone else.
   "planning",
+  // Shipper CRM is opt-in: it lights up a whole sales surface built from a
+  // carrier's own lane history, which not every org wants on. Absent flags
+  // read as disabled; an org turns it on in /admin/orgs (or SQL).
+  "shipper_crm",
 ]);
 
 /**
@@ -280,6 +289,9 @@ export const MVP_LAUNCH_DEFAULTS: Readonly<Record<OrgModule, boolean>> = {
   hiring:             false,
   // Planning: OFF, and in DEFAULT_OFF_MODULES — see there.
   planning:           false,
+  // Shipper CRM: OFF, and in DEFAULT_OFF_MODULES — opt-in per org. Nothing
+  // to seed (it reads existing stops), so turning it on is instant.
+  shipper_crm:        false,
 };
 
 // ── Resolution ────────────────────────────────────────────────────

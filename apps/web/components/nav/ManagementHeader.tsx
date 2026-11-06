@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Calendar, BarChart2, Users, LayoutDashboard, FileCheck2, Receipt, Package, Gauge, HandCoins, UserPlus, Route as RouteIcon } from 'lucide-react';
+import { Calendar, BarChart2, Users, LayoutDashboard, FileCheck2, Receipt, Package, Gauge, HandCoins, UserPlus, Route as RouteIcon, Warehouse } from 'lucide-react';
 import type { Capability, OrgModule } from '@fleetcal/types';
 import { useNavGate } from '@/lib/useNavGate';
 
@@ -43,6 +43,7 @@ const NAV_LINKS: Array<{
   { href: '/drivers',     label: 'Drivers',        icon: Gauge,           cap: 'drivers.view' },
   { href: '/payroll',     label: 'Payroll',        icon: Users,           cap: 'payroll.access',     module: 'payroll' },
   { href: '/lanes',       label: 'Lanes',          icon: RouteIcon,       cap: 'loads.view_price' },
+  { href: '/shipper-crm', label: 'Shipper CRM',    icon: Warehouse,       cap: 'shipperCrm.access', module: 'shipper_crm' },
 ];
 
 interface ManagementHeaderProps {

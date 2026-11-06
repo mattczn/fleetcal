@@ -125,3 +125,4 @@ export * from "./severity";
 // ── CRM (internal sales tooling) ─────────────────────────────────────────
 
 export * from "./crm";
+export * from "./shipperCrm";

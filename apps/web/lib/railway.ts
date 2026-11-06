@@ -123,6 +123,9 @@ import type {
   CrmLogCallRequest, CrmLogCallResponse,
   CrmSequence, CrmSequenceStep, CrmEmail, CrmEmailStatus,
   PerformanceEventRow, MotivePerfRaw, PerformanceEventMovement,
+  ListFacilitiesResponse, FacilityDetailResponse,
+  UpdateFacilityOutreachRequest, UpdateFacilityOutreachResponse,
+  LogFacilityActivityRequest, LogFacilityActivityResponse,
 } from '@fleetcal/types';
 
 // ── HOS duty board ─────────────────────────────────────────────────────
@@ -2674,6 +2677,22 @@ class RailwayClient {
   /** failed → approved (next sweep resends). crm.manage only. */
   crmRetryEmail(id: string) {
     return this.req<{ ok: boolean }>('POST', `/v1/crm/emails/${id}/retry`, {});
+  }
+
+  // ── Shipper CRM ────────────────────────────────────────────────────────
+  // The carrier's OWN shipper/receiver/warehouse outreach board. Facilities
+  // are computed from lane history; only the outreach layer is stored.
+  listFacilities() {
+    return this.req<ListFacilitiesResponse>('GET', '/v1/shipper-crm/facilities');
+  }
+  getFacility(geoKey: string) {
+    return this.req<FacilityDetailResponse>('GET', `/v1/shipper-crm/facilities/${encodeURIComponent(geoKey)}`);
+  }
+  updateFacilityOutreach(geoKey: string, body: UpdateFacilityOutreachRequest) {
+    return this.req<UpdateFacilityOutreachResponse>('PATCH', `/v1/shipper-crm/facilities/${encodeURIComponent(geoKey)}`, body);
+  }
+  logFacilityActivity(geoKey: string, body: LogFacilityActivityRequest) {
+    return this.req<LogFacilityActivityResponse>('POST', `/v1/shipper-crm/facilities/${encodeURIComponent(geoKey)}/activities`, body);
   }
 }
 

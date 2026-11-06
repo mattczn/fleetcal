@@ -38,6 +38,7 @@ import {
   Calendar, BarChart2, LayoutDashboard, FileCheck2, Receipt, Package,
   Gauge, Users, Settings, ChevronDown, ChevronRight, ChevronsLeft, ChevronsRight,
   Wrench, ClipboardCheck, Fuel as FuelIcon, Target, DollarSign, HandCoins, Route as RouteIcon,
+  Warehouse,
 } from 'lucide-react';
 import { useOrganization, useUser } from '@clerk/nextjs';
 import type { Capability, OrgModule } from '@fleetcal/types';
@@ -105,6 +106,7 @@ export const PRIMARY_NAV: NavItem[] = [
   { kind: 'leaf', href: '/lanes',       label: 'Lanes',          icon: RouteIcon,       cap: 'loads.view_price' },
   { kind: 'leaf', href: '/expenses',    label: 'Expenses',       icon: DollarSign,      cap: 'expenses.access',   module: 'expenses' },
   { kind: 'leaf', href: '/drivers',     label: 'Drivers',        icon: Gauge,           cap: 'drivers.view',      module: 'performance' },
+  { kind: 'leaf', href: '/shipper-crm', label: 'Shipper CRM',    icon: Warehouse,       cap: 'shipperCrm.access', module: 'shipper_crm' },
   { kind: 'leaf', href: '/crm',         label: 'CRM',            icon: Target,          cap: 'crm.access',        module: 'crm', internalOnly: true },
 ];
 
