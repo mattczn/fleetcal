@@ -126,6 +126,7 @@ import type {
   ListFacilitiesResponse, FacilityDetailResponse,
   UpdateFacilityOutreachRequest, UpdateFacilityOutreachResponse,
   LogFacilityActivityRequest, LogFacilityActivityResponse,
+  CreateFacilityContactRequest, FacilityContactInput, FacilityContactResponse,
 } from '@fleetcal/types';
 
 // ── HOS duty board ─────────────────────────────────────────────────────
@@ -2693,6 +2694,15 @@ class RailwayClient {
   }
   logFacilityActivity(geoKey: string, body: LogFacilityActivityRequest) {
     return this.req<LogFacilityActivityResponse>('POST', `/v1/shipper-crm/facilities/${encodeURIComponent(geoKey)}/activities`, body);
+  }
+  addFacilityContact(geoKey: string, body: CreateFacilityContactRequest) {
+    return this.req<FacilityContactResponse>('POST', `/v1/shipper-crm/facilities/${encodeURIComponent(geoKey)}/contacts`, body);
+  }
+  updateFacilityContact(geoKey: string, contactId: string, body: FacilityContactInput) {
+    return this.req<FacilityContactResponse>('PATCH', `/v1/shipper-crm/facilities/${encodeURIComponent(geoKey)}/contacts/${contactId}`, body);
+  }
+  deleteFacilityContact(geoKey: string, contactId: string) {
+    return this.req<{ ok: boolean }>('DELETE', `/v1/shipper-crm/facilities/${encodeURIComponent(geoKey)}/contacts/${contactId}`);
   }
 }
 

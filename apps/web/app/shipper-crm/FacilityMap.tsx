@@ -42,16 +42,63 @@ export default function FacilityMap({ facilities, selectedGeoKey, onSelect }: Pr
   // without re-binding listeners on every render.
   const selectedRef  = useRef<string | null>(selectedGeoKey);
   const onSelectRef  = useRef(onSelect);
-  const styleFnRef   = useRef<google.maps.Data.StylingFunction | null>(null);
+  const selFeatRef   = useRef<google.maps.Data.Feature | null>(null);
+  const didFitRef    = useRef(false);
+  const lastSigRef   = useRef<string>('');
   const [mapReady, setMapReady] = useState(false);
 
   // Keep the click handler's callback current without re-binding listeners.
   useEffect(() => { onSelectRef.current = onSelect; }, [onSelect]);
 
-  // ── (Re)draw features when the facility set changes ────────────────
+  // Latest facilities for applySelection's pan lookup, without making the
+  // selection callback depend on (and re-run for) every array change.
+  const facilitiesRef = useRef(facilities);
+  useEffect(() => { facilitiesRef.current = facilities; }, [facilities]);
+
+  // Ring the selected facility, and pan to it only on a real selection
+  // change (`pan`). Uses overrideStyle on the one feature (found by its
+  // geoKey id) instead of restyling all ~1,300, so a click is O(1). Stable
+  // identity (no deps) so logging a call doesn't re-pan the map.
+  const applySelection = useCallback((gk: string | null, pan: boolean) => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (selFeatRef.current) { map.data.revertStyle(selFeatRef.current); selFeatRef.current = null; }
+    if (!gk) return;
+    const feat = map.data.getFeatureById(gk);
+    if (feat) {
+      const visits = (feat.getProperty('visits') as number) ?? 1;
+      const role   = (feat.getProperty('role') as FacilityRole) ?? 'stop';
+      map.data.overrideStyle(feat, {
+        icon: {
+          path: google.maps.SymbolPath.CIRCLE, scale: radiusFor(visits) + 4,
+          fillColor: ROLE_COLOR[role], fillOpacity: 0.95,
+          strokeColor: '#202124', strokeWeight: 2.5,
+        },
+        zIndex: 10_000,
+      });
+      selFeatRef.current = feat;
+    }
+    if (pan) {
+      const target = facilitiesRef.current.find((f) => f.geoKey === gk);
+      if (target && Number.isFinite(target.lat) && Number.isFinite(target.lng)) {
+        map.panTo({ lat: target.lat, lng: target.lng });
+        if ((map.getZoom() ?? 0) < 9) map.setZoom(11);
+      }
+    }
+  }, []);
+
+  // Rebuild markers ONLY when the set of facilities actually changes — not
+  // when a selection or an outreach edit hands us a new array of the same
+  // points. The signature guard is what stops a logged call from redrawing
+  // the whole map.
   const drawFeatures = useCallback(() => {
     const map = mapRef.current;
     if (!map) return;
+    const sig = [...facilities].map((f) => f.geoKey).sort().join('|');
+    if (sig === lastSigRef.current) return;
+    lastSigRef.current = sig;
+
+    selFeatRef.current = null;
     map.data.forEach((f) => map.data.remove(f));
 
     const bounds = new google.maps.LatLngBounds();
@@ -60,30 +107,18 @@ export default function FacilityMap({ facilities, selectedGeoKey, onSelect }: Pr
       if (!Number.isFinite(f.lat) || !Number.isFinite(f.lng)) continue;
       map.data.addGeoJson({
         type: 'Feature',
+        id: f.geoKey,
         geometry: { type: 'Point', coordinates: [f.lng, f.lat] },
         properties: { geoKey: f.geoKey, visits: f.stats.visitCount, role: f.role, name: f.name ?? '' },
       });
       bounds.extend({ lat: f.lat, lng: f.lng });
       any = true;
     }
-    // Only auto-fit when nothing is selected — a selection drives its own
-    // focus and we don't want to yank the viewport out from under it.
-    if (any && !selectedRef.current) map.fitBounds(bounds, 48);
-  }, [facilities]);
-
-  const focusSelected = useCallback(() => {
-    const map = mapRef.current;
-    if (!map) return;
-    // Re-apply styles so the ring moves to the new selection.
-    if (styleFnRef.current) map.data.setStyle(styleFnRef.current);
-    const gk = selectedRef.current;
-    if (!gk) return;
-    const target = facilities.find((f) => f.geoKey === gk);
-    if (target && Number.isFinite(target.lat) && Number.isFinite(target.lng)) {
-      map.panTo({ lat: target.lat, lng: target.lng });
-      if ((map.getZoom() ?? 0) < 9) map.setZoom(11);
-    }
-  }, [facilities]);
+    // Fit the viewport ONCE, on the first populated draw. Keeping it stable
+    // after that is what stops the map lurching every time you filter.
+    if (any && !didFitRef.current) { map.fitBounds(bounds, 48); didFitRef.current = true; }
+    if (selectedRef.current) applySelection(selectedRef.current, false);
+  }, [facilities, applySelection]);
 
   // ── Init once ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -105,27 +140,22 @@ export default function FacilityMap({ facilities, selectedGeoKey, onSelect }: Pr
         });
         mapRef.current = map;
 
-        const styleFn: google.maps.Data.StylingFunction = (feature) => {
+        // Base style: role colour + size by visits. The selected facility is
+        // handled separately via overrideStyle, so a click never re-runs
+        // this for every point.
+        map.data.setStyle((feature) => {
           const visits = (feature.getProperty('visits') as number) ?? 1;
           const role   = (feature.getProperty('role') as FacilityRole) ?? 'stop';
-          const gk     = feature.getProperty('geoKey') as string;
-          const sel    = gk === selectedRef.current;
           const r      = radiusFor(visits);
           return {
             icon: {
-              path:          google.maps.SymbolPath.CIRCLE,
-              scale:         sel ? r + 4 : r,
-              fillColor:     ROLE_COLOR[role],
-              fillOpacity:   sel ? 0.95 : 0.68,
-              strokeColor:   sel ? '#202124' : '#ffffff',
-              strokeWeight:  sel ? 2.5 : 1,
+              path: google.maps.SymbolPath.CIRCLE, scale: r,
+              fillColor: ROLE_COLOR[role], fillOpacity: 0.68,
+              strokeColor: '#ffffff', strokeWeight: 1,
             },
-            // Busiest on top; selected always wins.
-            zIndex: sel ? 10_000 : Math.round(visits),
+            zIndex: Math.round(visits),
           };
-        };
-        styleFnRef.current = styleFn;
-        map.data.setStyle(styleFn);
+        });
 
         map.data.addListener('click', (e: google.maps.Data.MouseEvent) => {
           const gk = e.feature.getProperty('geoKey') as string | undefined;
@@ -146,14 +176,14 @@ export default function FacilityMap({ facilities, selectedGeoKey, onSelect }: Pr
     return () => { cancelled = true; mapRef.current = null; };
   }, []);
 
-  // Draw once the map is ready, then on every facility-set change.
+  // Draw once the map is ready, then whenever the facility SET changes.
   useEffect(() => { if (mapReady) drawFeatures(); }, [mapReady, drawFeatures]);
 
-  // Keep the selection ref + viewport in sync with the chosen facility.
+  // Selection: ring + pan the one feature, no full restyle.
   useEffect(() => {
     selectedRef.current = selectedGeoKey;
-    if (mapReady) focusSelected();
-  }, [mapReady, selectedGeoKey, focusSelected]);
+    if (mapReady) applySelection(selectedGeoKey, true);
+  }, [mapReady, selectedGeoKey, applySelection]);
 
   return (
     <div

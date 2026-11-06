@@ -21,10 +21,14 @@ import {
   FACILITY_STATUSES,
   FACILITY_CALL_OUTCOMES,
   type Database,
+  type CreateFacilityContactRequest,
   type Facility,
   type FacilityActivity,
   type FacilityActivityKind,
   type FacilityCallOutcome,
+  type FacilityContact,
+  type FacilityContactInput,
+  type FacilityContactResponse,
   type FacilityDetailResponse,
   type FacilityLoad,
   type FacilityOutreach,
@@ -58,6 +62,9 @@ type FacilityDbRow        = Database["public"]["Tables"]["facilities"]["Row"];
 type FacilityInsert       = Database["public"]["Tables"]["facilities"]["Insert"];
 type FacilityUpdate       = Database["public"]["Tables"]["facilities"]["Update"];
 type FacilityActivityRow  = Database["public"]["Tables"]["facility_activities"]["Row"];
+type FacilityContactRow   = Database["public"]["Tables"]["facility_contacts"]["Row"];
+type FacilityContactInsert = Database["public"]["Tables"]["facility_contacts"]["Insert"];
+type FacilityContactUpdate = Database["public"]["Tables"]["facility_contacts"]["Update"];
 
 /** One element of the facilities_rollup jsonb array. */
 interface RollupRow {
@@ -151,6 +158,36 @@ function toActivity(r: FacilityActivityRow): FacilityActivity {
     actorUserId: r.actor_user_id ?? undefined,
     createdAt:   r.created_at,
   };
+}
+
+function toContact(r: FacilityContactRow): FacilityContact {
+  return {
+    id:         r.id,
+    facilityId: r.facility_id,
+    firstName:  r.first_name ?? undefined,
+    lastName:   r.last_name ?? undefined,
+    title:      r.title ?? undefined,
+    email:      r.email ?? undefined,
+    phone:      r.phone ?? undefined,
+    createdAt:  r.created_at,
+  };
+}
+
+/** Contacts for a facility. Defensive: if the facility_contacts table is
+ *  not there yet (migration lagging a deploy), return [] rather than 500
+ *  the whole detail drawer. */
+async function contactsForFacility(orgId: string, facilityId: string): Promise<FacilityContact[]> {
+  try {
+    const { data, error } = await supabase
+      .from("facility_contacts").select("*")
+      .eq("org_id", orgId).eq("facility_id", facilityId)
+      .order("created_at", { ascending: true });
+    if (error) throw error;
+    return ((data ?? []) as FacilityContactRow[]).map(toContact);
+  } catch (err) {
+    console.warn("[shipper-crm] contacts read failed (missing table?):", err);
+    return [];
+  }
 }
 
 // ── Rollup cache ───────────────────────────────────────────────────────
@@ -276,13 +313,14 @@ shipperCrm.get("/facilities/:geoKey", async (c) => {
     const rollupRow = byKey.get(geoKey) ?? (outreach ? syntheticRow(outreach) : null);
     if (!rollupRow) return c.json({ error: "not_found" }, 404);
 
-    const [loadsRes, actsRes] = await Promise.all([
+    const [loadsRes, actsRes, contacts] = await Promise.all([
       supabase.rpc("facility_loads", { p_org_id: orgId, p_geo_key: geoKey }),
       outreach
         ? supabase.from("facility_activities").select("*")
             .eq("org_id", orgId).eq("facility_id", outreach.id)
             .order("created_at", { ascending: false })
         : Promise.resolve({ data: [] as FacilityActivityRow[], error: null }),
+      outreach ? contactsForFacility(orgId, outreach.id) : Promise.resolve([] as FacilityContact[]),
     ]);
     if (loadsRes.error) throw new Error(`facility_loads: ${loadsRes.error.message}`);
 
@@ -293,6 +331,7 @@ shipperCrm.get("/facilities/:geoKey", async (c) => {
       facility: toFacility(rollupRow, outreach),
       loads,
       activities,
+      contacts,
     } satisfies FacilityDetailResponse);
   } catch (err) {
     console.error("[shipper-crm] detail failed:", err);
@@ -416,6 +455,83 @@ shipperCrm.post("/facilities/:geoKey/activities", async (c) => {
     } satisfies LogFacilityActivityResponse);
   } catch (err) {
     console.error("[shipper-crm] activity failed:", err);
+    return c.json({ error: "internal", reason: err instanceof Error ? err.message : String(err) }, 500);
+  }
+});
+
+// ── Contacts (multiple per facility) ───────────────────────────────────
+
+shipperCrm.post("/facilities/:geoKey/contacts", async (c) => {
+  const orgId  = c.get("orgId");
+  const userId = c.get("userId");
+  const geoKey = c.req.param("geoKey");
+  if (!geoKey) return c.json({ error: "bad_request", reason: "missing geoKey" }, 400);
+
+  const body = await c.req.json<CreateFacilityContactRequest>().catch(() => null);
+  if (!body || !body.snapshot) {
+    return c.json({ error: "bad_request", reason: "missing snapshot" }, 400);
+  }
+  try {
+    const row = await ensureFacility(orgId, geoKey, body.snapshot, userId);
+    const insert: FacilityContactInsert = {
+      org_id:     orgId,
+      facility_id: row.id,
+      first_name: body.firstName?.trim() || null,
+      last_name:  body.lastName?.trim() || null,
+      title:      body.title?.trim() || null,
+      email:      body.email?.trim() || null,
+      phone:      body.phone?.trim() || null,
+      created_by: userId ?? null,
+    };
+    const { data, error } = await supabase
+      .from("facility_contacts").insert(insert).select("*").single();
+    if (error) throw new Error(`contact insert: ${error.message}`);
+    return c.json({ contact: toContact(data as FacilityContactRow) } satisfies FacilityContactResponse);
+  } catch (err) {
+    console.error("[shipper-crm] contact create failed:", err);
+    return c.json({ error: "internal", reason: err instanceof Error ? err.message : String(err) }, 500);
+  }
+});
+
+shipperCrm.patch("/facilities/:geoKey/contacts/:contactId", async (c) => {
+  const orgId     = c.get("orgId");
+  const contactId = c.req.param("contactId");
+  if (!contactId) return c.json({ error: "bad_request", reason: "missing contactId" }, 400);
+
+  const body = await c.req.json<FacilityContactInput>().catch(() => null);
+  if (!body) return c.json({ error: "bad_request", reason: "invalid body" }, 400);
+
+  const patch: FacilityContactUpdate = {};
+  if ("firstName" in body) patch.first_name = body.firstName?.trim() || null;
+  if ("lastName"  in body) patch.last_name  = body.lastName?.trim() || null;
+  if ("title"     in body) patch.title      = body.title?.trim() || null;
+  if ("email"     in body) patch.email      = body.email?.trim() || null;
+  if ("phone"     in body) patch.phone      = body.phone?.trim() || null;
+
+  try {
+    const { data, error } = await supabase
+      .from("facility_contacts").update(patch)
+      .eq("org_id", orgId).eq("id", contactId).select("*").single();
+    if (error) throw new Error(`contact update: ${error.message}`);
+    return c.json({ contact: toContact(data as FacilityContactRow) } satisfies FacilityContactResponse);
+  } catch (err) {
+    console.error("[shipper-crm] contact update failed:", err);
+    return c.json({ error: "internal", reason: err instanceof Error ? err.message : String(err) }, 500);
+  }
+});
+
+shipperCrm.delete("/facilities/:geoKey/contacts/:contactId", async (c) => {
+  const orgId     = c.get("orgId");
+  const contactId = c.req.param("contactId");
+  if (!contactId) return c.json({ error: "bad_request", reason: "missing contactId" }, 400);
+  try {
+    const { error } = await supabase
+      .from("facility_contacts").delete()
+      .eq("org_id", orgId).eq("id", contactId);
+    if (error) throw new Error(`contact delete: ${error.message}`);
+    return c.json({ ok: true });
+  } catch (err) {
+    console.error("[shipper-crm] contact delete failed:", err);
     return c.json({ error: "internal", reason: err instanceof Error ? err.message : String(err) }, 500);
   }
 });

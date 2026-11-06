@@ -125,6 +125,27 @@ export interface Facility {
   outreach?: FacilityOutreach;
 }
 
+/** One contact person at a facility (multiple per facility). */
+export interface FacilityContact {
+  id: string;
+  facilityId: string;
+  firstName?: string;
+  lastName?: string;
+  title?: string;
+  email?: string;
+  phone?: string;
+  createdAt: string;
+}
+
+/** Editable contact fields (create + update share this). */
+export interface FacilityContactInput {
+  firstName?: string | null;
+  lastName?: string | null;
+  title?: string | null;
+  email?: string | null;
+  phone?: string | null;
+}
+
 export interface FacilityActivity {
   id: string;
   facilityId: string;
@@ -180,6 +201,16 @@ export interface FacilityDetailResponse {
   facility: Facility;
   loads: FacilityLoad[];
   activities: FacilityActivity[];
+  contacts: FacilityContact[];
+}
+
+export interface CreateFacilityContactRequest extends FacilityContactInput {
+  /** Snapshot to create the facility row on first touch, same as outreach. */
+  snapshot: FacilitySnapshot;
+}
+
+export interface FacilityContactResponse {
+  contact: FacilityContact;
 }
 
 /** Merge-write the outreach state. Only provided keys change; the snapshot

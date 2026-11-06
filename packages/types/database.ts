@@ -2137,6 +2137,48 @@ export type Database = {
         }
         Relationships: []
       }
+      facility_contacts: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          email: string | null
+          facility_id: string
+          first_name: string | null
+          id: string
+          last_name: string | null
+          org_id: string
+          phone: string | null
+          title: string | null
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          email?: string | null
+          facility_id: string
+          first_name?: string | null
+          id?: string
+          last_name?: string | null
+          org_id: string
+          phone?: string | null
+          title?: string | null
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          email?: string | null
+          facility_id?: string
+          first_name?: string | null
+          id?: string
+          last_name?: string | null
+          org_id?: string
+          phone?: string | null
+          title?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never

@@ -14,15 +14,15 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   X, Phone, Mail, StickyNote, Users as MeetingIcon, ArrowRight, Clock,
-  MapPin, Loader2, Check, Truck,
+  MapPin, Loader2, Check, Truck, Plus, Trash2, Pencil, User,
 } from 'lucide-react';
 import { railway } from '@/lib/railway';
 import {
   FACILITY_STATUSES, FACILITY_STATUS_LABEL,
   FACILITY_CALL_OUTCOMES, FACILITY_CALL_OUTCOME_LABEL,
   type Facility, type FacilityActivity, type FacilityActivityKind,
-  type FacilityCallOutcome, type FacilityLoad, type FacilityStatus,
-  type FacilitySnapshot,
+  type FacilityCallOutcome, type FacilityContact, type FacilityContactInput,
+  type FacilityLoad, type FacilityStatus, type FacilitySnapshot,
 } from '@fleetcal/types';
 
 interface Props {
@@ -78,22 +78,21 @@ export default function FacilityDetail({ facility, onClose, onUpdated }: Props) 
     lat: facility.lat, lng: facility.lng,
   };
 
-  const [fac,     setFac]     = useState<Facility>(facility);
-  const [loads,   setLoads]   = useState<FacilityLoad[]>([]);
-  const [acts,    setActs]    = useState<FacilityActivity[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [err,     setErr]     = useState<string | null>(null);
+  const [fac,      setFac]      = useState<Facility>(facility);
+  const [loads,    setLoads]    = useState<FacilityLoad[]>([]);
+  const [acts,     setActs]     = useState<FacilityActivity[]>([]);
+  const [contacts, setContacts] = useState<FacilityContact[]>([]);
+  const [addingContact, setAddingContact] = useState(false);
+  const [loading,  setLoading]  = useState(true);
+  const [err,      setErr]      = useState<string | null>(null);
 
   // Outreach form (seeded from the loaded facility's stored row).
   const o = fac.outreach;
   const [status,  setStatus]  = useState<FacilityStatus>(o?.status ?? 'prospect');
   const [nextAt,  setNextAt]  = useState(o?.nextActionAt?.slice(0, 10) ?? '');
-  const [cName,   setCName]   = useState(o?.contactName ?? '');
-  const [cPhone,  setCPhone]  = useState(o?.contactPhone ?? '');
-  const [cEmail,  setCEmail]  = useState(o?.contactEmail ?? '');
   const [notes,   setNotes]   = useState(o?.notes ?? '');
-  const [savingContact, setSavingContact] = useState(false);
-  const [savedContact,  setSavedContact]  = useState(false);
+  const [savingOutreach, setSavingOutreach] = useState(false);
+  const [savedOutreach,  setSavedOutreach]  = useState(false);
 
   // Reach-out log form.
   const [logKind,    setLogKind]    = useState<FacilityActivityKind | null>(null);
@@ -105,9 +104,6 @@ export default function FacilityDetail({ facility, onClose, onUpdated }: Props) 
     const ou = f.outreach;
     setStatus(ou?.status ?? 'prospect');
     setNextAt(ou?.nextActionAt?.slice(0, 10) ?? '');
-    setCName(ou?.contactName ?? '');
-    setCPhone(ou?.contactPhone ?? '');
-    setCEmail(ou?.contactEmail ?? '');
     setNotes(ou?.notes ?? '');
   }, []);
 
@@ -120,6 +116,7 @@ export default function FacilityDetail({ facility, onClose, onUpdated }: Props) 
         setFac(res.facility);
         setLoads(res.loads);
         setActs(res.activities);
+        setContacts(res.contacts ?? []);
         seedForm(res.facility);
         setErr(null);
       })
@@ -145,25 +142,42 @@ export default function FacilityDetail({ facility, onClose, onUpdated }: Props) 
     }
   }
 
-  async function saveContact() {
-    setSavingContact(true);
+  async function saveOutreach() {
+    setSavingOutreach(true);
     try {
       const { facility: updated } = await railway.updateFacilityOutreach(geoKey, {
         snapshot,
         nextActionAt: nextAt ? nextAt : null,
-        contactName:  cName.trim() || null,
-        contactPhone: cPhone.trim() || null,
-        contactEmail: cEmail.trim() || null,
         notes:        notes.trim() || null,
       });
       applyFacility(updated);
-      setSavedContact(true);
-      setTimeout(() => setSavedContact(false), 1800);
+      setSavedOutreach(true);
+      setTimeout(() => setSavedOutreach(false), 1800);
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Failed to save');
     } finally {
-      setSavingContact(false);
+      setSavingOutreach(false);
     }
+  }
+
+  async function addContact(v: FacilityContactInput) {
+    try {
+      const { contact } = await railway.addFacilityContact(geoKey, { snapshot, ...v });
+      setContacts((prev) => [...prev, contact]);
+      setAddingContact(false);
+    } catch (e) { setErr(e instanceof Error ? e.message : 'Failed to add contact'); }
+  }
+  async function updateContact(id: string, v: FacilityContactInput) {
+    try {
+      const { contact } = await railway.updateFacilityContact(geoKey, id, v);
+      setContacts((prev) => prev.map((c) => (c.id === id ? contact : c)));
+    } catch (e) { setErr(e instanceof Error ? e.message : 'Failed to update contact'); }
+  }
+  async function removeContact(id: string) {
+    try {
+      await railway.deleteFacilityContact(geoKey, id);
+      setContacts((prev) => prev.filter((c) => c.id !== id));
+    } catch (e) { setErr(e instanceof Error ? e.message : 'Failed to remove contact'); }
   }
 
   async function refreshActivities() {
@@ -272,7 +286,7 @@ export default function FacilityDetail({ facility, onClose, onUpdated }: Props) 
               </select>
             </div>
             <div className="flex flex-col" style={{ flex: 'none' }}>
-              <input type="date" value={nextAt} onChange={(e) => setNextAt(e.target.value)} onBlur={saveContact}
+              <input type="date" value={nextAt} onChange={(e) => setNextAt(e.target.value)} onBlur={saveOutreach}
                 title="Follow-up date"
                 style={{ height: 34, padding: '0 8px', borderRadius: 8, border: '1px solid var(--gc-border)', background: 'var(--gc-surface)', fontSize: 12, color: 'var(--gc-text-2)', outline: 'none' }} />
             </div>
@@ -318,22 +332,33 @@ export default function FacilityDetail({ facility, onClose, onUpdated }: Props) 
             </div>
           )}
 
-          {/* contact + notes */}
-          <SectionLabel>Contact</SectionLabel>
-          <div className="flex flex-col gap-2" style={{ marginBottom: 10 }}>
-            <input value={cName} onChange={(e) => setCName(e.target.value)} placeholder="Contact name" style={inputStyle} />
-            <div className="flex gap-2">
-              <input value={cPhone} onChange={(e) => setCPhone(e.target.value)} placeholder="Phone" style={{ ...inputStyle, flex: 1 }} />
-              <input value={cEmail} onChange={(e) => setCEmail(e.target.value)} placeholder="Email" style={{ ...inputStyle, flex: 1 }} />
-            </div>
-            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Notes" rows={2} style={{ ...inputStyle, resize: 'vertical' }} />
+          {/* contacts */}
+          <SectionLabel>{contacts.length ? `Contacts (${contacts.length})` : 'Contacts'}</SectionLabel>
+          <div className="flex flex-col gap-2" style={{ marginBottom: 20 }}>
+            {contacts.map((ct) => (
+              <ContactCard key={ct.id} contact={ct} onSave={updateContact} onDelete={removeContact} />
+            ))}
+            {addingContact ? (
+              <ContactForm onSubmit={addContact} onCancel={() => setAddingContact(false)} />
+            ) : (
+              <button onClick={() => setAddingContact(true)}
+                className="inline-flex items-center justify-center gap-1.5"
+                style={{ height: 34, borderRadius: 8, border: '1px dashed var(--gc-border)', background: 'var(--gc-surface)', color: 'var(--gc-text-2)', fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}>
+                <Plus size={14} /> Add contact
+              </button>
+            )}
           </div>
-          <div className="flex items-center justify-end" style={{ marginBottom: 20 }}>
-            <button onClick={saveContact} disabled={savingContact}
+
+          {/* notes */}
+          <SectionLabel>Notes</SectionLabel>
+          <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Notes about this facility…" rows={2}
+            style={{ ...inputStyle, height: 'auto', padding: '8px 10px', width: '100%', resize: 'vertical' }} />
+          <div className="flex items-center justify-end" style={{ marginTop: 8, marginBottom: 20 }}>
+            <button onClick={saveOutreach} disabled={savingOutreach}
               className="inline-flex items-center gap-1.5"
-              style={{ height: 30, padding: '0 14px', borderRadius: 8, border: '1px solid var(--gc-border)', background: savedContact ? '#e6f4ea' : 'var(--gc-surface)', color: savedContact ? '#137333' : 'var(--gc-text-2)', fontSize: 12, fontWeight: 700 }}>
-              {savingContact ? <Loader2 size={13} className="animate-spin" /> : savedContact ? <Check size={13} /> : null}
-              {savedContact ? 'Saved' : 'Save contact'}
+              style={{ height: 30, padding: '0 14px', borderRadius: 8, border: '1px solid var(--gc-border)', background: savedOutreach ? '#e6f4ea' : 'var(--gc-surface)', color: savedOutreach ? '#137333' : 'var(--gc-text-2)', fontSize: 12, fontWeight: 700 }}>
+              {savingOutreach ? <Loader2 size={13} className="animate-spin" /> : savedOutreach ? <Check size={13} /> : null}
+              {savedOutreach ? 'Saved' : 'Save notes'}
             </button>
           </div>
 
@@ -442,5 +467,86 @@ function LogButton({ active, icon: Icon, label, onClick }: {
       }}>
       <Icon size={14} /> {label}
     </button>
+  );
+}
+
+function ContactForm({ initial, onSubmit, onCancel }: {
+  initial?: FacilityContact;
+  onSubmit: (v: FacilityContactInput) => void | Promise<void>;
+  onCancel: () => void;
+}) {
+  const [first, setFirst] = useState(initial?.firstName ?? '');
+  const [last,  setLast]  = useState(initial?.lastName ?? '');
+  const [title, setTitle] = useState(initial?.title ?? '');
+  const [email, setEmail] = useState(initial?.email ?? '');
+  const [phone, setPhone] = useState(initial?.phone ?? '');
+  const [busy,  setBusy]  = useState(false);
+
+  const submit = async () => {
+    setBusy(true);
+    await onSubmit({
+      firstName: first.trim() || null, lastName: last.trim() || null,
+      title: title.trim() || null, email: email.trim() || null, phone: phone.trim() || null,
+    });
+    setBusy(false);
+  };
+
+  return (
+    <div style={{ border: '1px solid var(--gc-border)', borderRadius: 10, padding: 10, background: 'var(--gc-bg)' }}>
+      <div className="flex gap-2" style={{ marginBottom: 6 }}>
+        <input value={first} onChange={(e) => setFirst(e.target.value)} placeholder="First name" style={{ ...inputStyle, flex: 1, minWidth: 0 }} />
+        <input value={last}  onChange={(e) => setLast(e.target.value)}  placeholder="Last name"  style={{ ...inputStyle, flex: 1, minWidth: 0 }} />
+      </div>
+      <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Title (e.g. Shipping Manager)" style={{ ...inputStyle, width: '100%', marginBottom: 6 }} />
+      <div className="flex gap-2" style={{ marginBottom: 8 }}>
+        <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Phone" style={{ ...inputStyle, flex: 1, minWidth: 0 }} />
+        <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" style={{ ...inputStyle, flex: 1, minWidth: 0 }} />
+      </div>
+      <div className="flex items-center justify-end gap-2">
+        <button onClick={onCancel} style={{ fontSize: 12, fontWeight: 600, color: 'var(--gc-text-3)' }}>Cancel</button>
+        <button onClick={submit} disabled={busy} className="inline-flex items-center gap-1.5"
+          style={{ height: 30, padding: '0 14px', borderRadius: 8, background: '#1a73e8', color: '#fff', fontSize: 12, fontWeight: 700, opacity: busy ? 0.6 : 1 }}>
+          {busy ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />} Save
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ContactCard({ contact, onSave, onDelete }: {
+  contact: FacilityContact;
+  onSave: (id: string, v: FacilityContactInput) => void | Promise<void>;
+  onDelete: (id: string) => void | Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  if (editing) {
+    return (
+      <ContactForm initial={contact} onCancel={() => setEditing(false)}
+        onSubmit={async (v) => { await onSave(contact.id, v); setEditing(false); }} />
+    );
+  }
+  const name = [contact.firstName, contact.lastName].filter(Boolean).join(' ') || 'Unnamed contact';
+  return (
+    <div className="flex items-start gap-2.5" style={{ border: '1px solid var(--gc-border-light)', borderRadius: 10, padding: '9px 11px' }}>
+      <div className="grid place-items-center" style={{ width: 28, height: 28, borderRadius: 999, background: 'var(--gc-bg)', color: 'var(--gc-text-2)', flex: 'none' }}>
+        <User size={14} />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="truncate" style={{ fontSize: 13, fontWeight: 700, color: 'var(--gc-text-1)' }}>
+          {name}
+          {contact.title ? <span style={{ fontWeight: 500, color: 'var(--gc-text-3)' }}> · {contact.title}</span> : null}
+        </div>
+        {(contact.phone || contact.email) && (
+          <div className="flex flex-col" style={{ marginTop: 2, gap: 1 }}>
+            {contact.phone && <a href={`tel:${contact.phone}`} style={{ fontSize: 12, color: 'var(--gc-blue-text, #1558d6)' }}>{contact.phone}</a>}
+            {contact.email && <a href={`mailto:${contact.email}`} className="truncate" style={{ fontSize: 12, color: 'var(--gc-blue-text, #1558d6)' }}>{contact.email}</a>}
+          </div>
+        )}
+      </div>
+      <div className="flex items-center gap-1" style={{ flex: 'none' }}>
+        <button onClick={() => setEditing(true)} className="grid place-items-center" style={{ width: 26, height: 26, color: 'var(--gc-text-3)' }} title="Edit"><Pencil size={13} /></button>
+        <button onClick={() => onDelete(contact.id)} className="grid place-items-center" style={{ width: 26, height: 26, color: 'var(--gc-text-3)' }} title="Remove"><Trash2 size={13} /></button>
+      </div>
+    </div>
   );
 }
