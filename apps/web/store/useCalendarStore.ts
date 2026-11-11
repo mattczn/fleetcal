@@ -214,6 +214,12 @@ interface CalendarStore extends ModalState {
   lastKnownAssetCount: number;
   hydrate: (payload: HydratePayload) => void;
   extendLoadedRange: (start: string, end: string) => Promise<void>;
+  /** Re-pull the window already on screen, even though the range is
+   *  covered. extendLoadedRange deliberately early-returns in that case,
+   *  so there was no way to REFRESH what's loaded — only a page reload
+   *  repaired a calendar that had drifted. This is the repair path for
+   *  a realtime gap: reconnect, tab refocus, or the periodic heartbeat. */
+  resyncLoadedRange: () => Promise<void>;
   /** Splice fetched events into the store. Used when a screen pulls
    *  loads outside the calendar's loaded window (e.g. /closeout) and
    *  needs the EventModal to find them by id. Existing ids are
@@ -695,6 +701,35 @@ export const useCalendarStore = create<CalendarStore>()(
       });
     } catch (err) {
       console.error('[store] extendLoadedRange:', err);
+    }
+  },
+
+  resyncLoadedRange: async () => {
+    const { orgId, loadedStart, loadedEnd, isDemo } = get();
+    if (!orgId || isDemo || !loadedStart || !loadedEnd) return;
+    try {
+      const { events, deletedEvents } = await fetchEventsInRange(orgId, loadedStart, loadedEnd);
+      set((state) => {
+        // Upsert by id. A plain replace would drop events the caller
+        // extended into after this fetch started, and any event the
+        // server no longer returns is handled by the delete channel —
+        // dropping rows here on a partial response would blank the
+        // calendar on a flaky connection.
+        const freshById = new Map(events.map(e => [e.id, e]));
+        const updated   = state.events.map(e => freshById.get(e.id) ?? e);
+        const additions = events.filter(e => !state.events.some(s => s.id === e.id));
+        const freshDelById = new Map(deletedEvents.map(e => [e.id, e]));
+        const updatedDel   = state.deletedEvents.map(e => freshDelById.get(e.id) ?? e);
+        const delAdditions = deletedEvents.filter(e => !state.deletedEvents.some(s => s.id === e.id));
+        return {
+          events:        [...updated,    ...additions],
+          deletedEvents: [...updatedDel, ...delAdditions],
+        };
+      });
+    } catch (err) {
+      // Non-fatal and silent-ish: this runs on a timer and on tab focus,
+      // so a transient failure just means the next tick tries again.
+      console.warn('[store] resyncLoadedRange:', err);
     }
   },
 

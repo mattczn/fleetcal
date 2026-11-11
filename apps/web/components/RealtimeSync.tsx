@@ -32,6 +32,12 @@ import { getSupabase } from '@/lib/supabase';
 import { railway } from '@/lib/railway';
 import { useCalendarStore } from '@/store/useCalendarStore';
 
+/** How often a visible calendar re-pulls its window regardless of
+ *  realtime. Short enough that a silent socket failure costs minutes
+ *  rather than a working day; long enough that a dispatcher sitting on
+ *  the calendar all day adds ~30 requests an hour, not thousands. */
+const HEARTBEAT_MS = 120_000;
+
 export default function RealtimeSync() {
   const { organization } = useOrganization();
   const orgId = organization?.id ?? null;
@@ -65,13 +71,51 @@ export default function RealtimeSync() {
       return token;
     };
 
+    // ── Recovery ──────────────────────────────────────────────────────
+    // A channel that errors, times out or closes used to be logged and
+    // then left dead for the life of the tab: realtime silently stopped,
+    // nothing on screen said so, and the only repair was a page reload.
+    // One laptop sleep or VPN hop was enough. Now a failure tears the
+    // whole set down and rebuilds it, re-authing first (RLS on
+    // postgres_changes is evaluated at JOIN, so a rebuilt channel needs
+    // a fresh token before it subscribes, not after).
+    //
+    // Backoff is per-rebuild, capped, and reset on a clean SUBSCRIBED,
+    // so a server that is genuinely down doesn't get hammered.
+    let rebuildTimer: ReturnType<typeof setTimeout> | null = null;
+    let rebuildAttempt = 0;
+    let rebuilding = false;
+
+    const scheduleRebuild = (why: string) => {
+      if (cancelled || rebuilding) return;
+      rebuilding = true;
+      const delay = Math.min(30_000, 1_000 * 2 ** rebuildAttempt) + Math.random() * 500;
+      rebuildAttempt += 1;
+      console.warn(`[realtime] rebuilding channels in ${Math.round(delay)}ms — ${why}`);
+      rebuildTimer = setTimeout(() => {
+        if (cancelled) return;
+        void (async () => {
+          for (const ch of channels.splice(0)) { try { await supabase.removeChannel(ch); } catch { /* already gone */ } }
+          await openChannels();
+          rebuilding = false;
+          // Whatever changed while we were disconnected was never
+          // pushed to us — realtime only delivers live edges. Pull the
+          // visible window so the gap is actually repaired, not just
+          // the pipe reopened.
+          void useCalendarStore.getState().resyncLoadedRange();
+        })();
+      }, delay);
+    };
+
     const onSubStatus = (label: string) => (status: string) => {
+      if (status === 'SUBSCRIBED') { rebuildAttempt = 0; return; }
       if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
         console.warn(`[realtime] ${label} channel status: ${status}`);
+        scheduleRebuild(`${label} ${status}`);
       }
     };
 
-    (async () => {
+    async function openChannels() {
       // Authorize the socket BEFORE joining any channel — postgres_changes
       // RLS is evaluated at join time, so subscribing first would bind the
       // channels as `anon` and they'd never recover from a later setAuth.
@@ -80,8 +124,6 @@ export default function RealtimeSync() {
       if (!token) {
         console.warn('[realtime] no Clerk token available — realtime updates will be blocked by RLS');
       }
-      // Keep the socket token fresh ahead of the ~60s Clerk TTL.
-      refreshTimer = setInterval(() => { void applyRealtimeToken(); }, 50_000);
 
       channels.push(
         supabase
@@ -176,11 +218,43 @@ export default function RealtimeSync() {
           )
           .subscribe(onSubStatus('load-documents')),
       );
-    })();
+    }
+
+    // Keep the socket token fresh ahead of the ~60s Clerk TTL.
+    refreshTimer = setInterval(() => { void applyRealtimeToken(); }, 50_000);
+
+    void openChannels();
+
+    // ── Repair triggers ───────────────────────────────────────────────
+    // Realtime only delivers edges as they happen, so any disconnection
+    // leaves a hole nothing fills. These three pull the visible window
+    // back to the truth.
+    //
+    // Coming back to the tab and regaining the network are the two
+    // moments a gap is most likely — a backgrounded tab can have its
+    // socket dropped without any event firing, so the status handler
+    // above never sees it.
+    const resync = () => { void useCalendarStore.getState().resyncLoadedRange(); };
+    const onVisible = () => { if (document.visibilityState === 'visible') resync(); };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('online', resync);
+
+    // Heartbeat: the floor under everything else. Realtime stays the
+    // fast path — this just guarantees a tab converges within a couple
+    // of minutes even when the socket fails in a way nothing detects,
+    // which is the failure the team has actually been hitting. Skipped
+    // while hidden so background tabs don't poll all night.
+    const heartbeat = setInterval(() => {
+      if (document.visibilityState === 'visible') resync();
+    }, HEARTBEAT_MS);
 
     return () => {
       cancelled = true;
       if (refreshTimer) clearInterval(refreshTimer);
+      if (rebuildTimer) clearTimeout(rebuildTimer);
+      clearInterval(heartbeat);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('online', resync);
       for (const ch of channels) supabase.removeChannel(ch);
     };
   }, [orgId, updateFromRemote, removeFromRemote]);
