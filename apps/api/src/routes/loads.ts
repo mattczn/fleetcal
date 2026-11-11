@@ -1498,6 +1498,10 @@ loads.patch("/:id", requireCapability("loads.edit"), async (c) => {
   // request didn't include accessorials at all (no work to diff).
   let existingAccessorialsBeforeMerge: ServerAccessorialSnapshot[] | null = null;
 
+  /** Statuses that represent a decision somebody made. Once set, only
+   *  closeout may take them back — see the merge below. */
+  const DECIDED_STATUSES = new Set(["approved", "denied"]);
+
   if ("accessorials" in body) {
     type AccessorialRow = {
       id: string;
@@ -1535,15 +1539,45 @@ loads.patch("/:id", requireCapability("loads.edit"), async (c) => {
       const merged = incoming.map((a) => {
         const prev = existingById.get(a.id);
         if (!prev) return a; // new accessorial — take as-is
-        // Preserve closeout-owned fields. `status` is the active one;
-        // include the approved/denied timestamps + actor if your
-        // schema later adds them and we'll keep these forwards-compatible.
+        // Preserve closeout-owned fields; include the approved/denied
+        // timestamps + actor if the schema later adds them and we'll
+        // keep these forwards-compatible.
         const preserved: Partial<AccessorialRow> = {};
-        if (prev.status        !== undefined) preserved.status        = prev.status;
         if (prev.approvedAt    !== undefined) preserved.approvedAt    = prev.approvedAt;
         if (prev.approvedBy    !== undefined) preserved.approvedBy    = prev.approvedBy;
         if (prev.deniedAt      !== undefined) preserved.deniedAt      = prev.deniedAt;
         if (prev.deniedBy      !== undefined) preserved.deniedBy      = prev.deniedBy;
+
+        // `status` used to be preserved unconditionally, which meant the
+        // modal could never change it — while still SHOWING a status
+        // dropdown and writing "approved" into the load's history from
+        // its own form state. Load 1021537: the same edit moved amount
+        // 0 → 12.50 and status requested → approved; the amount landed,
+        // the status was discarded, and the history claimed both. The
+        // dispatcher had no way to tell.
+        //
+        // Now an incoming status applies, EXCEPT where it would undo a
+        // decision already made. That is the case the blanket preserve
+        // existed for: closeout approves while a modal sits open, the
+        // modal later saves an unrelated accessorial edit and carries
+        // its stale "requested" along, silently reversing the approval.
+        // Moving requested → approved/denied is the dispatcher acting;
+        // moving approved/denied → requested is almost always a stale
+        // copy, so it's refused and the decision stands.
+        //
+        // Consequence worth knowing: un-approving from the modal does
+        // nothing. That is deliberate — reversing a decision belongs in
+        // closeout (PATCH /v1/closeout/loads/:id, followUpResolution
+        // type 'accessorial_status'), which records who reversed it.
+        const incomingStatus = typeof a.status    === "string" ? a.status    : undefined;
+        const prevStatus     = typeof prev.status === "string" ? prev.status : undefined;
+        const undoesDecision =
+          prevStatus !== undefined &&
+          DECIDED_STATUSES.has(prevStatus) &&
+          (incomingStatus === undefined || !DECIDED_STATUSES.has(incomingStatus));
+        if (incomingStatus === undefined || undoesDecision) {
+          if (prevStatus !== undefined) preserved.status = prevStatus;
+        }
         return { ...a, ...preserved };
       });
       update.accessorials = merged;
