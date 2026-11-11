@@ -1,5 +1,6 @@
 // Mapbox geocoding and road-distance helpers (server-side only)
 import { find as tzFind } from 'geo-tz';
+import { extractCityState, type GoogleAddressComponent } from './addressParts';
 
 const MAPBOX_TOKEN  = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? '';
 const GOOGLE_KEY    = process.env.GOOGLE_MAPS_API_KEY ?? '';
@@ -25,35 +26,6 @@ export interface GeoResult {
   /** Two-letter state / province code from `administrative_area_level_1`. */
   state?:    string;
   timezone?: string;
-}
-
-interface GoogleAddressComponent {
-  long_name:  string;
-  short_name: string;
-  types:      string[];
-}
-
-/**
- * Pull city + state out of Google's structured address_components in a
- * way that's stable across countries (US locality, UK postal_town, etc.).
- */
-function extractCityState(components: GoogleAddressComponent[] | undefined):
-  { city?: string; state?: string }
-{
-  if (!components?.length) return {};
-  const find = (...types: string[]) =>
-    components.find((c) => types.some((t) => c.types.includes(t)));
-  const cityComp =
-    find("locality") ??
-    find("postal_town") ??
-    find("sublocality_level_1") ??
-    find("sublocality") ??
-    find("administrative_area_level_3");
-  const stateComp = find("administrative_area_level_1");
-  return {
-    city:  cityComp?.long_name,
-    state: stateComp?.short_name,
-  };
 }
 
 /** Geocode a single address string → lat/lng + city/state + IANA timezone. */
@@ -200,3 +172,6 @@ export async function geocodeAll(
 
   return results;
 }
+
+export { extractCityState, parseCityStateFromAddress } from './addressParts';
+export type { GoogleAddressComponent } from './addressParts';

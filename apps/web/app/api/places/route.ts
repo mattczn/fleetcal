@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
+import { extractCityState, type GoogleAddressComponent } from '@/lib/addressParts';
 
 const KEY = process.env.GOOGLE_MAPS_API_KEY ?? '';
 
@@ -37,12 +38,21 @@ export async function GET(req: NextRequest) {
   // Return place details (lat/lng + timezone) for a selected suggestion
   if (place_id) {
     const res  = await fetch(
-      `https://maps.googleapis.com/maps/api/place/details/json?place_id=${place_id}&fields=geometry,formatted_address&key=${KEY}${tokenParam}`,
+      // address_components is requested so the caller gets city/state
+      // alongside the coordinates. Without it a dispatcher who picks a
+      // new address keeps the PREVIOUS stop's city — the address and
+      // pin move, the city doesn't, and every surface that reads city
+      // still names the old town.
+      `https://maps.googleapis.com/maps/api/place/details/json?place_id=${place_id}&fields=geometry,formatted_address,address_components&key=${KEY}${tokenParam}`,
       { cache: 'no-store' },
     );
     const data = await res.json() as {
       status?: string;
-      result?: { geometry: { location: { lat: number; lng: number } }; formatted_address: string };
+      result?: {
+        geometry: { location: { lat: number; lng: number } };
+        formatted_address: string;
+        address_components?: GoogleAddressComponent[];
+      };
     };
     if (data.status !== 'OK' || !data.result) {
       console.error('Places Details API error:', data.status, place_id);
@@ -68,7 +78,8 @@ export async function GET(req: NextRequest) {
       if (tzData.status === 'OK') timezone = tzData.timeZoneId;
     } catch { /* best-effort — coordinates are what matter */ }
 
-    return NextResponse.json({ result: { lat, lng, timezone, address: data.result.formatted_address } });
+    const { city, state } = extractCityState(data.result.address_components);
+    return NextResponse.json({ result: { lat, lng, timezone, city, state, address: data.result.formatted_address } });
   }
 
   // Return autocomplete suggestions

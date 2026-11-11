@@ -21,6 +21,7 @@ import Tooltip from '@/components/ui/Tooltip';
 import type { Stop } from '@/lib/types';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { railway } from '@/lib/railway';
+import { parseCityStateFromAddress } from '@/lib/addressParts';
 
 function GeocodeIndicator({ status }: { status: Stop['geocodeStatus'] }) {
   // The green check is the ONLY signal that an address was actually
@@ -65,6 +66,8 @@ interface StopSuggestion {
   address?: string;
   lat?: number;
   lng?: number;
+  city?: string;
+  state?: string;
   timezone?: string;
   count: number;
   isSaved?: boolean;
@@ -212,6 +215,10 @@ export function StopAddressFields({
         address: loc.address,
         lat: loc.lat,
         lng: loc.lng,
+        // SavedLocation stores only a formatted address, so city/state
+        // are read back out of it. Picking "SLC Yard" moved the address
+        // and the pin but left the stop naming Herriman.
+        ...parseCityStateFromAddress(loc.address),
         timezone: loc.timezone,
         count: 0,
         isSaved: true,
@@ -233,6 +240,8 @@ export function StopAddressFields({
             address: s.address,
             lat: s.lat,
             lng: s.lng,
+            city: s.city,
+            state: s.state,
             timezone: s.timezone,
             count: 1,
             isSaved: false,
@@ -281,6 +290,8 @@ export function StopAddressFields({
           address:      r.address,
           lat:          r.lat,
           lng:          r.lng,
+          city:         r.city,
+          state:        r.state,
           timezone:     r.timezone,
           count:        0,
           isRemote:     true,
@@ -331,6 +342,8 @@ export function StopAddressFields({
       address: s.address ?? stop.address,
       lat: s.lat,
       lng: s.lng,
+      city: s.city,
+      state: s.state,
       timezone: s.timezone,
       geocodeStatus: s.lat ? 'success' : 'pending',
     });
@@ -341,9 +354,13 @@ export function StopAddressFields({
     setSuggestions([]); setAddrOpen(false);
     try {
       const res  = await fetch(`/api/places?place_id=${encodeURIComponent(s.place_id)}&sessiontoken=${getPlacesToken()}`);
-      const data = await res.json() as { result: { lat: number; lng: number; timezone?: string; address?: string } | null };
+      const data = await res.json() as { result: { lat: number; lng: number; timezone?: string; address?: string; city?: string; state?: string } | null };
       if (data.result) {
-        onChange({ address: data.result.address ?? s.description, lat: data.result.lat, lng: data.result.lng, timezone: data.result.timezone, geocodeStatus: 'success' });
+        // city/state ride along with the coordinates. Leaving them out
+        // moved the pin to the new place while the stop kept naming the
+        // old town — "SLC Yard, 1762 Milestone Dr, Salt Lake City" still
+        // reading as Herriman.
+        onChange({ address: data.result.address ?? s.description, lat: data.result.lat, lng: data.result.lng, city: data.result.city, state: data.result.state, timezone: data.result.timezone, geocodeStatus: 'success' });
       } else {
         onChange({ address: s.description, geocodeStatus: 'failed' });
       }
@@ -364,11 +381,13 @@ export function StopAddressFields({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ address }),
       });
-      const { result } = await res.json() as { result: { lat: number; lng: number; timezone?: string } | null };
+      const { result } = await res.json() as { result: { lat: number; lng: number; timezone?: string; city?: string; state?: string } | null };
       if (result) {
-        onChange({ lat: result.lat, lng: result.lng, timezone: result.timezone, geocodeStatus: 'success' });
+        onChange({ lat: result.lat, lng: result.lng, city: result.city, state: result.state, timezone: result.timezone, geocodeStatus: 'success' });
       } else {
-        onChange({ lat: undefined, lng: undefined, timezone: undefined, geocodeStatus: 'failed' });
+        // Failed geocode clears city/state too — keeping the previous
+        // town next to a brand-new address is worse than showing none.
+        onChange({ lat: undefined, lng: undefined, city: undefined, state: undefined, timezone: undefined, geocodeStatus: 'failed' });
       }
     } catch {
       onChange({ geocodeStatus: 'failed' });
@@ -558,8 +577,11 @@ export function StopAddressFields({
                 if (!isNaN(lat) && !isNaN(lng)) {
                   fetch('/api/geocode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lat, lng }) })
                     .then(r => r.json())
-                    .then((d: { result: { timezone?: string } | null }) => {
-                      onChange({ lat, lng, timezone: d.result?.timezone, geocodeStatus: 'success' });
+                    .then((d: { result: { timezone?: string; city?: string; state?: string } | null }) => {
+                      // This is the reverse lookup — it returns city and
+                      // state for the coords, so take them rather than
+                      // leaving whatever town the stop named before.
+                      onChange({ lat, lng, city: d.result?.city, state: d.result?.state, timezone: d.result?.timezone, geocodeStatus: 'success' });
                     })
                     .catch(() => onChange({ lat, lng, geocodeStatus: 'success' }));
                   setManualCoord(false); setManualLat(''); setManualLng('');
