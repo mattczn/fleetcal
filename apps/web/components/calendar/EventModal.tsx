@@ -36,6 +36,7 @@ import StopsSection from './StopsSection';
 import RelayLegsEditor, { RelayLegView, RelayHandoffView, RelayHandoffPhoto } from './RelayLegsEditor';
 import { legRoleFor, legLabel, byLegIndex, handoffIndexes, handoffTimesOf, isHandoffStop } from '@fleetcal/types';
 import { AuditHistory, appendAuditEntry, buildAuditEntry } from '@/lib/auditEntry';
+import { diffEventPayload, isNoOpDiff } from '@/lib/eventDiff';
 import InvoiceDeliveryHistory from './InvoiceDeliveryHistory';
 import { legStraightMiles } from '@/lib/legMiles';
 import {
@@ -2061,6 +2062,12 @@ export default function EventModal() {
 
   // Dirty tracking
   const [isDirty,        setIsDirty]        = useState(false);
+  /** Mirror of isDirty for callbacks that fire outside render — the
+   *  open-time refetch resolves asynchronously and must see whether the
+   *  user has started typing SINCE it was dispatched, not the value
+   *  captured when the effect ran. */
+  const isDirtyRef = useRef(false);
+  useEffect(() => { isDirtyRef.current = isDirty; }, [isDirty]);
   const [showSavePrompt, setShowSavePrompt] = useState(false);
   // Mirror of UploadedDocsPanel's local pendingFile state. True when
   // the user has staged a doc but not yet picked a type. We block the
@@ -3104,14 +3111,27 @@ export default function EventModal() {
       });
       return;
     }
-    // Case B: revenue load present but with empty stops (cache landed
-    // in a partial state). Retry to fill stops.
-    if (ev.eventKind === 'non_revenue') return;
-    if ((ev.stops?.length ?? 0) > 0) return;
+    // Case B: ALWAYS pull a fresh copy when opening a load for edit.
+    //
+    // This used to fire only when the cached stops were empty, so a
+    // normal open hydrated the form from whatever that tab had held in
+    // memory — potentially for hours, if its realtime channel had died.
+    // The form then saved that stale copy back, which is how load
+    // 60-1306988 lost a title and its stops to a tab that had been open
+    // overnight. Starting from the server costs one row and removes the
+    // whole class of problem; the "updated by another dispatcher"
+    // banner is left to handle genuinely simultaneous editing, which is
+    // what it is actually good at.
+    if (ev.eventKind === 'non_revenue' && (ev.stops?.length ?? 0) > 0) return;
     refetchedEventIdsRef.current.add(modalEventId);
     void refetchEvent(modalEventId).then(() => {
       const fresh = useCalendarStore.getState().events.find(e => e.id === modalEventId) ?? useCalendarStore.getState().deletedEvents.find(e => e.id === modalEventId);
-      if (fresh) reinitForm(fresh);
+      if (!fresh) return;
+      // Don't yank the form out from under someone who started typing
+      // while the refetch was in flight. Their edit wins; the conflict
+      // banner covers them if the server copy really did move.
+      if (isDirtyRef.current) return;
+      reinitForm(fresh);
     });
   }, [modalOpen, modalEventId, events]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -3878,7 +3898,25 @@ export default function EventModal() {
       // we still flush defensively just in case.
       const pendingLinks = eventKind === 'non_revenue' ? pendingWorkOrderLinks : [];
       if (isEdit && modalEventId) {
-        updateEvent(modalEventId, payload);
+        // Send only what moved. The payload above is the whole form, so
+        // writing it wholesale rewrote every field from this browser's
+        // copy — which is how a tab left open overnight reverted another
+        // dispatcher's title and stops while its owner only changed the
+        // truck. Two people editing different fields of one load now
+        // don't collide at all, instead of colliding and being detected.
+        // Baseline is `existingEv`, which the open-time refetch above
+        // has just refreshed from the server.
+        const changed = diffEventPayload(payload as unknown as Record<string, unknown>, existingEv as unknown as Record<string, unknown> | undefined);
+        // Nothing moved and the differ produced no new history entry —
+        // an open-and-close that happened to go through Save. Skip the
+        // write rather than re-send auditLog, which is a FULL-ARRAY
+        // replacement: posting this browser's copy back could drop
+        // entries another dispatcher appended in the meantime.
+        const auditGrew = (nextAuditLog?.length ?? 0) > auditLog.length;
+        const nothingToSave = isNoOpDiff(changed) && !auditGrew;
+        if (!nothingToSave) {
+          updateEvent(modalEventId, changed as Partial<Omit<CalendarEvent, 'id'>>);
+        }
         if (pendingLinks.length > 0) {
           const targetEventId = modalEventId;
           // Multi-link: ADD this event id to each WO's existing
