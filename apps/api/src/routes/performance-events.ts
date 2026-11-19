@@ -32,7 +32,8 @@ import { deriveSeverity, type SeverityLevel } from "@fleetcal/types";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireTruckHistoryOrg, requireModule, requireCapability } from "../middleware/require.js";
 import { supabase } from "../lib/supabase.js";
-import { suppressedInFilter } from "../lib/motivePerfFilter.js";
+import { suppressedInFilter, nonAlertingInFilter } from "../lib/motivePerfFilter.js";
+import { LOW_PRIORITY_EVENT_TYPES, lowPriorityInFilter } from "@fleetcal/types";
 import { sendAutoPushToDriver } from "../lib/push.js";
 import { getOrgMotiveKey } from "../lib/motiveIngest.js";
 
@@ -126,6 +127,11 @@ perf.get("/", async (c) => {
   // fed the driver's score.
   const driverIdParam = url.searchParams.get("driverId");
   const driverId = driverIdParam ? Number(driverIdParam) : null;
+  // `?priority=high|low` narrows to one tier. Omitted = both, which is
+  // what every existing caller gets. "high" is everything that isn't
+  // explicitly low-priority, so a new Motive event type lands in it by
+  // default rather than disappearing.
+  const priorityParam = url.searchParams.get("priority");
   // `?include=raw,movements` — opt-in payload extras for the panel.
   // Popover doesn't ask for either (raw is multi-KB per row for GPS
   // arrays; movements need a second query per truck).
@@ -152,6 +158,8 @@ perf.get("/", async (c) => {
     .limit(limit);
   if (status !== "all") q = q.eq("dispatch_status", status);
   if (sinceMs != null) q = q.gte("event_time", new Date(Date.now() - sinceMs).toISOString());
+  if (priorityParam === "low")  q = q.in("event_type", Array.from(LOW_PRIORITY_EVENT_TYPES));
+  if (priorityParam === "high") q = q.not("event_type", "in", lowPriorityInFilter());
   if (driverId != null && Number.isFinite(driverId)) {
     // Match either attribution column — same rule the safety score
     // uses. Exclude accepted-dispute events so the list matches what's
@@ -204,20 +212,39 @@ perf.get("/", async (c) => {
     movements = (mvts ?? []) as MovementSidecar[];
   }
 
-  // Unread count — cheap thanks to the partial index; always returned
+  // Unread counts — cheap thanks to the partial index; always returned
   // so the bell badge stays fresh even when the panel is filtered.
-  // Same SUPPRESSED_EVENT_TYPES filter as the list above so the badge
-  // count and the drawer contents can't diverge (bell says "8 unread"
-  // while the drawer shows 2 because the other 6 are suppressed types).
+  //
+  // `newCount` is the ALERT count and drives the red badge, so it
+  // excludes both the suppressed types and the low-priority ones: a
+  // dispatcher is never asked to acknowledge a phone-use event. It is
+  // deliberately NOT windowed — an alert from last week is still open —
+  // which is why the panel needs an all-open view to reach them.
+  //
+  // `lowPriorityNewCount` is reported separately so the UI can say
+  // "+248 low priority" without any of them counting as work.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { count } = await (supabase as any)
     .from("motive_performance_events")
     .select("id", { count: "exact", head: true })
     .eq("org_id", orgId)
     .eq("dispatch_status", "new")
-    .not("event_type", "in", suppressedInFilter());
+    .not("event_type", "in", nonAlertingInFilter());
 
-  return c.json({ events: rows, movements, newCount: count ?? 0 });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { count: lowCount } = await (supabase as any)
+    .from("motive_performance_events")
+    .select("id", { count: "exact", head: true })
+    .eq("org_id", orgId)
+    .eq("dispatch_status", "new")
+    .in("event_type", Array.from(LOW_PRIORITY_EVENT_TYPES));
+
+  return c.json({
+    events: rows,
+    movements,
+    newCount: count ?? 0,
+    lowPriorityNewCount: lowCount ?? 0,
+  });
 });
 
 interface MovementSidecar {
@@ -457,6 +484,59 @@ perf.patch("/:id", async (c) => {
   }
   if (!data) return c.json({ error: "not_found" }, 404);
   return c.json({ event: data as PerfEventRow });
+});
+
+// ── POST /v1/performance-events/bulk-status ────────────────────────────
+//
+// Clear a batch of open alerts in one call. Added because there was no
+// way to reach an alert older than the panel's longest window (7 days):
+// the badge counts every open event regardless of age, so one
+// unacknowledged hard-brake from 13 days ago sat in the count
+// permanently with no surface that could show it.
+//
+// Takes EXPLICIT ids — never "acknowledge everything matching a
+// filter". The caller sends the ids it actually listed, so a
+// mis-scoped query can't silently close alerts nobody looked at.
+// Rows already out of 'new' are left alone rather than being
+// re-stamped, so this is safe to re-send.
+perf.post("/bulk-status", async (c) => {
+  const orgId = c.get("orgId");
+  const body = await c.req.json().catch(() => null) as {
+    ids?: unknown;
+    dispatch_status?: "confirmed" | "dismissed";
+  } | null;
+  if (!body) return c.json({ error: "bad_body" }, 400);
+
+  const status = body.dispatch_status ?? "confirmed";
+  if (!["confirmed", "dismissed"].includes(status)) {
+    return c.json({ error: "bad_status" }, 400);
+  }
+
+  const ids = Array.isArray(body.ids)
+    ? Array.from(new Set(body.ids.map(Number).filter(Number.isFinite)))
+    : [];
+  if (ids.length === 0)   return c.json({ error: "no_ids" }, 400);
+  if (ids.length > 1000)  return c.json({ error: "too_many_ids", detail: "max 1000 per call" }, 400);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (supabase as any)
+    .from("motive_performance_events")
+    .update({
+      dispatch_status:    status,
+      dispatched_at:      new Date().toISOString(),
+      dispatched_by_name: c.get("userId") ?? null,
+    })
+    .eq("org_id", orgId)
+    .eq("dispatch_status", "new")
+    .in("id", ids)
+    .select("id");
+  if (error) {
+    console.error("[POST /v1/performance-events/bulk-status]", error);
+    return c.json({ error: "update_failed", detail: error.message }, 500);
+  }
+
+  const updated = (data ?? []) as Array<{ id: number }>;
+  return c.json({ updated: updated.length, ids: updated.map(r => r.id) });
 });
 
 // ── POST /v1/performance-events/:id/notify-driver ──────────────────────

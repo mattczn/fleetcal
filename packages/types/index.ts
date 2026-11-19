@@ -122,6 +122,10 @@ export * from "./invoicePacket";
 
 export * from "./severity";
 
+// ── Safety-alert priority tiers (badge + ack behaviour) ─────────────────
+
+export * from "./safetyPriority";
+
 // ── CRM (internal sales tooling) ─────────────────────────────────────────
 
 export * from "./crm";

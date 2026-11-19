@@ -23,6 +23,8 @@
  * the aggregation loop. The list is short enough to inline as a
  * PostgREST `in` filter; the helper below formats it.
  */
+import { LOW_PRIORITY_EVENT_TYPES } from "@fleetcal/types";
+
 export const SUPPRESSED_EVENT_TYPES: ReadonlySet<string> = new Set([
   "seat_belt_violation",
   "stop_sign_violation",
@@ -34,4 +36,17 @@ export const SUPPRESSED_EVENT_TYPES: ReadonlySet<string> = new Set([
  *  `.not("event_type", "in", suppressedInFilter())`. */
 export function suppressedInFilter(): string {
   return `(${Array.from(SUPPRESSED_EVENT_TYPES).join(",")})`;
+}
+
+/** Everything that must not raise a badge or sit in the acknowledgement
+ *  queue: the suppressed types above PLUS the low-priority ones
+ *  (phone use, distraction, …) from @fleetcal/types.
+ *
+ *  Suppressed and low-priority are different ideas — suppressed rows are
+ *  never rendered at all, low-priority rows are rendered but don't
+ *  count — so they stay in separate sets. This is only the union used
+ *  for "does this demand attention". */
+export function nonAlertingInFilter(): string {
+  const all = [...SUPPRESSED_EVENT_TYPES, ...LOW_PRIORITY_EVENT_TYPES];
+  return `(${all.join(",")})`;
 }

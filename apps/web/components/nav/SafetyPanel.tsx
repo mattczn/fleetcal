@@ -16,7 +16,7 @@
  * dispatcher can act without a second click.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, X, MapPin, Truck, Loader2, ExternalLink } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { loadGoogleMaps, MAP_ID } from '@/lib/googleMaps';
@@ -27,6 +27,7 @@ import type {
   MotivePerfRaw,
   DriverSafetyScoreRow,
 } from '@fleetcal/types';
+import { isLowPrioritySafetyEvent } from '@fleetcal/types';
 import DashcamVideo from './SafetyDashcamVideo';
 import SeverityMeter, { severityColor as severityLevelColor } from './SeverityMeter';
 import { fmtDenverLong, fmtDenverFull, relTimeDenver } from '@/lib/safetyTime';
@@ -35,12 +36,20 @@ type PanelEvent = PerformanceEventRow & { raw?: MotivePerfRaw; vehicle_id?: numb
 
 interface Driver { id: number; name: string }
 
-const WINDOW_OPTIONS: Array<{ key: '1h' | '6h' | '24h' | '72h' | '168h'; hours: number; label: string }> = [
-  { key: '1h',   hours: 1,   label: 'Last 1 hour'  },
-  { key: '6h',   hours: 6,   label: 'Last 6 hours' },
-  { key: '24h',  hours: 24,  label: 'Last 24 hours' },
-  { key: '72h',  hours: 72,  label: 'Last 3 days'  },
-  { key: '168h', hours: 168, label: 'Last 7 days'  },
+// `hours: 0` is the all-open view: every event still sitting at
+// dispatch_status='new', with no time filter at all. It exists because
+// the windowed views cannot reach an old open alert — the badge counts
+// every open event regardless of age, so one unacknowledged alert from
+// outside the longest window stayed in the count with no way to clear
+// it.
+const ALL_OPEN = 0;
+const WINDOW_OPTIONS: Array<{ hours: number; label: string }> = [
+  { hours: ALL_OPEN, label: 'All open alerts' },
+  { hours: 1,   label: 'Last 1 hour'  },
+  { hours: 6,   label: 'Last 6 hours' },
+  { hours: 24,  label: 'Last 24 hours' },
+  { hours: 72,  label: 'Last 3 days'  },
+  { hours: 168, label: 'Last 7 days'  },
 ];
 
 export default function SafetyPanel({ onClose }: { onClose: () => void }) {
@@ -67,7 +76,9 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
       // event's driver. Fetched once per panel open; not re-fetched
       // when the window filter changes because it's always 7d.
       const [panel, driverList, safety7d] = await Promise.all([
-        railway.listPerformanceEventsForPanel(windowHours),
+        windowHours === ALL_OPEN
+          ? railway.listOpenPerformanceEvents()
+          : railway.listPerformanceEventsForPanel(windowHours),
         railway.listDrivers(),
         railway.getDriverSafetyScoring(7).catch(err => {
           console.warn('[SafetyPanel] 7d scores failed:', err);
@@ -143,6 +154,44 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
     }
     return true;
   }), [events, typeFilter, driverFilter, statusFilter, truckFilter]);
+
+  // Priority first, always. Within each tier the server's newest-first
+  // order is preserved — this re-ranks the tiers, it doesn't re-sort the
+  // events. A tailgating alert from this morning must never sit below
+  // forty phone-use events from this afternoon.
+  const ordered = useMemo(() => {
+    const priority = visible.filter(e => !isLowPrioritySafetyEvent(e.event_type));
+    const low      = visible.filter(e =>  isLowPrioritySafetyEvent(e.event_type));
+    return [...priority, ...low];
+  }, [visible]);
+
+  /** Open PRIORITY alerts currently listed — what "Clear all" acts on.
+   *  Scoped to what's on screen on purpose: the bulk endpoint takes
+   *  explicit ids, so nothing outside the user's view can be closed. */
+  const openPriorityIds = useMemo(
+    () => ordered
+      .filter(e => e.dispatch_status === 'new' && !isLowPrioritySafetyEvent(e.event_type))
+      .map(e => e.id),
+    [ordered],
+  );
+
+  const [clearing, setClearing] = useState(false);
+  async function clearAllOpen() {
+    if (openPriorityIds.length === 0 || clearing) return;
+    setClearing(true);
+    try {
+      const res = await railway.bulkUpdatePerformanceEvents(openPriorityIds, 'confirmed');
+      const cleared = new Set(res.ids);
+      setEvents(prev => prev.map(e => (
+        cleared.has(e.id)
+          ? { ...e, dispatch_status: 'confirmed' as const, dispatched_at: new Date().toISOString() }
+          : e
+      )));
+    } catch (err) {
+      setError((err as Error).message ?? 'Could not clear alerts');
+    }
+    setClearing(false);
+  }
 
   const selected = visible.find(e => e.id === selectedId) ?? events.find(e => e.id === selectedId) ?? null;
 
@@ -334,15 +383,57 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
               </div>
             ) : error ? (
               <div style={{ padding: 24, color: '#dc2626', fontSize: 12 }}>{error}</div>
-            ) : visible.length === 0 ? (
+            ) : ordered.length === 0 ? (
               <div style={{ padding: 24, textAlign: 'center', color: 'var(--gc-text-3)', fontSize: 12 }}>
-                No safety events in this window.
+                {windowHours === ALL_OPEN
+                  ? 'Nothing open. Every alert has been acknowledged.'
+                  : 'No safety events in this window.'}
               </div>
-            ) : visible.map(e => {
+            ) : ordered.map((e, i) => {
               const truck = e.asset_name ?? e.vehicle_number ?? `Vehicle ${e.vehicle_id}`;
+              // Tier divider — rendered at the first row of each tier.
+              // `ordered` is priority-then-low, so the boundary is
+              // wherever the tier differs from the previous row.
+              const low = isLowPrioritySafetyEvent(e.event_type);
+              const firstOfTier = i === 0 || isLowPrioritySafetyEvent(ordered[i - 1].event_type) !== low;
               return (
+                <Fragment key={e.id}>
+                {firstOfTier && (
+                  <div style={{
+                    position: 'sticky', top: 0, zIndex: 1,
+                    padding: '6px 12px',
+                    background: low ? 'var(--gc-bg)' : '#fef2f2',
+                    borderBottom: '1px solid var(--gc-border-light)',
+                    fontSize: 10, fontWeight: 700, letterSpacing: 0.5,
+                    textTransform: 'uppercase',
+                    color: low ? 'var(--gc-text-3)' : '#991b1b',
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+                  }}>
+                    <span>
+                      {low
+                        ? `Low priority · ${ordered.filter(x => isLowPrioritySafetyEvent(x.event_type)).length} · no action needed`
+                        : `Priority · ${ordered.filter(x => !isLowPrioritySafetyEvent(x.event_type)).length}`}
+                    </span>
+                    {!low && openPriorityIds.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => void clearAllOpen()}
+                        disabled={clearing}
+                        style={{
+                          padding: '2px 8px', borderRadius: 4,
+                          border: '1px solid #fca5a5', background: '#fff',
+                          color: '#991b1b', fontSize: 10, fontWeight: 700,
+                          letterSpacing: 0.3, textTransform: 'uppercase',
+                          cursor: clearing ? 'default' : 'pointer',
+                          opacity: clearing ? 0.6 : 1,
+                        }}
+                      >
+                        {clearing ? 'Clearing…' : `Acknowledge all ${openPriorityIds.length}`}
+                      </button>
+                    )}
+                  </div>
+                )}
                 <button
-                  key={e.id}
                   type="button"
                   onClick={() => setSelectedId(e.id)}
                   style={{
@@ -411,6 +502,7 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
                     }}
                   />
                 </button>
+                </Fragment>
               );
             })}
           </div>

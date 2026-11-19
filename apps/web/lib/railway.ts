@@ -1089,6 +1089,10 @@ class RailwayClient {
     return this.req<{
       events:   PerformanceEventRow[];
       newCount: number;
+      /** Open low-priority events (phone use, distraction, …). Counted
+       *  separately and never part of `newCount` — they don't require
+       *  an acknowledgement. */
+      lowPriorityNewCount: number;
     }>('GET', `/v1/performance-events?status=${status}&limit=${limit}`);
   }
   /** Safety events attributed to one driver over a trailing window.
@@ -1109,7 +1113,28 @@ class RailwayClient {
       events:    (PerformanceEventRow & { raw?: MotivePerfRaw; vehicle_id?: number })[];
       movements: PerformanceEventMovement[];
       newCount:  number;
+      lowPriorityNewCount: number;
     }>('GET', `/v1/performance-events?status=all&limit=500&since=${hours}h&include=raw,movements`);
+  }
+  /** Every still-open alert, with NO time window — the only way to reach
+   *  one older than the panel's longest window, which is how an alert
+   *  from last week ends up stuck in the badge forever. */
+  listOpenPerformanceEvents() {
+    return this.req<{
+      events:    (PerformanceEventRow & { raw?: MotivePerfRaw; vehicle_id?: number })[];
+      movements: PerformanceEventMovement[];
+      newCount:  number;
+      lowPriorityNewCount: number;
+    }>('GET', `/v1/performance-events?status=new&limit=500&include=raw,movements`);
+  }
+  /** Close a batch of open alerts. Sends explicit ids — the ones the UI
+   *  actually listed — so nothing outside the user's view can be
+   *  cleared. Returns how many rows actually moved (rows already out of
+   *  'new' are skipped, making this safe to retry). */
+  bulkUpdatePerformanceEvents(ids: number[], dispatch_status: 'confirmed' | 'dismissed' = 'confirmed') {
+    return this.req<{ updated: number; ids: number[] }>(
+      'POST', '/v1/performance-events/bulk-status', { ids, dispatch_status },
+    );
   }
   getPerformanceEvent(id: number) {
     return this.req<{
