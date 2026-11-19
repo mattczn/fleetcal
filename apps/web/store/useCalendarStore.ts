@@ -17,6 +17,7 @@ import { buildCreateLoadBody, splitForUpdate, buildEventByIdUpdate } from '@/lib
 import { DUMMY_ASSETS, DUMMY_DRIVERS, DUMMY_EVENTS, DEMO_BASE_DATE } from '@/lib/dummy-data';
 import { localDateStr, todayAtNoon } from '@/lib/time-utils';
 import { errorToast } from '@/lib/errorToast';
+import { deepEqual } from '@/lib/eventDiff';
 
 // ─── Self-echo suppression ──────────────────────────────────────────────
 //
@@ -31,7 +32,14 @@ import { errorToast } from '@/lib/errorToast';
 //
 // Module-local Map (not in Zustand state) — purely transient and
 // doesn't need serialization or React reactivity.
-const SELF_ECHO_WINDOW_MS = 5_000;
+// 15s, not 5. One modal save fans out into up to three API calls (load,
+// event, stops), each landing its own DB write; the echo comes back only
+// after Railway → Postgres → realtime → a refetch round trip. At 5s the
+// tail of our own save routinely arrived "late" and was reported to the
+// dispatcher as another dispatcher's edit. The cost of the wider window
+// is that a genuine foreign edit inside 15s of our own write applies
+// quietly instead of raising the banner — the data still lands.
+const SELF_ECHO_WINDOW_MS = 15_000;
 const selfWriteAt = new Map<string, number>();
 function markSelfWrite(id: string) {
   selfWriteAt.set(id, Date.now());
@@ -44,6 +52,36 @@ function consumeSelfWrite(id: string): boolean {
     return false;
   }
   return true;
+}
+
+// ─── Fields that don't count as "someone changed this load" ─────────────
+//
+// Server-maintained derivations that get rewritten by background work —
+// the route-geometry cache warming on a detail GET, a document-count
+// trigger firing. They arrive as a realtime UPDATE like any other write,
+// but no human touched them and nothing the dispatcher is looking at
+// moved, so they must not raise the conflict banner.
+const CONFLICT_IGNORED_FIELDS = new Set([
+  'routePolyline',
+  'routeStopsKey',
+  'loadedMiles',
+  'updatedAt',
+]);
+
+/** Did applying this remote payload change anything the user would
+ *  recognize as an edit? Compares the event as it WOULD BE after the
+ *  merge against what we already hold, so an echo that reapplies
+ *  identical data — the common case for our own writes and for
+ *  server-side cache warming — is silent. */
+function isUserVisibleChange(before: CalendarEvent, after: CalendarEvent): boolean {
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+  for (const k of keys) {
+    if (CONFLICT_IGNORED_FIELDS.has(k)) continue;
+    const a = (before as unknown as Record<string, unknown>)[k];
+    const b = (after  as unknown as Record<string, unknown>)[k];
+    if (!deepEqual(a, b)) return true;
+  }
+  return false;
 }
 
 // ─── Delete-error notify helper ─────────────────────────────────────────
@@ -2205,15 +2243,25 @@ export const useCalendarStore = create<CalendarStore>()(
           modalConflict: state.modalConflict,
         };
       }
+      // Build the merged row once so the conflict test and the stored
+      // value can't disagree about what this payload actually does.
+      let changedForUser = false;
+      const nextEvents = state.events.map(e => {
+        if (e.id !== event.id) return e;
+        // Take the incoming stops when populated; fall back to local
+        // copy only when the refetch came back empty (defensive).
+        const stops = (event.stops && event.stops.length > 0) ? event.stops : e.stops;
+        const merged = { ...e, ...event, stops };
+        changedForUser = isUserVisibleChange(e, merged);
+        return merged;
+      });
       return {
-        events: state.events.map(e => {
-          if (e.id !== event.id) return e;
-          // Take the incoming stops when populated; fall back to local
-          // copy only when the refetch came back empty (defensive).
-          const stops = (event.stops && event.stops.length > 0) ? event.stops : e.stops;
-          return { ...e, ...event, stops };
-        }),
-        modalConflict: !isSelfEcho && state.modalOpen && state.modalEventId === event.id
+        events: nextEvents,
+        // Only interrupt the dispatcher when the payload genuinely moves
+        // something. A realtime UPDATE is not evidence of an edit: route
+        // caches, document counts and our own echoes all produce one.
+        // Announcing those is what made the banner cry wolf.
+        modalConflict: changedForUser && !isSelfEcho && state.modalOpen && state.modalEventId === event.id
           ? 'updated'
           : state.modalConflict,
       };

@@ -19,8 +19,12 @@
  */
 
 /** Order-independent structural compare. Arrays stay order-SENSITIVE
- *  (stop order is meaningful); object key order is not. */
-function deepEqual(a: unknown, b: unknown): boolean {
+ *  (stop order is meaningful); object key order is not.
+ *
+ *  Exported because the realtime path needs the same notion of "did
+ *  anything actually change" when deciding whether an incoming payload
+ *  is worth telling the user about. */
+export function deepEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   // Treat the empty-ish values as interchangeable. The form produces ''
   // or undefined where the stored row has null, and a save must not

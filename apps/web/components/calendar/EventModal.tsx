@@ -2596,51 +2596,39 @@ export default function EventModal() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [otherLegsGeomKey]);
 
-  // ── Lazy cache: persist routed loadedMiles back to events.loaded_miles
-  // so reports / dashboards can pull from the column instead of re-running
-  // Google Directions. Fires once per modal-open when the computed value
-  // differs from what's stored (rounded to 0.1 mi to avoid noisy writes).
+  // ── loadedMiles is DISPLAY-ONLY here. Do not persist it. ────────────
   //
-  // Also clears the column when the event no longer has enough
-  // coordinates to compute miles (loadedMiles === null) but the DB
-  // still has a stale value. Without this branch, a maintenance
-  // event that briefly had geocoded stops keeps its 87-mi remnant
-  // forever, polluting per-driver tables and any miles-based
-  // analytics.
-  useEffect(() => {
-    if (!isEdit || !modalEventId) return;
-    const ev = events.find(e => e.id === modalEventId);
-    if (!ev) return;
-    const stored = ev.loadedMiles ?? null;
-    // Computed null + column has stale value → clear it. Cast to any
-    // because CalendarEvent's local type is `number | undefined` but
-    // the API accepts `number | null` for an explicit clear; the
-    // store/buildEventByIdUpdate copies the field through verbatim,
-    // so null on the wire is what we need.
-    if (loadedMiles == null) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      if (stored != null) void updateEvent(modalEventId, { loadedMiles: null as any });
-      return;
-    }
-    const next = Math.round(loadedMiles * 10) / 10;
-    if (stored != null && Math.abs(stored - next) < 0.1) return;
-    void updateEvent(modalEventId, { loadedMiles: next });
-  }, [loadedMiles, isEdit, modalEventId, events, updateEvent]);
-
-  // Persist the other legs' computed miles back to events.loaded_miles
-  // — same lazy-cache rule as the viewed leg above (0.1 mi threshold
-  // keeps this from ping-ponging with its own optimistic write).
-  useEffect(() => {
-    for (const leg of otherLegs) {
-      const computed = otherLegMiles[leg.id];
-      if (computed == null) continue;
-      const stored = leg.loadedMiles ?? null;
-      const next   = Math.round(computed * 10) / 10;
-      if (stored != null && Math.abs(stored - next) < 0.1) continue;
-      void updateEvent(leg.id, { loadedMiles: next });
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [otherLegMiles]);
+  // The modal used to write its computed mileage back to
+  // events.loaded_miles as a lazy cache. The server now owns that
+  // column — `ensureEventRouteCached` warms route_polyline +
+  // loaded_miles on every detail GET and on create/split — so the two
+  // of them were writing the same derived value from opposite ends,
+  // and they fought:
+  //
+  //   1. `loadedMiles` starts null and the Mapbox call that fills it is
+  //      async, so on EVERY modal open this effect fired first and
+  //      PATCHed loaded_miles → null, wiping a good value.
+  //   2. A null column is a guaranteed cache MISS server-side, so the
+  //      next GET recomputed and wrote the miles back.
+  //   3. That write echoed over realtime as a foreign UPDATE, which
+  //      popped "This load was updated by another dispatcher" — on a
+  //      load nobody else had touched.
+  //   4. Whenever the browser's own Mapbox call couldn't answer (token
+  //      rate-limited, request blocked, or the viewed leg window had
+  //      under two geocoded stops while the server's didn't), the
+  //      client kept writing null and the server kept writing the
+  //      number: a permanent write war, one round trip per cycle, with
+  //      a banner every time.
+  //
+  // One writer, server-side, same rule as recomputeInvoicePaid. The
+  // value still renders here from local state; it just isn't saved
+  // from here.
+  //
+  // Known gap left behind: an event that LOSES its coordinates keeps
+  // whatever miles it had, because the server's not-routable branch
+  // clears route_polyline but deliberately leaves loaded_miles alone —
+  // imported history (Alvys backfill) carries miles with ungeocoded
+  // stops and must not be erased on read.
 
   // Auto-fill driver pay from percentage setting whenever load price changes.
   // Handles loadPrice as either number or numeric string (AI parses sometimes
