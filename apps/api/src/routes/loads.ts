@@ -592,7 +592,62 @@ loads.get("/", async (c) => {
   // so we resolve broker names → matching load_ids first, then filter
   // events by those IDs.
   let brokerLoadIds: string[] | undefined;
-  if (brokersParam) {
+
+  // Customer history (?customerId=<uuid>). A load belongs to a customer in
+  // two different ways and BOTH have to count:
+  //   • customer_id — the FK, written when the load is linked to a customer
+  //   • broker      — the raw name off the rate con, which is all an older
+  //                   or unlinked load has
+  // Resolving by id instead of by name also sidesteps the delimiter problem
+  // that `brokers` has: that param is a comma-joined list, so a customer
+  // named "AM TRANS EXPEDITE, LLC" cannot be passed through it intact.
+  // The customer directory sends this; `brokers` stays for callers that
+  // only know a name.
+  const customerIdParam = url.searchParams.get("customerId");
+  if (customerIdParam) {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(customerIdParam)) {
+      return badRequest(c, ["customerId must be a uuid"]);
+    }
+    const { data: cust, error: custErr } = await supabase
+      .from("customers")
+      .select("name")
+      .eq("org_id", orgId)
+      .eq("id", customerIdParam)
+      .maybeSingle();
+    if (custErr) {
+      console.error("[GET /v1/loads] customer lookup failed:", custErr);
+      return c.json({ error: "list_failed", detail: custErr.message } satisfies ApiErrorResponse, 500);
+    }
+    if (!cust) return c.json({ loads: [] } satisfies ListLoadsResponse);
+    const custName = ((cust as { name: string | null }).name ?? "").trim();
+    const orParts = [`customer_id.eq.${customerIdParam}`];
+    if (custName) orParts.push(`broker.ilike."${custName.replace(/[%,()"]/g, "\\$&")}"`);
+    // Paged: PostgREST caps a response at 1000 rows, and the oldest
+    // customers here carry more loads than that. An unpaged read would
+    // silently drop the tail of the history.
+    const ids: string[] = [];
+    const RESOLVE_PAGE = 1000;
+    for (let offset = 0; ; offset += RESOLVE_PAGE) {
+      const { data, error } = await supabase
+        .from("loads")
+        .select("id")
+        .eq("org_id", orgId)
+        .or(orParts.join(","))
+        .order("id", { ascending: true })
+        .range(offset, offset + RESOLVE_PAGE - 1);
+      if (error) {
+        console.error("[GET /v1/loads] customer resolve failed:", error);
+        return c.json({ error: "list_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+      }
+      const batch = (data ?? []) as Array<{ id: string }>;
+      ids.push(...batch.map((r) => r.id));
+      if (batch.length < RESOLVE_PAGE) break;
+    }
+    brokerLoadIds = ids;
+    if (brokerLoadIds.length === 0) {
+      return c.json({ loads: [] } satisfies ListLoadsResponse);
+    }
+  } else if (brokersParam) {
     const names = brokersParam.split(",").map((s) => s.trim()).filter(Boolean);
     if (names.length === 0) {
       return c.json({ loads: [] } satisfies ListLoadsResponse);

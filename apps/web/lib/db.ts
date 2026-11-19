@@ -193,15 +193,24 @@ export async function deleteSavedLocation(id: string): Promise<void> {
 
 // ── Customers ─────────────────────────────────────────────────────────────────
 
-export async function fetchBrokerLoads(_orgId: string, names: string[]): Promise<CalendarEvent[]> {
-  if (names.length === 0) return [];
+/** Every load belonging to a customer — the ones linked by customer_id and
+ *  the older ones that only carry the broker name as text.
+ *
+ *  This used to send the customer's NAME through ?brokers=, a comma-joined
+ *  list, after stripping commas out of it so the delimiter survived. Any
+ *  customer with a comma in its name ("AM TRANS EXPEDITE, LLC" — 20 of
+ *  Curzon's 246) was then matched against a name that exists nowhere in the
+ *  data, and its history read "No loads found" forever. Loads whose broker
+ *  text had drifted from the customer name were invisible the same way,
+ *  linked or not. The id goes to the server now and the server does the
+ *  matching. */
+export async function fetchCustomerLoads(customerId: string): Promise<CalendarEvent[]> {
+  if (!customerId) return [];
   try {
-    // Strip commas from names — comma is the param-list delimiter on the server side.
-    const safe = names.map(n => n.replace(/,/g, '')).filter(Boolean);
-    const { loads } = await railway.listLoads({ brokers: safe.join(',') });
+    const { loads } = await railway.listLoads({ customerId });
     return [...loads].sort((a, b) => b.start.localeCompare(a.start));
   } catch (err) {
-    console.error('fetchBrokerLoads:', err);
+    console.error('fetchCustomerLoads:', err);
     return [];
   }
 }

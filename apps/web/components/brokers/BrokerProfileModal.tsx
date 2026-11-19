@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 import { railway } from '@/lib/railway';
 import { useCalendarStore } from '@/store/useCalendarStore';
-import { fetchBrokerLoads } from '@/lib/db';
+import { fetchCustomerLoads } from '@/lib/db';
 import { parseNaiveIsoInTz } from '@/lib/time-utils';
 import type { Customer, CalendarEvent, CustomerContact } from '@/lib/types';
 import type { DirectoryDetailHandle } from '@/components/sidebar/DirectoryModal';
@@ -136,8 +136,7 @@ function BrokerProfileModal({
     let cancelled = false;
     setLoadingLoads(true);
     setSelectedLoadId(null);
-    const names = [selected.name, ...selected.aliases].filter(Boolean);
-    fetchBrokerLoads(orgId, names).then(results => {
+    fetchCustomerLoads(selected.id).then(results => {
       if (!cancelled) { setLoads(results); setLoadingLoads(false); }
     });
     return () => { cancelled = true; };
