@@ -569,16 +569,43 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
               }}
               onAdvance={() => {
                 // After an acknowledge/notify/ignore, jump to the next
-                // new alert so the dispatcher doesn't have to click back
-                // to the list. Prefer the next `new` row after the
-                // current position; if none remain, fall back to the
-                // next row in visible order; if the current row was the
-                // last one, clear the selection.
-                const idx = visible.findIndex(e => e.id === selectedId);
-                if (idx === -1) return;
-                const tail = visible.slice(idx + 1);
-                const nextNew = tail.find(e => e.dispatch_status === 'new' && e.id !== selectedId);
-                const next    = nextNew ?? tail.find(e => e.id !== selectedId) ?? null;
+                // alert that still needs a decision, so the dispatcher
+                // can work the queue without going back to the list.
+                //
+                // Walks `ordered`, NOT `visible`: `visible` is time order
+                // with the tiers interleaved, so acknowledging a hard
+                // brake used to drop you into whatever phone-use event
+                // happened to be next by timestamp. Priority is the
+                // queue; everything else is a footnote.
+                //
+                // Cycles rather than runs off the end — wraps to the
+                // open priority alerts above the current row — so one
+                // pass of Acknowledge clears the tier no matter where in
+                // the list the dispatcher started.
+                const isOpenPriority = (e: typeof ordered[number]) =>
+                  e.dispatch_status === 'new'
+                  && e.id !== selectedId
+                  && !isLowPrioritySafetyEvent(e.event_type);
+
+                // -1 (current row filtered out from under us) starts the
+                // search at the top, which is what we want anyway.
+                const idx   = ordered.findIndex(e => e.id === selectedId);
+                const after = ordered.slice(idx + 1);
+                const before= idx === -1 ? [] : ordered.slice(0, idx);
+
+                const next =
+                  after.find(isOpenPriority)
+                  ?? before.find(isOpenPriority)
+                  // Priority tier is clear. Fall through to whatever is
+                  // still open below it rather than stranding the user
+                  // on an acknowledged row.
+                  ?? after.find(e => e.dispatch_status === 'new' && e.id !== selectedId)
+                  ?? before.find(e => e.dispatch_status === 'new' && e.id !== selectedId)
+                  // Nothing open at all. Keep stepping down the list so
+                  // the Acknowledged filter still reads as a list you can
+                  // page through, instead of emptying the pane each click.
+                  ?? after.find(e => e.id !== selectedId)
+                  ?? null;
                 setSelectedId(next ? next.id : null);
               }}
             />
