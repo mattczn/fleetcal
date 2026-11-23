@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Calendar, BarChart2, Users, LayoutDashboard, FileCheck2, Receipt, Package, Gauge, HandCoins, UserPlus, Route as RouteIcon, Warehouse, Container } from 'lucide-react';
+import { Calendar, BarChart2, Users, LayoutDashboard, FileCheck2, Receipt, Package, HandCoins, UserPlus, Route as RouteIcon, Warehouse, Container } from 'lucide-react';
 import type { Capability, OrgModule } from '@fleetcal/types';
 import { useNavGate } from '@/lib/useNavGate';
 
@@ -36,11 +36,9 @@ const NAV_LINKS: Array<{
   // / maintenance has it on; fuel-only orgs are vanishingly rare in
   // practice.
   { href: '/equipment',   label: 'Equipment',      icon: Package,         cap: 'maintenance.access', module: 'maintenance' },
-  // Drivers — performance scorecards. Read-only ops dashboarding;
-  // driver CRUD still lives in Settings → Dispatchers/Drivers. No
-  // module gate (any fleet that tracks loads + inspections benefits)
-  // — the per-user `drivers.view` capability is the only filter.
-  { href: '/drivers',     label: 'Drivers',        icon: Gauge,           cap: 'drivers.view' },
+  // No Drivers link — see the note in AppSidebar's PRIMARY_NAV. The
+  // route still resolves; it's reached from the safety panel and the
+  // asset performance table rather than from the nav.
   // Trailers — see the note in AppSidebar's PRIMARY_NAV. Both lists stay in sync.
   { href: '/trailers',    label: 'Trailers',       icon: Container,       cap: 'loads.view',         module: 'trailers' },
   { href: '/payroll',     label: 'Payroll',        icon: Users,           cap: 'payroll.access',     module: 'payroll' },

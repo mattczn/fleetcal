@@ -36,7 +36,7 @@ import { useEffect, useState } from 'react';
 import {
   UserPlus,
   Calendar, BarChart2, LayoutDashboard, FileCheck2, Receipt, Package,
-  Gauge, Users, Settings, ChevronDown, ChevronRight, ChevronsLeft, ChevronsRight,
+  Users, Settings, ChevronDown, ChevronRight, ChevronsLeft, ChevronsRight,
   Wrench, ClipboardCheck, Fuel as FuelIcon, Target, DollarSign, HandCoins, Route as RouteIcon,
   Warehouse, Container,
 } from 'lucide-react';
@@ -105,7 +105,10 @@ export const PRIMARY_NAV: NavItem[] = [
   // Lane builder + quote targets; anyone who sees load prices (driver-pay tabs need payroll).
   { kind: 'leaf', href: '/lanes',       label: 'Lanes',          icon: RouteIcon,       cap: 'loads.view_price' },
   { kind: 'leaf', href: '/expenses',    label: 'Expenses',       icon: DollarSign,      cap: 'expenses.access',   module: 'expenses' },
-  { kind: 'leaf', href: '/drivers',     label: 'Drivers',        icon: Gauge,           cap: 'drivers.view',      module: 'performance' },
+  // No Drivers leaf: the scorecard page went unused as a destination.
+  // /drivers still resolves — the safety panel and the asset
+  // performance table link into it, and those are the contexts where
+  // a driver's numbers are actually the question.
   // Trailers — the fleet map + roster that the calendar toolbar also
   // opens as a popup. `trailers` is the module that documents itself
   // as gating exactly this; it's on for MVP orgs. Capability is
