@@ -63,28 +63,49 @@ const YARD_COLOR = '#1a73e8';
 
 const POLL_MS = 60_000;
 
+/**
+ * What the tag above a selected pin says.
+ *
+ * Every field is recomputed on each plot pass rather than captured
+ * when the pin was built, because two of them go stale on their own:
+ * "12m ago" ages, and a trailer gets hooked to a truck without the
+ * pin ever moving.
+ */
+interface PinTag {
+  /** "#2030" when the trailer has a number, else its display name. */
+  heading:    string;
+  category:   string;
+  lastSeen:   string | null;
+  /** Set only while the trailer is on a load that's running now. */
+  truck?:     { name: string; color: string };
+  loadTitle?: string;
+}
+
 /** Build a colored circle marker (HTMLElement) for the map plus a
- *  pre-attached label element that's hidden until the marker is
- *  selected. The label element is returned alongside so the
- *  selection-effect can flip it on/off without recreating the pin. */
-function makePinElement(color: string, label: string): { wrapper: HTMLDivElement; labelEl: HTMLDivElement } {
+ *  pre-attached tag element that's hidden until the marker is
+ *  selected. The tag element is returned alongside so the selection
+ *  effect can flip it on/off, and the plot effect can repaint its
+ *  contents, without either one recreating the pin. */
+function makePinElement(color: string): { wrapper: HTMLDivElement; labelEl: HTMLDivElement } {
   const wrapper = document.createElement('div');
   wrapper.style.cssText = 'position:relative;cursor:pointer;display:flex;flex-direction:column;align-items:center;';
 
   const labelEl = document.createElement('div');
-  labelEl.textContent = label;
   labelEl.style.cssText = [
     'display:none',
-    'margin-bottom:4px',
-    'padding:2px 8px',
+    'margin-bottom:5px',
+    'padding:5px 9px',
     'background:#ffffff',
     'color:#202124',
     'border:1px solid rgba(0,0,0,0.15)',
-    'border-radius:6px',
+    'border-radius:8px',
     'font-size:11px',
-    'font-weight:700',
-    'white-space:nowrap',
-    'box-shadow:0 1px 4px rgba(0,0,0,0.25)',
+    'line-height:1.35',
+    'text-align:left',
+    // Capped so a long load title makes a two-line tag instead of a
+    // banner wide enough to cover the pins either side of it.
+    'max-width:240px',
+    'box-shadow:0 2px 8px rgba(0,0,0,0.28)',
     'pointer-events:none',
   ].join(';');
 
@@ -98,6 +119,83 @@ function makePinElement(color: string, label: string): { wrapper: HTMLDivElement
   wrapper.appendChild(labelEl);
   wrapper.appendChild(dot);
   return { wrapper, labelEl };
+}
+
+/**
+ * Repaint a pin's tag from current data.
+ *
+ * Called on every plot pass, survivors included, so a tag a
+ * dispatcher is looking at updates under them on the 60s poll instead
+ * of freezing at whatever it said when the pin was created.
+ *
+ * Built with textContent and style properties rather than innerHTML:
+ * a trailer name and a load title are org-entered strings, and a
+ * truck colour comes out of the database. Assigning through
+ * `style.background` means a malformed colour is simply ignored
+ * instead of being parsed as further CSS.
+ */
+function paintPinTag(el: HTMLDivElement, tag: PinTag): void {
+  el.replaceChildren();
+
+  // Line 1 — the trailer's own identity: number, then category.
+  const idRow = document.createElement('div');
+  idRow.style.cssText = 'display:flex;align-items:baseline;gap:6px;white-space:nowrap;';
+  const heading = document.createElement('span');
+  heading.textContent = tag.heading;
+  heading.style.cssText = 'font-size:12px;font-weight:700;color:#202124;';
+  idRow.appendChild(heading);
+  if (tag.category) {
+    const cat = document.createElement('span');
+    cat.textContent = tag.category;
+    cat.style.cssText = 'font-size:10px;color:#5f6368;';
+    idRow.appendChild(cat);
+  }
+  el.appendChild(idRow);
+
+  // Line 2 — how much to trust the dot. A trailer last seen three
+  // days ago is somewhere else by now, and that is the single most
+  // important caveat on this map.
+  if (tag.lastSeen) {
+    const seen = document.createElement('div');
+    seen.textContent = tag.lastSeen;
+    seen.style.cssText = 'font-size:10px;color:#5f6368;white-space:nowrap;';
+    el.appendChild(seen);
+  }
+
+  // Line 3 — truck + load, which turn "where is it" into "what is it
+  // doing". Only present for a trailer on a running load.
+  if (tag.truck) {
+    const row = document.createElement('div');
+    row.style.cssText = [
+      'display:flex', 'align-items:center', 'gap:5px',
+      'margin-top:4px', 'padding-top:4px',
+      'border-top:1px solid rgba(0,0,0,0.08)',
+    ].join(';');
+
+    // On the calendar the colour IS how a dispatcher recognises a
+    // truck, so the swatch is identification, not decoration.
+    const swatch = document.createElement('span');
+    swatch.style.cssText = 'width:9px;height:9px;border-radius:50%;flex:0 0 auto;box-shadow:0 0 0 1px rgba(0,0,0,0.15);';
+    swatch.style.background = tag.truck.color;
+    row.appendChild(swatch);
+
+    const truckName = document.createElement('span');
+    truckName.textContent = tag.truck.name;
+    truckName.style.cssText = 'font-size:11px;font-weight:700;color:#202124;white-space:nowrap;';
+    row.appendChild(truckName);
+
+    if (tag.loadTitle) {
+      const sep = document.createElement('span');
+      sep.textContent = '·';
+      sep.style.cssText = 'font-size:11px;color:#9aa0a6;flex:0 0 auto;';
+      row.appendChild(sep);
+      const load = document.createElement('span');
+      load.textContent = tag.loadTitle;
+      load.style.cssText = 'font-size:11px;color:#5f6368;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+      row.appendChild(load);
+    }
+    el.appendChild(row);
+  }
 }
 
 /** Format an ISO timestamp as a coarse "X ago" string. Returns null
@@ -146,6 +244,11 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
   // map so we can toggle visibility on selection change without
   // recreating any pins. Cleared together with markersRef.
   const labelsRef    = useRef<Map<string, HTMLDivElement>>(new Map());
+  // Pin positions keyed by trailer id, written by the plot effect.
+  // The selection effect reads these rather than marker.position so
+  // it can nudge the view without taking `groups` as a dependency —
+  // doing that would re-run the nudge on every 60s poll.
+  const positionsRef = useRef<Map<string, google.maps.LatLngLiteral>>(new Map());
 
   const [locations,  setLocations]  = useState<Record<string, MotiveTrailerLocation>>({});
   const [locLoading, setLocLoading] = useState(false);
@@ -287,6 +390,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
       markersRef.current.forEach(m => { m.map = null; });
       markersRef.current.clear();
       labelsRef.current.clear();
+      positionsRef.current.clear();
       mapRef.current = null;
     };
     // Construct once — never tear down / rebuild on poll-driven count
@@ -316,13 +420,31 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
         seen.add(key);
         const color = STATUS_PIN_COLOR[entry.usage.status];
         const lastSeen = formatLastSeen(entry.loc.locatedAt);
-        // Label content prefers the trailer number (what dispatchers
-        // actually call them) and falls back to the display name.
-        const labelText = entry.trailer.trailerNumber
-          ? `#${entry.trailer.trailerNumber}`
-          : entry.trailer.name;
+        const load = entry.usage.load;
+        // Only an in-use trailer has a load, and only that load names
+        // a truck — so an idle pin's tag simply has no truck line
+        // rather than an empty one.
+        const truck = load ? assets.find(a => a.id === load.assetId) : undefined;
+        const tag: PinTag = {
+          // Prefers the trailer number (what dispatchers actually call
+          // them) and falls back to the display name.
+          heading: entry.trailer.trailerNumber
+            ? `#${entry.trailer.trailerNumber}`
+            : entry.trailer.name,
+          category: entry.trailer.category,
+          lastSeen,
+          truck: truck ? { name: truck.name, color: truck.color } : undefined,
+          // routeLabel is the fallback because a load with no typed
+          // title still has stops, and "Las Vegas, NV → Salt Lake
+          // City, UT" beats a blank line.
+          loadTitle: load ? (load.title || routeLabel(load)) : undefined,
+        };
         const position = { lat: entry.loc.lat, lng: entry.loc.lon };
-        const title = lastSeen ? `${entry.trailer.name} · ${lastSeen}` : entry.trailer.name;
+        const title = [
+          entry.trailer.name,
+          truck ? `on ${truck.name}` : null,
+          lastSeen,
+        ].filter(Boolean).join(' · ');
 
         const existing = markersRef.current.get(key);
         if (existing) {
@@ -331,7 +453,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
           existing.position = position;
           existing.title = title;
         } else {
-          const { wrapper, labelEl } = makePinElement(color, labelText);
+          const { wrapper, labelEl } = makePinElement(color);
           const marker = new google.maps.marker.AdvancedMarkerElement({
             map,
             position,
@@ -344,6 +466,13 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
           markersRef.current.set(key, marker);
           labelsRef.current.set(key, labelEl);
         }
+        // Repaint whether the pin is new or a survivor: the poll that
+        // moved it may also have aged its "last seen" or hooked it to
+        // a truck. Replacing the children leaves the element's own
+        // display style alone, so an open tag stays open.
+        const tagEl = labelsRef.current.get(key);
+        if (tagEl) paintPinTag(tagEl, tag);
+        positionsRef.current.set(key, position);
         bounds.extend(position);
       }
 
@@ -353,6 +482,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
           marker.map = null;
           markersRef.current.delete(key);
           labelsRef.current.delete(key);
+          positionsRef.current.delete(key);
         }
       }
 
@@ -364,16 +494,8 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
         if (allPinned.length > 1) map.fitBounds(bounds, 60);
       }
     });
-  }, [mapReady, groups]);
+  }, [mapReady, groups, assets]);
 
-  // ── Selection effect ──────────────────────────────────────────────────
-  // Three things happen when a trailer becomes selected (whether the
-  // click came from a pin or a sidebar row):
-  //   1. The map pans/zooms to the pin.
-  //   2. The pin's label (trailer #) appears above the dot, and the
-  //      pin's zIndex is bumped so it draws on top of nearby pins.
-  //   3. The matching sidebar row scrolls into view — without this the
-  //      highlight is invisible when the row is below the fold.
   // ── Yard circles ──────────────────────────────────────────────────────
   // Redrawn whenever the yard set changes. Circles are not clickable:
   // a geofence that swallows clicks would make the pins underneath it
@@ -433,12 +555,25 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
     return () => listener.remove();
   }, [mapReady, placing, addSavedLocation]);
 
+  // ── Selection effect ────────────────────────────────────────
+  // Four things happen when a trailer becomes selected (whether the
+  // click came from a pin or a sidebar row):
+  //   1. The pin's tag opens above the dot — trailer number,
+  //      category, last seen, and the truck + load if it's on one.
+  //   2. The pin's zIndex is bumped so it draws above its neighbours
+  //      and its tag isn't buried under their dots.
+  //   3. The map nudges the pin into view, but only if it isn't
+  //      already in view. See the note below — this is deliberately
+  //      not a recentre.
+  //   4. The matching sidebar row scrolls into view — without this the
+  //      highlight is invisible when the row is below the fold.
   useEffect(() => {
-    // Hide every label first so old selections clear out.
+    // Hide every tag first so old selections clear out.
     labelsRef.current.forEach(el => { el.style.display = 'none'; });
     markersRef.current.forEach(m => { m.zIndex = undefined; });
 
     if (selectedTrailerId == null) return;
+    let cancelled = false;
 
     const key = String(selectedTrailerId);
     const marker = markersRef.current.get(key);
@@ -447,12 +582,34 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
     if (labelEl) labelEl.style.display = 'block';
     if (marker)  marker.zIndex = 999;
 
-    // The map deliberately does NOT pan or zoom to the selection. It
-    // used to, and that made the map useless for comparing trailers:
-    // every click threw away the view you had framed, so checking
-    // which of three trailers sat nearest a yard meant re-panning
-    // after each one. The label + raised zIndex are enough to find the
-    // pin, and the view stays where the dispatcher put it.
+    // The map NUDGES rather than centres.
+    //
+    // Centring on every click made the map useless for comparing
+    // trailers in one yard — each click threw away the view you had
+    // framed. Doing nothing at all was wrong in the other direction:
+    // selecting a trailer parked three states away left you staring
+    // at an unchanged map wondering which pin lit up.
+    //
+    // panToBounds pans by the MINIMUM amount needed to fit a point
+    // inside the padded viewport, and does nothing when it already
+    // fits. So clicking another SLC trailer moves the map not at all,
+    // and clicking one in Dallas brings it just inside the edge at
+    // the same zoom — no re-framing, no zoom change.
+    //
+    // The padding is asymmetric because the tag hangs above the dot
+    // and spreads sideways: these are roughly that tag's footprint,
+    // so a pin is never nudged to a spot where its own tag is clipped
+    // by the map frame.
+    const pos = positionsRef.current.get(key);
+    if (pos) {
+      void loadGoogleMaps().then(google => {
+        const map = mapRef.current;
+        if (cancelled || !map) return;
+        map.panToBounds(new google.maps.LatLngBounds(pos, pos), {
+          top: 130, right: 160, bottom: 50, left: 160,
+        });
+      });
+    }
 
     // Scroll the sidebar row into view. We use a data attribute rather
     // than threading refs through Section so the lookup stays simple
@@ -461,6 +618,8 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
       const row = document.querySelector<HTMLElement>(`[data-trailer-row-id="${selectedTrailerId}"]`);
       row?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
+
+    return () => { cancelled = true; };
   }, [selectedTrailerId]);
 
   // ── Sidebar row helpers ───────────────────────────────────────────────
