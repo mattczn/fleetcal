@@ -223,14 +223,21 @@ export interface HosAssetDriver {
   /** How the driver was determined: override | calendar_active |
    *  calendar_recent | asset_default | none. */
   source: string;
-  /** Trailer on the truck's active (else most recent) load today.
-   *  Resolved independently of the driver — an override says who is
-   *  driving, not what is hooked. Null when no load today named one. */
+  /** Trailer on the truck's active load today, else its last load
+   *  today, else its next. Resolved independently of the driver — an
+   *  override says who is driving, not what is hooked. Null when no
+   *  load today named a trailer. */
   trailerId: number | null;
   /** Display label for trailerId — the bare trailer number, falling
    *  back to the roster name for trailers that have no number. Null
    *  when the trailer row has since been removed. */
   trailerName: string | null;
+  /** Which tier answered: 'active' (load running now — definitive),
+   *  'recent' (last load that ended today — still hooked unless
+   *  swapped), 'upcoming' (next load today — planned, not hooked yet).
+   *  Drives the tooltip so a planned trailer is never mistaken for one
+   *  that's actually on the truck. */
+  trailerSource: 'active' | 'recent' | 'upcoming' | null;
   /** Null when the driver has HOS switched off, or none resolved. */
   hos: {
     status: 'on_duty' | 'off_duty';

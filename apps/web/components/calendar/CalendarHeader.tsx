@@ -318,18 +318,28 @@ export default function CalendarHeader() {
 
                 Hidden under 90px like the rest of the header detail. */}
             {showTrailerInHeader && rw >= 90 && (() => {
-              const t = hosByAsset.get(asset.id)?.trailerName;
+              const entry = hosByAsset.get(asset.id);
+              const t = entry?.trailerName;
               if (!t) return null;
+              // An upcoming trailer is planned, not hooked — it reads
+              // lighter so a glance can tell the two apart without
+              // hovering, and the tooltip says so outright. Active and
+              // recent both mean "it's on the truck".
+              const planned = entry?.trailerSource === 'upcoming';
+              const why =
+                entry?.trailerSource === 'active'   ? "on the load running now"
+                : entry?.trailerSource === 'recent' ? "from today's last load — still hooked unless it was swapped"
+                : "planned for today's next load — not hooked yet";
               return (
                 <div
                   className="flex items-center justify-center gap-0.5 w-full"
-                  style={{ marginTop: 2, maxWidth: '100%' }}
-                  title={`Trailer ${t} — on this truck's current load`}
+                  style={{ marginTop: 2, maxWidth: '100%', opacity: planned ? 0.55 : 1 }}
+                  title={`Trailer ${t} — ${why}`}
                 >
                   <Container size={9} style={{ color: 'var(--gc-text-3)', flexShrink: 0 }} />
                   <span
                     className="text-[10px] font-medium truncate leading-none"
-                    style={{ color: 'var(--gc-text-2)' }}
+                    style={{ color: 'var(--gc-text-2)', fontStyle: planned ? 'italic' : 'normal' }}
                   >
                     {t}
                   </span>

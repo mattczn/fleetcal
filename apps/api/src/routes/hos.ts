@@ -682,40 +682,65 @@ hos.get("/by-asset", async (c) => {
     return { driverId: null, source: "none" };
   };
 
-  // What's hooked to this truck right now. Same active-then-recent walk
-  // as the driver, deliberately run as its OWN pass rather than reading
-  // the trailer off whichever event resolved the driver:
+  // What's hooked to this truck, in descending order of how sure we
+  // are that it really is:
   //
+  //   1. active   — a load running right now. Definitive.
+  //   2. recent   — the last load that ended today. The trailer stays
+  //                 hooked after a drop until someone swaps it, so this
+  //                 is still a strong answer.
+  //   3. upcoming — the next load today. Weakest: planned, not hooked
+  //                 yet. Earns its place because it is the only answer
+  //                 available first thing in the morning — measured on
+  //                 a week of real days, it fills 4-6 trucks at 07:00
+  //                 and almost nothing by 13:00.
+  //
+  // Bounded to today by the events query. Nothing carries over from
+  // yesterday, which is what stops the header asserting a trailer for
+  // a truck that hasn't worked since.
+  //
+  // Run as its OWN pass rather than reading the trailer off whichever
+  // event resolved the driver:
   //   - A dispatcher override says who is driving, not what is hooked.
-  //     Reading the trailer off the driver's resolution would blank the
-  //     trailer on every overridden truck.
+  //     Reading through the driver would blank the trailer on every
+  //     overridden truck.
   //   - A standing driver pref (asset_default) has no event behind it
   //     at all, so there'd be nothing to read.
   //   - The active leg can carry a driver but no trailer, or the other
   //     way round; each question should fall through on its own.
   //
   // Only events that actually name a trailer are candidates, so a leg
-  // nobody reported a trailer on falls through to the last one that
-  // did instead of blanking the header.
-  const resolveTrailer = (assetId: number): number | null => {
+  // nobody reported one on falls through to the nearest leg that did
+  // instead of blanking the header.
+  type TrailerPick = { trailerId: number | null; trailerSource: "active" | "recent" | "upcoming" | null };
+  const resolveTrailer = (assetId: number): TrailerPick => {
     const candidates = (evByAsset.get(assetId) ?? []).filter(e => e.trailer_id != null);
+
     let best: Ev | null = null;
     for (const e of candidates) {
       if (e.start <= nowLocal && e.end >= nowLocal) {
         if (!best || e.end < best.end) best = e;   // relay: soonest-ending leg wins
       }
     }
-    if (best) return best.trailer_id;
+    if (best) return { trailerId: best.trailer_id, trailerSource: "active" };
+
     for (const e of candidates) {
       if (e.end <= nowLocal) { if (!best || e.end > best.end) best = e; }
     }
-    return best?.trailer_id ?? null;
+    if (best) return { trailerId: best.trailer_id, trailerSource: "recent" };
+
+    for (const e of candidates) {
+      if (e.start > nowLocal) { if (!best || e.start < best.start) best = e; }
+    }
+    if (best) return { trailerId: best.trailer_id, trailerSource: "upcoming" };
+
+    return { trailerId: null, trailerSource: null };
   };
 
   // Hours for every driver that resolved to a truck — reuse the same
   // snapshot the board renders so the two can't disagree.
   const assets = (assetsRes.data ?? []) as Array<{ id: number; name: string; unit: string | null }>;
-  const resolved = assets.map(a => ({ asset: a, ...resolve(a.id), trailerId: resolveTrailer(a.id) }));
+  const resolved = assets.map(a => ({ asset: a, ...resolve(a.id), ...resolveTrailer(a.id) }));
 
   // Names for whatever trailers resolved. Soft-deleted/retired trailers
   // are still named here — a header that reads "no trailer" because the
@@ -767,7 +792,7 @@ hos.get("/by-asset", async (c) => {
   return c.json({
     date,
     config,
-    assets: resolved.map(({ asset, driverId, source, trailerId }) => {
+    assets: resolved.map(({ asset, driverId, source, trailerId, trailerSource }) => {
       const snap = driverId != null ? snapshots.get(driverId) : null;
       return {
         assetId: asset.id,
@@ -777,6 +802,7 @@ hos.get("/by-asset", async (c) => {
         source,
         trailerId,
         trailerName: trailerId != null ? trailerName.get(trailerId) ?? null : null,
+        trailerSource,
         hos: snap && driverId != null && hosEnabled.has(driverId) ? {
           status: snap.status,
           windowRemainingSeconds: snap.window ? Math.round(snap.window.remainingSeconds) : null,
