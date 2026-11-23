@@ -370,11 +370,12 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
     if (labelEl) labelEl.style.display = 'block';
     if (marker)  marker.zIndex = 999;
 
-    if (marker?.position && mapRef.current) {
-      const pos = marker.position as google.maps.LatLngLiteral;
-      mapRef.current.panTo(pos);
-      mapRef.current.setZoom(Math.max(mapRef.current.getZoom() ?? 8, 11));
-    }
+    // The map deliberately does NOT pan or zoom to the selection. It
+    // used to, and that made the map useless for comparing trailers:
+    // every click threw away the view you had framed, so checking
+    // which of three trailers sat nearest a yard meant re-panning
+    // after each one. The label + raised zIndex are enough to find the
+    // pin, and the view stays where the dispatcher put it.
 
     // Scroll the sidebar row into view. We use a data attribute rather
     // than threading refs through Section so the lookup stays simple

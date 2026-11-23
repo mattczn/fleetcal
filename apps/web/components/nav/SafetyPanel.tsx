@@ -17,7 +17,7 @@
  */
 
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, X, MapPin, Truck, Loader2, ExternalLink } from 'lucide-react';
+import { AlertTriangle, X, MapPin, Truck, Loader2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { loadGoogleMaps, MAP_ID } from '@/lib/googleMaps';
 import { railway } from '@/lib/railway';
@@ -277,20 +277,6 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
                 Refresh
               </button>
             </div>
-            {/* Deep-link to the drivers scorecard so a dispatcher can
-                jump from panel triage to the fleet-wide overview. */}
-            <button
-              type="button"
-              onClick={() => { onClose(); router.push('/drivers'); }}
-              style={{
-                display: 'inline-flex', alignItems: 'center', gap: 4,
-                fontSize: 11, color: 'var(--gc-blue, #1a73e8)',
-                background: 'transparent', border: 'none', cursor: 'pointer',
-                padding: 0, alignSelf: 'flex-start',
-              }}
-            >
-              View driver scorecards <ExternalLink size={11} />
-            </button>
             {/* Above-fleet-avg severe banner — appears when at least
                 one driver had ≥2 severe events in the last 24h AND was
                 above the fleet mean. Tooltip shows the raw numbers. */}
@@ -553,7 +539,6 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
               movements={movements}
               drivers={drivers}
               driverScores7d={driverScores7d}
-              onOpenScorecard={() => { onClose(); router.push('/drivers'); }}
               onEventUpdated={(updated) => {
                 // Splice the server's fresh row (already enriched) into
                 // our events array — no full re-fetch. Same row, same
@@ -623,7 +608,7 @@ export default function SafetyPanel({ onClose }: { onClose: () => void }) {
 // ── Right pane: map + video + actions ──────────────────────────────────
 
 function SafetyDetail({
-  event, movements, drivers, driverScores7d, onOpenScorecard, onEventUpdated, onRawRefreshed, onAdvance,
+  event, movements, drivers, driverScores7d, onEventUpdated, onRawRefreshed, onAdvance,
 }: {
   event:     PanelEvent;
   movements: PerformanceEventMovement[];
@@ -635,9 +620,6 @@ function SafetyDetail({
    *  splices it into its events array — no full re-fetch. */
   onEventUpdated: (updated: PerformanceEventRow) => void;
   onRawRefreshed: (eventId: number, raw: MotivePerfRaw | undefined) => void;
-  /** Fires when the dispatcher clicks the "See full scorecard" link
-   *  next to the 7-day score. Panel navigates to /drivers. */
-  onOpenScorecard: () => void;
   /** Fires after a successful acknowledge / notify / ignore so the
    *  panel can jump to the next new alert without a manual click. */
   onAdvance?: () => void;
@@ -924,13 +906,11 @@ function SafetyDetail({
             <DisputeReviewBlock event={event} onEventUpdated={onEventUpdated} />
           )}
 
-          {/* Driver 7-day safety score — shorter-window health check
-              alongside the 30-day score on the drivers page. Only
-              renders when we have a resolved driver AND a 7d score. */}
+          {/* Driver 7-day safety score. Only renders when we have a
+              resolved driver AND a 7d score. */}
           <DriverScore7dBlock
             event={event}
             driverScores7d={driverScores7d}
-            onOpenScorecard={onOpenScorecard}
           />
 
           {/* Delivery record — only rendered when a push actually went
@@ -1224,11 +1204,10 @@ function DisputeReviewBlock({
 }
 
 function DriverScore7dBlock({
-  event, driverScores7d, onOpenScorecard,
+  event, driverScores7d,
 }: {
   event: PanelEvent;
   driverScores7d: Map<number, DriverSafetyScoreRow>;
-  onOpenScorecard: () => void;
 }) {
   const driverId = event.resolved_driver_id ?? event.assigned_driver_id;
   if (driverId == null) return null;
@@ -1265,19 +1244,6 @@ function DriverScore7dBlock({
               <span style={{ color: '#c5221f', marginLeft: 6, fontWeight: 700 }}>· flagged</span>
             )}
           </div>
-          <button
-            type="button"
-            onClick={onOpenScorecard}
-            style={{
-              marginTop: 6,
-              padding: 0, border: 'none', background: 'transparent',
-              color: 'var(--gc-blue, #1a73e8)',
-              fontSize: 11, cursor: 'pointer',
-              display: 'inline-flex', alignItems: 'center', gap: 3,
-            }}
-          >
-            See full scorecard <ExternalLink size={11} />
-          </button>
         </div>
       </div>
     </DetailBlock>

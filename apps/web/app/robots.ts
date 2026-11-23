@@ -15,7 +15,6 @@ export default function robots(): MetadataRoute.Robots {
         '/closeout',
         '/create-organization',
         '/dashboard',
-        '/drivers',
         '/equipment',
         '/fuel',
         '/loads',

@@ -137,16 +137,13 @@ function EquipmentPageInner() {
   const legacyRedirectRouter = useRouter();
   // Legacy deep link: /equipment?tab=cardspend was retired when Card
   // Spend moved to /expenses/cards. Bounce anything landing here from
-  // an old bookmark before the tab-init logic runs. Scorecard moved
-  // to /drivers in the same spirit — driver-performance signals live
-  // under the Drivers page now (safety score + inspection compliance
-  // both live there).
+  // an old bookmark before the tab-init logic runs. ?tab=scorecard
+  // used to forward to /drivers; that page is gone, so the stale tab
+  // now falls through to the default rather than routing to a 404.
   useEffect(() => {
     const t = searchParams?.get('tab');
     if (t === 'cardspend') {
       legacyRedirectRouter.replace('/expenses/cards');
-    } else if (t === 'scorecard') {
-      legacyRedirectRouter.replace('/drivers');
     }
   }, [searchParams, legacyRedirectRouter]);
   // Internal-org gate for the Curzon-only "Truck History" module — same

@@ -16,8 +16,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import Link from 'next/link';
-import { Truck, ChevronDown, ChevronUp, ArrowUpDown, Users, Sparkles, Loader2 } from 'lucide-react';
+import { Truck, ChevronDown, ChevronUp, ArrowUpDown, Sparkles, Loader2 } from 'lucide-react';
 import AppShell from '@/components/nav/AppShell';
 import { PeriodSelector } from '@/components/ui/PeriodSelector';
 import Tooltip from '@/components/ui/Tooltip';
@@ -317,13 +316,6 @@ export default function AssetPerformanceView() {
                 ? `Linking… ${relinkProgress?.done ?? 0} / ${relinkProgress?.total ?? 0}`
                 : 'Re-link period for fleet'}
             </button>
-            <Link
-              href="/drivers"
-              className="text-[12px] font-semibold flex items-center gap-1.5 px-3 py-1.5 rounded"
-              style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)' }}
-            >
-              <Users size={14} /> Drivers view
-            </Link>
             <PeriodSelector
               period={period}
               onPeriodChange={setPeriod}
