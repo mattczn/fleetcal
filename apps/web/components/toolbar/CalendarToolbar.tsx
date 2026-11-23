@@ -76,6 +76,7 @@ export default function CalendarToolbar() {
     showPodOverlay,       setShowPodOverlay,
     showTrailerOverlay,   setShowTrailerOverlay,
     showOtrOverlay,       setShowOtrOverlay,     shortHaul,
+    showTrailerInHeader,  setShowTrailerInHeader,
     showBillingOverlay,   setShowBillingOverlay,
   } = useCalendarStore();
 
@@ -905,7 +906,10 @@ export default function CalendarToolbar() {
                 // for an org that doesn't assign trailers this would
                 // be a badge that can never light up.
                 ...(moduleEnabled('trailers')
-                  ? [{ key: 'trailer', label: 'Trailer reported', value: showTrailerOverlay, set: setShowTrailerOverlay } as const]
+                  ? [
+                      { key: 'trailer',    label: 'Trailer reported',  value: showTrailerOverlay,  set: setShowTrailerOverlay  } as const,
+                      { key: 'trailerHdr', label: 'Trailer in header', value: showTrailerInHeader, set: setShowTrailerInHeader } as const,
+                    ]
                   : []),
                 // Needs a configured home terminal — with no centre
                 // there is no radius, and the outline could never

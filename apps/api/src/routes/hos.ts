@@ -616,7 +616,7 @@ hos.get("/by-asset", async (c) => {
   const [assetsRes, eventsRes, prefsRes, driversRes] = await Promise.all([
     sb.from("assets").select("id, name, unit").eq("org_id", orgId)
       .eq("hidden", false).is("active_to", null),
-    sb.from("events").select("id, asset_id, driver_id, driver_name, start, end")
+    sb.from("events").select("id, asset_id, driver_id, driver_name, start, end, trailer_id")
       .eq("org_id", orgId).is("deleted_at", null)
       .lte("start", `${date}T23:59`).gte("end", `${date}T00:00`),
     sb.from("driver_asset_prefs").select("asset_id, driver_id").eq("org_id", orgId),
@@ -645,7 +645,7 @@ hos.get("/by-asset", async (c) => {
       .map(d => [d.id, d.name ?? `Driver ${d.id}`]),
   );
 
-  type Ev = { asset_id: number | null; driver_id: number | null; driver_name: string | null; start: string; end: string };
+  type Ev = { asset_id: number | null; driver_id: number | null; driver_name: string | null; start: string; end: string; trailer_id: number | null };
   const evByAsset = new Map<number, Ev[]>();
   for (const e of ((eventsRes.data ?? []) as Ev[])) {
     if (e.asset_id == null) continue;
@@ -682,10 +682,62 @@ hos.get("/by-asset", async (c) => {
     return { driverId: null, source: "none" };
   };
 
+  // What's hooked to this truck right now. Same active-then-recent walk
+  // as the driver, deliberately run as its OWN pass rather than reading
+  // the trailer off whichever event resolved the driver:
+  //
+  //   - A dispatcher override says who is driving, not what is hooked.
+  //     Reading the trailer off the driver's resolution would blank the
+  //     trailer on every overridden truck.
+  //   - A standing driver pref (asset_default) has no event behind it
+  //     at all, so there'd be nothing to read.
+  //   - The active leg can carry a driver but no trailer, or the other
+  //     way round; each question should fall through on its own.
+  //
+  // Only events that actually name a trailer are candidates, so a leg
+  // nobody reported a trailer on falls through to the last one that
+  // did instead of blanking the header.
+  const resolveTrailer = (assetId: number): number | null => {
+    const candidates = (evByAsset.get(assetId) ?? []).filter(e => e.trailer_id != null);
+    let best: Ev | null = null;
+    for (const e of candidates) {
+      if (e.start <= nowLocal && e.end >= nowLocal) {
+        if (!best || e.end < best.end) best = e;   // relay: soonest-ending leg wins
+      }
+    }
+    if (best) return best.trailer_id;
+    for (const e of candidates) {
+      if (e.end <= nowLocal) { if (!best || e.end > best.end) best = e; }
+    }
+    return best?.trailer_id ?? null;
+  };
+
   // Hours for every driver that resolved to a truck — reuse the same
   // snapshot the board renders so the two can't disagree.
   const assets = (assetsRes.data ?? []) as Array<{ id: number; name: string; unit: string | null }>;
-  const resolved = assets.map(a => ({ asset: a, ...resolve(a.id) }));
+  const resolved = assets.map(a => ({ asset: a, ...resolve(a.id), trailerId: resolveTrailer(a.id) }));
+
+  // Names for whatever trailers resolved. Soft-deleted/retired trailers
+  // are still named here — a header that reads "no trailer" because the
+  // trailer was retired last month is worse than one naming it.
+  const trailerName = new Map<number, string>();
+  {
+    const ids = Array.from(new Set(resolved.map(r => r.trailerId).filter((x): x is number => x != null)));
+    if (ids.length > 0) {
+      const { data, error } = await sb.from("trailers")
+        .select("id, name, trailer_number").eq("org_id", orgId).in("id", ids);
+      if (error) console.warn("[hos/by-asset] trailer lookup failed:", error.message);
+      // trailer_number first, name second. The roster stores the number
+      // twice — trailer_number is the bare "290862", name is the same
+      // number with the door type bolted on ("290862 - Swing") — and a
+      // column header this narrow has room for one or the other. Rows
+      // with no number (hand-added trailers) fall back to the name.
+      for (const t of ((data ?? []) as Array<{ id: number; name: string | null; trailer_number: string | null }>)) {
+        const label = (t.trailer_number ?? "").trim() || (t.name ?? "").trim();
+        if (label) trailerName.set(t.id, label);
+      }
+    }
+  }
   const driverIds = Array.from(new Set(
     resolved.map(r => r.driverId).filter((x): x is number => x != null),
   ));
@@ -715,7 +767,7 @@ hos.get("/by-asset", async (c) => {
   return c.json({
     date,
     config,
-    assets: resolved.map(({ asset, driverId, source }) => {
+    assets: resolved.map(({ asset, driverId, source, trailerId }) => {
       const snap = driverId != null ? snapshots.get(driverId) : null;
       return {
         assetId: asset.id,
@@ -723,6 +775,8 @@ hos.get("/by-asset", async (c) => {
         driverId,
         driverName: driverId != null ? driverName.get(driverId) ?? null : null,
         source,
+        trailerId,
+        trailerName: trailerId != null ? trailerName.get(trailerId) ?? null : null,
         hos: snap && driverId != null && hosEnabled.has(driverId) ? {
           status: snap.status,
           windowRemainingSeconds: snap.window ? Math.round(snap.window.remainingSeconds) : null,

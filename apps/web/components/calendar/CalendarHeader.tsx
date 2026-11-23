@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { railway, type HosAssetDriver } from '@/lib/railway';
 import AssetDriverChip from './AssetDriverChip';
-import { MapPin, Loader2, RefreshCw, Truck, Activity } from 'lucide-react';
+import { MapPin, Loader2, RefreshCw, Truck, Activity, Container } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { useModules } from '@/lib/useModules';
 import { GUTTER_W } from '@/lib/time-utils';
@@ -98,7 +98,7 @@ function useMotiveLocations() {
 
 export default function CalendarHeader() {
   const { byAsset: hosByAsset, reload: reloadHos } = useHosByAsset();
-  const { assets: allAssets, resourceWidth: rw, activeCategoryFilter, showUnassigned, unassignedAssetId, calendarTimezone, currentDate, viewMode, calendarMode, setCalendarMode, movementsLoading, movementsError, fetchMovements } = useCalendarStore();
+  const { assets: allAssets, resourceWidth: rw, activeCategoryFilter, showUnassigned, unassignedAssetId, calendarTimezone, currentDate, viewMode, calendarMode, setCalendarMode, movementsLoading, movementsError, fetchMovements, showTrailerInHeader } = useCalendarStore();
   const unassignedAsset = showUnassigned && unassignedAssetId !== null ? allAssets.find(a => a.id === unassignedAssetId) ?? null : null;
   // Date range that matches the calendar grid below — same logic +
   // same org-tz interpretation, so header chips align with columns.
@@ -302,6 +302,40 @@ export default function CalendarHeader() {
               width={rw}
               onChanged={reloadHos}
             />
+
+            {/* Current trailer, same "right now" answer as the driver
+                above it — the trailer on this truck's active load, or
+                the last load today that named one. Resolved server-side
+                in /v1/hos/by-asset so it can't disagree with the driver
+                line about which day it's describing: the calendar store
+                only holds the week on screen, and this header stays a
+                today view even while you page through next month.
+
+                Renders nothing at all when no trailer resolved, rather
+                than an em-dash placeholder — an empty row in a header
+                this dense reads as noise, and "no trailer reported" is
+                what the card badge is for.
+
+                Hidden under 90px like the rest of the header detail. */}
+            {showTrailerInHeader && rw >= 90 && (() => {
+              const t = hosByAsset.get(asset.id)?.trailerName;
+              if (!t) return null;
+              return (
+                <div
+                  className="flex items-center justify-center gap-0.5 w-full"
+                  style={{ marginTop: 2, maxWidth: '100%' }}
+                  title={`Trailer ${t} — on this truck's current load`}
+                >
+                  <Container size={9} style={{ color: 'var(--gc-text-3)', flexShrink: 0 }} />
+                  <span
+                    className="text-[10px] font-medium truncate leading-none"
+                    style={{ color: 'var(--gc-text-2)' }}
+                  >
+                    {t}
+                  </span>
+                </div>
+              );
+            })()}
 
             {loc && age ? (
               <button
