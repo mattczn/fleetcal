@@ -25,7 +25,7 @@
  * Polls /api/motive/trailer-locations every 60s while open. Closes on
  * Escape or click outside.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { X, MapPin, Container, AlertCircle, Loader2, Search, Clock, Plus, Trash2, Crosshair } from 'lucide-react';
 import { loadGoogleMaps, MAP_ID } from '@/lib/googleMaps';
 import { useCalendarStore } from '@/store/useCalendarStore';
@@ -81,12 +81,44 @@ interface PinTag {
   loadTitle?: string;
 }
 
+/**
+ * How a pin is currently being looked at.
+ *
+ * Hover is transient and selection is sticky, but they compete for the
+ * same two bits of the pin — how big the dot is and what the tag says
+ * — so they're one mode rather than two independent flags. Without
+ * that, hovering a selected pin would try to show both tags at once.
+ */
+type PinMode = 'idle' | 'hover' | 'selected';
+
+const PIN_SCALE: Record<PinMode, string> = {
+  idle:     'scale(1)',
+  hover:    'scale(1.35)',
+  selected: 'scale(1.6)',
+};
+
+const PIN_SHADOW: Record<PinMode, string> = {
+  idle:     '0 1px 6px rgba(0,0,0,0.35)',
+  hover:    '0 2px 9px rgba(0,0,0,0.45)',
+  selected: '0 2px 11px rgba(0,0,0,0.5)',
+};
+
+// Hover outranks selection. The selected pin is wherever you left it;
+// the hovered pin is the one your cursor is on *now*, and its tag has
+// to be readable over whatever it happens to overlap — including the
+// selected pin's larger tag.
+const PIN_Z: Record<PinMode, number | undefined> = {
+  idle:     undefined,
+  hover:    1000,
+  selected: 900,
+};
+
 /** Build a colored circle marker (HTMLElement) for the map plus a
  *  pre-attached tag element that's hidden until the marker is
- *  selected. The tag element is returned alongside so the selection
+ *  hovered or selected. The tag element is returned alongside so the selection
  *  effect can flip it on/off, and the plot effect can repaint its
  *  contents, without either one recreating the pin. */
-function makePinElement(color: string): { wrapper: HTMLDivElement; labelEl: HTMLDivElement } {
+function makePinElement(color: string): { wrapper: HTMLDivElement; labelEl: HTMLDivElement; dot: HTMLDivElement } {
   const wrapper = document.createElement('div');
   wrapper.style.cssText = 'position:relative;cursor:pointer;display:flex;flex-direction:column;align-items:center;';
 
@@ -110,15 +142,34 @@ function makePinElement(color: string): { wrapper: HTMLDivElement; labelEl: HTML
   ].join(';');
 
   const dot = document.createElement('div');
-  dot.style.cssText = `
-    width:16px;height:16px;border-radius:50%;
-    background:${color};border:2.5px solid white;
-    box-shadow:0 1px 6px rgba(0,0,0,0.35);
-  `;
+  dot.style.cssText = [
+    'width:16px', 'height:16px', 'border-radius:50%',
+    `background:${color}`, 'border:2.5px solid white',
+    `box-shadow:${PIN_SHADOW.idle}`,
+    // Grown with a transform rather than by changing width/height, so
+    // enlarging the dot never reflows the tag stacked above it. The
+    // marker anchors this wrapper's bottom centre at the trailer's
+    // coordinates, so a layout change here would visibly jump the pin.
+    'transform-origin:center',
+    'transition:transform 120ms ease-out, box-shadow 120ms ease-out',
+  ].join(';');
 
   wrapper.appendChild(labelEl);
   wrapper.appendChild(dot);
-  return { wrapper, labelEl };
+  return { wrapper, labelEl, dot };
+}
+
+/** The truck's calendar colour as a dot. On the calendar the colour
+ *  IS how a dispatcher recognises a truck, so this is identification,
+ *  not decoration. Set through `style.background` rather than in the
+ *  cssText string: the value comes out of the database, and the
+ *  property setter ignores a malformed colour instead of letting it
+ *  be parsed as further CSS. */
+function truckSwatch(color: string): HTMLSpanElement {
+  const swatch = document.createElement('span');
+  swatch.style.cssText = 'width:9px;height:9px;border-radius:50%;flex:0 0 auto;box-shadow:0 0 0 1px rgba(0,0,0,0.15);';
+  swatch.style.background = color;
+  return swatch;
 }
 
 /**
@@ -128,14 +179,35 @@ function makePinElement(color: string): { wrapper: HTMLDivElement; labelEl: HTML
  * dispatcher is looking at updates under them on the 60s poll instead
  * of freezing at whatever it said when the pin was created.
  *
- * Built with textContent and style properties rather than innerHTML:
- * a trailer name and a load title are org-entered strings, and a
- * truck colour comes out of the database. Assigning through
- * `style.background` means a malformed colour is simply ignored
- * instead of being parsed as further CSS.
+ * `compact` is the hover tag: one line, because hovering is a glance
+ * across a yard asking "which trailer is this, and is it under a
+ * truck". Clicking is the deliberate read, and earns the category,
+ * the last-seen and the load.
+ *
+ * Built with textContent rather than innerHTML — a trailer name and a
+ * load title are org-entered strings.
  */
-function paintPinTag(el: HTMLDivElement, tag: PinTag): void {
+function paintPinTag(el: HTMLDivElement, tag: PinTag, compact: boolean): void {
   el.replaceChildren();
+  el.style.padding = compact ? '3px 9px' : '5px 9px';
+
+  if (compact) {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:6px;white-space:nowrap;';
+    const heading = document.createElement('span');
+    heading.textContent = tag.heading;
+    heading.style.cssText = 'font-size:11px;font-weight:700;color:#202124;';
+    row.appendChild(heading);
+    if (tag.truck) {
+      row.appendChild(truckSwatch(tag.truck.color));
+      const name = document.createElement('span');
+      name.textContent = tag.truck.name;
+      name.style.cssText = 'font-size:11px;font-weight:600;color:#3c4043;';
+      row.appendChild(name);
+    }
+    el.appendChild(row);
+    return;
+  }
 
   // Line 1 — the trailer's own identity: number, then category.
   const idRow = document.createElement('div');
@@ -172,12 +244,7 @@ function paintPinTag(el: HTMLDivElement, tag: PinTag): void {
       'border-top:1px solid rgba(0,0,0,0.08)',
     ].join(';');
 
-    // On the calendar the colour IS how a dispatcher recognises a
-    // truck, so the swatch is identification, not decoration.
-    const swatch = document.createElement('span');
-    swatch.style.cssText = 'width:9px;height:9px;border-radius:50%;flex:0 0 auto;box-shadow:0 0 0 1px rgba(0,0,0,0.15);';
-    swatch.style.background = tag.truck.color;
-    row.appendChild(swatch);
+    row.appendChild(truckSwatch(tag.truck.color));
 
     const truckName = document.createElement('span');
     truckName.textContent = tag.truck.name;
@@ -196,6 +263,31 @@ function paintPinTag(el: HTMLDivElement, tag: PinTag): void {
     }
     el.appendChild(row);
   }
+}
+
+/** Put one pin into the given mode: dot size, stacking order, and
+ *  which tag (if any) is open. Every caller funnels through here so
+ *  the three modes can't drift apart — the bug that would otherwise
+ *  show up is a pin left large after the cursor moved on. */
+function applyPinVisual(
+  mode:   PinMode,
+  dot:    HTMLDivElement | undefined,
+  tagEl:  HTMLDivElement | undefined,
+  marker: google.maps.marker.AdvancedMarkerElement | undefined,
+  tag:    PinTag | undefined,
+): void {
+  if (dot) {
+    dot.style.transform = PIN_SCALE[mode];
+    dot.style.boxShadow = PIN_SHADOW[mode];
+  }
+  if (marker) marker.zIndex = PIN_Z[mode];
+  if (!tagEl) return;
+  if (mode === 'idle' || !tag) {
+    tagEl.style.display = 'none';
+    return;
+  }
+  paintPinTag(tagEl, tag, mode === 'hover');
+  tagEl.style.display = 'block';
 }
 
 /** Format an ISO timestamp as a coarse "X ago" string. Returns null
@@ -249,6 +341,21 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
   // it can nudge the view without taking `groups` as a dependency —
   // doing that would re-run the nudge on every 60s poll.
   const positionsRef = useRef<Map<string, google.maps.LatLngLiteral>>(new Map());
+  // The dot inside each pin, kept separately so it can be scaled
+  // without touching the tag above it.
+  const dotsRef      = useRef<Map<string, HTMLDivElement>>(new Map());
+  // What each pin's tag should say, written by the plot effect and
+  // read by repaintPins. Keeping it here rather than in state means a
+  // hover doesn't re-render the whole roster.
+  const tagDataRef   = useRef<Map<string, PinTag>>(new Map());
+  // Hover lives in a ref, not state, for the same reason: nothing in
+  // the React tree depends on it, only map DOM.
+  const hoveredKeyRef  = useRef<string | null>(null);
+  // Selection DOES live in state (the sidebar highlight needs it);
+  // this mirror exists so the pin listeners, which are attached once
+  // at pin creation, read the current value instead of whatever was
+  // selected on the render that created them.
+  const selectedKeyRef = useRef<string | null>(null);
 
   const [locations,  setLocations]  = useState<Record<string, MotiveTrailerLocation>>({});
   const [locLoading, setLocLoading] = useState(false);
@@ -265,6 +372,30 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
   const [yardError, setYardError] = useState<string | null>(null);
 
   const yards = useMemo(() => yardsFrom(savedLocations), [savedLocations]);
+
+  /**
+   * Re-apply every pin's visual state from the refs.
+   *
+   * One pass over all pins rather than a targeted update of the two
+   * that changed, because the pin *losing* hover or selection has to
+   * shrink back and close its tag, and tracking which that was is how
+   * you end up with a pin stuck large. There are a few dozen pins;
+   * this is three style writes each.
+   *
+   * Stable identity with no dependencies, reading everything through
+   * refs — so the mouseenter/mouseleave handlers attached when a pin
+   * was created still see the current selection, not a stale one.
+   */
+  const repaintPins = useCallback(() => {
+    const selKey = selectedKeyRef.current;
+    const hovKey = hoveredKeyRef.current;
+    for (const [key, marker] of markersRef.current) {
+      const mode: PinMode = key === hovKey ? 'hover'
+        : key === selKey ? 'selected'
+        : 'idle';
+      applyPinVisual(mode, dotsRef.current.get(key), labelsRef.current.get(key), marker, tagDataRef.current.get(key));
+    }
+  }, []);
 
   // ── ESC closes (modal only) ───────────────────────────────────────────
   useEffect(() => {
@@ -391,6 +522,8 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
       markersRef.current.clear();
       labelsRef.current.clear();
       positionsRef.current.clear();
+      dotsRef.current.clear();
+      tagDataRef.current.clear();
       mapRef.current = null;
     };
     // Construct once — never tear down / rebuild on poll-driven count
@@ -440,38 +573,50 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
           loadTitle: load ? (load.title || routeLabel(load)) : undefined,
         };
         const position = { lat: entry.loc.lat, lng: entry.loc.lon };
-        const title = [
-          entry.trailer.name,
-          truck ? `on ${truck.name}` : null,
-          lastSeen,
-        ].filter(Boolean).join(' · ');
 
         const existing = markersRef.current.get(key);
         if (existing) {
-          // Update the survivor in place — moving the pin and refreshing
-          // its hover title without recreating the AdvancedMarkerElement.
+          // Update the survivor in place — moving the pin without
+          // recreating the AdvancedMarkerElement or its listeners.
           existing.position = position;
-          existing.title = title;
         } else {
-          const { wrapper, labelEl } = makePinElement(color);
+          const { wrapper, labelEl, dot } = makePinElement(color);
+
+          // No `title` on the marker. It used to carry name + truck +
+          // last seen as a native browser tooltip, which now arrives a
+          // second late and directly on top of the hover tag saying
+          // the same thing. The tag replaces it.
           const marker = new google.maps.marker.AdvancedMarkerElement({
             map,
             position,
             content: wrapper,
-            // Hover title gives the dispatcher a quick read without
-            // clicking through to the sidebar.
-            title,
           });
           marker.addListener('click', () => setSelectedTrailerId(entry.trailer.id));
+
+          // Hover is wired to the wrapper rather than the marker so it
+          // works regardless of which pointer events the Maps marker
+          // forwards. The tag is pointer-events:none, so opening it
+          // can't steal the hover from the pin underneath — and since
+          // the tag stacks ABOVE the dot while the marker anchors the
+          // wrapper's bottom edge, the dot doesn't move when the tag
+          // appears. No flicker loop.
+          wrapper.addEventListener('mouseenter', () => {
+            hoveredKeyRef.current = key;
+            repaintPins();
+          });
+          wrapper.addEventListener('mouseleave', () => {
+            if (hoveredKeyRef.current === key) hoveredKeyRef.current = null;
+            repaintPins();
+          });
+
           markersRef.current.set(key, marker);
           labelsRef.current.set(key, labelEl);
+          dotsRef.current.set(key, dot);
         }
-        // Repaint whether the pin is new or a survivor: the poll that
-        // moved it may also have aged its "last seen" or hooked it to
-        // a truck. Replacing the children leaves the element's own
-        // display style alone, so an open tag stays open.
-        const tagEl = labelsRef.current.get(key);
-        if (tagEl) paintPinTag(tagEl, tag);
+        // Recorded for new pins and survivors alike: the poll that
+        // moved a pin may also have aged its "last seen" or hooked it
+        // to a truck, and an open tag has to pick that up.
+        tagDataRef.current.set(key, tag);
         positionsRef.current.set(key, position);
         bounds.extend(position);
       }
@@ -483,6 +628,13 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
           markersRef.current.delete(key);
           labelsRef.current.delete(key);
           positionsRef.current.delete(key);
+          dotsRef.current.delete(key);
+          tagDataRef.current.delete(key);
+          // A trailer can drop out of the pinned set while the cursor
+          // is on it (a search keystroke, or its GPS going stale), and
+          // a hovered key pointing at a pin that no longer exists
+          // would keep the next pin that reuses the id looking hovered.
+          if (hoveredKeyRef.current === key) hoveredKeyRef.current = null;
         }
       }
 
@@ -493,8 +645,12 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
         didInitialFitRef.current = true;
         if (allPinned.length > 1) map.fitBounds(bounds, 60);
       }
+
+      // Last, so brand-new pins start at the right size and any open
+      // tag refreshes with this pass's data.
+      repaintPins();
     });
-  }, [mapReady, groups, assets]);
+  }, [mapReady, groups, assets, repaintPins]);
 
   // ── Yard circles ──────────────────────────────────────────────────────
   // Redrawn whenever the yard set changes. Circles are not clickable:
@@ -558,8 +714,10 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
   // ── Selection effect ────────────────────────────────────────
   // Four things happen when a trailer becomes selected (whether the
   // click came from a pin or a sidebar row):
-  //   1. The pin's tag opens above the dot — trailer number,
-  //      category, last seen, and the truck + load if it's on one.
+  //   1. The pin's dot grows and its tag opens above it — trailer
+  //      number, category, last seen, and the truck + load if it's on
+  //      one. (Hover does a smaller version of the same thing; both
+  //      go through repaintPins.)
   //   2. The pin's zIndex is bumped so it draws above its neighbours
   //      and its tag isn't buried under their dots.
   //   3. The map nudges the pin into view, but only if it isn't
@@ -568,19 +726,15 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
   //   4. The matching sidebar row scrolls into view — without this the
   //      highlight is invisible when the row is below the fold.
   useEffect(() => {
-    // Hide every tag first so old selections clear out.
-    labelsRef.current.forEach(el => { el.style.display = 'none'; });
-    markersRef.current.forEach(m => { m.zIndex = undefined; });
+    // One repaint handles both ends of the change: the pin that just
+    // lost the selection shrinks and closes its tag, the one that
+    // gained it grows and opens the full tag.
+    selectedKeyRef.current = selectedTrailerId == null ? null : String(selectedTrailerId);
+    repaintPins();
 
     if (selectedTrailerId == null) return;
     let cancelled = false;
-
     const key = String(selectedTrailerId);
-    const marker = markersRef.current.get(key);
-    const labelEl = labelsRef.current.get(key);
-
-    if (labelEl) labelEl.style.display = 'block';
-    if (marker)  marker.zIndex = 999;
 
     // The map NUDGES rather than centres.
     //
@@ -620,7 +774,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
     }
 
     return () => { cancelled = true; };
-  }, [selectedTrailerId]);
+  }, [selectedTrailerId, repaintPins]);
 
   // ── Sidebar row helpers ───────────────────────────────────────────────
   function driverName(load: CalendarEvent | undefined): string | undefined {
