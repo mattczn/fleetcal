@@ -34,7 +34,17 @@ import type { MotiveTrailerLocation } from '@/app/api/motive/trailer-locations/r
 import type { Trailer, CalendarEvent } from '@/lib/types';
 
 interface Props {
-  onClose: () => void;
+  /** Required in modal mode; ignored when `embedded`. */
+  onClose?: () => void;
+  /**
+   * Render the map + roster filling the parent instead of as a modal
+   * over the calendar. The /trailers page uses this so the page and
+   * the toolbar popup stay the same component — the only differences
+   * are the chrome (no backdrop, no fixed 980×720 card, no close
+   * button) and that Escape isn't bound, since on a page there's
+   * nothing to escape from.
+   */
+  embedded?: boolean;
 }
 
 // Status palette: red signals "this trailer is tied up right now",
@@ -118,7 +128,7 @@ function trailerMatchesQuery(t: Trailer, q: string): boolean {
   return false;
 }
 
-export default function TrailerFleetMapPanel({ onClose }: Props) {
+export default function TrailerFleetMapPanel({ onClose, embedded = false }: Props) {
   const { trailers, events, drivers, assets, calendarTimezone } = useCalendarStore();
   const overlayRef   = useRef<HTMLDivElement>(null);
   const mapContainer = useRef<HTMLDivElement>(null);
@@ -135,12 +145,13 @@ export default function TrailerFleetMapPanel({ onClose }: Props) {
   const [selectedTrailerId, setSelectedTrailerId] = useState<number | null>(null);
   const [query, setQuery] = useState('');
 
-  // ── ESC closes ────────────────────────────────────────────────────────
+  // ── ESC closes (modal only) ───────────────────────────────────────────
   useEffect(() => {
+    if (embedded || !onClose) return;
     const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
-  }, [onClose]);
+  }, [onClose, embedded]);
 
   // Stable comma-separated list of Motive asset IDs to locate. The
   // server-side endpoint hits keeptruckin.com/v1/asset_locations and
@@ -394,44 +405,46 @@ export default function TrailerFleetMapPanel({ onClose }: Props) {
   const totalCount  = groups.active.length + groups.idle.length + groups.noGps.length;
   const activeCount = groups.active.length;
 
-  return (
-    <div
-      ref={overlayRef}
-      className="fixed inset-0 z-50 flex items-center justify-center"
-      style={{ background: 'rgba(0,0,0,0.45)' }}
-      onClick={e => { if (e.target === overlayRef.current) onClose(); }}
-    >
-      <div
-        className="relative flex flex-col rounded-2xl overflow-hidden"
-        style={{ width: 980, height: 720, background: 'var(--gc-surface)', boxShadow: 'var(--shadow-3)' }}
-      >
-        {/* Header */}
-        <div className="flex items-center gap-3 px-4 py-3 shrink-0" style={{ borderBottom: '1px solid var(--gc-border)' }}>
-          <Container size={18} style={{ color: 'var(--gc-blue)' }} />
+  const content = (
+    <>
+        {/* Header. Embedded, the title and icon would just repeat the
+            page shell's own "Trailers" heading, so only the counts
+            survive — as a slim strip above the map. */}
+        <div
+          className={`flex items-center gap-3 px-4 shrink-0 ${embedded ? 'py-2' : 'py-3'}`}
+          style={{ borderBottom: '1px solid var(--gc-border)' }}
+        >
+          {!embedded && <Container size={18} style={{ color: 'var(--gc-blue)' }} />}
           <div className="flex-1 min-w-0">
-            <div className="text-[14px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
-              Trailer fleet
-            </div>
+            {!embedded && (
+              <div className="text-[14px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+                Trailer fleet
+              </div>
+            )}
             <div className="text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
               {totalCount} trailers · {activeCount} in use · {groups.noGps.length} without GPS
               {locLoading && <span className="ml-2"><Loader2 size={10} className="inline animate-spin" /></span>}
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-full transition-colors shrink-0"
-            style={{ color: 'var(--gc-text-3)' }}
-            onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-          >
-            <X size={16} />
-          </button>
+          {!embedded && (
+            <button
+              onClick={onClose}
+              className="p-1.5 rounded-full transition-colors shrink-0"
+              style={{ color: 'var(--gc-text-3)' }}
+              onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+            >
+              <X size={16} />
+            </button>
+          )}
         </div>
 
-        {/* Body: map + sidebar */}
+        {/* Body: map + sidebar. In the modal the map is a fixed 620 of
+            the 980 card; on the page it takes whatever the roster
+            doesn't, so a wide monitor spends its pixels on the map. */}
         <div className="flex-1 flex min-h-0">
           {/* Map */}
-          <div className="relative" style={{ width: 620 }}>
+          <div className="relative" style={embedded ? { flex: 1, minWidth: 0 } : { width: 620 }}>
             <div ref={mapContainer} style={{ width: '100%', height: '100%' }} />
             {locError && (
               <div className="absolute top-3 left-3 right-3 px-3 py-2 rounded-lg text-[12px]"
@@ -442,7 +455,10 @@ export default function TrailerFleetMapPanel({ onClose }: Props) {
           </div>
 
           {/* Sidebar */}
-          <div className="flex-1 flex flex-col min-h-0" style={{ borderLeft: '1px solid var(--gc-border)' }}>
+          <div
+            className={`flex flex-col min-h-0${embedded ? '' : ' flex-1'}`}
+            style={{ borderLeft: '1px solid var(--gc-border)', ...(embedded ? { width: 400, flexShrink: 0 } : {}) }}
+          >
             {/* Search — sits above the scrollable section list so it
                 stays visible while scrolling through long fleets. */}
             <div className="px-3 py-2.5 shrink-0" style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
@@ -543,6 +559,29 @@ export default function TrailerFleetMapPanel({ onClose }: Props) {
             </div>
           </div>
         </div>
+    </>
+  );
+
+  if (embedded) {
+    return (
+      <div className="flex-1 flex flex-col min-h-0" style={{ background: 'var(--gc-surface)' }}>
+        {content}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      ref={overlayRef}
+      className="fixed inset-0 z-50 flex items-center justify-center"
+      style={{ background: 'rgba(0,0,0,0.45)' }}
+      onClick={e => { if (e.target === overlayRef.current) onClose?.(); }}
+    >
+      <div
+        className="relative flex flex-col rounded-2xl overflow-hidden"
+        style={{ width: 980, height: 720, background: 'var(--gc-surface)', boxShadow: 'var(--shadow-3)' }}
+      >
+        {content}
       </div>
     </div>
   );
