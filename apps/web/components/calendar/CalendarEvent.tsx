@@ -3,7 +3,7 @@
 import { useState, useRef, useMemo } from 'react';
 import { Star, CheckCircle2, FileCheck2, Container, ArrowUpFromLine, ArrowDownToLine, ArrowLeftRight } from 'lucide-react';
 import { CalendarEvent as EventType, Asset, Driver, EventStatus } from '@/lib/types';
-import { legRoleFor, legLabel, isOtrByAirMiles } from '@fleetcal/types';
+import { legRoleFor, legLabel, isOtrByAirMiles, stopsForLeg } from '@fleetcal/types';
 import { legPositionFor } from '@/lib/legDisplay';
 import { CARD_FIELD_DEFS } from '@/lib/cardFields';
 import { timeToPixels, timeHeightPixels, localDateStr, naiveHomeToView } from '@/lib/time-utils';
@@ -73,17 +73,6 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
   // none geocoded — and null must not render as local. An ungeocoded
   // load silently passing for short-haul work is the one failure here
   // with a compliance cost, so no ring means no answer, not "fine".
-  const isOtrLeg = useMemo(() => {
-    if (!showOtrOverlay || !shortHaul) return false;
-    const stops = event.stops ?? [];
-    if (stops.length === 0) return false;
-    return isOtrByAirMiles(
-      { lat: shortHaul.lat, lon: shortHaul.lon },
-      stops.map(s => ({ lat: s.lat, lon: s.lng })),
-      shortHaul.radiusMiles,
-    ) === true;
-  }, [showOtrOverlay, shortHaul, event.stops]);
-
   const scale = cardFontScale ?? 1.0;
   const fs = (basePx: number) => Math.round(basePx * scale * 2) / 2;
   const fsTitle        = fs(11);  // main title
@@ -109,6 +98,47 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
   const legPos = isRelay ? legPositionFor(event, events) : null;
   const relayRole = event.relayRole
     ?? (legPos ? legRoleFor(legPos.index, legPos.count) ?? null : null);
+
+  // ── OTR ring ────────────────────────────────────────────────────────
+  //
+  // 49 CFR 395.1(e)(1): a driver keeps the record-of-duty-status
+  // exemption only while working inside a 150 AIR-mile radius of the
+  // home terminal. One stop outside it and a log is owed.
+  //
+  // Classified in the browser rather than served pre-computed, because
+  // calendar stops already carry lat/lng — the ring then re-evaluates
+  // the moment a dispatcher moves a stop instead of going stale
+  // against whatever was true when the window was fetched.
+  //
+  // SEGMENT THE LEG FIRST. A relay leg carries the whole LOAD's stop
+  // list, not its own slice: a delivery leg that only runs yard →
+  // customer still holds the far-away pickup that leg 1 handled.
+  // Classifying across all of them rang local delivery legs of OTR
+  // loads — the driver never went near the stop that tripped it.
+  // stopsForLeg cuts the list at the handoff boundaries, and it knows
+  // that a handoff is either a `type:'relay'` stop OR a real stop
+  // flagged isHandoff, which a hand-rolled type check would miss.
+  //
+  // When a relay's position can't be established (siblings not loaded
+  // and no legIndex from the API), fall back to the full list. That
+  // over-rings rather than under-rings, and of the two mistakes only
+  // the under-ring has a compliance cost: a missed ring is a driver
+  // who owes a log and nobody noticed.
+  //
+  // isOtrByAirMiles returns null for "couldn't tell" — no stops, or
+  // none geocoded — and null must never render as local, for the same
+  // reason.
+  const isOtrLeg = useMemo(() => {
+    if (!showOtrOverlay || !shortHaul) return false;
+    const all = event.stops ?? [];
+    if (all.length === 0) return false;
+    const mine = legPos ? stopsForLeg(all, legPos.index) : all;
+    return isOtrByAirMiles(
+      { lat: shortHaul.lat, lon: shortHaul.lon },
+      mine.map(s => ({ lat: s.lat, lon: s.lng })),
+      shortHaul.radiusMiles,
+    ) === true;
+  }, [showOtrOverlay, shortHaul, event.stops, legPos]);
 
   // TONU + cancelled loads render gray in the calendar — they didn't
   // actually run, so the asset's primary color would mislead the
