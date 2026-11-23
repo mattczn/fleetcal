@@ -358,6 +358,15 @@ export interface SavedLocation {
   lat?: number;
   lng?: number;
   timezone?: string;
+  /**
+   * Geofence radius in METRES. Set = this location is a "yard": the
+   * trailer map draws the circle and any trailer inside it reports as
+   * parked there. Undefined = an ordinary stop preset, which is what
+   * every location was before yards existed. Needs lat/lng to do
+   * anything. UI collects feet; metres is what Google's Circle and a
+   * haversine both speak.
+   */
+  radiusMeters?: number;
 }
 
 // ── Payroll ─────────────────────────────────────────────────────────────

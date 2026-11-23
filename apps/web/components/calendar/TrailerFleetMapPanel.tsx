@@ -26,12 +26,13 @@
  * Escape or click outside.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { X, MapPin, Container, AlertCircle, Loader2, Search, Clock } from 'lucide-react';
+import { X, MapPin, Container, AlertCircle, Loader2, Search, Clock, Plus, Trash2, Crosshair } from 'lucide-react';
 import { loadGoogleMaps, MAP_ID } from '@/lib/googleMaps';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { getTrailerUsage, type TrailerUsage } from '@/lib/trailerUsage';
 import type { MotiveTrailerLocation } from '@/app/api/motive/trailer-locations/route';
-import type { Trailer, CalendarEvent } from '@/lib/types';
+import { yardsFrom, yardAt, feetToMetres, metresToFeet, DEFAULT_YARD_RADIUS_FT, type Yard } from '@/lib/yards';
+import type { Trailer, CalendarEvent, SavedLocation } from '@/lib/types';
 
 interface Props {
   /** Required in modal mode; ignored when `embedded`. */
@@ -54,6 +55,11 @@ const STATUS_PIN_COLOR = {
   in_use: '#d93025',  // red
   idle:   '#1e8e3e',  // green
 } as const;
+
+// Yards are drawn in blue, deliberately not red or green: those two
+// already mean "this trailer is busy / free", and a geofence is not a
+// third trailer state.
+const YARD_COLOR = '#1a73e8';
 
 const POLL_MS = 60_000;
 
@@ -129,7 +135,9 @@ function trailerMatchesQuery(t: Trailer, q: string): boolean {
 }
 
 export default function TrailerFleetMapPanel({ onClose, embedded = false }: Props) {
-  const { trailers, events, drivers, assets, calendarTimezone } = useCalendarStore();
+  const { trailers, events, drivers, assets, calendarTimezone, savedLocations } = useCalendarStore();
+  const addSavedLocation    = useCalendarStore(s => s.addSavedLocation);
+  const updateSavedLocation = useCalendarStore(s => s.updateSavedLocation);
   const overlayRef   = useRef<HTMLDivElement>(null);
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef       = useRef<google.maps.Map | null>(null);
@@ -144,6 +152,16 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
   const [locError,   setLocError]   = useState<string | null>(null);
   const [selectedTrailerId, setSelectedTrailerId] = useState<number | null>(null);
   const [query, setQuery] = useState('');
+  // Which half of the rail is showing. Yards only on the page — the
+  // toolbar popup is a glance-at-the-fleet tool, not somewhere to
+  // administer geofences.
+  const [rail, setRail] = useState<'trailers' | 'yards'>('trailers');
+  // Non-null while waiting for a map click to place a new yard. Named
+  // first so the click finishes the job instead of opening a prompt.
+  const [placing, setPlacing] = useState<{ name: string; radiusFt: number } | null>(null);
+  const [yardError, setYardError] = useState<string | null>(null);
+
+  const yards = useMemo(() => yardsFrom(savedLocations), [savedLocations]);
 
   // ── ESC closes (modal only) ───────────────────────────────────────────
   useEffect(() => {
@@ -356,6 +374,65 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
   //      pin's zIndex is bumped so it draws on top of nearby pins.
   //   3. The matching sidebar row scrolls into view — without this the
   //      highlight is invisible when the row is below the fold.
+  // ── Yard circles ──────────────────────────────────────────────────────
+  // Redrawn whenever the yard set changes. Circles are not clickable:
+  // a geofence that swallows clicks would make the pins underneath it
+  // unselectable, and the pin is what a dispatcher is aiming for.
+  const circlesRef = useRef<google.maps.Circle[]>([]);
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return;
+    let cancelled = false;
+    void loadGoogleMaps().then(google => {
+      const map = mapRef.current;
+      if (cancelled || !map) return;
+      for (const c of circlesRef.current) c.setMap(null);
+      circlesRef.current = yards.map(y => new google.maps.Circle({
+        map,
+        center: { lat: y.lat, lng: y.lng },
+        radius: y.radiusMeters,
+        strokeColor: YARD_COLOR,
+        strokeOpacity: 0.9,
+        strokeWeight: 1.5,
+        fillColor: YARD_COLOR,
+        fillOpacity: 0.12,
+        clickable: false,
+        zIndex: 1,
+      }));
+    });
+    return () => {
+      cancelled = true;
+      for (const c of circlesRef.current) c.setMap(null);
+      circlesRef.current = [];
+    };
+  }, [yards, mapReady]);
+
+  // ── Click the map to drop a new yard ──────────────────────────────────
+  // Only armed while `placing` is set, so an ordinary click on the map
+  // never creates anything.
+  useEffect(() => {
+    if (!mapReady || !mapRef.current || !placing) return;
+    const map = mapRef.current;
+    const listener: google.maps.MapsEventListener = map.addListener('click', (e: google.maps.MapMouseEvent) => {
+      if (!e.latLng) return;
+      const { name, radiusFt } = placing;
+      setPlacing(null);
+      void (async () => {
+        try {
+          await addSavedLocation({
+            name,
+            lat: e.latLng!.lat(),
+            lng: e.latLng!.lng(),
+            radiusMeters: feetToMetres(radiusFt),
+          });
+          setYardError(null);
+        } catch (err) {
+          setYardError(err instanceof Error ? err.message : 'Could not save the yard');
+        }
+      })();
+    });
+    return () => listener.remove();
+  }, [mapReady, placing, addSavedLocation]);
+
   useEffect(() => {
     // Hide every label first so old selections clear out.
     labelsRef.current.forEach(el => { el.style.display = 'none'; });
@@ -460,6 +537,31 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
             className={`flex flex-col min-h-0${embedded ? '' : ' flex-1'}`}
             style={{ borderLeft: '1px solid var(--gc-border)', ...(embedded ? { width: 400, flexShrink: 0 } : {}) }}
           >
+            {/* Trailers / Yards. Only on the page: the toolbar popup
+                is a glance-at-the-fleet tool, not somewhere to
+                administer geofences. */}
+            {embedded && (
+              <div className="flex gap-1 px-3 pt-2.5 shrink-0">
+                {(['trailers', 'yards'] as const).map(tab => (
+                  <button
+                    key={tab}
+                    type="button"
+                    onClick={() => { setRail(tab); if (tab === 'trailers') setPlacing(null); }}
+                    className="text-[12px] font-semibold capitalize"
+                    style={{
+                      padding: '5px 12px', borderRadius: 7, cursor: 'pointer',
+                      border: `1px solid ${rail === tab ? 'var(--gc-blue)' : 'var(--gc-border)'}`,
+                      background: rail === tab ? 'var(--gc-blue)' : 'transparent',
+                      color: rail === tab ? '#fff' : 'var(--gc-text-2)',
+                    }}
+                  >
+                    {tab === 'yards' ? `Yards${yards.length ? ` (${yards.length})` : ''}` : 'Trailers'}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {rail === 'trailers' && (<>
             {/* Search — sits above the scrollable section list so it
                 stays visible while scrolling through long fleets. */}
             <div className="px-3 py-2.5 shrink-0" style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
@@ -508,6 +610,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
                   badge: 'In use',
                   badgeColor: STATUS_PIN_COLOR.in_use,
                   lastSeen: formatLastSeen(loc.locatedAt),
+                  yardName: yardAt(loc.lat, loc.lon, yards)?.name,
                   locationLabel: loc.description || undefined,
                   detail: {
                     driver: driverName(usage.load),
@@ -528,6 +631,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
                   badge: 'Idle',
                   badgeColor: STATUS_PIN_COLOR.idle,
                   lastSeen: formatLastSeen(loc.locatedAt),
+                  yardName: yardAt(loc.lat, loc.lon, yards)?.name,
                   locationLabel: loc.description || undefined,
                 }))}
                 selectedId={selectedTrailerId}
@@ -558,6 +662,21 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
                 </div>
               )}
             </div>
+            </>)}
+
+            {rail === 'yards' && (
+              <YardsRail
+                yards={yards}
+                locations={savedLocations}
+                placing={placing}
+                error={yardError}
+                onStartPlacing={(name, radiusFt) => { setYardError(null); setPlacing({ name, radiusFt }); }}
+                onCancelPlacing={() => setPlacing(null)}
+                onSetRadius={(id, radiusFt) => { void updateSavedLocation(id, { radiusMeters: feetToMetres(radiusFt) }); }}
+                onClearYard={(id) => { void updateSavedLocation(id, { radiusMeters: null }); }}
+                onFocus={(y) => { mapRef.current?.panTo({ lat: y.lat, lng: y.lng }); }}
+              />
+            )}
           </div>
         </div>
     </>
@@ -612,6 +731,8 @@ function Section({
     lastSeen?:      string | null;
     /** Reverse-geocoded address from Motive — shown above driver/asset. */
     locationLabel?: string;
+    /** Name of the yard this trailer is parked inside, if any. */
+    yardName?: string;
     detail?: { driver?: string; asset?: string; route?: string; status?: string };
   }>;
   selectedId: number | null;
@@ -629,7 +750,7 @@ function Section({
         </span>
         <span className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>{count}</span>
       </div>
-      {rows.map(({ trailer, badge, badgeColor, lastSeen, locationLabel, detail }) => {
+      {rows.map(({ trailer, badge, badgeColor, lastSeen, locationLabel, yardName, detail }) => {
         const isSel = trailer.id === selectedId;
         return (
           <button
@@ -678,6 +799,12 @@ function Section({
             {/* Address — surfaced even on idle rows so the dispatcher
                 can see "trailer is sitting at the yard" without
                 clicking the pin. */}
+            {yardName && (
+              <div className="mt-1.5 text-[11px] flex items-center gap-1" style={{ color: YARD_COLOR, fontWeight: 600 }}>
+                <Container size={10} />
+                <span className="truncate">At {yardName}</span>
+              </div>
+            )}
             {locationLabel && (
               <div className="mt-1.5 text-[11px] flex items-center gap-1" style={{ color: 'var(--gc-text-2)' }}>
                 <MapPin size={10} style={{ color: 'var(--gc-text-3)' }} />
@@ -702,6 +829,183 @@ function Section({
           </button>
         );
       })}
+    </div>
+  );
+}
+
+/**
+ * YardsRail — manage the geofences shown on the map.
+ *
+ * Two ways in, because there are two situations. A place dispatch
+ * already has as a stop preset (SLC Yard has been one since the HOS
+ * work) just needs a radius — promoting it keeps one row, so the
+ * preset and the geofence can never drift apart. Somewhere not yet on
+ * file gets named here and placed by clicking the map, which beats
+ * typing coordinates for a gravel lot with no address.
+ *
+ * "Remove" clears the radius rather than deleting the location: these
+ * rows are also the stop presets the load modal offers, and dropping
+ * one because a geofence is no longer wanted would quietly take a
+ * preset with it.
+ */
+function YardsRail({
+  yards, locations, placing, error,
+  onStartPlacing, onCancelPlacing, onSetRadius, onClearYard, onFocus,
+}: {
+  yards: Yard[];
+  locations: SavedLocation[];
+  placing: { name: string; radiusFt: number } | null;
+  error: string | null;
+  onStartPlacing: (name: string, radiusFt: number) => void;
+  onCancelPlacing: () => void;
+  onSetRadius: (id: string, radiusFt: number) => void;
+  onClearYard: (id: string) => void;
+  onFocus: (yard: Yard) => void;
+}) {
+  const [newName, setNewName] = useState('');
+  const yardIds = new Set(yards.map(y => y.id));
+  // Candidates for promotion: already geocoded, not already a yard.
+  const promotable = locations.filter(l =>
+    !yardIds.has(l.id) && typeof l.lat === 'number' && typeof l.lng === 'number');
+
+  return (
+    <div className="flex-1 overflow-auto">
+      {/* Add */}
+      <div className="px-3 py-3" style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
+        {placing ? (
+          <div className="rounded-lg px-3 py-2.5 text-[12px]"
+            style={{ background: 'rgba(26,115,232,0.08)', border: `1px solid ${YARD_COLOR}` }}>
+            <div className="flex items-center gap-1.5 font-semibold" style={{ color: YARD_COLOR }}>
+              <Crosshair size={12} /> Click the map to place “{placing.name}”
+            </div>
+            <div className="mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
+              {placing.radiusFt.toLocaleString()} ft radius · adjustable after
+            </div>
+            <button
+              type="button"
+              onClick={onCancelPlacing}
+              className="mt-2 text-[11px] font-semibold"
+              style={{ background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--gc-text-2)' }}
+            >
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <div className="flex gap-1.5">
+            <input
+              type="text"
+              value={newName}
+              onChange={e => setNewName(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && newName.trim()) {
+                  onStartPlacing(newName.trim(), DEFAULT_YARD_RADIUS_FT);
+                  setNewName('');
+                }
+              }}
+              placeholder="New yard name"
+              className="flex-1 text-[13px] outline-none"
+              style={{
+                padding: '7px 10px', border: '1px solid var(--gc-border)',
+                borderRadius: 8, background: 'var(--gc-surface)', color: 'var(--gc-text-1)',
+              }}
+            />
+            <button
+              type="button"
+              disabled={!newName.trim()}
+              onClick={() => { onStartPlacing(newName.trim(), DEFAULT_YARD_RADIUS_FT); setNewName(''); }}
+              className="text-[12px] font-semibold inline-flex items-center gap-1"
+              style={{
+                padding: '7px 11px', borderRadius: 8, border: 'none',
+                background: newName.trim() ? YARD_COLOR : 'var(--gc-border)',
+                color: '#fff', cursor: newName.trim() ? 'pointer' : 'default',
+              }}
+            >
+              <Plus size={13} /> Place
+            </button>
+          </div>
+        )}
+        {error && (
+          <div className="mt-2 text-[11px]" style={{ color: '#d93025' }}>
+            <AlertCircle size={11} className="inline mr-1" />{error}
+          </div>
+        )}
+      </div>
+
+      {/* Existing yards */}
+      {yards.length === 0 && !placing && (
+        <div className="px-4 py-6 text-center text-[13px]" style={{ color: 'var(--gc-text-3)' }}>
+          No yards yet. Name one above and click the map to place it, or give
+          a saved location a radius below.
+        </div>
+      )}
+      {yards.map(y => (
+        <div key={y.id} className="px-4 py-3" style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => onFocus(y)}
+              className="flex-1 min-w-0 text-left text-[13px] font-semibold truncate"
+              style={{ background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--gc-text-1)' }}
+            >
+              {y.name}
+            </button>
+            <button
+              type="button"
+              onClick={() => onClearYard(y.id)}
+              title="Stop treating this location as a yard (keeps the saved location)"
+              style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--gc-text-3)', padding: 2 }}
+            >
+              <Trash2 size={13} />
+            </button>
+          </div>
+          <div className="mt-1.5 flex items-center gap-2">
+            <input
+              type="number"
+              min={50}
+              step={50}
+              defaultValue={metresToFeet(y.radiusMeters)}
+              onBlur={e => {
+                const ft = Number(e.target.value);
+                if (Number.isFinite(ft) && ft > 0 && feetToMetres(ft) !== y.radiusMeters) onSetRadius(y.id, ft);
+              }}
+              className="text-[12px] outline-none tabular-nums"
+              style={{
+                width: 84, padding: '4px 8px', border: '1px solid var(--gc-border)',
+                borderRadius: 6, background: 'var(--gc-surface)', color: 'var(--gc-text-1)',
+              }}
+            />
+            <span className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>ft radius</span>
+          </div>
+        </div>
+      ))}
+
+      {/* Promote an existing preset */}
+      {promotable.length > 0 && (
+        <div className="px-4 py-3">
+          <div className="text-[11px] font-bold uppercase tracking-wider mb-2" style={{ color: 'var(--gc-text-3)' }}>
+            Saved locations
+          </div>
+          {promotable.map(l => (
+            <div key={l.id} className="flex items-center gap-2 py-1.5">
+              <span className="flex-1 min-w-0 truncate text-[12px]" style={{ color: 'var(--gc-text-2)' }}>
+                {l.name}
+              </span>
+              <button
+                type="button"
+                onClick={() => onSetRadius(l.id, DEFAULT_YARD_RADIUS_FT)}
+                className="text-[11px] font-semibold"
+                style={{
+                  padding: '3px 9px', borderRadius: 6,
+                  border: `1px solid ${YARD_COLOR}`, background: 'transparent',
+                  color: YARD_COLOR, cursor: 'pointer',
+                }}
+              >
+                Make a yard
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

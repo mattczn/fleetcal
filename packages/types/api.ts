@@ -1036,6 +1036,8 @@ export interface CreateSavedLocationRequest {
   lat?:      number | null;
   lng?:      number | null;
   timezone?: string | null;
+  /** Metres. Set to make this location a yard; see SavedLocation. */
+  radiusMeters?: number | null;
 }
 export interface CreateSavedLocationResponse { location: SavedLocation; }
 export interface UpdateSavedLocationRequest {
@@ -1044,6 +1046,9 @@ export interface UpdateSavedLocationRequest {
   lat?:      number | null;
   lng?:      number | null;
   timezone?: string | null;
+  /** Metres, or null to stop being a yard without deleting the
+   *  location — it stays available as a stop preset. */
+  radiusMeters?: number | null;
 }
 export interface UpdateSavedLocationResponse { location: SavedLocation; }
 
@@ -3928,10 +3933,13 @@ export interface LaneTripLeg {
   /** The load's rate, and this leg's share of it. */
   rate: number;
   share: number;
-  /** How the share was set: whole load; the leg's lane's usual rate; its miles; a relay shuttle (none). */
-  shareBasis: 'whole' | 'market' | 'miles' | 'shuttle';
-  /** Every leg of a relay load: who drove it and what it was valued at. */
-  split: Array<{ eventId: string; driver: string | null; from: string; to: string; value: number; basis: 'market' | 'miles' | 'shuttle' }> | null;
+  /** How the share was set: whole load; by driver pay; the leg's lane's usual rate; its miles; a relay shuttle (none). */
+  shareBasis: 'whole' | 'pay' | 'market' | 'miles' | 'shuttle';
+  /** Every leg of a relay load: who drove it, its pay and miles, and its part of the rate. */
+  split: Array<{
+    eventId: string; driver: string | null; from: string; to: string; value: number;
+    basis: 'whole' | 'pay' | 'market' | 'miles' | 'shuttle'; pay: number | null; miles: number;
+  }> | null;
   revenue: number;
   driverPay: number;
   payBasis: 'payroll' | 'calendar' | 'percent';

@@ -519,6 +519,12 @@ interface CalendarStore extends ModalState {
    *  Also defaults off; it's a compliance-desk view, not a dispatch one. */
   showOtrOverlay: boolean;
   setShowOtrOverlay: (v: boolean) => void;
+  /** Show the current trailer under the driver in the asset column
+   *  header. Off by default — the header is already four lines deep
+   *  (truck, driver + hours, ELD location, age) and most dispatchers
+   *  don't need a fifth. */
+  showTrailerInHeader: boolean;
+  setShowTrailerInHeader: (v: boolean) => void;
   /** Show the billing-status indicator (verified / invoiced / paid / on-hold). */
   showBillingOverlay: boolean;
   setShowBillingOverlay: (v: boolean) => void;
@@ -580,7 +586,9 @@ interface CalendarStore extends ModalState {
   savedLocations: SavedLocation[];
   fetchSavedLocations: () => Promise<void>;
   addSavedLocation: (loc: Omit<SavedLocation, 'id'>) => Promise<void>;
-  updateSavedLocation: (id: string, updates: Partial<Omit<SavedLocation, 'id'>>) => Promise<void>;
+  /** `radiusMeters: null` clears the yard geofence without deleting
+   *  the location — see lib/db.updateSavedLocation. */
+  updateSavedLocation: (id: string, updates: Omit<Partial<Omit<SavedLocation, 'id'>>, 'radiusMeters'> & { radiusMeters?: number | null }) => Promise<void>;
   removeSavedLocation: (id: string) => Promise<void>;
 
   dispatchers: Dispatcher[];
@@ -1016,6 +1024,8 @@ export const useCalendarStore = create<CalendarStore>()(
   setShowTrailerOverlay: (v) => set({ showTrailerOverlay: v }),
   showOtrOverlay: false,
   setShowOtrOverlay: (v) => set({ showOtrOverlay: v }),
+  showTrailerInHeader: false,
+  setShowTrailerInHeader: (v) => set({ showTrailerInHeader: v }),
   showBillingOverlay: true,
   setShowBillingOverlay: (v) => set({ showBillingOverlay: v }),
 
@@ -1154,7 +1164,15 @@ export const useCalendarStore = create<CalendarStore>()(
   },
   updateSavedLocation: async (id, updates) => {
     await updateSavedLocation(id, updates);
-    set((s) => ({ savedLocations: s.savedLocations.map((l) => l.id === id ? { ...l, ...updates } : l) }));
+    set((s) => ({ savedLocations: s.savedLocations.map((l) => {
+      if (l.id !== id) return l;
+      const next = { ...l, ...updates };
+      // null is how the caller says "no longer a yard"; the store's
+      // own shape uses undefined for absent, so translate rather than
+      // leaving a null that every reader would have to handle.
+      if (updates.radiusMeters === null) delete (next as { radiusMeters?: number }).radiusMeters;
+      return next as SavedLocation;
+    }) }));
   },
   removeSavedLocation: async (id) => {
     try {
@@ -3063,6 +3081,7 @@ export const useCalendarStore = create<CalendarStore>()(
         showPodOverlay:      state.showPodOverlay,
         showTrailerOverlay:  state.showTrailerOverlay,
         showOtrOverlay:      state.showOtrOverlay,
+        showTrailerInHeader: state.showTrailerInHeader,
         showBillingOverlay:  state.showBillingOverlay,
         showUnassigned:     state.showUnassigned,
         calendarTimezone:   state.calendarTimezone,

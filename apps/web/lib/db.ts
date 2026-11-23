@@ -168,18 +168,26 @@ export async function createSavedLocation(_orgId: string, loc: Omit<SavedLocatio
       lat:      loc.lat      ?? null,
       lng:      loc.lng      ?? null,
       timezone: loc.timezone ?? null,
+      radiusMeters: loc.radiusMeters ?? null,
     });
     return location;
   } catch (err) { console.error('createSavedLocation:', err); return null; }
 }
 
-export async function updateSavedLocation(id: string, updates: Partial<Omit<SavedLocation, 'id'>>): Promise<void> {
+/** `radiusMeters: null` is meaningful — it stops a location being a
+ *  yard while leaving it available as a stop preset — so the update
+ *  type widens it beyond SavedLocation's `number | undefined`. */
+export async function updateSavedLocation(
+  id: string,
+  updates: Omit<Partial<Omit<SavedLocation, 'id'>>, 'radiusMeters'> & { radiusMeters?: number | null },
+): Promise<void> {
   const body = {
     ...(updates.name     !== undefined ? { name: updates.name } : {}),
     ...(updates.address  !== undefined ? { address: updates.address ?? null } : {}),
     ...(updates.lat      !== undefined ? { lat: updates.lat ?? null } : {}),
     ...(updates.lng      !== undefined ? { lng: updates.lng ?? null } : {}),
     ...(updates.timezone !== undefined ? { timezone: updates.timezone ?? null } : {}),
+    ...(updates.radiusMeters !== undefined ? { radiusMeters: updates.radiusMeters } : {}),
   };
   if (Object.keys(body).length === 0) return;
   try { await railway.updateSavedLocation(id, body); }
