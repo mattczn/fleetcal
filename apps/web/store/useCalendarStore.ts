@@ -499,6 +499,15 @@ interface CalendarStore extends ModalState {
   /** Show the green document overlay when a POD has been uploaded. */
   showPodOverlay: boolean;
   setShowPodOverlay: (v: boolean) => void;
+  /** Show the trailer overlay when a trailer has been recorded on the leg.
+   *  DEFAULTS OFF, unlike every other overlay here. Only 22% of revenue
+   *  legs carry a trailer today, so for most dispatchers this is a badge
+   *  that rarely fires and doesn't earn its space; the people whose job
+   *  is chasing trailer reporting turn it on. Per-browser like the rest
+   *  of this menu, which is what makes "on for some users" work without
+   *  any server-side user prefs. */
+  showTrailerOverlay: boolean;
+  setShowTrailerOverlay: (v: boolean) => void;
   /** Show the billing-status indicator (verified / invoiced / paid / on-hold). */
   showBillingOverlay: boolean;
   setShowBillingOverlay: (v: boolean) => void;
@@ -984,6 +993,8 @@ export const useCalendarStore = create<CalendarStore>()(
   setShowConfirmedOverlay: (v) => set({ showConfirmedOverlay: v }),
   showPodOverlay: true,
   setShowPodOverlay: (v) => set({ showPodOverlay: v }),
+  showTrailerOverlay: false,
+  setShowTrailerOverlay: (v) => set({ showTrailerOverlay: v }),
   showBillingOverlay: true,
   setShowBillingOverlay: (v) => set({ showBillingOverlay: v }),
 
@@ -3029,6 +3040,7 @@ export const useCalendarStore = create<CalendarStore>()(
         showStatusOverlay:   state.showStatusOverlay,
         showConfirmedOverlay: state.showConfirmedOverlay,
         showPodOverlay:      state.showPodOverlay,
+        showTrailerOverlay:  state.showTrailerOverlay,
         showBillingOverlay:  state.showBillingOverlay,
         showUnassigned:     state.showUnassigned,
         calendarTimezone:   state.calendarTimezone,

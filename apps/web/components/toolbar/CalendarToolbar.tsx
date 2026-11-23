@@ -74,6 +74,7 @@ export default function CalendarToolbar() {
     showStatusOverlay,    setShowStatusOverlay,
     showConfirmedOverlay, setShowConfirmedOverlay,
     showPodOverlay,       setShowPodOverlay,
+    showTrailerOverlay,   setShowTrailerOverlay,
     showBillingOverlay,   setShowBillingOverlay,
   } = useCalendarStore();
 
@@ -899,6 +900,12 @@ export default function CalendarToolbar() {
                   ? [{ key: 'confirmed', label: 'Driver confirmed', value: showConfirmedOverlay, set: setShowConfirmedOverlay } as const]
                   : []),
                 { key: 'pod',       label: 'POD uploaded',     value: showPodOverlay,       set: setShowPodOverlay       },
+                // Off by default and gated on the trailers module —
+                // for an org that doesn't assign trailers this would
+                // be a badge that can never light up.
+                ...(moduleEnabled('trailers')
+                  ? [{ key: 'trailer', label: 'Trailer reported', value: showTrailerOverlay, set: setShowTrailerOverlay } as const]
+                  : []),
               ] as const).map(row => (
                 <label key={row.key}
                   className="flex items-center justify-between gap-3 px-2.5 py-2 rounded cursor-pointer transition-colors"

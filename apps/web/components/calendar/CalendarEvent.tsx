@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef } from 'react';
-import { Star, CheckCircle2, FileCheck2, ArrowUpFromLine, ArrowDownToLine, ArrowLeftRight } from 'lucide-react';
+import { Star, CheckCircle2, FileCheck2, Container, ArrowUpFromLine, ArrowDownToLine, ArrowLeftRight } from 'lucide-react';
 import { CalendarEvent as EventType, Asset, Driver, EventStatus } from '@/lib/types';
 import { legRoleFor, legLabel } from '@fleetcal/types';
 import { legPositionFor } from '@/lib/legDisplay';
@@ -42,8 +42,8 @@ function driverDisplayName(d: Driver): string {
 export default function CalendarEvent({ event, asset, colIdx, totalCols, compact = false, overrideTop, overrideHeight, onSmartAssign }: Props) {
   const {
     events, currentDate, dragState, setDragState, rowHeight,
-    showStatusOverlay, showConfirmedOverlay, showPodOverlay, showBillingOverlay,
-    drivers, openEditModal, cardFields, cardFieldIcons, customers, calendarTimezone,
+    showStatusOverlay, showConfirmedOverlay, showPodOverlay, showTrailerOverlay, showBillingOverlay,
+    drivers, trailers, openEditModal, cardFields, cardFieldIcons, customers, calendarTimezone,
     cardFontScale,
   } = useCalendarStore();
 
@@ -262,19 +262,44 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
                   goes up, so a POD badge on an earlier leg would
                   mis-suggest "this leg is done". Same `documentCounts`
                   data is on every leg (shared via load_id), we just
-                  only surface it on the last one. */}
+                  only surface it on the last one.
+                - Trailer icon renders per-leg like the checkmark, not
+                  on the delivery leg like the POD: trailer_id is a
+                  column on the event, and on a relay each driver pulls
+                  their own trailer. A reported trailer on leg 1 says
+                  nothing about leg 2, so each leg answers for itself. */}
           {(() => {
             const podCount      = event.documentCounts?.pod ?? 0;
             const showCheck     = event.confirmedAt && showConfirmedOverlay;
             const podAllowedHere = !isRelay || relayRole === 'delivery';
             const showPod       = podAllowedHere && podCount > 0 && showPodOverlay;
-            if (!showCheck && !showPod) return null;
+            // Any recorded trailer counts — dispatcher-assigned or
+            // driver-reported from the app. Both write events.trailer_id
+            // (the driver path also acks the 'report_trailer' nudge),
+            // and who set it isn't in the calendar payload anyway.
+            const showTrailer   = event.trailerId != null && showTrailerOverlay;
+            // Tooltip only. The calendar payload carries trailer_id but
+            // no joined trailer name, so resolve it off the store's
+            // roster; an id with no matching row (deleted trailer) just
+            // falls back to the generic label.
+            const trailerLabel  = showTrailer
+              ? trailers.find(t => t.id === event.trailerId)?.name
+              : undefined;
+            if (!showCheck && !showPod && !showTrailer) return null;
             return (
               <div style={{
                 position: 'absolute', bottom: 16, right: 4,
                 display: 'flex', alignItems: 'center', gap: 3,
                 pointerEvents: 'none',
               }}>
+                {/* Blue, not the #0f9d58 the other two share. Three
+                    green badges in a row are one green smudge at card
+                    size; the colour is what makes this one scannable. */}
+                {showTrailer && (
+                  <span title={trailerLabel ? `Trailer ${trailerLabel}` : 'Trailer reported'}>
+                    <Container size={18} fill="#1a73e8" style={{ color: '#fff', filter: 'drop-shadow(0 1px 3px rgba(0,0,0,0.45))' }} />
+                  </span>
+                )}
                 {showPod && (
                   <span title="POD uploaded">
                     <FileCheck2 size={18} fill="#0f9d58" style={{ color: '#fff', filter: 'drop-shadow(0 1px 3px rgba(0,0,0,0.45))' }} />
