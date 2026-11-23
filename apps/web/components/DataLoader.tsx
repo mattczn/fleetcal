@@ -20,6 +20,7 @@ export default function DataLoader() {
   const hydrateOrgModules    = useCalendarStore((s) => s.hydrateOrgModules);
   const hydrateDocumentTypes = useCalendarStore((s) => s.hydrateDocumentTypes);
   const hydrateInvoiceAutoIncludeKinds = useCalendarStore((s) => s.hydrateInvoiceAutoIncludeKinds);
+  const hydrateShortHaul = useCalendarStore((s) => s.hydrateShortHaul);
   const autoExpireTrash      = useCalendarStore((s) => s.autoExpireTrash);
   const hydrateCanEditLoads  = useCalendarStore((s) => s.hydrateCanEditLoads);
   const { phase, completeOnboarding } = useOnboardingStore();
@@ -85,6 +86,7 @@ export default function DataLoader() {
             hydrateOrgModules(settings.orgModules);
             hydrateDocumentTypes(settings.documentTypes ?? null);
             hydrateInvoiceAutoIncludeKinds(settings.invoiceAutoIncludeKinds ?? null);
+            hydrateShortHaul(settings.shortHaul ?? null);
           })
           .catch((err) => {
             console.error('[DataLoader] org settings fetch failed:', err);
@@ -105,7 +107,7 @@ export default function DataLoader() {
         void extendLoadedRange(stage2Start, stage2End);
       })
       .catch((err) => console.error('[DataLoader] fetch failed:', err));
-  }, [orgId, hydrate, extendLoadedRange, loadSavedLocations, loadDispatchers, loadCustomers, loadTrailers, hydrateRateConSettings, hydrateRoleOverrides, hydrateOrgModules, hydrateDocumentTypes, hydrateInvoiceAutoIncludeKinds, autoExpireTrash, phase, completeOnboarding]);
+  }, [orgId, hydrate, extendLoadedRange, loadSavedLocations, loadDispatchers, loadCustomers, loadTrailers, hydrateRateConSettings, hydrateRoleOverrides, hydrateOrgModules, hydrateDocumentTypes, hydrateInvoiceAutoIncludeKinds, hydrateShortHaul, autoExpireTrash, phase, completeOnboarding]);
 
   return null;
 }

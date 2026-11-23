@@ -126,6 +126,10 @@ export * from "./severity";
 
 export * from "./safetyPriority";
 
+// ── Short-haul (150 air-mile) geometry — shared server + browser ────────
+
+export * from "./shortHaul";
+
 // ── CRM (internal sales tooling) ─────────────────────────────────────────
 
 export * from "./crm";

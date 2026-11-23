@@ -458,6 +458,12 @@ interface CalendarStore extends ModalState {
    *  even on failure. */
   ensureOrgModules: () => void;
 
+  /** Home terminal + radius for classifying legs as OTR. Arrives on the
+   *  same org-settings response as the module flags. Null when the org
+   *  has no terminal configured, and null before hydration lands. */
+  shortHaul: import('@fleetcal/types').ShortHaulTerminal | null;
+  hydrateShortHaul: (t: import('@fleetcal/types').ShortHaulTerminal | null | undefined) => void;
+
   /** Per-org document-type configuration (kind → enabled + driver
    *  visibility). Drives upload kind pickers across the app and the
    *  driver-visible filter on document reads. null = not yet hydrated;
@@ -508,6 +514,11 @@ interface CalendarStore extends ModalState {
    *  any server-side user prefs. */
   showTrailerOverlay: boolean;
   setShowTrailerOverlay: (v: boolean) => void;
+  /** Outline legs whose furthest stop falls outside the §395.1(e)(1)
+   *  short-haul radius — the HOS "does this driver owe a log" line.
+   *  Also defaults off; it's a compliance-desk view, not a dispatch one. */
+  showOtrOverlay: boolean;
+  setShowOtrOverlay: (v: boolean) => void;
   /** Show the billing-status indicator (verified / invoiced / paid / on-hold). */
   showBillingOverlay: boolean;
   setShowBillingOverlay: (v: boolean) => void;
@@ -888,6 +899,13 @@ export const useCalendarStore = create<CalendarStore>()(
   modulesHydrated: false,
   hydrateOrgModules: (flags) =>
     set({ orgModules: flags ?? {}, modulesHydrated: true }),
+
+  // Home terminal for the short-haul radius. Null means "no terminal
+  // configured" — the OTR outline then renders nothing rather than
+  // calling every leg local, because an unanswerable question must not
+  // look like a reassuring answer.
+  shortHaul: null,
+  hydrateShortHaul: (t) => set({ shortHaul: t ?? null }),
   ensureOrgModules: () => {
     if (get().modulesHydrated || modulesFetchInFlight) return;
     modulesFetchInFlight = true;
@@ -901,6 +919,7 @@ export const useCalendarStore = create<CalendarStore>()(
         set({
           orgModules:      settings.orgModules ?? {},
           roleOverrides:   settings.roleOverrides ?? {},
+          shortHaul:       settings.shortHaul ?? null,
           modulesHydrated: true,
         });
       })
@@ -995,6 +1014,8 @@ export const useCalendarStore = create<CalendarStore>()(
   setShowPodOverlay: (v) => set({ showPodOverlay: v }),
   showTrailerOverlay: false,
   setShowTrailerOverlay: (v) => set({ showTrailerOverlay: v }),
+  showOtrOverlay: false,
+  setShowOtrOverlay: (v) => set({ showOtrOverlay: v }),
   showBillingOverlay: true,
   setShowBillingOverlay: (v) => set({ showBillingOverlay: v }),
 
@@ -3041,6 +3062,7 @@ export const useCalendarStore = create<CalendarStore>()(
         showConfirmedOverlay: state.showConfirmedOverlay,
         showPodOverlay:      state.showPodOverlay,
         showTrailerOverlay:  state.showTrailerOverlay,
+        showOtrOverlay:      state.showOtrOverlay,
         showBillingOverlay:  state.showBillingOverlay,
         showUnassigned:     state.showUnassigned,
         calendarTimezone:   state.calendarTimezone,

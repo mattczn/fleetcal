@@ -28,8 +28,11 @@ import {
   resolveOrgModules,
   resolveAutoIncludeKinds,
   isPacketDocKind,
+  SHORT_HAUL_RADIUS_MILES,
+  type ShortHaulTerminal,
 } from "@fleetcal/types";
 
+import { parseTerminal } from "../lib/airMiles.js";
 import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability, invalidateRoleOverrides, invalidateOrgModules } from "../middleware/require.js";
@@ -40,7 +43,7 @@ orgSettings.get("/", async (c) => {
   const orgId = c.get("orgId");
   const { data, error } = await supabase
     .from("org_settings")
-    .select("show_driver_pay,rate_con_settings,invoice_settings,role_overrides,modules,driver_visible_doc_kinds,document_types,notification_rules,motive_settings,invoice_auto_include_kinds")
+    .select("show_driver_pay,rate_con_settings,invoice_settings,role_overrides,modules,driver_visible_doc_kinds,document_types,notification_rules,motive_settings,invoice_auto_include_kinds,hos_settings")
     .eq("org_id", orgId)
     .maybeSingle();
   if (error) {
@@ -58,7 +61,29 @@ orgSettings.get("/", async (c) => {
     notification_rules:        NotificationRules      | null;
     motive_settings:           import("@fleetcal/types").MotiveSettings | null;
     invoice_auto_include_kinds: string[]              | null;
+    hos_settings:              { homeTerminalLat?: unknown; homeTerminalLon?: unknown; homeTerminalLabel?: unknown } | null;
   } | null;
+
+  // Project the home terminal out of hos_settings so clients can
+  // classify work against the §395.1(e)(1) radius themselves — the
+  // calendar outlines OTR legs from stop coordinates it already holds,
+  // which keeps the outline live as a dispatcher edits stops instead
+  // of stale against a value computed at fetch time.
+  //
+  // READ-ONLY. The HOS screen owns these values; PATCH here ignores
+  // them deliberately, so there is one writer.
+  const terminal = parseTerminal(row?.hos_settings ?? null);
+  const shortHaul: ShortHaulTerminal | null = terminal
+    ? {
+        lat: terminal.lat,
+        lon: terminal.lon,
+        label: typeof row?.hos_settings?.homeTerminalLabel === "string"
+          ? row.hos_settings.homeTerminalLabel
+          : undefined,
+        radiusMiles: SHORT_HAUL_RADIUS_MILES,
+      }
+    : null;
+
   // orgModules: layer MVP_LAUNCH_DEFAULTS as the base, then merge the
   // stored map on top. Three regimes fall out:
   //   (a) no row, or row with null/empty modules → returns the pure
@@ -92,6 +117,7 @@ orgSettings.get("/", async (c) => {
       // UI and the server packet builder see the same list. An explicitly
       // cleared [] is returned verbatim.
       invoiceAutoIncludeKinds: resolveAutoIncludeKinds(row?.invoice_auto_include_kinds),
+      shortHaul,
     },
   };
   return c.json(res);

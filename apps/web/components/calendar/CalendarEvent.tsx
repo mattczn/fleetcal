@@ -1,9 +1,9 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useMemo } from 'react';
 import { Star, CheckCircle2, FileCheck2, Container, ArrowUpFromLine, ArrowDownToLine, ArrowLeftRight } from 'lucide-react';
 import { CalendarEvent as EventType, Asset, Driver, EventStatus } from '@/lib/types';
-import { legRoleFor, legLabel } from '@fleetcal/types';
+import { legRoleFor, legLabel, isOtrByAirMiles } from '@fleetcal/types';
 import { legPositionFor } from '@/lib/legDisplay';
 import { CARD_FIELD_DEFS } from '@/lib/cardFields';
 import { timeToPixels, timeHeightPixels, localDateStr, naiveHomeToView } from '@/lib/time-utils';
@@ -43,6 +43,7 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
   const {
     events, currentDate, dragState, setDragState, rowHeight,
     showStatusOverlay, showConfirmedOverlay, showPodOverlay, showTrailerOverlay, showBillingOverlay,
+    showOtrOverlay, shortHaul,
     drivers, trailers, openEditModal, cardFields, cardFieldIcons, customers, calendarTimezone,
     cardFontScale,
   } = useCalendarStore();
@@ -52,6 +53,37 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
   // map to scales 0.9 / 1.0 / 1.15 / 1.3 in the panel. Each individual
   // size below is rounded to the nearest 0.5px so character anti-
   // aliasing stays crisp.
+  // ── OTR ring ────────────────────────────────────────────────────────
+  //
+  // 49 CFR 395.1(e)(1): a driver is exempt from keeping a record of duty
+  // status only while working inside a 150 AIR-mile radius of the home
+  // terminal. One stop outside it and a log is owed. Classified here
+  // rather than served pre-computed because calendar stops already
+  // carry lat/lng — doing the haversine locally means the ring updates
+  // the moment a dispatcher moves a stop, instead of going stale
+  // against whatever was true when the window was fetched.
+  //
+  // Scope is this LEG only, which is narrower than the regulation: the
+  // exemption is lost for the whole DAY, so a driver with one ringed
+  // leg owes a log for their unringed legs that day too. The ring
+  // points at the load that cost them the exemption, not at everything
+  // that inherits the consequence.
+  //
+  // isOtrByAirMiles returns null for "couldn't tell" — no stops, or
+  // none geocoded — and null must not render as local. An ungeocoded
+  // load silently passing for short-haul work is the one failure here
+  // with a compliance cost, so no ring means no answer, not "fine".
+  const isOtrLeg = useMemo(() => {
+    if (!showOtrOverlay || !shortHaul) return false;
+    const stops = event.stops ?? [];
+    if (stops.length === 0) return false;
+    return isOtrByAirMiles(
+      { lat: shortHaul.lat, lon: shortHaul.lon },
+      stops.map(s => ({ lat: s.lat, lon: s.lng })),
+      shortHaul.radiusMiles,
+    ) === true;
+  }, [showOtrOverlay, shortHaul, event.stops]);
+
   const scale = cardFontScale ?? 1.0;
   const fs = (basePx: number) => Math.round(basePx * scale * 2) / 2;
   const fsTitle        = fs(11);  // main title
@@ -211,8 +243,22 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
         // load — they still need to see the details).
         if (isRelay || !canDragThis) openEditModal(event.id);
       }}
-      title={`${displayTitle} · ${startTime}–${endTime}`}
+      title={`${displayTitle} · ${startTime}–${endTime}${isOtrLeg ? `\nOTR — a stop falls outside the ${shortHaul?.radiusMiles ?? 150} air-mile short-haul radius, so this driver owes a log for the day` : ''}`}
     >
+      {/* OTR ring — drawn as its own overlay rather than an outline or
+          a box-shadow on the card: the card's boxShadow is rewritten by
+          the hover handlers, and a real `outline` would sit outside the
+          rounded corners. Amber over a dark hairline so it holds up
+          against any truck colour underneath, the same reasoning as the
+          white-plate relay badge. */}
+      {isOtrLeg && (
+        <div style={{
+          position: 'absolute', inset: 0, borderRadius: 'inherit', pointerEvents: 'none',
+          border: '2px solid #f59e0b',
+          boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.5)',
+          zIndex: 15,
+        }} />
+      )}
       {/* Non-revenue stripe overlay */}
       {event.eventKind === 'non_revenue' && (
         <div style={{

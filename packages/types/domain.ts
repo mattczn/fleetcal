@@ -11,6 +11,7 @@
  */
 
 import type { LoadStatus, StopType, ScheduleType, GeocodeStatus, TrailerCategory, CheckCallChannel, CheckCallParty } from "./enums";
+import type { ShortHaulTerminal } from "./shortHaul";
 
 // ── Refs / enums (small) ────────────────────────────────────────────────
 
@@ -599,6 +600,13 @@ export interface DocumentTypeConfig {
 
 export interface OrgSettings {
   showDriverPay: boolean;
+  /** Read-only projection of org_settings.hos_settings' home terminal,
+   *  for clients that classify work against the §395.1(e)(1) short-haul
+   *  radius themselves (the calendar's OTR outline). Null when no
+   *  terminal is configured — callers must treat that as "cannot say",
+   *  not as "everything is local". Not settable through
+   *  PATCH /v1/org-settings; the HOS screen is the only writer. */
+  shortHaul?: ShortHaulTerminal | null;
   /** Per-org rate-con AI parsing config. See RateConSettings for shape. */
   rateConSettings?: RateConSettings;
   /** Per-org invoice template + identity config. See InvoiceSettings. */

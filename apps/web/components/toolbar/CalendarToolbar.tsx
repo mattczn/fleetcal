@@ -75,6 +75,7 @@ export default function CalendarToolbar() {
     showConfirmedOverlay, setShowConfirmedOverlay,
     showPodOverlay,       setShowPodOverlay,
     showTrailerOverlay,   setShowTrailerOverlay,
+    showOtrOverlay,       setShowOtrOverlay,     shortHaul,
     showBillingOverlay,   setShowBillingOverlay,
   } = useCalendarStore();
 
@@ -905,6 +906,12 @@ export default function CalendarToolbar() {
                 // be a badge that can never light up.
                 ...(moduleEnabled('trailers')
                   ? [{ key: 'trailer', label: 'Trailer reported', value: showTrailerOverlay, set: setShowTrailerOverlay } as const]
+                  : []),
+                // Needs a configured home terminal — with no centre
+                // there is no radius, and the outline could never
+                // render. Hide the row rather than offer a dead switch.
+                ...(shortHaul
+                  ? [{ key: 'otr', label: 'OTR (outside 150 mi)', value: showOtrOverlay, set: setShowOtrOverlay } as const]
                   : []),
               ] as const).map(row => (
                 <label key={row.key}

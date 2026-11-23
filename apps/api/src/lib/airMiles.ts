@@ -21,47 +21,26 @@
  * Pure: no I/O, no clock reads. Run the checks in airMiles.verify.ts.
  */
 
-/** Mean Earth radius in statute miles. An air mile is a statute mile;
- *  the "air" only signifies straight-line rather than road distance. */
-const EARTH_RADIUS_MILES = 3958.7613;
-
-/** §395.1(e)(1)(i). */
-export const SHORT_HAUL_RADIUS_MILES = 150;
-
-export interface Coord {
-  lat: number;
-  lon: number;
-}
-
-export function isUsableCoord(c: Partial<Coord> | null | undefined): c is Coord {
-  if (!c) return false;
-  const { lat, lon } = c;
-  if (typeof lat !== "number" || typeof lon !== "number") return false;
-  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return false;
-  if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return false;
-  // Null Island is what a failed geocode looks like, not a real stop.
-  return !(lat === 0 && lon === 0);
-}
-
-/**
- * Great-circle distance in statute miles.
- *
- * Haversine rather than the simpler equirectangular approximation:
- * across the distances that matter here (100–200 miles at ~40°N) the
- * flat approximation drifts by a couple of miles, which is precisely
- * the margin that decides whether a shift crosses the 150-mile line.
- */
-export function airMilesBetween(a: Coord, b: Coord): number {
-  const toRad = (deg: number) => (deg * Math.PI) / 180;
-  const dLat = toRad(b.lat - a.lat);
-  const dLon = toRad(b.lon - a.lon);
-  const lat1 = toRad(a.lat);
-  const lat2 = toRad(b.lat);
-  const h =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
-  return 2 * EARTH_RADIUS_MILES * Math.asin(Math.min(1, Math.sqrt(h)));
-}
+/* The radius, the distance maths and the coordinate guard moved to
+ * @fleetcal/types/shortHaul when the calendar started classifying legs
+ * in the browser. They are re-exported here unchanged so every existing
+ * importer of this module keeps working, and so there is one definition
+ * of 150 and one of haversine rather than a server copy and a web copy
+ * free to drift apart. The shift-level reasoning below — ungeocoded
+ * stops, the refusal to decide on no data — is server-side only and
+ * stays here. airMiles.verify.ts still exercises all of it. */
+export {
+  SHORT_HAUL_RADIUS_MILES,
+  isUsableCoord,
+  airMilesBetween,
+  type Coord,
+} from "@fleetcal/types";
+import {
+  SHORT_HAUL_RADIUS_MILES,
+  isUsableCoord,
+  airMilesBetween,
+  type Coord,
+} from "@fleetcal/types";
 
 export interface StopPoint extends Coord {
   /** For explaining the classification back to a dispatcher. */
