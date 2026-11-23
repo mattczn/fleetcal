@@ -73,6 +73,14 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
   // none geocoded — and null must not render as local. An ungeocoded
   // load silently passing for short-haul work is the one failure here
   // with a compliance cost, so no ring means no answer, not "fine".
+  // Card border widths, named because the OTR ring has to cancel them
+  // out. An absolutely-positioned child's `inset` resolves against the
+  // PADDING box, so `inset: 0` lands inside these borders — and since
+  // the two sides differ, the ring came out visibly off-centre: 3px in
+  // on the left, flush on the right.
+  const cardBorderL = totalCols >= 3 ? 2 : 3;
+  const cardBorderR = totalCols >= 3 ? 2 : 0;
+
   const scale = cardFontScale ?? 1.0;
   const fs = (basePx: number) => Math.round(basePx * scale * 2) / 2;
   const fsTitle        = fs(11);  // main title
@@ -244,8 +252,8 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
         left: `calc(${leftFrac * 100}% + 2px)`,
         width: `calc(${widthFrac * 100}% - 4px)`,
         backgroundColor: color,
-        borderLeft: totalCols >= 3 ? '2px solid rgba(255,255,255,0.6)' : `3px solid ${color}`,
-        borderRight: totalCols >= 3 ? '2px solid rgba(255,255,255,0.6)' : 'none',
+        borderLeft: `${cardBorderL}px solid ${totalCols >= 3 ? 'rgba(255,255,255,0.6)' : color}`,
+        borderRight: cardBorderR > 0 ? `${cardBorderR}px solid rgba(255,255,255,0.6)` : 'none',
         cursor: isDragging ? 'grabbing' : canDragThis ? 'grab' : 'pointer',
         opacity: isDragging ? 0.3 : isCancelled ? 0.55 : 1,
         pointerEvents: isDragging ? 'none' : 'auto',
@@ -283,7 +291,12 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
           white-plate relay badge. */}
       {isOtrLeg && (
         <div style={{
-          position: 'absolute', inset: 0, borderRadius: 'inherit', pointerEvents: 'none',
+          position: 'absolute',
+          // Negative left/right pull the ring back out over the card's
+          // own borders so it traces the real card edge. Top and bottom
+          // have no border to cancel.
+          top: 0, bottom: 0, left: -cardBorderL, right: -cardBorderR,
+          borderRadius: 'inherit', pointerEvents: 'none',
           border: '2px solid #f59e0b',
           boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.5)',
           zIndex: 15,
