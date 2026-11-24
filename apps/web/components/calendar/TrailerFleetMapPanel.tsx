@@ -29,7 +29,7 @@
  * Escape or click outside.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { X, MapPin, Container, AlertCircle, Loader2, Search, Clock, Plus, Trash2, Crosshair, ShieldAlert, WifiOff, ParkingCircle, HelpCircle } from 'lucide-react';
+import { X, MapPin, Container, AlertCircle, Loader2, Search, Clock, Plus, Trash2, Crosshair, ShieldAlert, WifiOff, ParkingCircle, HelpCircle, Truck } from 'lucide-react';
 import { loadGoogleMaps, MAP_ID } from '@/lib/googleMaps';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { getTrailerUsage, type TrailerUsage } from '@/lib/trailerUsage';
@@ -1364,6 +1364,14 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
     const a = assets.find(x => x.id === load.assetId);
     return a?.name;
   }
+  /** The tractor's calendar colour. On the calendar the colour IS how
+   *  a dispatcher recognises a truck, so carrying it into the roster
+   *  row makes the row and the map pin name the same tractor the same
+   *  way — the name alone makes you read before you recognise. */
+  function assetColor(load: CalendarEvent | undefined): string | undefined {
+    if (!load) return undefined;
+    return assets.find(x => x.id === load.assetId)?.color;
+  }
 
   // One row shape for both groupings — the list is regrouped, not
   // redesigned, so a trailer reads the same wherever it appears.
@@ -1379,6 +1387,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
       detail: status === 'idle' ? undefined : {
         driver: driverName(entry.usage.load),
         asset:  assetName(entry.usage.load),
+        assetColor: assetColor(entry.usage.load),
         // The route of a load that's OVER is not where the trailer
         // is, and this row already shows where it is from the live
         // fix — so a hooked row shows who had it, not where that
@@ -1631,6 +1640,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
                   detail: usage.status === 'idle' ? undefined : {
                     driver: driverName(usage.load),
                     asset:  assetName(usage.load),
+                    assetColor: assetColor(usage.load),
                     route:  usage.status === 'in_use' ? routeLabel(usage.load) : undefined,
                     status: usage.load?.status,
                     lead:   usage.status === 'hooked' ? 'Last load' : undefined,
@@ -1756,7 +1766,12 @@ function Section({
     /** `lead` prefixes the truck/driver line — "Last load" on a
      *  hooked row, so facts taken from a finished load can't be read
      *  as what the trailer is doing now. */
-     detail?: { driver?: string; asset?: string; route?: string; status?: string; lead?: string };
+     detail?: {
+       driver?: string; asset?: string; route?: string; status?: string;
+       lead?: string;
+       /** The tractor's calendar colour, for the truck mark. */
+       assetColor?: string;
+     };
   }>;
   selectedId: number | null;
   onSelect: (id: number) => void;
@@ -1843,8 +1858,30 @@ function Section({
                   </div>
                 )}
                 {(detail.driver || detail.asset) && (
-                  <div className="truncate" style={{ color: 'var(--gc-text-3)' }}>
-                    {[detail.lead, detail.asset, detail.driver, detail.status?.replace('_', ' ')].filter(Boolean).join(' · ')}
+                  <div className="flex items-center gap-1 min-w-0" style={{ color: 'var(--gc-text-3)' }}>
+                    {detail.lead && <span className="shrink-0">{detail.lead} ·</span>}
+                    {detail.asset && (
+                      <>
+                        {/* Tinted through the style prop rather than a
+                            class: the value comes out of the database,
+                            and the property setter drops a malformed
+                            colour instead of it landing in markup. */}
+                        <Truck
+                          size={11}
+                          className="shrink-0"
+                          style={{ color: detail.assetColor || 'var(--gc-text-3)' }}
+                        />
+                        <span className="shrink-0 font-semibold" style={{ color: 'var(--gc-text-2)' }}>
+                          {detail.asset}
+                        </span>
+                      </>
+                    )}
+                    {(detail.driver || detail.status) && (
+                      <span className="truncate">
+                        {detail.asset ? '· ' : ''}
+                        {[detail.driver, detail.status?.replace('_', ' ')].filter(Boolean).join(' · ')}
+                      </span>
+                    )}
                   </div>
                 )}
               </div>
