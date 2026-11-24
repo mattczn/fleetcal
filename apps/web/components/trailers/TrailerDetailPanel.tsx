@@ -270,17 +270,54 @@ export default function TrailerDetailPanel({ data, segments, historyDays, loadin
             <div className="text-[12px] py-1" style={{ color: 'var(--gc-text-3)' }}>None on record.</div>
           ) : (
             <div className="space-y-1.5 pb-1">
-              {data.recentLoads.map(load => (
-                <div key={load.id} className="flex gap-2">
-                  <Truck size={11} style={{ color: 'var(--gc-text-3)', marginTop: 3, flex: '0 0 auto' }} />
-                  <div className="min-w-0">
-                    <div className="text-[12px] truncate" style={{ color: 'var(--gc-text-1)' }}>{load.title}</div>
-                    <div className="text-[10px]" style={{ color: 'var(--gc-text-3)' }}>
-                      {[load.start?.slice(0, 10), load.status?.replace('_', ' ')].filter(Boolean).join(' · ')}
+              {data.recentLoads.map(load => {
+                // Lead with the number, because the point of this list
+                // is to give you something to look the load up by. The
+                // broker's load # is what paperwork and phone calls
+                // use, so it goes first; the internal id trails it
+                // muted, since that's what /loads/{id} and the search
+                // results key on.
+                const broker = load.loadNum ? `#${load.loadNum}` : null;
+                const internal = load.internalLoadId != null ? String(load.internalLoadId) : null;
+                const body = (
+                  <>
+                    <div className="text-[12px] font-semibold truncate" style={{ color: 'var(--gc-text-1)' }}>
+                      {broker ?? (internal ? `#${internal}` : load.title)}
+                      {broker && internal && (
+                        <span className="ml-1.5 font-normal" style={{ color: 'var(--gc-text-3)' }}>{internal}</span>
+                      )}
                     </div>
+                    <div className="text-[10px] truncate" style={{ color: 'var(--gc-text-3)' }}>
+                      {[
+                        broker || internal ? load.title : null,
+                        load.start?.slice(0, 10),
+                        load.status?.replace('_', ' '),
+                      ].filter(Boolean).join(' · ')}
+                    </div>
+                  </>
+                );
+                return (
+                  <div key={load.id} className="flex gap-2">
+                    <Truck size={11} style={{ color: 'var(--gc-text-3)', marginTop: 3, flex: '0 0 auto' }} />
+                    {/* Straight through to the load where we have the
+                        internal id, which beats handing you a number to
+                        go and paste into search. */}
+                    {load.internalLoadId != null ? (
+                      <a
+                        href={`/loads/${load.internalLoadId}`}
+                        className="min-w-0 block"
+                        style={{ textDecoration: 'none' }}
+                        onMouseEnter={e => { e.currentTarget.style.textDecoration = 'underline'; }}
+                        onMouseLeave={e => { e.currentTarget.style.textDecoration = 'none'; }}
+                      >
+                        {body}
+                      </a>
+                    ) : (
+                      <div className="min-w-0">{body}</div>
+                    )}
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
