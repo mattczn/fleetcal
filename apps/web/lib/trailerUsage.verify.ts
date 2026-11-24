@@ -115,6 +115,18 @@ check('…but the same load hooks fine when that id is a real truck',
   usage([load({ start: at(-9), end: at(-3), assetId: UNASSIGNED })]).status,
   'hooked');
 
+// ── a retired tractor is holding nothing ────────────────────────────
+// Real case: P-SWAP pulled #633453 on the 18th and was retired on
+// the 22nd. The load is well inside the age bound and the truck
+// never took another trailer, so every other rule said "hooked" —
+// but the tractor is out of the fleet.
+check('a retired tractor cannot hold a hook',
+  usage([over], { retiredAssetIds: new Set([TRUCK_A]) }).status, 'idle');
+check('another truck being retired is irrelevant',
+  usage([over], { retiredAssetIds: new Set([TRUCK_B]) }).status, 'hooked');
+check('retirement does not touch a load running RIGHT NOW',
+  usage([live], { retiredAssetIds: new Set([TRUCK_A]) }).status, 'in_use');
+
 // ── delivered early, window still open ──────────────────────────────
 // The gap this closes: the load is no longer running (delivered) but
 // its end hasn't arrived, so it is neither live nor "past its

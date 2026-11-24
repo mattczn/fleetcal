@@ -176,7 +176,15 @@ function makePinElement(): {
   wrapper: HTMLDivElement; labelEl: HTMLDivElement; dot: HTMLDivElement; chipEl: HTMLDivElement;
 } {
   const wrapper = document.createElement('div');
-  wrapper.style.cssText = 'position:relative;cursor:pointer;display:flex;flex-direction:column;align-items:center;';
+  // pointer-events:none on the wrapper, auto on the dot, so ONLY the
+  // dot is a hover target. The wrapper's box grows upward when its
+  // tag opens, and while it was hit-testable that empty region sat
+  // over neighbouring pins — in a cluster the cursor would land in
+  // one pin's open tag, hover would flip to that pin, which moved the
+  // tag, and the two would trade the hover back and forth. Events on
+  // the dot still bubble to the marker, so the click listener is
+  // unaffected.
+  wrapper.style.cssText = 'position:relative;cursor:pointer;display:flex;flex-direction:column;align-items:center;pointer-events:none;';
 
   const labelEl = document.createElement('div');
   labelEl.style.cssText = [
@@ -208,6 +216,7 @@ function makePinElement(): {
     // coordinates, so a layout change here would visibly jump the pin.
     'transform-origin:center',
     'transition:transform 120ms ease-out, box-shadow 120ms ease-out',
+    'pointer-events:auto',
   ].join(';');
 
   const chipEl = document.createElement('div');
@@ -265,12 +274,14 @@ function paintPinGlyph(dot: HTMLDivElement, tag: PinTag): void {
     dot.style.height = '22px';
     dot.style.borderRadius = '7px';
     dot.style.background = tag.truck.color;
-    // A hookup left over from a finished load is faded rather than
-    // recoloured: the truck's own colour is how it's recognised, so
-    // swapping it would cost the identification to say something the
-    // tag says in words anyway. Dimmed reads as "was", which is
-    // exactly the claim.
-    dot.style.opacity = tag.linkLive === false ? '0.6' : '1';
+    // A leftover hookup keeps the truck's own colour — that colour is
+    // how a dispatcher recognises the tractor, so swapping or fading
+    // it costs the identification to say something the tag already
+    // says in words. The difference is the border: dashed for a
+    // hookup, solid for a live load. Fading it was the first attempt
+    // and it just read as a half-rendered icon.
+    dot.style.borderStyle = tag.linkLive === false ? 'dashed' : 'solid';
+    dot.style.opacity = '1';
     if (!dot.firstChild) dot.innerHTML = truckGlyphSvg();
     return;
   }
@@ -278,6 +289,7 @@ function paintPinGlyph(dot: HTMLDivElement, tag: PinTag): void {
   dot.style.height = '16px';
   dot.style.borderRadius = '50%';
   dot.style.background = tag.dotColor;
+  dot.style.borderStyle = 'solid';
   dot.style.opacity = '1';
   if (dot.firstChild) dot.replaceChildren();
 }
@@ -298,11 +310,6 @@ function paintPinChip(chipEl: HTMLDivElement, tag: PinTag): void {
   }
   chipEl.textContent = [tag.truck.name, [tag.heading, tag.category].filter(Boolean).join(' ')]
     .filter(Boolean).join(' · ');
-  // Matches the pin it hangs under: solid while the load is running,
-  // washed out once the link is only the last load's.
-  chipEl.style.background = tag.linkLive === false
-    ? 'rgba(32,33,36,0.52)'
-    : 'rgba(32,33,36,0.86)';
   chipEl.style.display = 'block';
 }
 
@@ -646,6 +653,20 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
 
   const yards = useMemo(() => yardsFrom(savedLocations), [savedLocations]);
 
+  // Tractors retired as of today. A retired truck is out of the fleet
+  // and cannot be holding a trailer now, so it can't keep a hookup
+  // alive — and the retirement is usually the very thing that ended
+  // the pairing. activeTo is the LAST active date, so a truck retired
+  // today still counts as active today.
+  const retiredAssetIds = useMemo(() => {
+    const d = new Date(nowMs);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const today = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const out = new Set<number>();
+    for (const a of assets) if (a.activeTo && a.activeTo < today) out.add(a.id);
+    return out;
+  }, [assets, nowMs]);
+
   /**
    * Re-apply every pin's visual state from the refs.
    *
@@ -843,6 +864,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
       const usage = getTrailerUsage(t.id, events, calendarTimezone, {
         atYard: loc ? yardAt(loc.lat, loc.lon, yards) != null : false,
         unassignedAssetId,
+        retiredAssetIds,
       });
       if (!loc) {
         noGps.push({ trailer: t, usage });
@@ -857,7 +879,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
     // grouping) read this so a fourth bucket can't be forgotten in
     // one of them.
     return { active, hooked, idle, noGps, pinned: [...active, ...hooked, ...idle] };
-  }, [trailers, events, locations, calendarTimezone, query, yards, unassignedAssetId]);
+  }, [trailers, events, locations, calendarTimezone, query, yards, unassignedAssetId, retiredAssetIds]);
 
   // ── The selected trailer's history ─────────────────────────
   // Only on the page: the detail panel it feeds is a third column,
@@ -988,6 +1010,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
     const usage = getTrailerUsage(trailer.id, events, calendarTimezone, {
       atYard: loc ? yardAt(loc.lat, loc.lon, yards) != null : false,
       unassignedAssetId,
+      retiredAssetIds,
     });
     const still = stillness[String(trailer.id)];
 
@@ -1016,7 +1039,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
       lastDriver: driverLoad && driverLabel ? { name: driverLabel, at: driverLoad.start } : undefined,
       recentLoads: recent.slice(0, 6),
     };
-  }, [embedded, selectedTrailerId, trailers, events, calendarTimezone, locations, stillness, yards, assets, drivers, nowMs, unassignedAssetId]);
+  }, [embedded, selectedTrailerId, trailers, events, calendarTimezone, locations, stillness, yards, assets, drivers, nowMs, unassignedAssetId, retiredAssetIds]);
 
   // ── Construct the map ONCE ────────────────────────────────────────────
   // The google.maps.Map is a billable Dynamic Maps load, so it must be
@@ -1142,18 +1165,19 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
           });
           marker.addListener('click', () => focusTrailer(entry.trailer.id, 'pin'));
 
-          // Hover is wired to the wrapper rather than the marker so it
-          // works regardless of which pointer events the Maps marker
-          // forwards. The tag is pointer-events:none, so opening it
-          // can't steal the hover from the pin underneath — and since
-          // the tag stacks ABOVE the dot while the marker anchors the
-          // wrapper's bottom edge, the dot doesn't move when the tag
-          // appears. No flicker loop.
-          wrapper.addEventListener('mouseenter', () => {
+          // Hover is wired to the DOT rather than the marker or the
+          // wrapper: to the dot and not the marker so it works
+          // regardless of which pointer events the Maps marker
+          // forwards, and to the dot and not the wrapper so an open
+          // tag never becomes a hover target over the pins beside it
+          // (see makePinElement). The tag stacks ABOVE the dot while
+          // the marker anchors the wrapper's bottom edge, so the dot
+          // doesn't move when the tag appears. No flicker loop.
+          dot.addEventListener('mouseenter', () => {
             hoveredKeyRef.current = key;
             repaintPins();
           });
-          wrapper.addEventListener('mouseleave', () => {
+          dot.addEventListener('mouseleave', () => {
             if (hoveredKeyRef.current === key) hoveredKeyRef.current = null;
             repaintPins();
           });

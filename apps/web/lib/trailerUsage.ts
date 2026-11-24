@@ -22,7 +22,9 @@
  *      matters. (Caller's call — see `atYard`.)
  *   2. That tractor's own most recent begun load names a DIFFERENT
  *      trailer. The truck has moved on, so the hook is stale.
- *   3. The load ended more than HOOK_MAX_DAYS ago. Not a claim about
+ *   3. That tractor has been retired. A truck that is out of the
+ *      fleet is not holding a trailer today.
+ *   4. The load ended more than HOOK_MAX_DAYS ago. Not a claim about
  *      trucks — a bound on how long a guess is worth repeating.
  *
  * `hooked` is deliberately a third state rather than folded into
@@ -76,6 +78,13 @@ export interface TrailerUsageOptions {
    *  assetId, so without this a load parked on Unassigned would
    *  "hook" the trailer to a tractor that does not exist. */
   unassignedAssetId?: number | null;
+  /** Tractors retired as of today (assets.activeTo in the past). A
+   *  retired truck is out of the fleet, so it cannot be holding a
+   *  trailer right now however recent its last load was — and the
+   *  retirement is usually the very event that ended the pairing.
+   *  Passed in because retirement is a property of the asset, which
+   *  this module deliberately knows nothing else about. */
+  retiredAssetIds?: ReadonlySet<number>;
 }
 
 /**
@@ -150,12 +159,17 @@ export function getTrailerUsage<E extends CalendarEventLike>(
     return { status: 'idle' };
   }
 
-  // ── Rule 3: age bound ───────────────────────────────────────────────
+  // ── Rule 3: the tractor has been retired ────────────────────────────
+  if (opts.retiredAssetIds?.has(last.assetId)) return { status: 'idle' };
+
+  // ── Rule 4: age bound ───────────────────────────────────────────────
   const cutoff = new Date(nowDate);
   cutoff.setDate(cutoff.getDate() - HOOK_MAX_DAYS);
   if (last.end < naive(cutoff)) return { status: 'idle' };
 
   // ── Rule 2: has that tractor since been given another trailer? ──────
+  // (Numbered by the order the doc comment lists them, not the order
+  // they run — the cheap checks go first.)
   // Measured as "the truck's most recent BEGUN load that recorded a
   // trailer", which is `last` itself unless something newer exists.
   // Two deliberate choices:
