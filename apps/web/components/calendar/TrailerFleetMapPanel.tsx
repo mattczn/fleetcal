@@ -397,13 +397,64 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
     }
   }, []);
 
-  // ── ESC closes (modal only) ───────────────────────────────────────────
+  /**
+   * Select a trailer and move the map accordingly.
+   *
+   * The two ways in want different things from the map, so the caller
+   * says which it is:
+   *
+   *   'pin'  — you can already see the pin, you just clicked it. Nudge
+   *            it into full view only if it's near/past the edge, and
+   *            otherwise leave the view exactly as framed. Clicking
+   *            your way around five trailers in one yard must not
+   *            re-frame the map five times.
+   *   'row'  — you clicked a name in the roster and may have no idea
+   *            where that trailer is. Centre it; that IS the request.
+   *
+   * The pan lives here rather than in the selection effect so clicking
+   * the row of an already-selected trailer re-centres instead of doing
+   * nothing (the state wouldn't change, so no effect would run).
+   */
+  const focusTrailer = useCallback((id: number, source: 'pin' | 'row') => {
+    setSelectedTrailerId(id);
+    const pos = positionsRef.current.get(String(id));
+    if (!pos) return;  // no GPS — nothing to move to
+    void loadGoogleMaps().then(google => {
+      const map = mapRef.current;
+      if (!map) return;
+      if (source === 'row') {
+        map.panTo(pos);
+        return;
+      }
+      // panToBounds pans by the MINIMUM amount needed to fit a point
+      // inside the padded viewport, and does nothing when it already
+      // fits. The padding is asymmetric because the tag hangs above
+      // the dot and spreads sideways: these are roughly that tag's
+      // footprint, so a nudged pin never lands somewhere its own tag
+      // is clipped by the map frame.
+      map.panToBounds(new google.maps.LatLngBounds(pos, pos), {
+        top: 130, right: 160, bottom: 50, left: 160,
+      });
+    });
+  }, []);
+
+  // ── Escape ───────────────────────────────────────────────────────
+  // Escape peels one layer at a time: an open trailer detail first,
+  // then the panel. Without the first step, dismissing a tag in the
+  // calendar popup would close the whole popup with it.
+  //
+  // Bound in embedded mode too, where there is no panel to close but
+  // there is still a detail to dismiss.
   useEffect(() => {
-    if (embedded || !onClose) return;
-    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    if (embedded && selectedTrailerId == null) return;
+    const h = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (selectedTrailerId != null) { setSelectedTrailerId(null); return; }
+      onClose?.();
+    };
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
-  }, [onClose, embedded]);
+  }, [onClose, embedded, selectedTrailerId]);
 
   // Stable comma-separated list of Motive asset IDs to locate. The
   // server-side endpoint hits keeptruckin.com/v1/asset_locations and
@@ -591,7 +642,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
             position,
             content: wrapper,
           });
-          marker.addListener('click', () => setSelectedTrailerId(entry.trailer.id));
+          marker.addListener('click', () => focusTrailer(entry.trailer.id, 'pin'));
 
           // Hover is wired to the wrapper rather than the marker so it
           // works regardless of which pointer events the Maps marker
@@ -650,7 +701,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
       // tag refreshes with this pass's data.
       repaintPins();
     });
-  }, [mapReady, groups, assets, repaintPins]);
+  }, [mapReady, groups, assets, repaintPins, focusTrailer]);
 
   // ── Yard circles ──────────────────────────────────────────────────────
   // Redrawn whenever the yard set changes. Circles are not clickable:
@@ -712,7 +763,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
   }, [mapReady, placing, addSavedLocation]);
 
   // ── Selection effect ────────────────────────────────────────
-  // Four things happen when a trailer becomes selected (whether the
+  // Three things happen when a trailer becomes selected (whether the
   // click came from a pin or a sidebar row):
   //   1. The pin's dot grows and its tag opens above it — trailer
   //      number, category, last seen, and the truck + load if it's on
@@ -720,11 +771,12 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
   //      go through repaintPins.)
   //   2. The pin's zIndex is bumped so it draws above its neighbours
   //      and its tag isn't buried under their dots.
-  //   3. The map nudges the pin into view, but only if it isn't
-  //      already in view. See the note below — this is deliberately
-  //      not a recentre.
-  //   4. The matching sidebar row scrolls into view — without this the
+  //   3. The matching sidebar row scrolls into view — without this the
   //      highlight is invisible when the row is below the fold.
+  //
+  // Moving the MAP is deliberately not here: what it should do depends
+  // on whether the click came from a pin or a roster row, which only
+  // the click site knows. See focusTrailer.
   useEffect(() => {
     // One repaint handles both ends of the change: the pin that just
     // lost the selection shrinks and closes its tag, the one that
@@ -733,37 +785,6 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
     repaintPins();
 
     if (selectedTrailerId == null) return;
-    let cancelled = false;
-    const key = String(selectedTrailerId);
-
-    // The map NUDGES rather than centres.
-    //
-    // Centring on every click made the map useless for comparing
-    // trailers in one yard — each click threw away the view you had
-    // framed. Doing nothing at all was wrong in the other direction:
-    // selecting a trailer parked three states away left you staring
-    // at an unchanged map wondering which pin lit up.
-    //
-    // panToBounds pans by the MINIMUM amount needed to fit a point
-    // inside the padded viewport, and does nothing when it already
-    // fits. So clicking another SLC trailer moves the map not at all,
-    // and clicking one in Dallas brings it just inside the edge at
-    // the same zoom — no re-framing, no zoom change.
-    //
-    // The padding is asymmetric because the tag hangs above the dot
-    // and spreads sideways: these are roughly that tag's footprint,
-    // so a pin is never nudged to a spot where its own tag is clipped
-    // by the map frame.
-    const pos = positionsRef.current.get(key);
-    if (pos) {
-      void loadGoogleMaps().then(google => {
-        const map = mapRef.current;
-        if (cancelled || !map) return;
-        map.panToBounds(new google.maps.LatLngBounds(pos, pos), {
-          top: 130, right: 160, bottom: 50, left: 160,
-        });
-      });
-    }
 
     // Scroll the sidebar row into view. We use a data attribute rather
     // than threading refs through Section so the lookup stays simple
@@ -772,9 +793,10 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
       const row = document.querySelector<HTMLElement>(`[data-trailer-row-id="${selectedTrailerId}"]`);
       row?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
-
-    return () => { cancelled = true; };
   }, [selectedTrailerId, repaintPins]);
+
+  // Roster rows always centre — see focusTrailer.
+  const selectFromRow = useCallback((id: number) => focusTrailer(id, 'row'), [focusTrailer]);
 
   // ── Sidebar row helpers ───────────────────────────────────────────────
   function driverName(load: CalendarEvent | undefined): string | undefined {
@@ -933,7 +955,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
                   },
                 }))}
                 selectedId={selectedTrailerId}
-                onSelect={setSelectedTrailerId}
+                onSelect={selectFromRow}
               />
               <Section
                 label="Idle"
@@ -948,7 +970,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
                   locationLabel: loc.description || undefined,
                 }))}
                 selectedId={selectedTrailerId}
-                onSelect={setSelectedTrailerId}
+                onSelect={selectFromRow}
               />
               <Section
                 label="No GPS"
@@ -966,7 +988,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
                   } : undefined,
                 }))}
                 selectedId={selectedTrailerId}
-                onSelect={setSelectedTrailerId}
+                onSelect={selectFromRow}
                 dim
               />
               {totalCount === 0 && (
