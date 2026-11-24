@@ -76,6 +76,10 @@ const POLL_MS = 60_000;
 // re-deriving this every minute would be pure waste.
 const STILLNESS_POLL_MS = 5 * 60_000;
 const CLOCK_TICK_MS = 60_000;
+// How long after a pin click the map's own click handler stays quiet.
+// Long enough to cover the two events arriving from one physical
+// click, short enough that a deliberate second click always lands.
+const PIN_CLICK_GRACE_MS = 350;
 
 /**
  * What the tag above a selected pin says.
@@ -428,6 +432,13 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
   // at pin creation, read the current value instead of whatever was
   // selected on the render that created them.
   const selectedKeyRef = useRef<string | null>(null);
+  // When a pin was last clicked. The map's own click handler ignores
+  // anything inside a short window after it, so selecting a pin can
+  // never immediately deselect itself. The Maps API is not supposed to
+  // let a marker click reach the map at all, but "not supposed to" is
+  // the wrong thing to hang a selection on when the cost of being
+  // wrong is a feature that silently does nothing.
+  const pinClickAtRef  = useRef(0);
 
   const [locations,  setLocations]  = useState<Record<string, MotiveTrailerLocation>>({});
   // Derived from the stored location history (see
@@ -505,6 +516,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
    * nothing (the state wouldn't change, so no effect would run).
    */
   const focusTrailer = useCallback((id: number, source: 'pin' | 'row') => {
+    if (source === 'pin') pinClickAtRef.current = Date.now();
     setSelectedTrailerId(id);
     const pos = positionsRef.current.get(String(id));
     if (!pos) return;  // no GPS — nothing to move to
@@ -909,6 +921,24 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
       circlesRef.current = [];
     };
   }, [yards, mapReady]);
+
+  // ── Click empty map to clear the selection ────────────────────
+  // Clicking away closes the open detail. Going from one pin to the
+  // next still just moves the selection: a marker click is handled by
+  // the marker, and the guard below covers the case where it reaches
+  // the map anyway. Yard circles are clickable:false, so a click
+  // inside a yard counts as empty map and clears too.
+  //
+  // Suspended while `placing`: that click is placing a yard, and the
+  // effect below owns it.
+  useEffect(() => {
+    if (!mapReady || !mapRef.current || placing) return;
+    const listener = mapRef.current.addListener('click', () => {
+      if (Date.now() - pinClickAtRef.current < PIN_CLICK_GRACE_MS) return;
+      setSelectedTrailerId(null);
+    });
+    return () => listener.remove();
+  }, [mapReady, placing]);
 
   // ── Click the map to drop a new yard ──────────────────────────────────
   // Only armed while `placing` is set, so an ordinary click on the map
