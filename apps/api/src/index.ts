@@ -868,18 +868,43 @@ setInterval(() => void fireCrmSendSweep("tick"), CRM_SEND_SWEEP_INTERVAL_MS).unr
 // yesterday's position, and that only exists if something wrote it
 // down yesterday. Nothing here is backfillable.
 //
-// Cadence: hourly. Measured on Curzon's fleet (2026-11-23), live
-// trackers were reporting every 0–7 hours, so hourly cannot miss a
-// move — it just rejects duplicates, which is the cheap outcome.
+// Cadence: 2 minutes, and the reason is measured rather than assumed.
+// Two snapshots of Curzon's fleet 2.1 minutes apart (2026-11-23): 10
+// of 30 trailers had already produced a NEW fix in that window, one of
+// them 3,658 m further along (~68 mph, east of Rawlins WY), while the
+// other 20 sat on fixes 25–470 minutes old. A trailer's gateway
+// reports every 1–2 minutes while rolling and goes quiet for hours
+// when parked — it powers down.
+//
+// Hourly polling therefore discarded ~30 of every 31 fixes a moving
+// trailer had already produced, and left 68-mile gaps in its path. The
+// fixes exist; we simply weren't asking.
+//
+// 2 minutes matches what the gateway actually offers while rolling, so
+// the stored path is the tracker's own path rather than a decimated
+// one. It is one small bulk call per tick (720/day, well inside
+// Motive's limits) and the dedupe key means the 20 PARKED trailers
+// contribute nothing extra — the finer polling is only paid for by
+// the trailers that have something new to say.
 //
 // Single-replica caveat: same as the other in-process crons, but this
 // one is genuinely safe to double-fire. The insert conflicts on
 // (trailer_id, located_at) — Motive's timestamp for the fix, not ours
 // for the request — so a second replica re-polling the same fix inserts
 // nothing. See jobs/trailerLocationSweep.ts.
-const TRAILER_LOCATION_INTERVAL_MS   = Number(process.env.TRAILER_LOCATION_INTERVAL_MS   ?? 60 * 60 * 1000);
+const TRAILER_LOCATION_INTERVAL_MS   = Number(process.env.TRAILER_LOCATION_INTERVAL_MS   ?? 2 * 60 * 1000);
 const TRAILER_LOCATION_STARTUP_DELAY = Number(process.env.TRAILER_LOCATION_STARTUP_DELAY ?? 90_000);
+// At this cadence a slow Motive response could still be in flight
+// when the next tick arrives. The insert is idempotent so an overlap
+// would be harmless, but two concurrent full-fleet pulls are pure
+// waste, so the later tick stands down.
+let trailerSweepInFlight = false;
 async function fireTrailerLocationSweep(label: string): Promise<void> {
+  if (trailerSweepInFlight) {
+    console.log(`[trailer-locations] ${label}: previous run still in flight, skipping`);
+    return;
+  }
+  trailerSweepInFlight = true;
   try {
     await trackCronRun("trailer-locations", async () => {
       const r = await runTrailerLocationSweep();
@@ -893,6 +918,8 @@ async function fireTrailerLocationSweep(label: string): Promise<void> {
     });
   } catch (err) {
     console.error(`[trailer-locations] ${label} failed:`, err);
+  } finally {
+    trailerSweepInFlight = false;
   }
 }
 setTimeout(() => void fireTrailerLocationSweep("startup pass"), TRAILER_LOCATION_STARTUP_DELAY).unref();

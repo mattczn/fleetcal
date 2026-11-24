@@ -20,10 +20,19 @@
  * manual run is harmless. It also means the row count tracks real
  * fixes instead of our poll cadence.
  *
- * Scheduled hourly in apps/api/src/index.ts. Measured against Curzon's
- * fleet on 2026-11-23, live trackers were reporting every 0–7 hours,
- * so hourly cannot miss a move; it just rejects a lot of duplicates,
- * which is the cheap outcome.
+ * CADENCE IS SET BY THE GATEWAY, NOT BY US. Two snapshots of Curzon's
+ * fleet 2.1 minutes apart (2026-11-23) showed 10 of 30 trailers had
+ * already produced a new fix in that window — one of them 3,658 m
+ * further along, about 68 mph — while the other 20 sat on fixes
+ * 25–470 minutes old. A trailer gateway reports every 1–2 minutes
+ * while rolling and powers down when parked. So the sweep runs every
+ * 2 minutes (apps/api/src/index.ts) to match what a moving trailer
+ * offers, and the dedupe key means a parked one still costs nothing.
+ *
+ * DO NOT TRUST last_location.moving. In that same sample every one of
+ * the 30 assets reported moving=false, the 68 mph one included. The
+ * flag is stored for reference; motion is derived from distance over
+ * time between consecutive fixes instead.
  */
 
 import { supabase } from "../lib/supabase.js";
@@ -99,10 +108,17 @@ export interface TrailerLocationSweepResult {
 const PER_PAGE = 100;
 const MAX_PAGES = 25;
 
-// Two years. The table costs a few MB a year (see the migration), so
-// this is a ceiling rather than a budget — long enough that "where was
-// this trailer last winter" is still a question with an answer.
+// Two years. Even at 2-minute resolution for the trailers that are
+// actually rolling, this is well under 100 MB a year, so it's a
+// ceiling rather than a budget — long enough that "where was this
+// trailer last winter" is still a question with an answer.
 const RETENTION_DAYS = Number(process.env.TRAILER_LOCATION_RETENTION_DAYS ?? 730);
+
+// Retention is a slow-moving concern and the sweep now runs every two
+// minutes, so pruning on every pass would be 720 pointless deletes a
+// day. Once an hour is plenty.
+const PRUNE_EVERY_MS = 60 * 60 * 1000;
+let lastPruneAt = 0;
 
 async function fetchMotiveAssets(apiKey: string): Promise<MotiveAssetRow[]> {
   const out: MotiveAssetRow[] = [];
@@ -209,12 +225,17 @@ export async function runTrailerLocationSweep(): Promise<TrailerLocationSweepRes
 
   // Prune last, and globally rather than per-org: retention is a
   // property of the table, not of a tenant.
-  const cutoff = new Date(Date.now() - RETENTION_DAYS * 86_400_000).toISOString();
-  const { data: prunedRows, error: pruneErr } = await samplesTable()
-    .delete()
-    .lt("located_at", cutoff)
-    .select("id");
-  if (pruneErr) console.error("[trailer-locations] prune failed:", pruneErr.message);
+  let pruned = 0;
+  if (Date.now() - lastPruneAt >= PRUNE_EVERY_MS) {
+    lastPruneAt = Date.now();
+    const cutoff = new Date(Date.now() - RETENTION_DAYS * 86_400_000).toISOString();
+    const { data: prunedRows, error: pruneErr } = await samplesTable()
+      .delete()
+      .lt("located_at", cutoff)
+      .select("id");
+    if (pruneErr) console.error("[trailer-locations] prune failed:", pruneErr.message);
+    pruned = prunedRows?.length ?? 0;
+  }
 
-  return { orgs: results, pruned: prunedRows?.length ?? 0 };
+  return { orgs: results, pruned };
 }
