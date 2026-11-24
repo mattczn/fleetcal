@@ -100,8 +100,12 @@ interface PinTag {
   /** "Parked 3d 4h at SLC Yard", "No fix in 21d" — the stillness line.
    *  Absent until the history sweep has something to say. */
   dwell?:     string;
-  /** On the alert list, so the dot wears the attention ring. */
+  /** On the alert list, so the glyph wears the attention ring. */
   flagged?:   boolean;
+  /** Colour for the plain-dot form — the red/green in-use/idle status.
+   *  Unused when `truck` is set, since that pin is drawn in the
+   *  truck's own colour instead. */
+  dotColor:   string;
 }
 
 /**
@@ -136,12 +140,24 @@ const PIN_Z: Record<PinMode, number | undefined> = {
   selected: 900,
 };
 
-/** Build a colored circle marker (HTMLElement) for the map plus a
- *  pre-attached tag element that's hidden until the marker is
- *  hovered or selected. The tag element is returned alongside so the selection
- *  effect can flip it on/off, and the plot effect can repaint its
- *  contents, without either one recreating the pin. */
-function makePinElement(color: string): { wrapper: HTMLDivElement; labelEl: HTMLDivElement; dot: HTMLDivElement } {
+/**
+ * Build the marker's DOM. Three pieces, all repainted later rather
+ * than baked in here, because a trailer gets hooked to a truck without
+ * its pin ever being recreated:
+ *
+ *   labelEl — the hover / click tag, ABOVE the glyph, hidden by default.
+ *   dot     — the glyph itself: a status circle, or a truck-coloured
+ *              badge once the trailer is pulling a load.
+ *   chipEl  — the always-on "2020 · #633453 Swing" label, BELOW the
+ *              glyph, shown only for a trailer under a truck.
+ *
+ * chipEl is absolutely positioned on purpose. The marker anchors the
+ * wrapper's bottom centre at the trailer's coordinates, so a chip in
+ * normal flow would push the glyph up off the point it marks.
+ */
+function makePinElement(): {
+  wrapper: HTMLDivElement; labelEl: HTMLDivElement; dot: HTMLDivElement; chipEl: HTMLDivElement;
+} {
   const wrapper = document.createElement('div');
   wrapper.style.cssText = 'position:relative;cursor:pointer;display:flex;flex-direction:column;align-items:center;';
 
@@ -166,20 +182,99 @@ function makePinElement(color: string): { wrapper: HTMLDivElement; labelEl: HTML
 
   const dot = document.createElement('div');
   dot.style.cssText = [
-    'width:16px', 'height:16px', 'border-radius:50%',
-    `background:${color}`, 'border:2.5px solid white',
+    'display:flex', 'align-items:center', 'justify-content:center',
+    'border:2.5px solid white',
     `box-shadow:${PIN_SHADOW.idle}`,
     // Grown with a transform rather than by changing width/height, so
-    // enlarging the dot never reflows the tag stacked above it. The
+    // enlarging the glyph never reflows the tag stacked above it. The
     // marker anchors this wrapper's bottom centre at the trailer's
     // coordinates, so a layout change here would visibly jump the pin.
     'transform-origin:center',
     'transition:transform 120ms ease-out, box-shadow 120ms ease-out',
   ].join(';');
 
+  const chipEl = document.createElement('div');
+  chipEl.style.cssText = [
+    'display:none',
+    'position:absolute',
+    'top:calc(100% + 5px)',
+    'left:50%',
+    'transform:translateX(-50%)',
+    'padding:2px 7px',
+    'border-radius:5px',
+    'background:rgba(32,33,36,0.86)',
+    'color:#ffffff',
+    'font-size:10px',
+    'font-weight:600',
+    'white-space:nowrap',
+    'pointer-events:none',
+  ].join(';');
+
   wrapper.appendChild(labelEl);
   wrapper.appendChild(dot);
-  return { wrapper, labelEl, dot };
+  wrapper.appendChild(chipEl);
+  return { wrapper, labelEl, dot, chipEl };
+}
+
+/** A truck seen from above, as an inline SVG. Inline rather than a
+ *  lucide component because this marker is built with DOM calls, not
+ *  rendered by React. */
+function truckGlyphSvg(): string {
+  return [
+    '<svg viewBox="0 0 24 24" width="12" height="12" fill="none"',
+    ' stroke="#ffffff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">',
+    '<path d="M3 7h10v9H3z"/><path d="M13 10h4l4 3.5V16h-8z"/>',
+    '<circle cx="7" cy="18.5" r="1.6" fill="#ffffff"/>',
+    '<circle cx="17.5" cy="18.5" r="1.6" fill="#ffffff"/>',
+    '</svg>',
+  ].join('');
+}
+
+/**
+ * Draw the glyph for a pin's current state.
+ *
+ * A trailer under a truck stops being a dot and becomes a rounded
+ * badge in THAT TRUCK's calendar colour carrying a truck mark — the
+ * shape says "this one is moving with a tractor", the colour says
+ * which tractor. A trailer on its own keeps the status circle, where
+ * the colour means in-use / idle instead.
+ *
+ * Repainted every plot pass, so a trailer hooked to a truck between
+ * two polls changes shape without its marker being rebuilt.
+ */
+function paintPinGlyph(dot: HTMLDivElement, tag: PinTag): void {
+  if (tag.truck) {
+    dot.style.width = '22px';
+    dot.style.height = '22px';
+    dot.style.borderRadius = '7px';
+    dot.style.background = tag.truck.color;
+    if (!dot.firstChild) dot.innerHTML = truckGlyphSvg();
+    return;
+  }
+  dot.style.width = '16px';
+  dot.style.height = '16px';
+  dot.style.borderRadius = '50%';
+  dot.style.background = tag.dotColor;
+  if (dot.firstChild) dot.replaceChildren();
+}
+
+/**
+ * The always-on label under a moving trailer: "2020 · #633453 Swing".
+ *
+ * Only for trailers under a truck. Showing it for all of them would
+ * be unreadable — most of the fleet sits in two yards, and their
+ * labels would stack into a block of text. The ones under a tractor
+ * are spread out along a highway, which is exactly where a label you
+ * don't have to hover for earns its place.
+ */
+function paintPinChip(chipEl: HTMLDivElement, tag: PinTag): void {
+  if (!tag.truck) {
+    chipEl.style.display = 'none';
+    return;
+  }
+  chipEl.textContent = [tag.truck.name, [tag.heading, tag.category].filter(Boolean).join(' ')]
+    .filter(Boolean).join(' · ');
+  chipEl.style.display = 'block';
 }
 
 /** The truck's calendar colour as a dot. On the calendar the colour
@@ -308,7 +403,10 @@ function applyPinVisual(
   tagEl:  HTMLDivElement | undefined,
   marker: google.maps.marker.AdvancedMarkerElement | undefined,
   tag:    PinTag | undefined,
+  chipEl: HTMLDivElement | undefined,
 ): void {
+  if (dot && tag) paintPinGlyph(dot, tag);
+  if (chipEl && tag) paintPinChip(chipEl, tag);
   if (dot) {
     dot.style.transform = PIN_SCALE[mode];
     // The ring is composed in front of the drop shadow rather than
@@ -420,6 +518,8 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
   // The dot inside each pin, kept separately so it can be scaled
   // without touching the tag above it.
   const dotsRef      = useRef<Map<string, HTMLDivElement>>(new Map());
+  // The always-on "truck · trailer" chip under a moving trailer's pin.
+  const chipsRef     = useRef<Map<string, HTMLDivElement>>(new Map());
   // What each pin's tag should say, written by the plot effect and
   // read by repaintPins. Keeping it here rather than in state means a
   // hover doesn't re-render the whole roster.
@@ -493,7 +593,14 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
       const mode: PinMode = key === hovKey ? 'hover'
         : key === selKey ? 'selected'
         : 'idle';
-      applyPinVisual(mode, dotsRef.current.get(key), labelsRef.current.get(key), marker, tagDataRef.current.get(key));
+      applyPinVisual(
+        mode,
+        dotsRef.current.get(key),
+        labelsRef.current.get(key),
+        marker,
+        tagDataRef.current.get(key),
+        chipsRef.current.get(key),
+      );
     }
   }, []);
 
@@ -759,6 +866,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
       labelsRef.current.clear();
       positionsRef.current.clear();
       dotsRef.current.clear();
+      chipsRef.current.clear();
       tagDataRef.current.clear();
       mapRef.current = null;
     };
@@ -809,6 +917,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
           loadTitle: load ? (load.title || routeLabel(load)) : undefined,
           dwell: dwellLine(entry.trailer.id, entry.loc, stillness, yards),
           flagged: flaggedIds.has(entry.trailer.id),
+          dotColor: color,
         };
         const position = { lat: entry.loc.lat, lng: entry.loc.lon };
 
@@ -818,7 +927,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
           // recreating the AdvancedMarkerElement or its listeners.
           existing.position = position;
         } else {
-          const { wrapper, labelEl, dot } = makePinElement(color);
+          const { wrapper, labelEl, dot, chipEl } = makePinElement();
 
           // No `title` on the marker. It used to carry name + truck +
           // last seen as a native browser tooltip, which now arrives a
@@ -850,6 +959,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
           markersRef.current.set(key, marker);
           labelsRef.current.set(key, labelEl);
           dotsRef.current.set(key, dot);
+          chipsRef.current.set(key, chipEl);
         }
         // Recorded for new pins and survivors alike: the poll that
         // moved a pin may also have aged its "last seen" or hooked it
@@ -867,6 +977,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
           labelsRef.current.delete(key);
           positionsRef.current.delete(key);
           dotsRef.current.delete(key);
+          chipsRef.current.delete(key);
           tagDataRef.current.delete(key);
           // A trailer can drop out of the pinned set while the cursor
           // is on it (a search keystroke, or its GPS going stale), and
