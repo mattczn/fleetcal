@@ -36,7 +36,7 @@
  * name.
  */
 import { useState } from 'react';
-import { X, Truck, User, MapPin, Clock, Pencil, Container, Route } from 'lucide-react';
+import { X, Truck, User, MapPin, Clock, Pencil, Container, Route, Copy, Check } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { formatStill, formatAge, formatDwell } from '@/lib/trailerStillness';
 import type { TrailerSegment } from '@/lib/trailerHistory';
@@ -277,44 +277,34 @@ export default function TrailerDetailPanel({ data, segments, historyDays, loadin
                 // use, so it goes first; the internal id trails it
                 // muted, since that's what /loads/{id} and the search
                 // results key on.
-                const broker = load.loadNum ? `#${load.loadNum}` : null;
+                // The broker's load # is what paperwork and phone
+                // calls use, so it leads and it is what the copy
+                // button puts on the clipboard. The internal id
+                // trails it muted, since that's what the search
+                // results and /loads/{id} key on.
+                const broker   = load.loadNum ?? null;
                 const internal = load.internalLoadId != null ? String(load.internalLoadId) : null;
-                const body = (
-                  <>
-                    <div className="text-[12px] font-semibold truncate" style={{ color: 'var(--gc-text-1)' }}>
-                      {broker ?? (internal ? `#${internal}` : load.title)}
-                      {broker && internal && (
-                        <span className="ml-1.5 font-normal" style={{ color: 'var(--gc-text-3)' }}>{internal}</span>
-                      )}
-                    </div>
-                    <div className="text-[10px] truncate" style={{ color: 'var(--gc-text-3)' }}>
-                      {[
-                        broker || internal ? load.title : null,
-                        load.start?.slice(0, 10),
-                        load.status?.replace('_', ' '),
-                      ].filter(Boolean).join(' · ')}
-                    </div>
-                  </>
-                );
+                const copyable = broker ?? internal;
                 return (
                   <div key={load.id} className="flex gap-2">
                     <Truck size={11} style={{ color: 'var(--gc-text-3)', marginTop: 3, flex: '0 0 auto' }} />
-                    {/* Straight through to the load where we have the
-                        internal id, which beats handing you a number to
-                        go and paste into search. */}
-                    {load.internalLoadId != null ? (
-                      <a
-                        href={`/loads/${load.internalLoadId}`}
-                        className="min-w-0 block"
-                        style={{ textDecoration: 'none' }}
-                        onMouseEnter={e => { e.currentTarget.style.textDecoration = 'underline'; }}
-                        onMouseLeave={e => { e.currentTarget.style.textDecoration = 'none'; }}
-                      >
-                        {body}
-                      </a>
-                    ) : (
-                      <div className="min-w-0">{body}</div>
-                    )}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1 min-w-0">
+                        <span className="text-[12px] font-semibold truncate" style={{ color: 'var(--gc-text-1)' }}>
+                          {copyable ? `#${copyable}` : load.title}
+                          {broker && internal && (
+                            <span className="ml-1.5 font-normal" style={{ color: 'var(--gc-text-3)' }}>{internal}</span>
+                          )}
+                        </span>
+                        {copyable && <CopyButton value={copyable} />}
+                      </div>
+                      <div className="text-[10px] truncate" style={{ color: 'var(--gc-text-3)' }}>
+                        {[
+                          copyable ? load.title : null,
+                          load.start?.slice(0, 10),
+                        ].filter(Boolean).join(' · ')}
+                      </div>
+                    </div>
                   </div>
                 );
               })}
@@ -433,6 +423,49 @@ const inputStyle: React.CSSProperties = {
   fontSize: 12,
   outline: 'none',
 };
+
+/**
+ * Copy one value to the clipboard, with a tick to say it worked.
+ *
+ * The tick matters more than it looks: a copy button that silently
+ * does nothing is indistinguishable from one that worked, and
+ * clipboard writes genuinely fail — an insecure origin, or a browser
+ * that withholds permission. A failure leaves the icon alone rather
+ * than flashing a tick it hasn't earned.
+ */
+function CopyButton({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch {
+      // Left deliberately silent: there is nothing the dispatcher can
+      // do about it, and the number is right there to read.
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => void copy()}
+      title={copied ? 'Copied' : `Copy ${value}`}
+      aria-label={copied ? 'Copied' : `Copy load number ${value}`}
+      className="shrink-0 inline-flex items-center justify-center"
+      style={{
+        width: 18, height: 18, borderRadius: 4, border: 'none',
+        background: 'transparent', cursor: 'pointer', padding: 0,
+        color: copied ? '#1e8e3e' : 'var(--gc-text-3)',
+      }}
+      onMouseEnter={e => { if (!copied) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+      onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+    >
+      {copied ? <Check size={11} /> : <Copy size={11} />}
+    </button>
+  );
+}
 
 function FieldLabel({ children }: { children: React.ReactNode }) {
   return (
