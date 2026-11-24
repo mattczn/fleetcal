@@ -88,7 +88,7 @@ import { runAiUsageSweep } from "./jobs/aiUsageSweep.js";
 import { trackCronRun } from "./lib/cronRun.js";
 import { runFuelAutoMatchSweep } from "./jobs/fuelAutoMatchSweep.js";
 import { runMudflapSyncSweep } from "./jobs/mudflapSyncSweep.js";
-import { runTrailerLocationSweep } from "./jobs/trailerLocationSweep.js";
+import { runFleetLocationSweep, type FleetLocationOrgResult, type PassResult } from "./jobs/fleetLocationSweep.js";
 import { runRampSyncSweep } from "./jobs/rampSyncSweep.js";
 import { runMovementLinkSweep } from "./jobs/movementLinkSweep.js";
 import { runCrmFmcsaSyncSweep } from "./jobs/crmFmcsaSyncSweep.js";
@@ -859,16 +859,22 @@ async function fireCrmSendSweep(label: string): Promise<void> {
 setTimeout(() => void fireCrmSendSweep("startup pass"), CRM_SEND_SWEEP_STARTUP_DELAY).unref();
 setInterval(() => void fireCrmSendSweep("tick"), CRM_SEND_SWEEP_INTERVAL_MS).unref();
 
-// ── Trailer location history sweep ─────────────────────────────────────
+// ── Fleet location history sweep ─────────────────────────────
 //
 // Appends one row per distinct Motive GPS fix to
-// trailer_location_samples, so "how long has this trailer been sitting
-// there" has an answer. The live trailer map needs no cron to say where
-// a trailer is now; it is the sitting-still question that needs
-// yesterday's position, and that only exists if something wrote it
-// down yesterday. Nothing here is backfillable.
+// trailer_location_samples and vehicle_location_samples. The live map
+// needs no cron to say where anything is NOW; these are the two
+// questions that need yesterday's position, which only exists if
+// something wrote it down yesterday:
 //
-// Cadence: 2 minutes, and the reason is measured rather than assumed.
+//   how long has this trailer been sitting there (is it stolen), and
+//   which trailer is this truck pulling — dispatch recorded both
+//   sides on only 26% of loads, so for three in four nobody wrote it
+//   down.
+//
+// Nothing here is backfillable.
+//
+// Cadence: 5 minutes, and the reason is measured rather than assumed.
 // Two snapshots of Curzon's fleet 2.1 minutes apart (2026-11-23): 10
 // of 30 trailers had already produced a NEW fix in that window, one of
 // them 3,658 m further along (~68 mph, east of Rawlins WY), while the
@@ -880,47 +886,51 @@ setInterval(() => void fireCrmSendSweep("tick"), CRM_SEND_SWEEP_INTERVAL_MS).unr
 // trailer had already produced, and left 68-mile gaps in its path. The
 // fixes exist; we simply weren't asking.
 //
-// 2 minutes matches what the gateway actually offers while rolling, so
-// the stored path is the tracker's own path rather than a decimated
-// one. It is one small bulk call per tick (720/day, well inside
-// Motive's limits) and the dedupe key means the 20 PARKED trailers
-// contribute nothing extra — the finer polling is only paid for by
-// the trailers that have something new to say.
+// 5 minutes traces a route to about 5 miles at highway speed, enough
+// to see which road a trailer took and to catch any stop over ~25
+// minutes, at roughly 40% of what 2-minute polling would store. The
+// dedupe key means the PARKED units contribute nothing extra at any
+// cadence — only the ones with something new to say are paid for.
+// Two small bulk calls per tick, 576/day, well inside Motive's
+// limits.
 //
 // Single-replica caveat: same as the other in-process crons, but this
 // one is genuinely safe to double-fire. The insert conflicts on
 // (trailer_id, located_at) — Motive's timestamp for the fix, not ours
 // for the request — so a second replica re-polling the same fix inserts
 // nothing. See jobs/trailerLocationSweep.ts.
-const TRAILER_LOCATION_INTERVAL_MS   = Number(process.env.TRAILER_LOCATION_INTERVAL_MS   ?? 2 * 60 * 1000);
+const TRAILER_LOCATION_INTERVAL_MS   = Number(process.env.TRAILER_LOCATION_INTERVAL_MS   ?? 5 * 60 * 1000);
 const TRAILER_LOCATION_STARTUP_DELAY = Number(process.env.TRAILER_LOCATION_STARTUP_DELAY ?? 90_000);
-// At this cadence a slow Motive response could still be in flight
-// when the next tick arrives. The insert is idempotent so an overlap
-// would be harmless, but two concurrent full-fleet pulls are pure
-// waste, so the later tick stands down.
-let trailerSweepInFlight = false;
-async function fireTrailerLocationSweep(label: string): Promise<void> {
-  if (trailerSweepInFlight) {
-    console.log(`[trailer-locations] ${label}: previous run still in flight, skipping`);
+// A slow Motive response could still be in flight when the next tick
+// arrives. The inserts are idempotent so an overlap would be
+// harmless, but two concurrent full-fleet pulls are pure waste, so
+// the later tick stands down.
+let fleetSweepInFlight = false;
+async function fireFleetLocationSweep(label: string): Promise<void> {
+  if (fleetSweepInFlight) {
+    console.log(`[fleet-locations] ${label}: previous run still in flight, skipping`);
     return;
   }
-  trailerSweepInFlight = true;
+  fleetSweepInFlight = true;
   try {
-    await trackCronRun("trailer-locations", async () => {
-      const r = await runTrailerLocationSweep();
+    await trackCronRun("fleet-locations", async () => {
+      const r = await runFleetLocationSweep();
       const summary = r.orgs
-        .map((o) => o.error
-          ? `${o.orgId}: ERROR ${o.error}`
-          : `${o.orgId}: fetched=${o.fetched} matched=${o.matched} new=${o.inserted} dup=${o.duplicates}`)
+        .map((o: FleetLocationOrgResult) => {
+          const part = (name: string, pass: PassResult) => pass.error
+            ? `${name} ERROR ${pass.error}`
+            : `${name} ${pass.matched}/${pass.fetched} new=${pass.inserted} dup=${pass.duplicates}`;
+          return `${o.orgId}: ${part("trailers", o.trailers)}, ${part("trucks", o.vehicles)}`;
+        })
         .join("; ");
-      console.log(`[trailer-locations] ${label}: ${summary || "(no orgs with a Motive key)"}${r.pruned ? ` pruned=${r.pruned}` : ""}`);
+      console.log(`[fleet-locations] ${label}: ${summary || "(no orgs with a Motive key)"}${r.pruned ? ` pruned=${r.pruned}` : ""}`);
       return { meta: { orgs: r.orgs, pruned: r.pruned } };
     });
   } catch (err) {
-    console.error(`[trailer-locations] ${label} failed:`, err);
+    console.error(`[fleet-locations] ${label} failed:`, err);
   } finally {
-    trailerSweepInFlight = false;
+    fleetSweepInFlight = false;
   }
 }
-setTimeout(() => void fireTrailerLocationSweep("startup pass"), TRAILER_LOCATION_STARTUP_DELAY).unref();
-setInterval(() => void fireTrailerLocationSweep("tick"), TRAILER_LOCATION_INTERVAL_MS).unref();
+setTimeout(() => void fireFleetLocationSweep("startup pass"), TRAILER_LOCATION_STARTUP_DELAY).unref();
+setInterval(() => void fireFleetLocationSweep("tick"), TRAILER_LOCATION_INTERVAL_MS).unref();
