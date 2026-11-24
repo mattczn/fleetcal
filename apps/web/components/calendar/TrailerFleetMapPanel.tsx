@@ -26,12 +26,16 @@
  * Escape or click outside.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { X, MapPin, Container, AlertCircle, Loader2, Search, Clock, Plus, Trash2, Crosshair } from 'lucide-react';
+import { X, MapPin, Container, AlertCircle, Loader2, Search, Clock, Plus, Trash2, Crosshair, ShieldAlert, WifiOff, ParkingCircle, HelpCircle } from 'lucide-react';
 import { loadGoogleMaps, MAP_ID } from '@/lib/googleMaps';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { getTrailerUsage, type TrailerUsage } from '@/lib/trailerUsage';
 import type { MotiveTrailerLocation } from '@/app/api/motive/trailer-locations/route';
 import { yardsFrom, yardAt, feetToMetres, metresToFeet, DEFAULT_YARD_RADIUS_FT, type Yard } from '@/lib/yards';
+import {
+  isDark, isStatic, hoursSince, formatStill,
+  STILL_ALERT_DAYS, DARK_ALERT_HOURS, type Stillness,
+} from '@/lib/trailerStillness';
 import type { Trailer, CalendarEvent, SavedLocation } from '@/lib/types';
 
 interface Props {
@@ -61,7 +65,17 @@ const STATUS_PIN_COLOR = {
 // third trailer state.
 const YARD_COLOR = '#1a73e8';
 
+// One colour for "this needs a look", whatever the reason. Red and
+// green already mean busy/free on this map, so a third and fourth
+// status hue would turn the pins into a quiz; the rail says which kind
+// of attention it wants.
+const ALERT_COLOR = '#f9ab00';
+
 const POLL_MS = 60_000;
+// The history sweep runs hourly and a park is measured in days, so
+// re-deriving this every minute would be pure waste.
+const STILLNESS_POLL_MS = 5 * 60_000;
+const CLOCK_TICK_MS = 60_000;
 
 /**
  * What the tag above a selected pin says.
@@ -79,6 +93,11 @@ interface PinTag {
   /** Set only while the trailer is on a load that's running now. */
   truck?:     { name: string; color: string };
   loadTitle?: string;
+  /** "Parked 3d 4h at SLC Yard", "No fix in 21d" — the stillness line.
+   *  Absent until the history sweep has something to say. */
+  dwell?:     string;
+  /** On the alert list, so the dot wears the attention ring. */
+  flagged?:   boolean;
 }
 
 /**
@@ -234,7 +253,17 @@ function paintPinTag(el: HTMLDivElement, tag: PinTag, compact: boolean): void {
     el.appendChild(seen);
   }
 
-  // Line 3 — truck + load, which turn "where is it" into "what is it
+  // Line 3 — how long it has been sitting here, which is the question
+  // the position alone can't answer. Amber when it's on the alert
+  // list, so the tag and the ring on the dot agree.
+  if (tag.dwell) {
+    const dwell = document.createElement('div');
+    dwell.textContent = tag.dwell;
+    dwell.style.cssText = `font-size:10px;font-weight:${tag.flagged ? 700 : 400};color:${tag.flagged ? '#b06000' : '#5f6368'};white-space:nowrap;`;
+    el.appendChild(dwell);
+  }
+
+  // Line 4 — truck + load, which turn "where is it" into "what is it
   // doing". Only present for a trailer on a running load.
   if (tag.truck) {
     const row = document.createElement('div');
@@ -278,7 +307,11 @@ function applyPinVisual(
 ): void {
   if (dot) {
     dot.style.transform = PIN_SCALE[mode];
-    dot.style.boxShadow = PIN_SHADOW[mode];
+    // The ring is composed in front of the drop shadow rather than
+    // replacing it, so a flagged pin still reads as raised.
+    dot.style.boxShadow = tag?.flagged
+      ? `0 0 0 3.5px ${ALERT_COLOR}, ${PIN_SHADOW[mode]}`
+      : PIN_SHADOW[mode];
   }
   if (marker) marker.zIndex = PIN_Z[mode];
   if (!tagEl) return;
@@ -324,6 +357,45 @@ function trailerMatchesQuery(t: Trailer, q: string): boolean {
   return false;
 }
 
+/**
+ * Why a trailer is on the alert list.
+ *
+ * Four kinds, deliberately not collapsed into one "stale" number,
+ * because they call for different actions:
+ *
+ *   dark        — the tracker stopped reporting. Could be a dead
+ *                 gateway battery; could be that the trailer is
+ *                 somewhere it shouldn't be. Needs no stored history:
+ *                 Motive's own located_at is already old.
+ *   static_away — reporting fine, hasn't moved past the 2-day rule,
+ *                 and is NOT inside a known yard. The one that most
+ *                 often means "go look at this".
+ *   static_yard — same, but it's sitting in one of our yards. Matt's
+ *                 rule says flag anything over 2 days, so it is
+ *                 listed; it's separated rather than suppressed
+ *                 because a spare parked at the terminal for a week is
+ *                 ordinary and would otherwise bury the rest.
+ *   untracked   — no Motive link, or linked but Motive has never
+ *                 returned a position. Not monitorable at all, which
+ *                 is itself worth knowing.
+ */
+type TrailerAlertKind = 'dark' | 'static_away' | 'static_yard' | 'untracked';
+
+interface TrailerAlert {
+  trailer:        Trailer;
+  kind:           TrailerAlertKind;
+  /** Hours since Motive's last fix. Null for an untracked trailer. */
+  fixAgeHours:    number | null;
+  still:          Stillness | null;
+  yardName?:      string;
+  locationLabel?: string;
+}
+
+// The tab badge counts only the kinds that mean "go look at this".
+// Including the untracked trailers would pin the badge at 5 forever on
+// Curzon's fleet, and a badge that never goes to zero stops being read.
+const BADGED_KINDS = new Set<TrailerAlertKind>(['dark', 'static_away']);
+
 export default function TrailerFleetMapPanel({ onClose, embedded = false }: Props) {
   const { trailers, events, drivers, assets, calendarTimezone, savedLocations } = useCalendarStore();
   const addSavedLocation    = useCalendarStore(s => s.addSavedLocation);
@@ -358,6 +430,23 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
   const selectedKeyRef = useRef<string | null>(null);
 
   const [locations,  setLocations]  = useState<Record<string, MotiveTrailerLocation>>({});
+  // Derived from the stored location history (see
+  // /api/trailers/stillness). Empty until the hourly sweep in apps/api
+  // has written something, which is also the honest state for the
+  // first days after it goes live.
+  const [stillness, setStillness] = useState<Record<string, Stillness>>({});
+  const [historyStartedAt, setHistoryStartedAt] = useState<string | null>(null);
+  // The alert rules compare timestamps against the clock, which makes
+  // them a function of time as well as of data: a trailer crosses the
+  // 2-day line with nothing else on the page changing. Holding "now"
+  // in state keeps the memo below pure — no Date.now() during render,
+  // which would memoise a stale clock — and makes the crossing
+  // actually happen. A minute is plenty for thresholds in days.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), CLOCK_TICK_MS);
+    return () => clearInterval(id);
+  }, []);
   const [locLoading, setLocLoading] = useState(false);
   const [locError,   setLocError]   = useState<string | null>(null);
   const [selectedTrailerId, setSelectedTrailerId] = useState<number | null>(null);
@@ -365,7 +454,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
   // Which half of the rail is showing. Yards only on the page — the
   // toolbar popup is a glance-at-the-fleet tool, not somewhere to
   // administer geofences.
-  const [rail, setRail] = useState<'trailers' | 'yards'>('trailers');
+  const [rail, setRail] = useState<'trailers' | 'yards' | 'alerts'>('trailers');
   // Non-null while waiting for a map click to place a new yard. Named
   // first so the click finishes the job instead of opening a prompt.
   const [placing, setPlacing] = useState<{ name: string; radiusFt: number } | null>(null);
@@ -500,6 +589,38 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
     return () => { cancelled = true; clearInterval(id); };
   }, [motiveIds]);
 
+  // ── Poll the stillness history ────────────────────────────
+  // Far slower than the position poll, because this changes on the
+  // hour at most: it is derived from a sweep that runs hourly, and a
+  // park measured in days does not need a 60s refresh. The route also
+  // caches per-org for 5 minutes, so a dispatcher reopening the page
+  // doesn't re-read the history table.
+  //
+  // A failure here is silent on purpose. The map still works without
+  // it; losing the dwell line is not worth a red banner, and before
+  // the migration runs the route legitimately has nothing to return.
+  useEffect(() => {
+    let cancelled = false;
+    const fetchStillness = async () => {
+      try {
+        const res = await fetch('/api/trailers/stillness');
+        if (!res.ok) return;
+        const json = await res.json() as {
+          stillness?: Record<string, Stillness>;
+          historyStartedAt?: string | null;
+        };
+        if (cancelled) return;
+        setStillness(json.stillness ?? {});
+        setHistoryStartedAt(json.historyStartedAt ?? null);
+      } catch {
+        // see above — deliberately quiet
+      }
+    };
+    void fetchStillness();
+    const id = setInterval(fetchStillness, STILLNESS_POLL_MS);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
   // ── Compute usage + grouping ──────────────────────────────────────────
   // Group every (non-retired) trailer into Active / Idle / No GPS, then
   // filter by the search query. Filtering AFTER grouping keeps the
@@ -526,6 +647,58 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
     }
     return { active, idle, noGps };
   }, [trailers, events, locations, calendarTimezone, query]);
+
+  // ── Alerts ─────────────────────────────────────────────────
+  // Built from `trailers` rather than `groups` on purpose: the search
+  // box belongs to the Trailers tab, and a typo there must not hide a
+  // trailer that needs looking at.
+  //
+  // `dark` short-circuits `static`: once a tracker stops reporting we
+  // don't know whether the trailer moved, and claiming "hasn't moved
+  // in 9 days" from a 9-day-old fix would be the most misleading thing
+  // on the page.
+  const alerts = useMemo(() => {
+    const now = nowMs;
+    const out: TrailerAlert[] = [];
+    for (const t of trailers) {
+      if (t.activeTo) continue;
+      const loc = t.motiveVehicleId ? locations[t.motiveVehicleId] : undefined;
+      if (!loc) {
+        out.push({ trailer: t, kind: 'untracked', fixAgeHours: null, still: null });
+        continue;
+      }
+      const fixAgeHours   = hoursSince(loc.locatedAt, now);
+      const still         = stillness[String(t.id)] ?? null;
+      const yardName      = yardAt(loc.lat, loc.lon, yards)?.name;
+      const locationLabel = loc.description || undefined;
+      if (isDark(loc.locatedAt, now)) {
+        out.push({ trailer: t, kind: 'dark', fixAgeHours, still, yardName, locationLabel });
+        continue;
+      }
+      if (still && isStatic(still, now)) {
+        out.push({
+          trailer: t,
+          kind: yardName ? 'static_yard' : 'static_away',
+          fixAgeHours, still, yardName, locationLabel,
+        });
+      }
+    }
+    return out;
+  }, [trailers, locations, stillness, yards, nowMs]);
+
+  const alertBadgeCount = useMemo(
+    () => alerts.filter(a => BADGED_KINDS.has(a.kind)).length,
+    [alerts],
+  );
+
+  // Which trailers wear the ring on the map. Only the two actionable
+  // kinds: ringing every untracked trailer and every spare parked in
+  // the yard would ring most of the fleet.
+  const flaggedIds = useMemo(() => {
+    const s = new Set<number>();
+    for (const a of alerts) if (BADGED_KINDS.has(a.kind)) s.add(a.trailer.id);
+    return s;
+  }, [alerts]);
 
   // ── Construct the map ONCE ────────────────────────────────────────────
   // The google.maps.Map is a billable Dynamic Maps load, so it must be
@@ -622,6 +795,8 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
           // title still has stops, and "Las Vegas, NV → Salt Lake
           // City, UT" beats a blank line.
           loadTitle: load ? (load.title || routeLabel(load)) : undefined,
+          dwell: dwellLine(entry.trailer.id, entry.loc, stillness, yards),
+          flagged: flaggedIds.has(entry.trailer.id),
         };
         const position = { lat: entry.loc.lat, lng: entry.loc.lon };
 
@@ -701,7 +876,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
       // tag refreshes with this pass's data.
       repaintPins();
     });
-  }, [mapReady, groups, assets, repaintPins, focusTrailer]);
+  }, [mapReady, groups, assets, repaintPins, focusTrailer, stillness, yards, flaggedIds]);
 
   // ── Yard circles ──────────────────────────────────────────────────────
   // Redrawn whenever the yard set changes. Circles are not clickable:
@@ -877,22 +1052,32 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
                 administer geofences. */}
             {embedded && (
               <div className="flex gap-1 px-3 pt-2.5 shrink-0">
-                {(['trailers', 'yards'] as const).map(tab => (
-                  <button
-                    key={tab}
-                    type="button"
-                    onClick={() => { setRail(tab); if (tab === 'trailers') setPlacing(null); }}
-                    className="text-[12px] font-semibold capitalize"
-                    style={{
-                      padding: '5px 12px', borderRadius: 7, cursor: 'pointer',
-                      border: `1px solid ${rail === tab ? 'var(--gc-blue)' : 'var(--gc-border)'}`,
-                      background: rail === tab ? 'var(--gc-blue)' : 'transparent',
-                      color: rail === tab ? '#fff' : 'var(--gc-text-2)',
-                    }}
-                  >
-                    {tab === 'yards' ? `Yards${yards.length ? ` (${yards.length})` : ''}` : 'Trailers'}
-                  </button>
-                ))}
+                {(['trailers', 'yards', 'alerts'] as const).map(tab => {
+                  const isActive = rail === tab;
+                  // An unvisited Alerts tab with something on it wears
+                  // the alert colour, so the count is noticed without
+                  // the tab having to be opened.
+                  const wantsAttention = tab === 'alerts' && alertBadgeCount > 0 && !isActive;
+                  const label = tab === 'yards'  ? `Yards${yards.length ? ` (${yards.length})` : ''}`
+                              : tab === 'alerts' ? `Alerts${alertBadgeCount ? ` (${alertBadgeCount})` : ''}`
+                              : 'Trailers';
+                  return (
+                    <button
+                      key={tab}
+                      type="button"
+                      onClick={() => { setRail(tab); if (tab !== 'yards') setPlacing(null); }}
+                      className="text-[12px] font-semibold"
+                      style={{
+                        padding: '5px 12px', borderRadius: 7, cursor: 'pointer',
+                        border: `1px solid ${isActive ? 'var(--gc-blue)' : wantsAttention ? ALERT_COLOR : 'var(--gc-border)'}`,
+                        background: isActive ? 'var(--gc-blue)' : wantsAttention ? `${ALERT_COLOR}1f` : 'transparent',
+                        color: isActive ? '#fff' : wantsAttention ? '#b06000' : 'var(--gc-text-2)',
+                      }}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
               </div>
             )}
 
@@ -1012,6 +1197,15 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
                 onFocus={(y) => { mapRef.current?.panTo({ lat: y.lat, lng: y.lng }); }}
               />
             )}
+
+            {rail === 'alerts' && (
+              <AlertsRail
+                alerts={alerts}
+                historyStartedAt={historyStartedAt}
+                selectedId={selectedTrailerId}
+                onSelect={selectFromRow}
+              />
+            )}
           </div>
         </div>
     </>
@@ -1040,6 +1234,34 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
       </div>
     </div>
   );
+}
+
+/**
+ * The one-line stillness summary for a pin's tag.
+ *
+ * Ordered by what matters most. A dark tracker comes first because
+ * everything after it would be a claim about a trailer we stopped
+ * hearing from. Then a measured park. Then, before any history
+ * exists, nothing at all — silence is better than a confident
+ * "parked 0h" that only means "we started watching a minute ago".
+ */
+function dwellLine(
+  trailerId: number,
+  loc: MotiveTrailerLocation,
+  stillness: Record<string, Stillness>,
+  yards: Yard[],
+): string | undefined {
+  const fixAge = hoursSince(loc.locatedAt);
+  if (fixAge != null && fixAge >= DARK_ALERT_HOURS) {
+    return `No fix in ${formatStill(fixAge)}`;
+  }
+  const s = stillness[String(trailerId)];
+  if (!s || s.stillHours == null) return undefined;
+  if (s.stillHours < 1 && s.truncated) return undefined;
+  const yard = yardAt(loc.lat, loc.lon, yards);
+  const where = yard ? ` at ${yard.name}` : '';
+  const prefix = s.truncated ? 'Parked \u2265' : 'Parked ';
+  return `${prefix}${formatStill(s.stillHours)}${where}`;
 }
 
 function routeLabel(load: CalendarEvent | undefined): string | undefined {
@@ -1341,6 +1563,151 @@ function YardsRail({
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * AlertsRail — the trailers that want someone to lay eyes on them.
+ *
+ * Four groups in descending "go look at this" order. The split between
+ * the two static groups is what makes the list usable: Matt's rule is
+ * "flag anything that hasn't moved in 2 days", and taken literally
+ * that includes every spare sitting at the terminal, which on its own
+ * would bury the one trailer parked for three days behind a truck stop
+ * in Nevada. So both are listed and the yard ones come last, dimmed.
+ *
+ * Every row selects and centres its trailer, because the next question
+ * after "which one" is always "where".
+ */
+function AlertsRail({
+  alerts, historyStartedAt, selectedId, onSelect,
+}: {
+  alerts: TrailerAlert[];
+  historyStartedAt: string | null;
+  selectedId: number | null;
+  onSelect: (id: number) => void;
+}) {
+  const groups: Array<{
+    kind:  TrailerAlertKind;
+    label: string;
+    hint:  string;
+    color: string;
+    Icon:  typeof ShieldAlert;
+    dim?:  boolean;
+  }> = [
+    { kind: 'dark',        label: 'Tracker dark',   color: ALERT_COLOR,       Icon: WifiOff,
+      hint: `No GPS fix in over ${DARK_ALERT_HOURS}h — the tracker stopped reporting, so where it is now is a guess.` },
+    { kind: 'static_away', label: 'Not moved',      color: ALERT_COLOR,       Icon: ShieldAlert,
+      hint: `Still reporting, but hasn't moved in ${STILL_ALERT_DAYS}+ days and isn't at a known yard.` },
+    { kind: 'static_yard', label: 'Parked at a yard', color: YARD_COLOR,      Icon: ParkingCircle, dim: true,
+      hint: `Hasn't moved in ${STILL_ALERT_DAYS}+ days, but it's inside one of your yards.` },
+    { kind: 'untracked',   label: 'No tracker',     color: 'var(--gc-text-3)', Icon: HelpCircle, dim: true,
+      hint: 'No Motive link, or Motive has never returned a position. Can’t be monitored at all.' },
+  ];
+
+  // Before there are two days of history, the static rules cannot have
+  // fired yet, and saying so beats an empty list that looks like an
+  // all-clear. The dark rule needs no history and works from day one.
+  const historyHours = hoursSince(historyStartedAt);
+  const warmingUp = historyHours == null || historyHours < STILL_ALERT_DAYS * 24;
+
+  const total = alerts.length;
+
+  return (
+    <div className="flex-1 overflow-auto">
+      {warmingUp && (
+        <div
+          className="mx-3 mt-3 px-3 py-2.5 rounded-lg text-[11px]"
+          style={{ background: 'var(--gc-hover)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)' }}
+        >
+          <div className="font-semibold mb-0.5" style={{ color: 'var(--gc-text-1)' }}>
+            Still building history
+          </div>
+          {historyHours == null
+            ? `No stored positions yet. "Not moved" needs ${STILL_ALERT_DAYS} days of history before it can fire; tracker-dark alerts work now.`
+            : `${formatStill(historyHours)} of history so far. "Not moved" starts reporting at ${STILL_ALERT_DAYS} days; tracker-dark alerts work now.`}
+        </div>
+      )}
+
+      {total === 0 && !warmingUp && (
+        <div className="px-4 py-8 text-center text-[13px]" style={{ color: 'var(--gc-text-3)' }}>
+          Every trailer has reported recently and moved within the last {STILL_ALERT_DAYS} days.
+        </div>
+      )}
+
+      {groups.map(({ kind, label, hint, color, Icon, dim }) => {
+        const rows = alerts.filter(a => a.kind === kind);
+        if (rows.length === 0) return null;
+        // Longest-standing first within each group: if you only deal
+        // with one, it should be the worst one.
+        rows.sort((a, b) => {
+          const av = kind === 'dark' ? (a.fixAgeHours ?? 0) : (a.still?.stillHours ?? 0);
+          const bv = kind === 'dark' ? (b.fixAgeHours ?? 0) : (b.still?.stillHours ?? 0);
+          return bv - av;
+        });
+        return (
+          <div key={kind} style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
+            <div className="px-4 pt-3 pb-2 sticky top-0" style={{ background: 'var(--gc-bg)', zIndex: 1 }}>
+              <div className="flex items-center gap-2">
+                <Icon size={12} style={{ color }} />
+                <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: 'var(--gc-text-2)' }}>
+                  {label}
+                </span>
+                <span className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>{rows.length}</span>
+              </div>
+              <div className="text-[10px] mt-1 leading-snug" style={{ color: 'var(--gc-text-3)' }}>{hint}</div>
+            </div>
+            {rows.map(a => {
+              const isSel = a.trailer.id === selectedId;
+              const measure = kind === 'dark'
+                ? `No fix in ${formatStill(a.fixAgeHours)}`
+                : kind === 'untracked'
+                  ? 'Never reported'
+                  : `${a.still?.truncated ? 'Parked ≥' : 'Parked '}${formatStill(a.still?.stillHours ?? null)}`;
+              return (
+                <button
+                  key={a.trailer.id}
+                  data-trailer-row-id={a.trailer.id}
+                  onClick={() => onSelect(a.trailer.id)}
+                  className="w-full text-left px-4 py-2.5 transition-colors"
+                  style={{
+                    background: isSel ? 'var(--gc-blue-light)' : 'transparent',
+                    borderLeft: isSel ? '3px solid var(--gc-blue)' : '3px solid transparent',
+                    opacity: dim && !isSel ? 0.75 : 1,
+                  }}
+                  onMouseEnter={e => { if (!isSel) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+                  onMouseLeave={e => { if (!isSel) e.currentTarget.style.background = 'transparent'; }}
+                >
+                  <div className="flex items-baseline justify-between gap-2">
+                    <div className="text-[13px] font-semibold truncate" style={{ color: 'var(--gc-text-1)' }}>
+                      {a.trailer.trailerNumber ? `#${a.trailer.trailerNumber}` : a.trailer.name}
+                      <span className="ml-1.5 text-[11px] font-normal" style={{ color: 'var(--gc-text-3)' }}>
+                        {a.trailer.category}
+                      </span>
+                    </div>
+                    <span className="text-[11px] font-semibold shrink-0" style={{ color }}>
+                      {measure}
+                    </span>
+                  </div>
+                  {a.yardName && (
+                    <div className="mt-1 text-[11px] flex items-center gap-1" style={{ color: YARD_COLOR, fontWeight: 600 }}>
+                      <Container size={10} />
+                      <span className="truncate">At {a.yardName}</span>
+                    </div>
+                  )}
+                  {a.locationLabel && !a.yardName && (
+                    <div className="mt-1 text-[11px] flex items-center gap-1" style={{ color: 'var(--gc-text-2)' }}>
+                      <MapPin size={10} style={{ color: 'var(--gc-text-3)' }} />
+                      <span className="truncate">{a.locationLabel}</span>
+                    </div>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        );
+      })}
     </div>
   );
 }
