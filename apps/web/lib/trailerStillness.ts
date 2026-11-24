@@ -144,12 +144,45 @@ export function isStatic(s: Stillness, now: number = Date.now()): boolean {
   return s.stillHours != null && s.stillHours >= STILL_ALERT_DAYS * 24;
 }
 
-/** "3d 4h", "6h", "just arrived" — for the alert rows. */
+/**
+ * A LENGTH OF TIME: "3d 4h", "6h", "under 1h".
+ *
+ * Not an age. The two read differently in English and mixing them up
+ * produces sentences like "Last fix just arrived ago", so ages go
+ * through formatAge below and every caller here is describing a
+ * duration — how long something lasted, not how long ago it was.
+ */
 export function formatStill(hours: number | null): string {
   if (hours == null) return 'unknown';
-  if (hours < 1) return 'just arrived';
+  const mins = hours * 60;
+  // Minutes matter at the short end. A yard shunt is "Moved 6 mi in
+  // 23m"; rounding that to an hour throws away the only interesting
+  // part of the sentence.
+  if (mins < 1)  return 'under a minute';
+  if (mins < 60) return `${Math.round(mins)}m`;
   if (hours < 24) return `${Math.floor(hours)}h`;
   const d = Math.floor(hours / 24);
   const h = Math.floor(hours % 24);
   return h > 0 ? `${d}d ${h}h` : `${d}d`;
+}
+
+/** HOW LONG AGO: "just now", "41m ago", "6h ago", "3d ago". */
+export function formatAge(hours: number | null): string {
+  if (hours == null) return 'unknown';
+  if (hours < 1 / 60) return 'just now';
+  if (hours < 1)  return `${Math.round(hours * 60)}m ago`;
+  if (hours < 24) return `${Math.floor(hours)}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+/**
+ * How long it has sat where it is, with the honest hedge.
+ *
+ * `truncated` means the stationary run reaches the oldest fix we
+ * hold, so the real figure can only be longer — "≥41m" rather than a
+ * confident "41m", which would be a claim we can't back.
+ */
+export function formatDwell(hours: number | null, truncated: boolean): string {
+  if (hours == null) return 'unknown';
+  return `${truncated ? '\u2265' : ''}${formatStill(hours)}`;
 }

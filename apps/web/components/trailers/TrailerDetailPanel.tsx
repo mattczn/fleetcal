@@ -38,7 +38,7 @@
 import { useState } from 'react';
 import { X, Truck, User, MapPin, Clock, Pencil, Container, Route } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
-import { formatStill } from '@/lib/trailerStillness';
+import { formatStill, formatAge, formatDwell } from '@/lib/trailerStillness';
 import type { TrailerSegment } from '@/lib/trailerHistory';
 import type { Trailer, TrailerCategory, CalendarEvent, Asset } from '@/lib/types';
 
@@ -172,7 +172,7 @@ export default function TrailerDetailPanel({ data, segments, historyDays, loadin
             </span>
             {data.stillHours != null && (
               <span className="text-[12px]" style={{ color: 'var(--gc-text-2)' }}>
-                Stationary {data.stillTruncated ? '≥' : ''}{formatStill(data.stillHours)}
+                Stationary {formatDwell(data.stillHours, data.stillTruncated)}
               </span>
             )}
           </div>
@@ -189,7 +189,7 @@ export default function TrailerDetailPanel({ data, segments, historyDays, loadin
             <Clock size={10} />
             {data.fixAgeHours == null
               ? 'No GPS fix on record'
-              : `Last fix ${formatStill(data.fixAgeHours)} ago`}
+              : `Last fix ${formatAge(data.fixAgeHours)}`}
           </div>
         </div>
 

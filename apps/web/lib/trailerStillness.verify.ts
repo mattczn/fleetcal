@@ -3,7 +3,7 @@
  *   npx tsx lib/trailerStillness.verify.ts
  */
 import {
-  computeStillness, isDark, isStatic, formatStill, hoursSince,
+  computeStillness, isDark, isStatic, formatStill, formatAge, formatDwell, hoursSince,
   MOVE_THRESHOLD_M, type LocationSample,
 } from './trailerStillness';
 
@@ -99,11 +99,26 @@ check('dark does not imply static',
 check('…while that same trailer IS dark', isDark(hoursAgo(30), NOW), true);
 
 // ── formatting ──────────────────────────────────────────────────────
-check('sub-hour reads as just arrived', formatStill(0.4), 'just arrived');
+// A DURATION. These words follow "Parked ..." / "Stationary ...".
+check('a short move reads in minutes', formatStill(0.4), '24m');
+check('a sub-minute blip says so', formatStill(0.008), 'under a minute');
 check('hours stay hours',  formatStill(6.7), '6h');
 check('a day rounds down', formatStill(26), '1d 2h');
 check('a whole day drops the hours', formatStill(48), '2d');
 check('unknown stays unknown', formatStill(null), 'unknown');
+
+// AN AGE. These follow "Last fix ...". Reading a duration into this
+// slot is what produced "Last fix just arrived ago" on the panel.
+check('a fresh fix is just now',  formatAge(0.005), 'just now');
+check('minutes read as minutes',  formatAge(0.68), '41m ago');
+check('hours read as hours',      formatAge(6.7), '6h ago');
+check('days read as days',        formatAge(50), '2d ago');
+check('an unknown age says so',   formatAge(null), 'unknown');
+
+// A DWELL, with the hedge for history that runs off the end.
+check('a hedged dwell carries the sign', formatDwell(50, true), '\u22652d 2h');
+check('an unhedged dwell does not',      formatDwell(50, false), '2d 2h');
+check('the hedge holds at the short end', formatDwell(0.3, true), '≥18m');
 
 console.log(`\n${pass} passed, ${failures.length} failed\n`);
 for (const f of failures) console.log(`  FAIL ${f}\n`);

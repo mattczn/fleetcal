@@ -33,7 +33,7 @@ import { getTrailerUsage, type TrailerUsage } from '@/lib/trailerUsage';
 import type { MotiveTrailerLocation } from '@/app/api/motive/trailer-locations/route';
 import { yardsFrom, yardAt, feetToMetres, metresToFeet, DEFAULT_YARD_RADIUS_FT, type Yard } from '@/lib/yards';
 import {
-  isDark, isStatic, hoursSince, formatStill,
+  isDark, isStatic, hoursSince, formatStill, formatAge, formatDwell,
   STILL_ALERT_DAYS, DARK_ALERT_HOURS, type Stillness,
 } from '@/lib/trailerStillness';
 import TrailerDetailPanel, { type TrailerDetailData } from '@/components/trailers/TrailerDetailPanel';
@@ -1625,15 +1625,14 @@ function dwellLine(
 ): string | undefined {
   const fixAge = hoursSince(loc.locatedAt);
   if (fixAge != null && fixAge >= DARK_ALERT_HOURS) {
-    return `No fix in ${formatStill(fixAge)}`;
+    return `Last fix ${formatAge(fixAge)}`;
   }
   const s = stillness[String(trailerId)];
   if (!s || s.stillHours == null) return undefined;
   if (s.stillHours < 1 && s.truncated) return undefined;
   const yard = yardAt(loc.lat, loc.lon, yards);
   const where = yard ? ` at ${yard.name}` : '';
-  const prefix = s.truncated ? 'Parked \u2265' : 'Parked ';
-  return `${prefix}${formatStill(s.stillHours)}${where}`;
+  return `Parked ${formatDwell(s.stillHours, s.truncated)}${where}`;
 }
 
 function routeLabel(load: CalendarEvent | undefined): string | undefined {
@@ -2033,10 +2032,10 @@ function AlertsRail({
             {rows.map(a => {
               const isSel = a.trailer.id === selectedId;
               const measure = kind === 'dark'
-                ? `No fix in ${formatStill(a.fixAgeHours)}`
+                ? `Last fix ${formatAge(a.fixAgeHours)}`
                 : kind === 'untracked'
                   ? 'Never reported'
-                  : `${a.still?.truncated ? 'Parked ≥' : 'Parked '}${formatStill(a.still?.stillHours ?? null)}`;
+                  : `Parked ${formatDwell(a.still?.stillHours ?? null, a.still?.truncated ?? false)}`;
               return (
                 <button
                   key={a.trailer.id}
