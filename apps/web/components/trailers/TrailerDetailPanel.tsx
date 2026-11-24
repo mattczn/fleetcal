@@ -44,9 +44,9 @@ import type { Trailer, TrailerCategory, CalendarEvent, Asset } from '@/lib/types
 
 export interface TrailerDetailData {
   trailer:     Trailer;
-  /** 'hooked' = no live load, but the last one left it behind a
-   *  tractor. See lib/trailerUsage.ts. */
-  status:      'in_use' | 'hooked' | 'idle';
+  /** 'in_use' covers both a running load and one that left the
+   *  trailer behind a tractor — see lib/trailerUsage.ts. */
+  status:      'in_use' | 'idle';
   /** Live position label and fix age. */
   address?:    string;
   yardName?:   string;
@@ -72,9 +72,8 @@ interface Props {
 /** Status pill colours. Kept in step with STATUS_PIN_COLOR in
  *  TrailerFleetMapPanel: the pill and the map pin describe the same
  *  trailer, so they must not disagree. */
-const STATUS_STYLE: Record<'in_use' | 'hooked' | 'idle', { label: string; fg: string; bg: string }> = {
+const STATUS_STYLE: Record<'in_use' | 'idle', { label: string; fg: string; bg: string }> = {
   in_use: { label: 'In use', fg: '#d93025', bg: 'rgba(217,48,37,0.12)' },
-  hooked: { label: 'Hooked', fg: '#e8710a', bg: 'rgba(232,113,10,0.12)' },
   idle:   { label: 'Idle',   fg: '#1e8e3e', bg: 'rgba(30,142,62,0.12)' },
 };
 

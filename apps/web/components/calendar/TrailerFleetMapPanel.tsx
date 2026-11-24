@@ -1,47 +1,66 @@
 'use client';
 
 /**
- * TrailerFleetMapPanel — fleet-wide trailer map + sidebar.
+ * TrailerFleetMapPanel — fleet-wide trailer + truck map, with sidebar.
  *
  * Opened via the Container icon in CalendarToolbar. Shows:
- *   - Left: Google Map with one pin per Motive-linked trailer that
- *     has a current_location. RED pin = in use right now (currently
- *     attached to an active load); GREEN pin = idle / available.
+ *   - Left: Google Map carrying two kinds of pin.
+ *
+ *     TRAILERS, one per Motive-linked trailer with a position. RED =
+ *     a truck has it, GREEN = idle and free to grab.
+ *
+ *     TRUCKS, one per Motive-linked tractor with a position, drawn in
+ *     that truck's own calendar colour — the colour IS how a
+ *     dispatcher recognises a truck, so the map and the calendar name
+ *     it the same way. Two forms: a square badge with a cab for a
+ *     bobtail, and a long pill with a cab-and-box for a truck pulling
+ *     a trailer. The outline alone says which, before any label is
+ *     read.
+ *
  *   - Right: search box, then sectioned list of all trailers:
- *       Active (in use right now)  — pulled from getTrailerUsage()
- *       Idle (no current load)
- *       Hooked (no live load, but a finished one left it behind a
- *               tractor and nothing since unhooked it — see
- *               lib/trailerUsage.ts for what ends a hookup)
+ *       Active (a truck has it)    — pulled from getTrailerUsage()
+ *       Idle (nothing has it)
  *       No GPS (trailers without motiveVehicleId, or no recent ping)
  *     Each row shows trailer name, number, category, "last seen" if
  *     the trailer has GPS data, and (for in-use rows) the linked
  *     load's driver, route, and status.
  *
+ * WHEN A TRUCK AND ITS TRAILER ARE IN THE SAME PLACE the truck pin
+ * owns the pairing: it draws the rig form and carries the label, and
+ * the trailer beside it falls back to a plain status dot. Two
+ * truck-coloured badges on one spot said the same thing twice. Apart
+ * — a trailer dropped at a customer — the trailer pin keeps the
+ * tractor's colour, because there it is the only thing that names who
+ * has it.
+ *
  * Click a sidebar row → pans the map to its pin. Click a pin → marks
- * the corresponding sidebar row.
+ * the corresponding sidebar row (trailers) or opens its tag (trucks).
  *
- * Search filters every section (matches name, trailer #, category,
- * notes). When the query is non-empty, sections collapse to only the
- * trailers that match.
+ * Search filters every section (trailers: name, #, category, notes;
+ * trucks: name, unit), so a query narrows both layers at once.
  *
- * Polls /api/motive/trailer-locations every 60s while open. Closes on
- * Escape or click outside.
+ * Polls /api/motive/trailer-locations every 60s while open, and the
+ * store's shared vehicle-location fetcher every 10 min (its route
+ * caches for that long, so anything tighter is a round trip for the
+ * same bytes). Closes on Escape or click outside.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { X, MapPin, Container, AlertCircle, Loader2, Search, Clock, Plus, Trash2, Crosshair, ShieldAlert, WifiOff, ParkingCircle, HelpCircle, Truck } from 'lucide-react';
 import { loadGoogleMaps, MAP_ID } from '@/lib/googleMaps';
-import { useCalendarStore } from '@/store/useCalendarStore';
+import { useCalendarStore, type EldLocation } from '@/store/useCalendarStore';
 import { getTrailerUsage, type TrailerUsage } from '@/lib/trailerUsage';
 import type { MotiveTrailerLocation } from '@/app/api/motive/trailer-locations/route';
-import { yardsFrom, yardAt, feetToMetres, metresToFeet, DEFAULT_YARD_RADIUS_FT, type Yard } from '@/lib/yards';
+import {
+  yardsFrom, yardAt, distanceMetres, feetToMetres, metresToFeet,
+  DEFAULT_YARD_RADIUS_FT, type Yard,
+} from '@/lib/yards';
 import {
   isDark, isStatic, hoursSince, formatStill, formatAge, formatDwell,
   STILL_ALERT_DAYS, DARK_ALERT_HOURS, type Stillness,
 } from '@/lib/trailerStillness';
 import TrailerDetailPanel, { type TrailerDetailData } from '@/components/trailers/TrailerDetailPanel';
 import type { TrailerSegment } from '@/lib/trailerHistory';
-import type { Trailer, CalendarEvent, SavedLocation } from '@/lib/types';
+import type { Trailer, Asset, CalendarEvent, SavedLocation } from '@/lib/types';
 
 interface Props {
   /** Required in modal mode; ignored when `embedded`. */
@@ -57,12 +76,17 @@ interface Props {
   embedded?: boolean;
 }
 
-// Status palette: red signals "this trailer is tied up right now",
-// green signals "this trailer is free." Matches dispatcher mental
-// model where green = good-to-grab.
+// Status palette: red signals "a truck has this trailer", green
+// signals "this trailer is free." Matches dispatcher mental model
+// where green = good-to-grab.
+//
+// Two colours, not three. A trailer left behind a tractor between
+// loads was briefly its own amber state; it isn't a different answer
+// to "can I send someone for this trailer", so it reads red like any
+// other trailer a truck has. What the finished load does change is
+// the wording — see `live` on the tag.
 const STATUS_PIN_COLOR = {
   in_use: '#d93025',  // red
-  hooked: '#e8710a',  // orange
   idle:   '#1e8e3e',  // green
 } as const;
 
@@ -78,6 +102,16 @@ const YARD_COLOR = '#1a73e8';
 const ALERT_COLOR = '#f9ab00';
 
 const POLL_MS = 60_000;
+// Vehicle positions come through the store's shared fetcher, whose
+// route caches per-org for 10 minutes — the same cadence EldSync uses
+// on the calendar. Polling faster would only make the header's "x min
+// ago" pill claim a freshness the cache isn't giving us.
+const TRUCK_POLL_MS = 10 * 60_000;
+// How close a truck and the trailer it's linked to have to be for the
+// truck pin to take over the pairing. A mile: a rolling rig's two
+// gateways report minutes apart and never disagree by that much,
+// while a trailer dropped at a consignee is nowhere near it.
+const PAIRED_RADIUS_M = 1_600;
 // The history sweep runs hourly and a park is measured in days, so
 // re-deriving this every minute would be pure waste.
 const STILLNESS_POLL_MS = 5 * 60_000;
@@ -101,28 +135,45 @@ const PIN_CLICK_GRACE_MS = 350;
  * pin ever moving.
  */
 interface PinTag {
-  /** "#2030" when the trailer has a number, else its display name. */
+  /** Which layer this pin belongs to. Trailers and trucks share the
+   *  marker machinery (hover, selection, tags, repaint) and differ
+   *  only in what they draw and say, so one tag type with a
+   *  discriminant beats two parallel sets of everything. */
+  kind:       'trailer' | 'truck';
+  /** "#2030" when the trailer has a number, else its display name.
+   *  For a truck, its calendar name ("CT-2025"). */
   heading:    string;
+  /** Trailer category, or a truck's unit number. */
   category:   string;
   lastSeen:   string | null;
-  /** The tractor this trailer is linked to — on a live load, or left
-   *  behind it by the last one. Absent when nothing has it. */
+  /** TRAILER pins: the tractor this trailer is linked to — on a live
+   *  load, or left behind it by the last one. Absent when nothing has
+   *  it. Unset on truck pins, which wear their own colour. */
   truck?:     { name: string; color: string };
-  /** False when `truck` comes from a FINISHED load (usage 'hooked')
-   *  rather than one running now. The pin is drawn dimmed and the tag
-   *  says "last load", so a leftover hookup can't be misread as a
-   *  truck that's currently rolling. */
-  linkLive?:  boolean;
+  /** TRUCK pins: the trailer this tractor has, as "#633453 Swing".
+   *  Absent for a bobtail, which is also what picks the glyph. */
+  trailerLabel?: string;
+  /** False when the link comes from a FINISHED load rather than one
+   *  running now. Same status either way — a truck still has the
+   *  trailer — but the tag says "last load" so a leftover pairing
+   *  can't be read as a load in progress. */
+  live?:      boolean;
   loadTitle?: string;
   /** "Parked 3d 4h at SLC Yard", "No fix in 21d" — the stillness line.
    *  Absent until the history sweep has something to say. */
   dwell?:     string;
   /** On the alert list, so the glyph wears the attention ring. */
   flagged?:   boolean;
-  /** Colour for the plain-dot form — the red/green in-use/idle status.
-   *  Unused when `truck` is set, since that pin is drawn in the
-   *  truck's own colour instead. */
+  /** Colour for the plain-dot form — the red/green in-use/idle
+   *  status. Also the fill for a truck pin, which is that truck's own
+   *  calendar colour. */
   dotColor:   string;
+  /** TRAILER pins: its linked truck is on the map and standing with
+   *  it, so the truck pin draws the rig and carries the label, and
+   *  this one goes back to a plain status dot. Without it the same
+   *  pairing was drawn twice, as two truck-coloured badges on one
+   *  spot. */
+  pairedPinned?: boolean;
 }
 
 /**
@@ -242,9 +293,17 @@ function makePinElement(): {
   return { wrapper, labelEl, dot, chipEl };
 }
 
-/** A truck seen from above, as an inline SVG. Inline rather than a
- *  lucide component because this marker is built with DOM calls, not
- *  rendered by React. */
+/**
+ * The three pin glyphs, as inline SVG strings. Inline rather than
+ * lucide components because these markers are built with DOM calls,
+ * not rendered by React.
+ *
+ * All three are side-on silhouettes in white, and they are meant to
+ * be told apart by OUTLINE before any of their detail is legible:
+ * a box truck (trailer pin), a short cab (bobtail), a long
+ * cab-and-box (a rig). At pin size the shape carries the meaning and
+ * the strokes inside it only confirm it.
+ */
 function truckGlyphSvg(): string {
   return [
     '<svg viewBox="0 0 24 24" width="12" height="12" fill="none"',
@@ -256,60 +315,121 @@ function truckGlyphSvg(): string {
   ].join('');
 }
 
+/** A tractor on its own — a truck running bobtail. */
+function cabGlyphSvg(): string {
+  return [
+    '<svg viewBox="0 0 24 24" width="13" height="13" fill="none"',
+    ' stroke="#ffffff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">',
+    '<path d="M6 6h7v10H6z"/><path d="M13 10h3l4 3.5V16h-7z"/>',
+    '<circle cx="9" cy="18.5" r="1.6" fill="#ffffff"/>',
+    '<circle cx="17" cy="18.5" r="1.6" fill="#ffffff"/>',
+    '</svg>',
+  ].join('');
+}
+
+/** A tractor with a trailer behind it — a loaded rig. Wider viewBox
+ *  than the other two: the length IS the signal. */
+function rigGlyphSvg(): string {
+  return [
+    '<svg viewBox="0 0 30 24" width="20" height="16" fill="none"',
+    ' stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">',
+    '<path d="M2 5h17v11H2z"/><path d="M19 9h3l4 3.5V16h-7z"/>',
+    '<circle cx="7" cy="18.5" r="1.5" fill="#ffffff"/>',
+    '<circle cx="12" cy="18.5" r="1.5" fill="#ffffff"/>',
+    '<circle cx="23" cy="18.5" r="1.5" fill="#ffffff"/>',
+    '</svg>',
+  ].join('');
+}
+
 /**
  * Draw the glyph for a pin's current state.
  *
- * A trailer under a truck stops being a dot and becomes a rounded
- * badge in THAT TRUCK's calendar colour carrying a truck mark — the
- * shape says "this one is moving with a tractor", the colour says
- * which tractor. A trailer on its own keeps the status circle, where
- * the colour means in-use / idle instead.
+ * Four forms, from one rule — the pin shows the largest thing it can
+ * honestly claim to be:
  *
- * Repainted every plot pass, so a trailer hooked to a truck between
- * two polls changes shape without its marker being rebuilt.
+ *   TRUCK, pulling   — a long pill, cab-and-box glyph. A rig.
+ *   TRUCK, bobtail   — a square badge, cab glyph.
+ *   TRAILER, linked to a truck that ISN'T here — a rounded badge in
+ *                      that truck's calendar colour with a box-truck
+ *                      mark. The colour says which tractor has it,
+ *                      which is the only place that is answered when
+ *                      the tractor itself is miles away.
+ *   TRAILER, otherwise — the status circle: red a truck has it, green
+ *                      free. Including when its truck is standing
+ *                      right here, because that truck's own pin is
+ *                      already saying so in its own colour.
+ *
+ * `dataset.glyph` guards the innerHTML write so repainting an
+ * unchanged pin doesn't re-parse SVG sixty times a minute — but a pin
+ * that genuinely changes form (a truck that drops its trailer) still
+ * swaps glyph, which an `if (!dot.firstChild)` test would have
+ * frozen.
  */
 function paintPinGlyph(dot: HTMLDivElement, tag: PinTag): void {
-  if (tag.truck) {
+  const setGlyph = (name: string, svg: string | null) => {
+    if (dot.dataset.glyph === name) return;
+    dot.dataset.glyph = name;
+    if (svg) dot.innerHTML = svg;
+    else dot.replaceChildren();
+  };
+
+  if (tag.kind === 'truck') {
+    const rig = !!tag.trailerLabel;
+    dot.style.width  = rig ? '32px' : '22px';
+    dot.style.height = rig ? '20px' : '22px';
+    dot.style.borderRadius = rig ? '6px' : '7px';
+    dot.style.background = tag.dotColor;
+    dot.style.borderStyle = 'solid';
+    dot.style.opacity = '1';
+    setGlyph(rig ? 'rig' : 'cab', rig ? rigGlyphSvg() : cabGlyphSvg());
+    return;
+  }
+
+  if (tag.truck && !tag.pairedPinned) {
     dot.style.width = '22px';
     dot.style.height = '22px';
     dot.style.borderRadius = '7px';
     dot.style.background = tag.truck.color;
-    // A leftover hookup keeps the truck's own colour — that colour is
-    // how a dispatcher recognises the tractor, so swapping or fading
-    // it costs the identification to say something the tag already
-    // says in words. The difference is the border: dashed for a
-    // hookup, solid for a live load. Fading it was the first attempt
-    // and it just read as a half-rendered icon.
-    dot.style.borderStyle = tag.linkLive === false ? 'dashed' : 'solid';
+    dot.style.borderStyle = 'solid';
     dot.style.opacity = '1';
-    if (!dot.firstChild) dot.innerHTML = truckGlyphSvg();
+    setGlyph('box', truckGlyphSvg());
     return;
   }
+
   dot.style.width = '16px';
   dot.style.height = '16px';
   dot.style.borderRadius = '50%';
   dot.style.background = tag.dotColor;
   dot.style.borderStyle = 'solid';
   dot.style.opacity = '1';
-  if (dot.firstChild) dot.replaceChildren();
+  setGlyph('dot', null);
 }
 
 /**
- * The always-on label under a moving trailer: "2020 · #633453 Swing".
+ * The always-on label under a pin: "CT-2025 · #633453 Swing".
  *
- * Only for trailers under a truck. Showing it for all of them would
- * be unreadable — most of the fleet sits in two yards, and their
- * labels would stack into a block of text. The ones under a tractor
- * are spread out along a highway, which is exactly where a label you
- * don't have to hover for earns its place.
+ * Only for a rig — a truck pulling a trailer, or a trailer whose
+ * tractor isn't on the map to say it instead. Labelling every pin
+ * would be unreadable: most of the fleet sits in two yards and the
+ * labels would stack into a block of text. A rig is out on a highway
+ * on its own, which is exactly where a label you don't have to hover
+ * for earns its place.
+ *
+ * Exactly one pin of a pair carries it, so a truck and its trailer
+ * standing together don't print the same line twice.
  */
 function paintPinChip(chipEl: HTMLDivElement, tag: PinTag): void {
-  if (!tag.truck) {
+  const text = tag.kind === 'truck'
+    ? (tag.trailerLabel ? `${tag.heading} · ${tag.trailerLabel}` : null)
+    : (tag.truck && !tag.pairedPinned
+        ? [tag.truck.name, [tag.heading, tag.category].filter(Boolean).join(' ')]
+            .filter(Boolean).join(' · ')
+        : null);
+  if (!text) {
     chipEl.style.display = 'none';
     return;
   }
-  chipEl.textContent = [tag.truck.name, [tag.heading, tag.category].filter(Boolean).join(' ')]
-    .filter(Boolean).join(' · ');
+  chipEl.textContent = text;
   chipEl.style.display = 'block';
 }
 
@@ -345,6 +465,11 @@ function paintPinTag(el: HTMLDivElement, tag: PinTag, compact: boolean): void {
   el.replaceChildren();
   el.style.padding = compact ? '3px 9px' : '5px 9px';
 
+  if (tag.kind === 'truck' && !compact) {
+    paintTruckTag(el, tag);
+    return;
+  }
+
   if (compact) {
     const row = document.createElement('div');
     row.style.cssText = 'display:flex;align-items:center;gap:6px;white-space:nowrap;';
@@ -352,21 +477,20 @@ function paintPinTag(el: HTMLDivElement, tag: PinTag, compact: boolean): void {
     heading.textContent = tag.heading;
     heading.style.cssText = 'font-size:11px;font-weight:700;color:#202124;';
     row.appendChild(heading);
+    // A truck's own colour is already the pin, so the glance tag
+    // spends its one line on what the truck is pulling.
+    if (tag.kind === 'truck' && tag.trailerLabel) {
+      const pulling = document.createElement('span');
+      pulling.textContent = tag.trailerLabel;
+      pulling.style.cssText = 'font-size:11px;color:#5f6368;';
+      row.appendChild(pulling);
+    }
     if (tag.truck) {
       row.appendChild(truckSwatch(tag.truck.color));
       const name = document.createElement('span');
       name.textContent = tag.truck.name;
       name.style.cssText = 'font-size:11px;font-weight:600;color:#3c4043;';
       row.appendChild(name);
-      // One word, because the whole point of the hover tag is that
-      // it's readable at a glance: "hooked" says the truck is the
-      // last one that had it, not one on a load right now.
-      if (tag.linkLive === false) {
-        const note = document.createElement('span');
-        note.textContent = 'hooked';
-        note.style.cssText = 'font-size:10px;color:#80868b;';
-        row.appendChild(note);
-      }
     }
     el.appendChild(row);
     return;
@@ -426,9 +550,9 @@ function paintPinTag(el: HTMLDivElement, tag: PinTag, compact: boolean): void {
     row.appendChild(truckName);
 
     // On a live load the title sits inline with the truck. On a
-    // leftover hookup it moves to its own line prefixed "Last load",
+    // finished one it moves to its own line prefixed "Last load",
     // because inline it would read as what the truck is doing now.
-    if (tag.loadTitle && tag.linkLive !== false) {
+    if (tag.loadTitle && tag.live !== false) {
       const sep = document.createElement('span');
       sep.textContent = '·';
       sep.style.cssText = 'font-size:11px;color:#9aa0a6;flex:0 0 auto;';
@@ -440,14 +564,70 @@ function paintPinTag(el: HTMLDivElement, tag: PinTag, compact: boolean): void {
     }
     el.appendChild(row);
 
-    if (tag.linkLive === false) {
+    if (tag.live === false) {
       const note = document.createElement('div');
       note.textContent = tag.loadTitle
         ? `Last load · ${tag.loadTitle}`
-        : 'Still hooked · no live load';
+        : 'No load running';
       note.style.cssText = 'font-size:10px;color:#5f6368;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
       el.appendChild(note);
     }
+  }
+}
+
+/**
+ * The full tag for a truck pin: who it is, how fresh the fix is, and
+ * what it has behind it.
+ *
+ * Split out rather than branched into paintPinTag because almost
+ * nothing is shared past the container — a truck's tag answers "what
+ * is this truck doing", a trailer's answers "who has this trailer",
+ * and the fields barely overlap.
+ */
+function paintTruckTag(el: HTMLDivElement, tag: PinTag): void {
+  const idRow = document.createElement('div');
+  idRow.style.cssText = 'display:flex;align-items:baseline;gap:6px;white-space:nowrap;';
+  const heading = document.createElement('span');
+  heading.textContent = tag.heading;
+  heading.style.cssText = 'font-size:12px;font-weight:700;color:#202124;';
+  idRow.appendChild(heading);
+  if (tag.category) {
+    const unit = document.createElement('span');
+    unit.textContent = `#${tag.category}`;
+    unit.style.cssText = 'font-size:10px;color:#5f6368;';
+    idRow.appendChild(unit);
+  }
+  el.appendChild(idRow);
+
+  if (tag.lastSeen) {
+    const seen = document.createElement('div');
+    seen.textContent = tag.lastSeen;
+    seen.style.cssText = 'font-size:10px;color:#5f6368;white-space:nowrap;';
+    el.appendChild(seen);
+  }
+
+  const row = document.createElement('div');
+  row.style.cssText = [
+    'display:flex', 'align-items:center', 'gap:5px',
+    'margin-top:4px', 'padding-top:4px',
+    'border-top:1px solid rgba(0,0,0,0.08)',
+  ].join(';');
+  const label = document.createElement('span');
+  // "No trailer" is stated rather than left blank: a bobtail is a
+  // fact a dispatcher is often looking for, and an absent line reads
+  // as missing data instead of an answer.
+  label.textContent = tag.trailerLabel ?? 'No trailer';
+  label.style.cssText = tag.trailerLabel
+    ? 'font-size:11px;font-weight:700;color:#202124;white-space:nowrap;'
+    : 'font-size:11px;color:#80868b;white-space:nowrap;';
+  row.appendChild(label);
+  el.appendChild(row);
+
+  if (tag.loadTitle) {
+    const load = document.createElement('div');
+    load.textContent = tag.live === false ? `Last load · ${tag.loadTitle}` : tag.loadTitle;
+    load.style.cssText = 'font-size:10px;color:#5f6368;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+    el.appendChild(load);
   }
 }
 
@@ -473,7 +653,10 @@ function applyPinVisual(
       ? `0 0 0 3.5px ${ALERT_COLOR}, ${PIN_SHADOW[mode]}`
       : PIN_SHADOW[mode];
   }
-  if (marker) marker.zIndex = PIN_Z[mode];
+  // Trucks sit above trailers at rest: a rig and the trailer it is
+  // pulling can land on the same spot, and the bigger pin hiding
+  // behind the smaller one looks like a rendering fault.
+  if (marker) marker.zIndex = PIN_Z[mode] ?? (tag?.kind === 'truck' ? 2 : undefined);
   if (!tagEl) return;
   if (mode === 'idle' || !tag) {
     tagEl.style.display = 'none';
@@ -517,6 +700,17 @@ function trailerMatchesQuery(t: Trailer, q: string): boolean {
   return false;
 }
 
+/** The same match, over the fields a dispatcher would type for a
+ *  truck. Kept beside the trailer one so a query narrows both layers
+ *  of the map by the same rules. */
+function truckMatchesQuery(a: Asset, q: string): boolean {
+  if (!q) return true;
+  const needle = q.toLowerCase();
+  if (a.name.toLowerCase().includes(needle)) return true;
+  if (a.unit?.toLowerCase().includes(needle)) return true;
+  return false;
+}
+
 /**
  * Why a trailer is on the alert list.
  *
@@ -551,6 +745,23 @@ interface TrailerAlert {
   locationLabel?: string;
 }
 
+/**
+ * Marker keys.
+ *
+ * Trailers and trucks are separate tables with their own integer ids,
+ * so `String(id)` would have let trailer 91 and truck 91 fight over
+ * one entry in every ref on this panel. The prefix makes the key say
+ * which layer it came from.
+ */
+const trailerKey = (id: number): string => `t${id}`;
+const truckKey   = (id: number): string => `v${id}`;
+/** The trailer a key names, or null when it names a truck. */
+function trailerIdFromKey(key: string | null): number | null {
+  if (!key || !key.startsWith('t')) return null;
+  const n = Number(key.slice(1));
+  return Number.isFinite(n) ? n : null;
+}
+
 // The tab badge counts only the kinds that mean "go look at this".
 // Including the untracked trailers would pin the badge at 5 forever on
 // Curzon's fleet, and a badge that never goes to zero stops being read.
@@ -564,6 +775,14 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
   const unassignedAssetId = useCalendarStore(s => s.unassignedAssetId);
   const addSavedLocation    = useCalendarStore(s => s.addSavedLocation);
   const updateSavedLocation = useCalendarStore(s => s.updateSavedLocation);
+  // Truck positions. Shared with the calendar and the dispatch board
+  // through the store rather than fetched again here: there is one
+  // fetcher for /api/motive/locations on purpose, and two pollers
+  // racing the same cached route is how its "x min ago" pill starts
+  // lying. EldSync isn't mounted on /trailers, so this panel kicks
+  // the fetcher itself (below).
+  const eldLocations       = useCalendarStore(s => s.eldLocations);
+  const refreshEldLocations = useCalendarStore(s => s.refreshEldLocations);
   const overlayRef   = useRef<HTMLDivElement>(null);
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef       = useRef<google.maps.Map | null>(null);
@@ -636,7 +855,19 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
   }, []);
   const [locLoading, setLocLoading] = useState(false);
   const [locError,   setLocError]   = useState<string | null>(null);
-  const [selectedTrailerId, setSelectedTrailerId] = useState<number | null>(null);
+  // One selection for both layers, held as a namespaced pin key —
+  // two independent "selected trailer" / "selected truck" states
+  // would have to be kept mutually exclusive by hand, and the pin
+  // machinery only has room for one open tag anyway.
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  // Everything that opens the detail panel, scrolls the roster or
+  // reads history wants the trailer, and gets null while a truck is
+  // selected — which is exactly right: a truck has no roster row.
+  const selectedTrailerId = trailerIdFromKey(selectedKey);
+  // Trucks are a layer on the trailer map, not a second map. Default
+  // on; off is for when the dispatcher wants the yard read without
+  // the rigs over it.
+  const [showTrucks, setShowTrucks] = useState(true);
   const [query, setQuery] = useState('');
   // Which half of the rail is showing. Yards only on the page — the
   // toolbar popup is a glance-at-the-fleet tool, not somewhere to
@@ -699,7 +930,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
   }, []);
 
   /**
-   * Select a trailer and move the map accordingly.
+   * Select a pin and move the map accordingly.
    *
    * The two ways in want different things from the map, so the caller
    * says which it is:
@@ -716,10 +947,10 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
    * the row of an already-selected trailer re-centres instead of doing
    * nothing (the state wouldn't change, so no effect would run).
    */
-  const focusTrailer = useCallback((id: number, source: 'pin' | 'row') => {
+  const focusPin = useCallback((key: string, source: 'pin' | 'row') => {
     if (source === 'pin') pinClickAtRef.current = Date.now();
-    setSelectedTrailerId(id);
-    const pos = positionsRef.current.get(String(id));
+    setSelectedKey(key);
+    const pos = positionsRef.current.get(key);
     if (!pos) return;  // no GPS — nothing to move to
     void loadGoogleMaps().then(google => {
       const map = mapRef.current;
@@ -748,15 +979,15 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
   // Bound in embedded mode too, where there is no panel to close but
   // there is still a detail to dismiss.
   useEffect(() => {
-    if (embedded && selectedTrailerId == null) return;
+    if (embedded && selectedKey == null) return;
     const h = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
-      if (selectedTrailerId != null) { setSelectedTrailerId(null); return; }
+      if (selectedKey != null) { setSelectedKey(null); return; }
       onClose?.();
     };
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
-  }, [onClose, embedded, selectedTrailerId]);
+  }, [onClose, embedded, selectedKey]);
 
   // Stable comma-separated list of Motive asset IDs to locate. The
   // server-side endpoint hits keeptruckin.com/v1/asset_locations and
@@ -802,6 +1033,17 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
     return () => { cancelled = true; clearInterval(id); };
   }, [motiveIds]);
 
+  // ── Keep truck positions coming ───────────────────────────────────────
+  // The store's fetcher coalesces overlapping calls and its route
+  // caches per-org for 10 minutes, so this is the same cadence
+  // EldSync uses on the calendar — and harmless if the calendar is
+  // open in another tab doing the same thing.
+  useEffect(() => {
+    void refreshEldLocations();
+    const id = setInterval(() => { void refreshEldLocations(); }, TRUCK_POLL_MS);
+    return () => clearInterval(id);
+  }, [refreshEldLocations]);
+
   // ── Poll the stillness history ────────────────────────────
   // Far slower than the position poll, because this changes on the
   // hour at most: it is derived from a sweep that runs hourly, and a
@@ -834,31 +1076,25 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
-  // ── Compute usage + grouping ──────────────────────────────────────────
-  // Group every (non-retired) trailer into Active / Hooked / Idle / No
-  // GPS, then filter by the search query. Filtering AFTER grouping
-  // keeps the section labels honest: "Active 0" still appears if the
-  // user has typed a query that doesn't match any active trailer,
-  // rather than silently shifting items between sections.
+  // ── Resolve every trailer, unfiltered ─────────────────────────────────
+  // The whole fleet with its usage and its last fix, before the search
+  // box gets a say. Two things read it, and the second is why it is
+  // separate from `groups`: the truck layer derives what each tractor
+  // is holding from these rows, and a truck's trailer must not
+  // disappear because the dispatcher typed a query that the trailer
+  // doesn't match.
   //
   // The yard geofences feed getTrailerUsage because being parked in
-  // one of our yards is what ends a hookup (see trailerUsage.ts) —
-  // the trailer is home and accounted for, so it goes back to being a
+  // one of our yards is what ends a link (see trailerUsage.ts) — the
+  // trailer is home and accounted for, so it goes back to being a
   // spare whatever brought it there.
-  const groups = useMemo(() => {
-    type RowWithLoc = { trailer: Trailer; usage: TrailerUsage; loc: MotiveTrailerLocation };
-    type RowNoGps   = { trailer: Trailer; usage: TrailerUsage };
-    const active: RowWithLoc[] = [];
-    const hooked: RowWithLoc[] = [];
-    const idle:   RowWithLoc[] = [];
-    const noGps:  RowNoGps[]   = [];
-
+  const trailerEntries = useMemo(() => {
+    const out: Array<{ trailer: Trailer; usage: TrailerUsage; loc?: MotiveTrailerLocation }> = [];
     for (const t of trailers) {
       if (t.activeTo) continue;  // retired — out of the fleet view
-      if (!trailerMatchesQuery(t, query)) continue;
       const loc = t.motiveVehicleId ? locations[t.motiveVehicleId] : undefined;
       // A trailer with no fix gets atYard: false — not because it
-      // isn't in a yard, but because we can't know. Leaving the hook
+      // isn't in a yard, but because we can't know. Leaving the link
       // standing is the useful answer there: who had it last is the
       // only thing known about an untracked trailer at all.
       const usage = getTrailerUsage(t.id, events, calendarTimezone, {
@@ -866,20 +1102,110 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
         unassignedAssetId,
         retiredAssetIds,
       });
-      if (!loc) {
-        noGps.push({ trailer: t, usage });
-        continue;
+      out.push({ trailer: t, usage, loc });
+    }
+    return out;
+  }, [trailers, events, locations, calendarTimezone, yards, unassignedAssetId, retiredAssetIds]);
+
+  // ── What each tractor is holding ──────────────────────────────────────
+  // Inverted from the trailer side rather than derived again from the
+  // events, so the two layers cannot disagree: whatever ended a link
+  // for the trailer pin has already ended it here.
+  //
+  // Trailers with no GPS are included. A trailer we can't locate is
+  // still worth naming on the pin of the truck that has it — in fact
+  // that truck's position is then the only clue where it is.
+  //
+  // getTrailerUsage's rule 2 makes a double claim on one tractor
+  // nearly impossible (a link only stands if that truck's latest
+  // begun load names this trailer), but overlapping live dispatch
+  // could still produce one, so a running load beats a finished one
+  // instead of whichever happened to be iterated first.
+  const truckLinks = useMemo(() => {
+    const m = new Map<number, {
+      trailer: Trailer; load: CalendarEvent; live: boolean; loc?: MotiveTrailerLocation;
+    }>();
+    for (const e of trailerEntries) {
+      const load = e.usage.load;
+      if (!load || e.usage.status !== 'in_use') continue;
+      const prev = m.get(load.assetId);
+      if (prev && (prev.live || !e.usage.live)) continue;
+      m.set(load.assetId, { trailer: e.trailer, load, live: e.usage.live, loc: e.loc });
+    }
+    return m;
+  }, [trailerEntries]);
+
+  // ── The truck layer ───────────────────────────────────────────────────
+  // Every tractor Motive is reporting a position for, with whatever it
+  // is holding. Retired trucks are dropped — they are out of the
+  // fleet, and their last fix is wherever they were parked for good.
+  // HIDDEN trucks are kept: `hidden` is a calendar-board preference
+  // about where a row is drawn, not a statement that the truck isn't
+  // running, and "where are my trucks" doesn't care how the board is
+  // laid out.
+  const truckEntries = useMemo(() => {
+    if (!showTrucks) return [];
+    const byVehicle = new Map<string, EldLocation>();
+    for (const l of eldLocations) byVehicle.set(l.vehicleId, l);
+    const out: Array<{
+      asset: Asset;
+      loc:   EldLocation;
+      link?: { trailer: Trailer; load: CalendarEvent; live: boolean; loc?: MotiveTrailerLocation };
+    }> = [];
+    for (const a of assets) {
+      if (a.activeTo) continue;
+      // The pseudo-asset every undispatched load sits on. It has no
+      // Motive link so it would fall out anyway; named here so that
+      // stays true if one is ever attached by accident.
+      if (unassignedAssetId != null && a.id === unassignedAssetId) continue;
+      if (!a.motiveVehicleId) continue;
+      const loc = byVehicle.get(a.motiveVehicleId);
+      if (!loc || !Number.isFinite(loc.lat) || !Number.isFinite(loc.lon)) continue;
+      if (!truckMatchesQuery(a, query)) continue;
+      out.push({ asset: a, loc, link: truckLinks.get(a.id) });
+    }
+    return out;
+  }, [assets, eldLocations, truckLinks, query, unassignedAssetId, showTrucks]);
+
+  // Trailers whose own tractor is pinned within sight of them. Those
+  // pins hand the pairing to the truck pin and go back to a plain
+  // status dot — see paintPinGlyph.
+  const pairedTrailerIds = useMemo(() => {
+    const out = new Set<number>();
+    for (const e of truckEntries) {
+      const link = e.link;
+      if (!link?.loc) continue;
+      if (distanceMetres(e.loc.lat, e.loc.lon, link.loc.lat, link.loc.lon) <= PAIRED_RADIUS_M) {
+        out.add(link.trailer.id);
       }
-      (usage.status === 'in_use' ? active
-        : usage.status === 'hooked' ? hooked
-        : idle).push({ trailer: t, usage, loc });
+    }
+    return out;
+  }, [truckEntries]);
+
+  // ── Group the trailers for the roster ─────────────────────────────────
+  // Active / Idle / No GPS, filtered by the search query. Filtering
+  // AFTER resolving keeps the section labels honest: "Active 0" still
+  // appears if the user has typed a query that doesn't match any
+  // active trailer, rather than silently shifting items between
+  // sections.
+  const groups = useMemo(() => {
+    type RowWithLoc = { trailer: Trailer; usage: TrailerUsage; loc: MotiveTrailerLocation };
+    type RowNoGps   = { trailer: Trailer; usage: TrailerUsage };
+    const active: RowWithLoc[] = [];
+    const idle:   RowWithLoc[] = [];
+    const noGps:  RowNoGps[]   = [];
+
+    for (const { trailer, usage, loc } of trailerEntries) {
+      if (!trailerMatchesQuery(trailer, query)) continue;
+      if (!loc) { noGps.push({ trailer, usage }); continue; }
+      (usage.status === 'in_use' ? active : idle).push({ trailer, usage, loc });
     }
     // Everything with a pin on the map, in one list — the orderings
     // that don't care about status (the plot pass, the by-location
-    // grouping) read this so a fourth bucket can't be forgotten in
-    // one of them.
-    return { active, hooked, idle, noGps, pinned: [...active, ...hooked, ...idle] };
-  }, [trailers, events, locations, calendarTimezone, query, yards, unassignedAssetId, retiredAssetIds]);
+    // grouping) read this so a bucket can't be forgotten in one of
+    // them.
+    return { active, idle, noGps, pinned: [...active, ...idle] };
+  }, [trailerEntries, query]);
 
   // ── The selected trailer's history ─────────────────────────
   // Only on the page: the detail panel it feeds is a third column,
@@ -1115,18 +1441,17 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
       const bounds = new google.maps.LatLngBounds();
 
       for (const entry of allPinned) {
-        const key = String(entry.trailer.id);
+        const key = trailerKey(entry.trailer.id);
         seen.add(key);
         const color = STATUS_PIN_COLOR[entry.usage.status];
         const lastSeen = formatLastSeen(entry.loc.locatedAt);
         const load = entry.usage.load;
-        // Set for an in-use trailer and for a hooked one (where it's
-        // the load that left it on that truck); absent when idle, so
-        // an idle pin's tag simply has no truck line rather than an
-        // empty one.
+        // Set whenever a truck has the trailer, whether that load is
+        // running or finished; absent when idle, so an idle pin's tag
+        // simply has no truck line rather than an empty one.
         const truck = load ? assets.find(a => a.id === load.assetId) : undefined;
-        const linkLive = entry.usage.status === 'in_use';
         const tag: PinTag = {
+          kind: 'trailer',
           // Prefers the trailer number (what dispatchers actually call
           // them) and falls back to the display name.
           heading: entry.trailer.trailerNumber
@@ -1135,7 +1460,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
           category: entry.trailer.category,
           lastSeen,
           truck: truck ? { name: truck.name, color: truck.color } : undefined,
-          linkLive,
+          live: entry.usage.live,
           // routeLabel is the fallback because a load with no typed
           // title still has stops, and "Las Vegas, NV → Salt Lake
           // City, UT" beats a blank line.
@@ -1143,6 +1468,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
           dwell: dwellLine(entry.trailer.id, entry.loc, stillness, yards),
           flagged: flaggedIds.has(entry.trailer.id),
           dotColor: color,
+          pairedPinned: pairedTrailerIds.has(entry.trailer.id),
         };
         const position = { lat: entry.loc.lat, lng: entry.loc.lon };
 
@@ -1163,7 +1489,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
             position,
             content: wrapper,
           });
-          marker.addListener('click', () => focusTrailer(entry.trailer.id, 'pin'));
+          marker.addListener('click', () => focusPin(key, 'pin'));
 
           // Hover is wired to the DOT rather than the marker or the
           // wrapper: to the dot and not the marker so it works
@@ -1195,7 +1521,57 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
         bounds.extend(position);
       }
 
-      // Remove markers whose trailers dropped out of the pinned set.
+      // ── The truck layer ───────────────────────────────────────
+      // Same markers, same hover/selection machinery, same removal
+      // sweep below. A truck pin differs only in what it draws and
+      // what its tag says.
+      for (const entry of truckEntries) {
+        const key = truckKey(entry.asset.id);
+        seen.add(key);
+        const link = entry.link;
+        const tag: PinTag = {
+          kind: 'truck',
+          heading: entry.asset.name,
+          category: entry.asset.unit ?? '',
+          lastSeen: formatLastSeen(entry.loc.locatedAt),
+          trailerLabel: link
+            ? [link.trailer.trailerNumber ? `#${link.trailer.trailerNumber}` : link.trailer.name,
+               link.trailer.category].filter(Boolean).join(' ')
+            : undefined,
+          live: link ? link.live : undefined,
+          loadTitle: link ? (link.load.title || routeLabel(link.load)) : undefined,
+          dotColor: entry.asset.color,
+        };
+        const position = { lat: entry.loc.lat, lng: entry.loc.lon };
+
+        const existing = markersRef.current.get(key);
+        if (existing) {
+          existing.position = position;
+        } else {
+          const { wrapper, labelEl, dot, chipEl } = makePinElement();
+          const marker = new google.maps.marker.AdvancedMarkerElement({
+            map, position, content: wrapper,
+          });
+          marker.addListener('click', () => focusPin(key, 'pin'));
+          dot.addEventListener('mouseenter', () => {
+            hoveredKeyRef.current = key;
+            repaintPins();
+          });
+          dot.addEventListener('mouseleave', () => {
+            if (hoveredKeyRef.current === key) hoveredKeyRef.current = null;
+            repaintPins();
+          });
+          markersRef.current.set(key, marker);
+          labelsRef.current.set(key, labelEl);
+          dotsRef.current.set(key, dot);
+          chipsRef.current.set(key, chipEl);
+        }
+        tagDataRef.current.set(key, tag);
+        positionsRef.current.set(key, position);
+        bounds.extend(position);
+      }
+
+      // Remove markers whose trailers or trucks dropped out.
       for (const [key, marker] of markersRef.current) {
         if (!seen.has(key)) {
           marker.map = null;
@@ -1210,22 +1586,29 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
           // a hovered key pointing at a pin that no longer exists
           // would keep the next pin that reuses the id looking hovered.
           if (hoveredKeyRef.current === key) hoveredKeyRef.current = null;
+          // The SELECTION is deliberately left alone. A key with no
+          // marker paints nothing and opens nothing, and if the pin
+          // comes back — a truck layer switched off and on again — it
+          // comes back still selected, which is what the dispatcher
+          // who switched it would expect.
         }
       }
 
       // Fit the map to all pins exactly once, on the first plot with
       // data. After that, poll updates mutate pins without forcibly
       // re-centering (matching prior UX where the view stayed put).
-      if (!didInitialFitRef.current && allPinned.length > 0) {
+      const pinCount = allPinned.length + truckEntries.length;
+      if (!didInitialFitRef.current && pinCount > 0) {
         didInitialFitRef.current = true;
-        if (allPinned.length > 1) map.fitBounds(bounds, 60);
+        if (pinCount > 1) map.fitBounds(bounds, 60);
       }
 
       // Last, so brand-new pins start at the right size and any open
       // tag refreshes with this pass's data.
       repaintPins();
     });
-  }, [mapReady, groups, assets, repaintPins, focusTrailer, stillness, yards, flaggedIds]);
+  }, [mapReady, groups, truckEntries, pairedTrailerIds, assets, repaintPins, focusPin,
+      stillness, yards, flaggedIds]);
 
   // ── Yard circles ──────────────────────────────────────────────────────
   // Redrawn whenever the yard set changes. Circles are not clickable:
@@ -1305,7 +1688,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
     if (!mapReady || !mapRef.current || placing) return;
     const listener = mapRef.current.addListener('click', () => {
       if (Date.now() - pinClickAtRef.current < PIN_CLICK_GRACE_MS) return;
-      setSelectedTrailerId(null);
+      setSelectedKey(null);
     });
     return () => listener.remove();
   }, [mapReady, placing]);
@@ -1356,7 +1739,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
     // One repaint handles both ends of the change: the pin that just
     // lost the selection shrinks and closes its tag, the one that
     // gained it grows and opens the full tag.
-    selectedKeyRef.current = selectedTrailerId == null ? null : String(selectedTrailerId);
+    selectedKeyRef.current = selectedKey;
     repaintPins();
 
     if (selectedTrailerId == null) return;
@@ -1368,10 +1751,10 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
       const row = document.querySelector<HTMLElement>(`[data-trailer-row-id="${selectedTrailerId}"]`);
       row?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
-  }, [selectedTrailerId, repaintPins]);
+  }, [selectedKey, selectedTrailerId, repaintPins]);
 
-  // Roster rows always centre — see focusTrailer.
-  const selectFromRow = useCallback((id: number) => focusTrailer(id, 'row'), [focusTrailer]);
+  // Roster rows always centre — see focusPin.
+  const selectFromRow = useCallback((id: number) => focusPin(trailerKey(id), 'row'), [focusPin]);
 
   // ── Sidebar row helpers ───────────────────────────────────────────────
   function driverName(load: CalendarEvent | undefined): string | undefined {
@@ -1400,10 +1783,10 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
   // One row shape for both groupings — the list is regrouped, not
   // redesigned, so a trailer reads the same wherever it appears.
   function rowFor(entry: { trailer: Trailer; usage: TrailerUsage; loc: MotiveTrailerLocation }) {
-    const status = entry.usage.status;
+    const { status, live } = entry.usage;
     return {
       trailer: entry.trailer,
-      badge: status === 'in_use' ? 'In use' : status === 'hooked' ? 'Hooked' : 'Idle',
+      badge: status === 'in_use' ? 'In use' : 'Idle',
       badgeColor: STATUS_PIN_COLOR[status],
       lastSeen: formatLastSeen(entry.loc.locatedAt),
       yardName: yardAt(entry.loc.lat, entry.loc.lon, yards)?.name,
@@ -1414,11 +1797,10 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
         assetColor: assetColor(entry.usage.load),
         // The route of a load that's OVER is not where the trailer
         // is, and this row already shows where it is from the live
-        // fix — so a hooked row shows who had it, not where that
-        // load went.
-        route:  status === 'in_use' ? routeLabel(entry.usage.load) : undefined,
+        // fix — so once the load is done the row shows who has it,
+        // not where that load went.
+        route:  live ? routeLabel(entry.usage.load) : undefined,
         status: entry.usage.load?.status,
-        lead:   status === 'hooked' ? 'Last load' : undefined,
       },
     };
   }
@@ -1426,7 +1808,15 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
   // ── Render ────────────────────────────────────────────────────────────
   const totalCount  = groups.pinned.length + groups.noGps.length;
   const activeCount = groups.active.length;
-  const hookedCount = groups.hooked.length;
+  // Counted off the store rather than off truckEntries, so the toggle
+  // reads "Trucks 14" when it's off too — otherwise switching the
+  // layer off would also hide how much it has to show.
+  const truckCount = useMemo(() => {
+    const ids = new Set(eldLocations.map(l => l.vehicleId));
+    return assets.filter(a =>
+      !a.activeTo && a.motiveVehicleId && ids.has(a.motiveVehicleId) &&
+      (unassignedAssetId == null || a.id !== unassignedAssetId)).length;
+  }, [assets, eldLocations, unassignedAssetId]);
 
   const content = (
     <>
@@ -1445,10 +1835,31 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
               </div>
             )}
             <div className="text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
-              {totalCount} trailers · {activeCount} in use · {hookedCount} hooked · {groups.noGps.length} without GPS
+              {totalCount} trailers · {activeCount} in use · {groups.noGps.length} without GPS
               {locLoading && <span className="ml-2"><Loader2 size={10} className="inline animate-spin" /></span>}
             </div>
           </div>
+          {/* The truck layer, toggled from the counts strip rather
+              than a control floating over the map — the map's four
+              corners already belong to Google's own buttons, and this
+              is where the other fleet numbers are. */}
+          {truckCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowTrucks(v => !v)}
+              title={showTrucks ? 'Hide trucks on the map' : 'Show trucks on the map'}
+              className="text-[11px] font-semibold shrink-0 inline-flex items-center gap-1.5"
+              style={{
+                padding: '4px 9px', borderRadius: 7, cursor: 'pointer',
+                border: `1px solid ${showTrucks ? 'var(--gc-text-2)' : 'var(--gc-border)'}`,
+                background: showTrucks ? 'var(--gc-hover)' : 'transparent',
+                color: showTrucks ? 'var(--gc-text-1)' : 'var(--gc-text-3)',
+              }}
+            >
+              <Truck size={12} />
+              {truckCount} trucks
+            </button>
+          )}
           {!embedded && (
             <button
               onClick={onClose}
@@ -1480,7 +1891,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
               segments={history?.trailerId === detailData.trailer.id ? history.segments : null}
               historyDays={HISTORY_DAYS}
               loadingHistory={history?.trailerId !== detailData.trailer.id}
-              onClose={() => setSelectedTrailerId(null)}
+              onClose={() => setSelectedKey(null)}
             />
           )}
 
@@ -1568,7 +1979,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
                   type="text"
                   value={query}
                   onChange={e => setQuery(e.target.value)}
-                  placeholder="Search trailer name, #, or category"
+                  placeholder="Search trailer or truck"
                   className="w-full text-[13px] outline-none"
                   style={{
                     padding: '7px 28px 7px 30px',
@@ -1601,14 +2012,6 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
                   count={groups.active.length}
                   statusColor={STATUS_PIN_COLOR.in_use}
                   rows={groups.active.map(rowFor)}
-                  selectedId={selectedTrailerId}
-                  onSelect={selectFromRow}
-                />
-                <Section
-                  label="Hooked"
-                  count={groups.hooked.length}
-                  statusColor={STATUS_PIN_COLOR.hooked}
-                  rows={groups.hooked.map(rowFor)}
                   selectedId={selectedTrailerId}
                   onSelect={selectFromRow}
                 />
@@ -1655,9 +2058,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
                 statusColor="var(--gc-border)"
                 rows={groups.noGps.map(({ trailer, usage }) => ({
                   trailer,
-                  badge: usage.status === 'in_use' ? 'In use (no GPS)'
-                       : usage.status === 'hooked' ? 'Hooked'
-                       : 'Idle',
+                  badge: usage.status === 'in_use' ? 'In use (no GPS)' : 'Idle',
                   badgeColor: usage.status === 'idle'
                     ? 'var(--gc-text-3)'
                     : STATUS_PIN_COLOR[usage.status],
@@ -1665,9 +2066,8 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
                     driver: driverName(usage.load),
                     asset:  assetName(usage.load),
                     assetColor: assetColor(usage.load),
-                    route:  usage.status === 'in_use' ? routeLabel(usage.load) : undefined,
+                    route:  usage.live ? routeLabel(usage.load) : undefined,
                     status: usage.load?.status,
-                    lead:   usage.status === 'hooked' ? 'Last load' : undefined,
                   },
                 }))}
                 selectedId={selectedTrailerId}
@@ -1787,12 +2187,8 @@ function Section({
     locationLabel?: string;
     /** Name of the yard this trailer is parked inside, if any. */
     yardName?: string;
-    /** `lead` prefixes the truck/driver line — "Last load" on a
-     *  hooked row, so facts taken from a finished load can't be read
-     *  as what the trailer is doing now. */
      detail?: {
        driver?: string; asset?: string; route?: string; status?: string;
-       lead?: string;
        /** The tractor's calendar colour, for the truck mark. */
        assetColor?: string;
      };
@@ -1883,7 +2279,6 @@ function Section({
                 )}
                 {(detail.driver || detail.asset) && (
                   <div className="flex items-center gap-1 min-w-0" style={{ color: 'var(--gc-text-3)' }}>
-                    {detail.lead && <span className="shrink-0">{detail.lead} ·</span>}
                     {detail.asset && (
                       <>
                         {/* Tinted through the style prop rather than a
