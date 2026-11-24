@@ -36,6 +36,8 @@ import {
   isDark, isStatic, hoursSince, formatStill,
   STILL_ALERT_DAYS, DARK_ALERT_HOURS, type Stillness,
 } from '@/lib/trailerStillness';
+import TrailerDetailPanel, { type TrailerDetailData } from '@/components/trailers/TrailerDetailPanel';
+import type { TrailerSegment } from '@/lib/trailerHistory';
 import type { Trailer, CalendarEvent, SavedLocation } from '@/lib/types';
 
 interface Props {
@@ -76,6 +78,11 @@ const POLL_MS = 60_000;
 // re-deriving this every minute would be pure waste.
 const STILLNESS_POLL_MS = 5 * 60_000;
 const CLOCK_TICK_MS = 60_000;
+// Matt's window. The route caps at 90, so this is one number to change
+// if a week turns out to be too short to answer "where has it been".
+const HISTORY_DAYS = 7;
+// The trail the selected trailer left, drawn under the pins.
+const TRAIL_COLOR = '#1a73e8';
 // How long after a pin click the map's own click handler stays quiet.
 // Long enough to cover the two events arriving from one physical
 // click, short enough that a deliberate second click always lands.
@@ -547,6 +554,20 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
   // first days after it goes live.
   const [stillness, setStillness] = useState<Record<string, Stillness>>({});
   const [historyStartedAt, setHistoryStartedAt] = useState<string | null>(null);
+  // The selected trailer's own recent life. Fetched per selection
+  // rather than for the whole fleet: a week of 2-minute fixes for 27
+  // trailers is a lot of JSON to hand the browser for a panel showing
+  // one of them.
+  const [history, setHistory] = useState<
+    { trailerId: number; path: Array<{ lat: number; lon: number }>; segments: TrailerSegment[] } | null
+  >(null);
+  // No separate loading flag: "loading" is exactly "the history we
+  // hold isn't this trailer's yet", which is derivable, and storing it
+  // instead would mean a synchronous setState inside the fetch effect.
+  // A failed fetch records an EMPTY result for the trailer rather than
+  // leaving the spinner up forever — the panel then says "no stored
+  // history yet", which is also what it would say if the sweep simply
+  // hadn't reached this trailer.
   // The alert rules compare timestamps against the clock, which makes
   // them a function of time as well as of data: a trailer crosses the
   // 2-day line with nothing else on the page changing. Holding "now"
@@ -767,6 +788,34 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
     return { active, idle, noGps };
   }, [trailers, events, locations, calendarTimezone, query]);
 
+  // ── The selected trailer's history ─────────────────────────
+  // Only on the page: the detail panel it feeds is a third column,
+  // which the 980px calendar popup has no room for.
+  useEffect(() => {
+    // No clearing of `history` here. Every reader already checks
+    // that the history it holds belongs to the selected trailer, so
+    // stale data is ignored rather than blanked — which keeps this
+    // effect free of a synchronous setState.
+    if (!embedded || selectedTrailerId == null) return;
+    let cancelled = false;
+    const id = selectedTrailerId;
+    void (async () => {
+      const empty = { trailerId: id, path: [], segments: [] as TrailerSegment[] };
+      try {
+        const res = await fetch(`/api/trailers/${id}/history?days=${HISTORY_DAYS}`);
+        if (!res.ok) { if (!cancelled) setHistory(empty); return; }
+        const json = await res.json() as typeof empty;
+        // A slow response for a trailer the dispatcher has already
+        // clicked away from must not overwrite the current one.
+        if (cancelled || json.trailerId !== id) return;
+        setHistory(json);
+      } catch {
+        if (!cancelled) setHistory(empty);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [embedded, selectedTrailerId]);
+
   // ── Alerts ─────────────────────────────────────────────────
   // Built from `trailers` rather than `groups` on purpose: the search
   // box belongs to the Trailers tab, and a typo there must not hide a
@@ -818,6 +867,49 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
     for (const a of alerts) if (BADGED_KINDS.has(a.kind)) s.add(a.trailer.id);
     return s;
   }, [alerts]);
+
+  // ── The selected trailer, assembled ──────────────────────
+  // "Last connected vehicle" and "last driver" come from OUR LOADS,
+  // not from Motive. Motive reports the tractor its gateway last drew
+  // power from, which is a reasonable guess about hardware;
+  // events.assetId is what dispatch actually assigned, which is the
+  // answer to "who had it". Where the two disagree, dispatch is right
+  // about intent, and intent is what this panel is for.
+  const detailData = useMemo<TrailerDetailData | null>(() => {
+    if (!embedded || selectedTrailerId == null) return null;
+    const trailer = trailers.find(t => t.id === selectedTrailerId);
+    if (!trailer) return null;
+
+    const usage = getTrailerUsage(trailer.id, events, calendarTimezone);
+    const loc   = trailer.motiveVehicleId ? locations[trailer.motiveVehicleId] : undefined;
+    const still = stillness[String(trailer.id)];
+
+    const recent = events
+      .filter(e => e.trailerId === trailer.id && !e.deletedAt)
+      .sort((a, b) => b.start.localeCompare(a.start));
+
+    const truckLoad  = recent.find(e => e.assetId != null);
+    const truckAsset = truckLoad ? assets.find(a => a.id === truckLoad.assetId) : undefined;
+
+    const driverLoad = recent.find(e => e.driverName || e.driverId != null);
+    const driverLabel = driverLoad
+      ? (driverLoad.driverName ?? drivers.find(d => d.id === driverLoad.driverId)?.name)
+      : undefined;
+
+    return {
+      trailer,
+      status:         usage.status,
+      address:        loc?.description || undefined,
+      yardName:       loc ? yardAt(loc.lat, loc.lon, yards)?.name : undefined,
+      fixAgeHours:    hoursSince(loc?.locatedAt, nowMs),
+      stillHours:     still?.stillHours ?? null,
+      stillTruncated: still?.truncated ?? true,
+      currentLoad:    usage.load,
+      lastTruck:  truckLoad && truckAsset ? { asset: truckAsset, at: truckLoad.start } : undefined,
+      lastDriver: driverLoad && driverLabel ? { name: driverLabel, at: driverLoad.start } : undefined,
+      recentLoads: recent.slice(0, 6),
+    };
+  }, [embedded, selectedTrailerId, trailers, events, calendarTimezone, locations, stillness, yards, assets, drivers, nowMs]);
 
   // ── Construct the map ONCE ────────────────────────────────────────────
   // The google.maps.Map is a billable Dynamic Maps load, so it must be
@@ -1033,6 +1125,39 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
     };
   }, [yards, mapReady]);
 
+  // ── Draw the selected trailer's trail ───────────────────
+  // A polyline through the actual fixes, because the route taken is
+  // the thing no list of start/end pairs can show. Drawn beneath the
+  // pins and non-clickable so it never swallows a click meant for a
+  // marker or for the empty-map deselect.
+  const trailRef = useRef<google.maps.Polyline | null>(null);
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return;
+    let cancelled = false;
+    const pts = history && history.trailerId === selectedTrailerId ? history.path : [];
+    void loadGoogleMaps().then(google => {
+      const map = mapRef.current;
+      if (cancelled || !map) return;
+      trailRef.current?.setMap(null);
+      trailRef.current = null;
+      if (pts.length < 2) return;
+      trailRef.current = new google.maps.Polyline({
+        map,
+        path: pts.map(p => ({ lat: p.lat, lng: p.lon })),
+        strokeColor: TRAIL_COLOR,
+        strokeOpacity: 0.65,
+        strokeWeight: 3,
+        clickable: false,
+        zIndex: 2,
+      });
+    });
+    return () => {
+      cancelled = true;
+      trailRef.current?.setMap(null);
+      trailRef.current = null;
+    };
+  }, [mapReady, history, selectedTrailerId]);
+
   // ── Click empty map to clear the selection ────────────────────
   // Clicking away closes the open detail. Going from one pin to the
   // next still just moves the selection: a marker click is handled by
@@ -1172,6 +1297,24 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
             the 980 card; on the page it takes whatever the roster
             doesn't, so a wide monitor spends its pixels on the map. */}
         <div className="flex-1 flex min-h-0">
+          {/* Detail — left of the map, so the panel and the pin it
+              describes are on screen together and the roster on the
+              right still works for moving between trailers. */}
+          {detailData && (
+            <TrailerDetailPanel
+              // Keyed by trailer so switching selection remounts the
+              // panel. That resets the edit form for free, instead of
+              // an effect that would otherwise show one trailer's
+              // half-typed VIN under another's name.
+              key={detailData.trailer.id}
+              data={detailData}
+              segments={history?.trailerId === detailData.trailer.id ? history.segments : null}
+              historyDays={HISTORY_DAYS}
+              loadingHistory={history?.trailerId !== detailData.trailer.id}
+              onClose={() => setSelectedTrailerId(null)}
+            />
+          )}
+
           {/* Map */}
           <div className="relative" style={embedded ? { flex: 1, minWidth: 0 } : { width: 620 }}>
             <div ref={mapContainer} style={{ width: '100%', height: '100%' }} />
