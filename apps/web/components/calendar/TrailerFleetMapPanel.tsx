@@ -587,6 +587,10 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
   // toolbar popup is a glance-at-the-fleet tool, not somewhere to
   // administer geofences.
   const [rail, setRail] = useState<'trailers' | 'yards' | 'alerts'>('trailers');
+  // How the Trailers rail is grouped. Status answers "what's free";
+  // location answers "what's accounted for at the yard", which is a
+  // different question and wants a different list, not a sort.
+  const [grouping, setGrouping] = useState<'status' | 'location'>('status');
   // Non-null while waiting for a map click to place a new yard. Named
   // first so the click finishes the job instead of opening a prompt.
   const [placing, setPlacing] = useState<{ name: string; radiusFt: number } | null>(null);
@@ -867,6 +871,39 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
     for (const a of alerts) if (BADGED_KINDS.has(a.kind)) s.add(a.trailer.id);
     return s;
   }, [alerts]);
+
+  // ── Grouped by where they are ───────────────────────────
+  // One section per yard, then everything else, then the untracked.
+  //
+  // Deliberately NOT a city clusterer. Motive's labels run from "Salt
+  // Lake City, UT" to "3.3 mi SW of Cheyenne, WY", and guessing a
+  // place out of the second kind would invent groupings that are
+  // sometimes wrong — which is worse than none when the question is
+  // "is this trailer accounted for". Yards are exact because you drew
+  // them; everything else is sorted by address, which clusters the
+  // same-city ones together anyway since the label leads with it.
+  //
+  // In-use trailers are included: where a trailer IS doesn't stop
+  // being true because it's under a load.
+  const byLocation = useMemo(() => {
+    const pinned = [...groups.active, ...groups.idle];
+    const atYard = new Map<string, typeof pinned>();
+    const elsewhere: typeof pinned = [];
+    for (const entry of pinned) {
+      const yard = yardAt(entry.loc.lat, entry.loc.lon, yards);
+      if (!yard) { elsewhere.push(entry); continue; }
+      const list = atYard.get(yard.id) ?? [];
+      list.push(entry);
+      atYard.set(yard.id, list);
+    }
+    elsewhere.sort((a, b) => (a.loc.description || '').localeCompare(b.loc.description || ''));
+    // Fullest yard first — that's the one worth checking against.
+    const sections = yards
+      .map(y => ({ yard: y, rows: atYard.get(y.id) ?? [] }))
+      .filter(s => s.rows.length > 0)
+      .sort((a, b) => b.rows.length - a.rows.length);
+    return { sections, elsewhere };
+  }, [groups, yards]);
 
   // ── The selected trailer, assembled ──────────────────────
   // "Last connected vehicle" and "last driver" come from OUR LOADS,
@@ -1255,6 +1292,26 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
     return a?.name;
   }
 
+  // One row shape for both groupings — the list is regrouped, not
+  // redesigned, so a trailer reads the same wherever it appears.
+  function rowFor(entry: { trailer: Trailer; usage: TrailerUsage; loc: MotiveTrailerLocation }) {
+    const inUse = entry.usage.status === 'in_use';
+    return {
+      trailer: entry.trailer,
+      badge: inUse ? 'In use' : 'Idle',
+      badgeColor: inUse ? STATUS_PIN_COLOR.in_use : STATUS_PIN_COLOR.idle,
+      lastSeen: formatLastSeen(entry.loc.locatedAt),
+      yardName: yardAt(entry.loc.lat, entry.loc.lon, yards)?.name,
+      locationLabel: entry.loc.description || undefined,
+      detail: inUse ? {
+        driver: driverName(entry.usage.load),
+        asset:  assetName(entry.usage.load),
+        route:  routeLabel(entry.usage.load),
+        status: entry.usage.load?.status,
+      } : undefined,
+    };
+  }
+
   // ── Render ────────────────────────────────────────────────────────────
   const totalCount  = groups.active.length + groups.idle.length + groups.noGps.length;
   const activeCount = groups.active.length;
@@ -1366,6 +1423,27 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
             )}
 
             {rail === 'trailers' && (<>
+            {/* Group by status or by place. Two different questions:
+                "what's free to grab" and "what's accounted for at the
+                yard". */}
+            <div className="flex gap-1 px-3 pt-2.5 shrink-0">
+              {(['status', 'location'] as const).map(g => (
+                <button
+                  key={g}
+                  type="button"
+                  onClick={() => setGrouping(g)}
+                  className="text-[11px] font-semibold capitalize"
+                  style={{
+                    padding: '3px 10px', borderRadius: 6, cursor: 'pointer',
+                    border: `1px solid ${grouping === g ? 'var(--gc-text-2)' : 'var(--gc-border)'}`,
+                    background: grouping === g ? 'var(--gc-hover)' : 'transparent',
+                    color: grouping === g ? 'var(--gc-text-1)' : 'var(--gc-text-3)',
+                  }}
+                >
+                  {g === 'status' ? 'By status' : 'By location'}
+                </button>
+              ))}
+            </div>
             {/* Search — sits above the scrollable section list so it
                 stays visible while scrolling through long fleets. */}
             <div className="px-3 py-2.5 shrink-0" style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
@@ -1405,42 +1483,52 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
             </div>
 
             <div className="flex-1 overflow-auto">
-              <Section
-                label="Active"
-                count={groups.active.length}
-                statusColor={STATUS_PIN_COLOR.in_use}
-                rows={groups.active.map(({ trailer, usage, loc }) => ({
-                  trailer,
-                  badge: 'In use',
-                  badgeColor: STATUS_PIN_COLOR.in_use,
-                  lastSeen: formatLastSeen(loc.locatedAt),
-                  yardName: yardAt(loc.lat, loc.lon, yards)?.name,
-                  locationLabel: loc.description || undefined,
-                  detail: {
-                    driver: driverName(usage.load),
-                    asset:  assetName(usage.load),
-                    route:  routeLabel(usage.load),
-                    status: usage.load?.status,
-                  },
-                }))}
-                selectedId={selectedTrailerId}
-                onSelect={selectFromRow}
-              />
-              <Section
-                label="Idle"
-                count={groups.idle.length}
-                statusColor={STATUS_PIN_COLOR.idle}
-                rows={groups.idle.map(({ trailer, loc }) => ({
-                  trailer,
-                  badge: 'Idle',
-                  badgeColor: STATUS_PIN_COLOR.idle,
-                  lastSeen: formatLastSeen(loc.locatedAt),
-                  yardName: yardAt(loc.lat, loc.lon, yards)?.name,
-                  locationLabel: loc.description || undefined,
-                }))}
-                selectedId={selectedTrailerId}
-                onSelect={selectFromRow}
-              />
+              {grouping === 'status' ? (<>
+                <Section
+                  label="Active"
+                  count={groups.active.length}
+                  statusColor={STATUS_PIN_COLOR.in_use}
+                  rows={groups.active.map(rowFor)}
+                  selectedId={selectedTrailerId}
+                  onSelect={selectFromRow}
+                />
+                <Section
+                  label="Idle"
+                  count={groups.idle.length}
+                  statusColor={STATUS_PIN_COLOR.idle}
+                  rows={groups.idle.map(rowFor)}
+                  selectedId={selectedTrailerId}
+                  onSelect={selectFromRow}
+                />
+              </>) : (<>
+                {yards.length === 0 && (
+                  <div className="px-4 py-3 text-[11px] leading-snug" style={{ color: 'var(--gc-text-3)' }}>
+                    No yards defined yet, so everything lands under &ldquo;Not at a yard&rdquo;. Give a
+                    saved location a radius on the Yards tab and its trailers group here.
+                  </div>
+                )}
+                {byLocation.sections.map(({ yard, rows }) => (
+                  <Section
+                    key={yard.id}
+                    label={yard.name}
+                    count={rows.length}
+                    statusColor={YARD_COLOR}
+                    // The "At <yard>" line is dropped inside a yard's
+                    // own section: the heading already said it.
+                    rows={rows.map(e => ({ ...rowFor(e), yardName: undefined }))}
+                    selectedId={selectedTrailerId}
+                    onSelect={selectFromRow}
+                  />
+                ))}
+                <Section
+                  label="Not at a yard"
+                  count={byLocation.elsewhere.length}
+                  statusColor="var(--gc-text-3)"
+                  rows={byLocation.elsewhere.map(rowFor)}
+                  selectedId={selectedTrailerId}
+                  onSelect={selectFromRow}
+                />
+              </>)}
               <Section
                 label="No GPS"
                 count={groups.noGps.length}
