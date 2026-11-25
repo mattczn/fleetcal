@@ -41,6 +41,7 @@ import { useCalendarStore } from '@/store/useCalendarStore';
 import { formatStill, formatAge, formatDwell } from '@/lib/trailerStillness';
 import type { TrailerSegment } from '@/lib/trailerHistory';
 import type { Trailer, TrailerCategory, CalendarEvent, Asset } from '@/lib/types';
+import type { LinkSource } from '@/lib/trailerUsage';
 
 export interface TrailerDetailData {
   trailer:     Trailer;
@@ -56,6 +57,22 @@ export interface TrailerDetailData {
   stillTruncated: boolean;
   /** Most recent load that carried this trailer, and the one running now. */
   currentLoad?: CalendarEvent;
+  /**
+   * Who has it RIGHT NOW, and on what evidence. A different question
+   * from `lastTruck` below, which is the dispatch history: loads get
+   * swapped mid-route and nobody retypes the record, so the truck
+   * that HAS a trailer is usually not the one its load names. See
+   * lib/trailerUsage.ts for how the sources are ranked.
+   */
+  heldBy?: {
+    asset?:        Asset;
+    source:        LinkSource;
+    /** The tractor the load was dispatched to, when it is a different
+     *  one. Present exactly when a swap happened. */
+    dispatchedTo?: Asset;
+    /** When a manual assignment was made, so a stale one is visible. */
+    setAt?:        string | null;
+  };
   lastTruck?:   { asset: Asset; at: string };
   lastDriver?:  { name: string; at: string };
   recentLoads:  CalendarEvent[];
@@ -66,6 +83,10 @@ interface Props {
   segments:    TrailerSegment[] | null;
   historyDays: number;
   loadingHistory: boolean;
+  /** "Now", ticked by the parent. Passed in rather than read here:
+   *  Date.now() during render is impure, and the panel would also
+   *  disagree with the fix ages the parent already computed. */
+  nowMs:       number;
   onClose:     () => void;
 }
 
@@ -97,6 +118,146 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   );
 }
 
+/**
+ * Where the "hooked to" answer came from.
+ *
+ * Shown always, not just when it is surprising. The three sources are
+ * not equally strong — a human who looked at the yard beats a
+ * proximity reading beats a dispatch record nobody updated after the
+ * swap — and a dispatcher deciding whether to trust the line needs to
+ * know which one they are reading.
+ */
+const SOURCE_BADGE: Record<LinkSource, { label: string; fg: string; bg: string; title: string }> = {
+  manual:   { label: 'Set by hand', fg: '#8430ce', bg: 'rgba(132,48,206,0.12)',
+              title: 'Somebody assigned this truck. Holds until it is changed or cleared.' },
+  gps:      { label: 'GPS',         fg: '#1e8e3e', bg: 'rgba(30,142,62,0.12)',
+              title: 'This truck is the only one standing with the trailer.' },
+  dispatch: { label: 'From the load', fg: '#b06000', bg: 'rgba(176,96,0,0.12)',
+              title: 'No usable GPS on the trailer, so this is the truck the load named — it may have been swapped.' },
+};
+
+function SourceBadge({ source }: { source: LinkSource }) {
+  const s = SOURCE_BADGE[source];
+  return (
+    <span
+      title={s.title}
+      className="text-[10px] font-bold uppercase tracking-wide rounded px-1.5 py-0.5"
+      style={{ color: s.fg, background: s.bg }}
+    >
+      {s.label}
+    </span>
+  );
+}
+
+/** A day heading like "Mon 24 Nov", and a bare clock time. */
+function fmtDay(iso: string): string {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return '—';
+  return d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+}
+function fmtTime(iso: string): string {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return '—';
+  return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+}
+
+/**
+ * The whole stored history, by time.
+ *
+ * The inline section shows the last day because that is what a
+ * dispatcher is usually asking ("where has this been since
+ * yesterday"), and because a working trailer fills a week with
+ * segments faster than a side panel can hold them. Everything older
+ * lives here, grouped by day with times down the left so the shape of
+ * a day — sat, ran, sat — is readable at a glance.
+ */
+function HistoryPanel({
+  segments, days, onClose,
+}: { segments: TrailerSegment[]; days: number; onClose: () => void }) {
+  const byDay: Array<{ day: string; rows: TrailerSegment[] }> = [];
+  for (const seg of segments) {
+    const day = fmtDay(seg.from);
+    const last = byDay[byDay.length - 1];
+    if (last && last.day === day) last.rows.push(seg);
+    else byDay.push({ day, rows: [seg] });
+  }
+
+  return (
+    <div
+      className="absolute inset-0 z-20 flex flex-col"
+      style={{ background: 'var(--gc-bg-1)' }}
+    >
+      <div
+        className="flex items-center justify-between px-4 py-3 shrink-0"
+        style={{ borderBottom: '1px solid var(--gc-border)' }}
+      >
+        <div className="text-[13px] font-bold" style={{ color: 'var(--gc-text-1)' }}>
+          Movement history · last {days} days
+        </div>
+        <button type="button" onClick={onClose} aria-label="Close history"
+          style={{ color: 'var(--gc-text-3)' }}>
+          <X size={16} />
+        </button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-4 py-3">
+        {segments.length === 0 ? (
+          <div className="text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
+            No stored history yet.
+          </div>
+        ) : byDay.map(({ day, rows }) => (
+          <div key={day} className="mb-4">
+            <div
+              className="text-[11px] font-bold uppercase tracking-wider pb-1.5 mb-1.5"
+              style={{ color: 'var(--gc-text-2)', borderBottom: '1px solid var(--gc-border)' }}
+            >
+              {day}
+            </div>
+            <div className="space-y-2">
+              {rows.map((seg, i) => (
+                <div key={i} className="flex gap-3">
+                  <div
+                    className="text-[10px] tabular-nums shrink-0 text-right"
+                    style={{ width: 64, color: 'var(--gc-text-3)', paddingTop: 2 }}
+                  >
+                    {fmtTime(seg.from)}
+                    <div>{fmtTime(seg.to)}</div>
+                  </div>
+                  {seg.kind === 'stopped' ? (
+                    <div className="min-w-0 flex gap-2">
+                      <MapPin size={11} style={{ color: 'var(--gc-text-3)', marginTop: 3, flex: '0 0 auto' }} />
+                      <div className="min-w-0">
+                        <div className="text-[12px]" style={{ color: 'var(--gc-text-1)' }}>
+                          {seg.address || `${seg.lat.toFixed(3)}, ${seg.lon.toFixed(3)}`}
+                        </div>
+                        <div className="text-[10px]" style={{ color: 'var(--gc-text-3)' }}>
+                          Sat {formatStill(seg.hours)}
+                          {/* A stop built from one check-in is a gateway
+                              that reported once and went quiet, not an
+                              observed dwell. */}
+                          {seg.fixes === 1 && ' · single check-in'}
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex gap-2 items-start">
+                      <Route size={11} style={{ color: '#1a73e8', marginTop: 3, flex: '0 0 auto' }} />
+                      <div className="text-[12px]" style={{ color: 'var(--gc-text-2)' }}>
+                        Moved {seg.miles != null ? `${Math.round(seg.miles)} mi ` : ''}
+                        in {formatStill(seg.hours)}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return (
     <div className="text-[11px] font-bold uppercase tracking-wider px-4 pt-4 pb-2" style={{ color: 'var(--gc-text-2)' }}>
@@ -105,7 +266,7 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
   );
 }
 
-export default function TrailerDetailPanel({ data, segments, historyDays, loadingHistory, onClose }: Props) {
+export default function TrailerDetailPanel({ data, segments, historyDays, loadingHistory, nowMs, onClose }: Props) {
   const { trailer } = data;
   const updateTrailer    = useCalendarStore(s => s.updateTrailer);
   const trailerCategories = useCalendarStore(s => s.trailerCategories);
@@ -114,6 +275,28 @@ export default function TrailerDetailPanel({ data, segments, historyDays, loadin
   const [saving, setSaving]   = useState(false);
   const [error, setError]     = useState<string | null>(null);
   const [form, setForm] = useState(() => formFrom(trailer));
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [hookOpen, setHookOpen] = useState(false);
+  const [hookSaving, setHookSaving] = useState(false);
+
+  // Only real tractors can be hand-assigned: a retired truck isn't
+  // holding anything today, and Unassigned is a column on the board,
+  // not a vehicle.
+  const assets = useCalendarStore(s => s.assets);
+  const today  = new Date().toISOString().slice(0, 10);
+  const assignable = assets
+    .filter(a => a.type !== 'Unassigned' && (!a.activeTo || a.activeTo >= today))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  async function setHook(assetId: number | null) {
+    setHookSaving(true);
+    try {
+      await updateTrailer(trailer.id, { manualAssetId: assetId });
+      setHookOpen(false);
+    } finally {
+      setHookSaving(false);
+    }
+  }
 
   async function save() {
     setSaving(true);
@@ -140,13 +323,40 @@ export default function TrailerDetailPanel({ data, segments, historyDays, loadin
     }
   }
 
-  const stops = (segments ?? []).filter(s => s.kind === 'stopped');
+  const allSegments = segments ?? [];
+  const stops = allSegments.filter(s => s.kind === 'stopped');
+
+  // The inline list is the last day only. A working trailer produces
+  // a segment every few hours, so a week of them turns this panel
+  // into a scroll — and "where has it been since yesterday" is the
+  // question being asked here. Everything older is one click away in
+  // HistoryPanel, with times.
+  //
+  // Kept by the END of the segment: a trailer that has sat in the
+  // same place since Friday has one stop whose `from` is days old,
+  // and dropping it would leave today's section empty while the
+  // trailer is plainly somewhere.
+  const dayAgo = nowMs - 24 * 3_600_000;
+  const recentSegments = allSegments.filter(seg => {
+    const ended = new Date(seg.to).getTime();
+    return Number.isFinite(ended) && ended >= dayAgo;
+  });
 
   return (
     <div
-      className="flex flex-col min-h-0"
+      className="flex flex-col min-h-0 relative"
       style={{ width: 340, flexShrink: 0, borderRight: '1px solid var(--gc-border)', background: 'var(--gc-surface)' }}
     >
+      {/* Covers the panel rather than opening beside it: at 340px
+          there is no room for two columns, and the history is a
+          thing you go and read, then come back from. */}
+      {historyOpen && (
+        <HistoryPanel
+          segments={allSegments}
+          days={historyDays}
+          onClose={() => setHistoryOpen(false)}
+        />
+      )}
       {/* Header */}
       <div className="flex items-start gap-2 px-4 py-3 shrink-0" style={{ borderBottom: '1px solid var(--gc-border)' }}>
         <div className="min-w-0 flex-1">
@@ -203,6 +413,87 @@ export default function TrailerDetailPanel({ data, segments, historyDays, loadin
           </div>
         </div>
 
+        {/* ── Who has it now ─────────────────────────────────────── */}
+        <SectionTitle>Hooked to</SectionTitle>
+        <div className="px-4 pb-1">
+          {data.heldBy?.asset ? (
+            <>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span
+                  style={{
+                    width: 9, height: 9, borderRadius: '50%', flex: '0 0 auto',
+                    background: data.heldBy.asset.color, boxShadow: '0 0 0 1px rgba(0,0,0,0.15)',
+                  }}
+                />
+                <span className="text-[13px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+                  {data.heldBy.asset.name}
+                </span>
+                <SourceBadge source={data.heldBy.source} />
+              </div>
+              {/* The swap, stated. Seeing "dispatched to CT-2020" under
+                  "hooked to P-C412863" is the whole point: both facts
+                  are true and the difference is the thing that
+                  happened. */}
+              {data.heldBy.dispatchedTo && (
+                <div className="mt-1 text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
+                  Load was dispatched to {data.heldBy.dispatchedTo.name}
+                </div>
+              )}
+              {data.heldBy.source === 'manual' && data.heldBy.setAt && (
+                <div className="mt-1 text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
+                  Set by hand {fmtDate(data.heldBy.setAt)}
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
+              {data.status === 'in_use'
+                ? 'On a load, but no truck is with it right now'
+                : 'No truck has it'}
+            </div>
+          )}
+
+          {hookOpen ? (
+            <div className="mt-2 flex items-center gap-2 flex-wrap">
+              <select
+                className="text-[12px] rounded px-2 py-1"
+                style={{ background: 'var(--gc-bg-2)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }}
+                defaultValue={trailer.manualAssetId != null ? String(trailer.manualAssetId) : ''}
+                disabled={hookSaving}
+                onChange={e => { void setHook(e.target.value ? Number(e.target.value) : null); }}
+              >
+                <option value="">Select a truck…</option>
+                {assignable.map(a => (
+                  <option key={a.id} value={a.id}>{a.name}{a.unit ? ` · #${a.unit}` : ''}</option>
+                ))}
+              </select>
+              <button
+                type="button" disabled={hookSaving} onClick={() => setHookOpen(false)}
+                className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <div className="mt-2 flex items-center gap-3">
+              <button
+                type="button" onClick={() => setHookOpen(true)}
+                className="text-[11px] font-semibold" style={{ color: 'var(--gc-blue)' }}
+              >
+                {trailer.manualAssetId != null ? 'Change truck' : 'Set the truck by hand'}
+              </button>
+              {trailer.manualAssetId != null && (
+                <button
+                  type="button" disabled={hookSaving} onClick={() => { void setHook(null); }}
+                  className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+
         {/* ── Last truck / driver ────────────────────────────────── */}
         <SectionTitle>Last connected</SectionTitle>
         <div className="px-4 pb-1">
@@ -236,7 +527,7 @@ export default function TrailerDetailPanel({ data, segments, historyDays, loadin
         </div>
 
         {/* ── Where it's been ────────────────────────────────────── */}
-        <SectionTitle>Where it&apos;s been · last {historyDays} days</SectionTitle>
+        <SectionTitle>Where it&apos;s been · last 24 hours</SectionTitle>
         <div className="px-4 pb-1">
           {loadingHistory ? (
             <div className="text-[12px] py-1" style={{ color: 'var(--gc-text-3)' }}>Loading…</div>
@@ -244,9 +535,13 @@ export default function TrailerDetailPanel({ data, segments, historyDays, loadin
             <div className="text-[12px] py-1 leading-snug" style={{ color: 'var(--gc-text-3)' }}>
               No stored history yet. Positions are recorded every 2 minutes from now on, so this fills in as the trailer moves.
             </div>
+          ) : recentSegments.length === 0 ? (
+            <div className="text-[12px] py-1" style={{ color: 'var(--gc-text-3)' }}>
+              Nothing recorded in the last 24 hours.
+            </div>
           ) : (
             <div className="space-y-2 pb-1">
-              {(segments ?? []).map((s, i) => (
+              {recentSegments.map((s, i) => (
                 s.kind === 'stopped' ? (
                   <div key={i} className="flex gap-2">
                     <MapPin size={11} style={{ color: 'var(--gc-text-3)', marginTop: 3, flex: '0 0 auto' }} />
@@ -270,6 +565,20 @@ export default function TrailerDetailPanel({ data, segments, historyDays, loadin
                 )
               ))}
             </div>
+          )}
+          {!loadingHistory && allSegments.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setHistoryOpen(true)}
+              className="mt-2 mb-1 text-[11px] font-semibold flex items-center gap-1"
+              style={{ color: 'var(--gc-blue)' }}
+            >
+              <Clock size={11} />
+              Full history by time
+              <span style={{ color: 'var(--gc-text-3)', fontWeight: 400 }}>
+                · {allSegments.length} {allSegments.length === 1 ? 'entry' : 'entries'}, {historyDays}d
+              </span>
+            </button>
           )}
         </div>
 

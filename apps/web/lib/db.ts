@@ -142,6 +142,10 @@ export async function updateTrailer(id: number, updates: Partial<Omit<Trailer, '
     ...(updates.licensePlate !== undefined    ? { licensePlate: updates.licensePlate ?? null } : {}),
     ...(updates.licenseState !== undefined    ? { licenseState: updates.licenseState ?? null } : {}),
     ...(updates.licenseExpiration !== undefined ? { licenseExpiration: updates.licenseExpiration ?? null } : {}),
+    // null is a REAL value here — it clears the hand-set hookup — so
+    // this tests for undefined and passes null straight through,
+    // unlike the `?? null` fields above.
+    ...(updates.manualAssetId !== undefined    ? { manualAssetId: updates.manualAssetId } : {}),
   };
   if (Object.keys(body).length === 0) return;
   try { await railway.updateTrailer(id, body); }

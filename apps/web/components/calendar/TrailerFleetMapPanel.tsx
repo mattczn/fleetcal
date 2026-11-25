@@ -48,6 +48,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { X, MapPin, Container, AlertCircle, Loader2, Search, Clock, Plus, Trash2, Crosshair, ShieldAlert, WifiOff, ParkingCircle, HelpCircle, Truck } from 'lucide-react';
 import { loadGoogleMaps, MAP_ID } from '@/lib/googleMaps';
 import { useCalendarStore, type EldLocation } from '@/store/useCalendarStore';
+import { resolveFleetPairing, type TruckPosition } from '@/lib/trailerPairing';
+import type { LinkSource } from '@/lib/trailerUsage';
 import { getTrailerUsage, type TrailerUsage } from '@/lib/trailerUsage';
 import type { MotiveTrailerLocation } from '@/app/api/motive/trailer-locations/route';
 import {
@@ -159,6 +161,11 @@ interface PinTag {
    *  can't be read as a load in progress. */
   live?:      boolean;
   loadTitle?: string;
+  /** How the truck↔trailer link was decided. 'gps' is the normal
+   *  case, 'manual' means somebody said so and the tag should show
+   *  that it is being taken on their word, 'dispatch' means GPS had
+   *  nothing to say and this is the load record's guess. */
+  linkSource?: LinkSource;
   /** "Parked 3d 4h at SLC Yard", "No fix in 21d" — the stillness line.
    *  Absent until the history sweep has something to say. */
   dwell?:     string;
@@ -1203,24 +1210,71 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
   // one of our yards is what ends a link (see trailerUsage.ts) — the
   // trailer is home and accounted for, so it goes back to being a
   // spare whatever brought it there.
+  // ── Where every tractor is ────────────────────────────────────────────
+  // Computed before the trailers, because the trailer side now asks
+  // GPS who is standing with each trailer rather than reading the
+  // truck off the dispatch record. Retired tractors and the
+  // Unassigned pseudo-asset are dropped: neither can be holding
+  // anything, and leaving them in would let a retired truck win a
+  // proximity test against a trailer parked where it was parked.
+  const truckPositions = useMemo(() => {
+    const byVehicle = new Map<string, EldLocation>();
+    for (const l of eldLocations) byVehicle.set(l.vehicleId, l);
+    const out: TruckPosition[] = [];
+    for (const a of assets) {
+      if (retiredAssetIds.has(a.id)) continue;
+      if (unassignedAssetId != null && a.id === unassignedAssetId) continue;
+      if (!a.motiveVehicleId) continue;
+      const loc = byVehicle.get(a.motiveVehicleId);
+      if (!loc || !Number.isFinite(loc.lat) || !Number.isFinite(loc.lon)) continue;
+      out.push({ assetId: a.id, lat: loc.lat, lon: loc.lon });
+    }
+    return out;
+  }, [assets, eldLocations, retiredAssetIds, unassignedAssetId]);
+
+  // ── Who is standing with what, fleet-wide ─────────────────────────────
+  // Resolved in one pass rather than per trailer so a tractor cannot
+  // come out holding two of them — see resolveFleetPairing. Shared by
+  // the roster below and by the detail panel, which must not be able
+  // to disagree with it.
+  const fleetPairing = useMemo(
+    () => resolveFleetPairing(
+      trailers
+        .filter(t => !t.activeTo)
+        .map(t => {
+          const loc = t.motiveVehicleId ? locations[t.motiveVehicleId] : undefined;
+          return {
+            trailerId: t.id,
+            position: loc ? { lat: loc.lat, lon: loc.lon, locatedAt: loc.locatedAt } : undefined,
+          };
+        }),
+      truckPositions,
+    ),
+    [trailers, locations, truckPositions],
+  );
+
   const trailerEntries = useMemo(() => {
     const out: Array<{ trailer: Trailer; usage: TrailerUsage; loc?: MotiveTrailerLocation }> = [];
     for (const t of trailers) {
       if (t.activeTo) continue;  // retired — out of the fleet view
       const loc = t.motiveVehicleId ? locations[t.motiveVehicleId] : undefined;
       // A trailer with no fix gets atYard: false — not because it
-      // isn't in a yard, but because we can't know. Leaving the link
-      // standing is the useful answer there: who had it last is the
-      // only thing known about an untracked trailer at all.
+      // isn't in a yard, but because we can't know. The pairing
+      // resolver is handed the same nothing and answers 'unknown',
+      // which puts the dispatch record back in charge for exactly the
+      // trailers we have no other information about.
       const usage = getTrailerUsage(t.id, events, calendarTimezone, {
         atYard: loc ? yardAt(loc.lat, loc.lon, yards) != null : false,
         unassignedAssetId,
         retiredAssetIds,
+        physical: fleetPairing.get(t.id),
+        manualAssetId: t.manualAssetId ?? null,
       });
       out.push({ trailer: t, usage, loc });
     }
     return out;
-  }, [trailers, events, locations, calendarTimezone, yards, unassignedAssetId, retiredAssetIds]);
+  }, [trailers, events, locations, calendarTimezone, yards, unassignedAssetId,
+      retiredAssetIds, fleetPairing]);
 
   // ── What each tractor is holding ──────────────────────────────────────
   // Inverted from the trailer side rather than derived again from the
@@ -1238,14 +1292,23 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
   // instead of whichever happened to be iterated first.
   const truckLinks = useMemo(() => {
     const m = new Map<number, {
-      trailer: Trailer; load: CalendarEvent; live: boolean; loc?: MotiveTrailerLocation;
+      trailer: Trailer; load?: CalendarEvent; live: boolean;
+      source: LinkSource; loc?: MotiveTrailerLocation;
     }>();
     for (const e of trailerEntries) {
-      const load = e.usage.load;
-      if (!load || e.usage.status !== 'in_use') continue;
-      const prev = m.get(load.assetId);
+      // Keyed on the truck the usage RESOLVED to, not the one its
+      // load was dispatched to. Those are different numbers whenever
+      // a load was swapped, and keying on the load's would put the
+      // trailer back on the pin of a truck 370 miles away — the bug
+      // this whole pass exists to remove.
+      const assetId = e.usage.truckAssetId;
+      if (assetId == null || e.usage.status !== 'in_use' || !e.usage.source) continue;
+      const prev = m.get(assetId);
       if (prev && (prev.live || !e.usage.live)) continue;
-      m.set(load.assetId, { trailer: e.trailer, load, live: e.usage.live, loc: e.loc });
+      m.set(assetId, {
+        trailer: e.trailer, load: e.usage.load, live: e.usage.live,
+        source: e.usage.source, loc: e.loc,
+      });
     }
     return m;
   }, [trailerEntries]);
@@ -1265,7 +1328,10 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
     const out: Array<{
       asset: Asset;
       loc:   EldLocation;
-      link?: { trailer: Trailer; load: CalendarEvent; live: boolean; loc?: MotiveTrailerLocation };
+      link?: {
+        trailer: Trailer; load?: CalendarEvent; live: boolean;
+        source: LinkSource; loc?: MotiveTrailerLocation;
+      };
     }> = [];
     for (const a of assets) {
       if (retiredAssetIds.has(a.id)) continue;
@@ -1452,6 +1518,8 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
       atYard: loc ? yardAt(loc.lat, loc.lon, yards) != null : false,
       unassignedAssetId,
       retiredAssetIds,
+      physical: fleetPairing.get(trailer.id),
+      manualAssetId: trailer.manualAssetId ?? null,
     });
     const still = stillness[String(trailer.id)];
 
@@ -1476,11 +1544,26 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
       stillHours:     still?.stillHours ?? null,
       stillTruncated: still?.truncated ?? true,
       currentLoad:    usage.load,
+      // Who has it RIGHT NOW and on what evidence — a different
+      // question from "last connected vehicle" below, which is the
+      // dispatch history. When these two disagree the trailer was
+      // swapped, which is the normal case on this fleet.
+      heldBy: usage.truckAssetId != null && usage.source
+        ? {
+            asset:  assets.find(a => a.id === usage.truckAssetId),
+            source: usage.source,
+            dispatchedTo: usage.dispatchedAssetId != null
+              ? assets.find(a => a.id === usage.dispatchedAssetId)
+              : undefined,
+            setAt: usage.source === 'manual' ? trailer.manualAssetAt ?? null : null,
+          }
+        : undefined,
       lastTruck:  truckLoad && truckAsset ? { asset: truckAsset, at: truckLoad.start } : undefined,
       lastDriver: driverLoad && driverLabel ? { name: driverLabel, at: driverLoad.start } : undefined,
       recentLoads: recent.slice(0, 6),
     };
-  }, [embedded, selectedTrailerId, trailers, events, calendarTimezone, locations, stillness, yards, assets, drivers, nowMs, unassignedAssetId, retiredAssetIds]);
+  }, [embedded, selectedTrailerId, trailers, events, calendarTimezone, locations, stillness,
+      yards, assets, drivers, nowMs, unassignedAssetId, retiredAssetIds, fleetPairing]);
 
   // ── Construct the map ONCE ────────────────────────────────────────────
   // The google.maps.Map is a billable Dynamic Maps load, so it must be
@@ -1561,10 +1644,13 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
         const color = STATUS_PIN_COLOR[entry.usage.status];
         const lastSeen = formatLastSeen(entry.loc.locatedAt);
         const load = entry.usage.load;
-        // Set whenever a truck has the trailer, whether that load is
-        // running or finished; absent when idle, so an idle pin's tag
-        // simply has no truck line rather than an empty one.
-        const truck = load ? assets.find(a => a.id === load.assetId) : undefined;
+        // The truck that HAS it, from whichever source won — not the
+        // one its load was dispatched to. Absent when nothing has it,
+        // so an idle pin's tag simply has no truck line rather than
+        // an empty one.
+        const truck = entry.usage.truckAssetId != null
+          ? assets.find(a => a.id === entry.usage.truckAssetId)
+          : undefined;
         const tag: PinTag = {
           kind: 'trailer',
           // Prefers the trailer number (what dispatchers actually call
@@ -1580,6 +1666,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
           // title still has stops, and "Las Vegas, NV → Salt Lake
           // City, UT" beats a blank line.
           loadTitle: load ? (load.title || routeLabel(load)) : undefined,
+          linkSource: entry.usage.source,
           dwell: dwellLine(entry.trailer.id, entry.loc, stillness, yards),
           flagged: flaggedIds.has(entry.trailer.id),
           dotColor: color,
@@ -1654,7 +1741,11 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
                link.trailer.category].filter(Boolean).join(' ')
             : undefined,
           live: link ? link.live : undefined,
-          loadTitle: link ? (link.load.title || routeLabel(link.load)) : undefined,
+          // A manual assignment often has no load behind it at all —
+          // somebody stating what is hooked up in the yard, which is
+          // the case the manual override exists for.
+          loadTitle: link?.load ? (link.load.title || routeLabel(link.load)) : undefined,
+          linkSource: link?.source,
           dotColor: entry.asset.color,
         };
         const position = { lat: entry.loc.lat, lng: entry.loc.lon };
@@ -2011,6 +2102,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
               right still works for moving between trailers. */}
           {detailData && (
             <TrailerDetailPanel
+              nowMs={nowMs}
               // Keyed by trailer so switching selection remounts the
               // panel. That resets the edit form for free, instead of
               // an effect that would otherwise show one trailer's

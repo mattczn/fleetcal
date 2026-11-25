@@ -975,6 +975,13 @@ export interface UpdateTrailerRequest {
   activeFrom?:        string;
   /** Stamp/clear the retire date. null = currently active (unretire). */
   activeTo?:          string | null;
+  /**
+   * Say by hand which tractor has this trailer; null clears it and
+   * hands the question back to GPS and the dispatch record. The
+   * server stamps who and when — those are not settable by the
+   * client, because a provenance you can type is not provenance.
+   */
+  manualAssetId?:     number | null;
 }
 export interface UpdateTrailerResponse { trailer: Trailer; }
 

@@ -29,6 +29,9 @@ interface DbTrailerRow {
   category: TrailerCategory;
   notes: string | null;
   motive_vehicle_id: string | null;
+  manual_asset_id: number | null;
+  manual_asset_at: string | null;
+  manual_asset_by: string | null;
   make: string | null;
   model: string | null;
   vin: string | null;
@@ -48,6 +51,9 @@ function rowToTrailer(r: DbTrailerRow): Trailer {
     category:          r.category,
     notes:             r.notes              ?? undefined,
     motiveVehicleId:   r.motive_vehicle_id  ?? undefined,
+    manualAssetId:     r.manual_asset_id    ?? null,
+    manualAssetAt:     r.manual_asset_at    ?? null,
+    manualAssetBy:     r.manual_asset_by    ?? null,
     make:              r.make               ?? undefined,
     model:             r.model              ?? undefined,
     vin:               r.vin                ?? undefined,
@@ -60,7 +66,7 @@ function rowToTrailer(r: DbTrailerRow): Trailer {
   };
 }
 
-const COLS = "id,name,trailer_number,category,notes,motive_vehicle_id,make,model,vin,license_plate,license_state,license_expiration,sort_order,active_from,active_to";
+const COLS = "id,name,trailer_number,category,notes,motive_vehicle_id,make,model,vin,license_plate,license_state,license_expiration,sort_order,active_from,active_to,manual_asset_id,manual_asset_at,manual_asset_by";
 
 function todayUtcDateKey(): string {
   return new Date().toISOString().slice(0, 10);
@@ -142,6 +148,17 @@ trailers.patch("/:id", requireCapability("trailers.edit"), async (c) => {
   if ("licenseState"      in body) update.license_state      = body.licenseState      ?? null;
   if ("licenseExpiration" in body) update.license_expiration = body.licenseExpiration ?? null;
   if ("activeFrom"        in body) update.active_from        = body.activeFrom;
+  // The hand-set hookup, with its provenance stamped here rather than
+  // taken from the client. Clearing the tractor clears who and when
+  // with it — the CHECK constraint on the table requires that, and a
+  // dangling "set by Matt" on an unclaimed trailer would be a lie
+  // anyway.
+  if ("manualAssetId" in body) {
+    const asset = body.manualAssetId ?? null;
+    update.manual_asset_id = asset;
+    update.manual_asset_at = asset == null ? null : new Date().toISOString();
+    update.manual_asset_by = asset == null ? null : (c.get("userId") ?? null);
+  }
   if ("activeTo"          in body) update.active_to          = body.activeTo          ?? null;
   if (Object.keys(update).length === 0) {
     return c.json({ error: "validation_failed", errors: ["no fields"] } satisfies ApiErrorResponse, 400);

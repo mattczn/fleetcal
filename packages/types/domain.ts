@@ -347,6 +347,20 @@ export interface Trailer {
   /** Active lifecycle — see Driver.activeFrom for semantics. */
   activeFrom?: string;
   activeTo?: string | null;
+  /**
+   * The tractor somebody said is hooked to this trailer.
+   *
+   * Outranks both derivations — GPS proximity and the dispatch record
+   * — and holds until it is changed or cleared. It exists for the
+   * yard, where several trucks and trailers stand at zero distance
+   * from each other and no position reading can say which is under
+   * which. See lib/trailerUsage.ts for the ranking.
+   */
+  manualAssetId?: number | null;
+  /** When that assignment was made, so a stale one can be recognised. */
+  manualAssetAt?: string | null;
+  /** Who made it. */
+  manualAssetBy?: string | null;
 }
 
 // ── Saved Location ──────────────────────────────────────────────────────

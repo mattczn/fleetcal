@@ -172,6 +172,72 @@ check('an idle trailer is not live', usage([]).live, false);
 check('a lapsed en_route load is not live',
   usage([load({ start: at(-30), end: at(-6), status: 'en_route' })]).live, false);
 
+// ── WHO HAS IT: manual > GPS > dispatch ─────────────────────────────
+// The bug this ranking exists for: #402595 sat at Cisco UT with
+// P-C412863 0.1 mi away, while the dispatch record said CT-2020 —
+// 370 mi off in Henderson, because the load had been swapped.
+const TRUCK_GPS = 300;
+const withTruck  = { kind: 'with' as const, assetId: TRUCK_GPS, miles: 0.1 };
+const alone      = { kind: 'alone' as const };
+const ambiguous  = { kind: 'ambiguous' as const, assetIds: [TRUCK_A, TRUCK_B] };
+const noFix      = { kind: 'unknown' as const, reason: 'no_fix' as const };
+
+check('GPS names the truck, not the dispatch record',
+  usage([over], { physical: withTruck }).truckAssetId, TRUCK_GPS);
+check('…and says so', usage([over], { physical: withTruck }).source, 'gps');
+check('…and surfaces who it WAS dispatched to',
+  usage([over], { physical: withTruck }).dispatchedAssetId, TRUCK_A);
+check('…and still carries the load as context',
+  usage([over], { physical: withTruck }).load?.id, over.id);
+check('no second truck named when GPS agrees with dispatch',
+  getTrailerUsage(OURS, [over], undefined,
+    { physical: { kind: 'with', assetId: TRUCK_A, miles: 0.2 } }).dispatchedAssetId,
+  undefined);
+
+check('a trailer standing alone is idle however recent the load',
+  usage([over], { physical: alone }).status, 'idle');
+check('…and names nobody', usage([over], { physical: alone }).truckAssetId, undefined);
+check('a huddle of trucks is not an answer',
+  usage([over], { physical: ambiguous }).status, 'idle');
+check('no fix falls back to the dispatch record',
+  usage([over], { physical: noFix }).truckAssetId, TRUCK_A);
+check('…labelled as such', usage([over], { physical: noFix }).source, 'dispatch');
+check('a dark tracker falls back too',
+  usage([over], { physical: { kind: 'unknown', reason: 'dark' } }).truckAssetId, TRUCK_A);
+check('omitting GPS entirely is the same as having none',
+  usage([over]).source, 'dispatch');
+
+// A running load keeps the trailer in use whatever GPS says, but GPS
+// still decides who has it — including "nobody", for a trailer
+// dropped at a receiver while its load is open.
+check('a live load is in use even with the trailer standing alone',
+  usage([live], { physical: alone }).status, 'in_use');
+check('…with no truck named', usage([live], { physical: alone }).truckAssetId, undefined);
+check('a live load takes its truck from GPS when GPS can say',
+  usage([live], { physical: withTruck }).truckAssetId, TRUCK_GPS);
+check('a live load falls back to its dispatched truck with no GPS',
+  usage([live], { physical: noFix }).truckAssetId, TRUCK_A);
+
+// Manual outranks both and holds until changed or cleared.
+check('a manual assignment wins over GPS',
+  usage([over], { physical: withTruck, manualAssetId: TRUCK_B }).truckAssetId, TRUCK_B);
+check('…and says so', usage([over], { physical: withTruck, manualAssetId: TRUCK_B }).source, 'manual');
+check('a manual assignment wins over a yard',
+  usage([over], { atYard: true, manualAssetId: TRUCK_B }).status, 'in_use');
+check('a manual assignment wins when GPS says the trailer is alone',
+  usage([over], { physical: alone, manualAssetId: TRUCK_B }).truckAssetId, TRUCK_B);
+check('a manual assignment stands with no load at all',
+  usage([], { manualAssetId: TRUCK_B }).status, 'in_use');
+check('…and flags the truck GPS disagrees with',
+  usage([over], { physical: withTruck, manualAssetId: TRUCK_B }).dispatchedAssetId, TRUCK_A);
+
+// The yard rule sits above GPS: trucks park beside trailers they are
+// not pulling all day at the home yard.
+check('a truck parked beside it in the yard is not a hookup',
+  usage([over], { atYard: true, physical: withTruck }).status, 'idle');
+check('…but a load being loaded AT the yard still counts',
+  usage([live], { atYard: true, physical: withTruck }).status, 'in_use');
+
 console.log(`\n${pass} passed, ${failures.length} failed\n`);
 for (const f of failures) console.log(`  FAIL ${f}\n`);
 process.exit(failures.length === 0 ? 0 : 1);
