@@ -223,6 +223,33 @@ const PIN_Z: Record<PinMode, number | undefined> = {
  * wrapper's bottom centre at the trailer's coordinates, so a chip in
  * normal flow would push the glyph up off the point it marks.
  */
+/**
+ * De-stacking co-located pins.
+ *
+ * Six of Curzon's trucks and half a dozen trailers sit inside 800 m of
+ * the Salt Lake yard most nights. At a zoom that shows the operating
+ * area — Henderson to Cheyenne is five degrees of latitude — 800 m is
+ * a fraction of a pixel, so twelve badges land on the same spot and
+ * eleven of them are invisible: the map says "one truck is home" when
+ * six are. So pins that would overlap ON SCREEN are fanned out onto a
+ * ring around their shared position.
+ *
+ * The displacement is visual only (a transform on the pin's wrapper),
+ * never a change to the marker's coordinates, so nothing downstream
+ * starts believing a truck is 50 m north of where Motive put it. It is
+ * recomputed per zoom: zoom in far enough and the ring collapses as
+ * each pin reaches its true position, which is also the gesture a
+ * dispatcher already makes to pick one out of a group.
+ */
+const PIN_OVERLAP_PX    = 26;   // a dot is 22px, a rig pill 32px wide
+const FAN_SPACING_PX    = 30;   // arc length each pin gets on the ring
+const FAN_MIN_RADIUS_PX = 18;
+
+/** Ground metres one screen pixel covers at this latitude and zoom. */
+function metresPerPixel(lat: number, zoom: number): number {
+  return (156543.03392 * Math.cos((lat * Math.PI) / 180)) / 2 ** zoom;
+}
+
 function makePinElement(): {
   wrapper: HTMLDivElement; labelEl: HTMLDivElement; dot: HTMLDivElement; chipEl: HTMLDivElement;
 } {
@@ -930,6 +957,62 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
   }, []);
 
   /**
+   * Fan apart any pins that would be drawn on top of each other.
+   *
+   * Single-link grouping at the current zoom, then each group of more
+   * than one is placed on a ring big enough to give every member
+   * FAN_SPACING_PX of arc. Groups are keyed off the sorted pin keys so
+   * a truck keeps the same seat on the ring between repaints instead
+   * of hopping around as the poll comes in.
+   *
+   * Same shape as repaintPins — no dependencies, everything through
+   * refs — so the map listener wired once still sees current pins.
+   */
+  const fanPins = useCallback(() => {
+    const map  = mapRef.current;
+    const zoom = map?.getZoom();
+    if (!map || zoom == null) return;
+
+    const setOffset = (key: string, dx: number, dy: number) => {
+      const wrapper = markersRef.current.get(key)?.content as HTMLElement | null;
+      if (!wrapper) return;
+      wrapper.style.transform = dx === 0 && dy === 0
+        ? ''
+        : `translate(${dx.toFixed(1)}px, ${dy.toFixed(1)}px)`;
+    };
+
+    const entries = [...positionsRef.current.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]));
+    const grouped = new Set<string>();
+
+    for (let i = 0; i < entries.length; i++) {
+      const [key, pos] = entries[i];
+      if (grouped.has(key)) continue;
+      grouped.add(key);
+      const group = [key];
+      const nearM = PIN_OVERLAP_PX * metresPerPixel(pos.lat, zoom);
+      for (let j = i + 1; j < entries.length; j++) {
+        const [other, otherPos] = entries[j];
+        if (grouped.has(other)) continue;
+        if (distanceMetres(pos.lat, pos.lng, otherPos.lat, otherPos.lng) <= nearM) {
+          group.push(other);
+          grouped.add(other);
+        }
+      }
+
+      if (group.length === 1) { setOffset(group[0], 0, 0); continue; }
+      const radius = Math.max(FAN_MIN_RADIUS_PX,
+                              (group.length * FAN_SPACING_PX) / (2 * Math.PI));
+      group.forEach((k, idx) => {
+        // Starts at 12 o'clock so a pair reads as one above the other
+        // rather than straddling the true position left and right.
+        const angle = (idx / group.length) * 2 * Math.PI - Math.PI / 2;
+        setOffset(k, Math.cos(angle) * radius, Math.sin(angle) * radius);
+      });
+    }
+  }, []);
+
+  /**
    * Select a pin and move the map accordingly.
    *
    * The two ways in want different things from the map, so the caller
@@ -1153,7 +1236,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
       link?: { trailer: Trailer; load: CalendarEvent; live: boolean; loc?: MotiveTrailerLocation };
     }> = [];
     for (const a of assets) {
-      if (a.activeTo) continue;
+      if (retiredAssetIds.has(a.id)) continue;
       // The pseudo-asset every undispatched load sits on. It has no
       // Motive link so it would fall out anyway; named here so that
       // stays true if one is ever attached by accident.
@@ -1165,7 +1248,7 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
       out.push({ asset: a, loc, link: truckLinks.get(a.id) });
     }
     return out;
-  }, [assets, eldLocations, truckLinks, query, unassignedAssetId, showTrucks]);
+  }, [assets, eldLocations, truckLinks, query, unassignedAssetId, showTrucks, retiredAssetIds]);
 
   // Trailers whose own tractor is pinned within sight of them. Those
   // pins hand the pairing to the truck pin and go back to a plain
@@ -1604,11 +1687,25 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
       }
 
       // Last, so brand-new pins start at the right size and any open
-      // tag refreshes with this pass's data.
+      // tag refreshes with this pass's data. The fan goes first: it
+      // only writes wrapper transforms, and repaintPins is what sizes
+      // the dots that the spacing is measured against.
+      fanPins();
       repaintPins();
     });
-  }, [mapReady, groups, truckEntries, pairedTrailerIds, assets, repaintPins, focusPin,
-      stillness, yards, flaggedIds]);
+  }, [mapReady, groups, truckEntries, pairedTrailerIds, assets, repaintPins, fanPins,
+      focusPin, stillness, yards, flaggedIds]);
+
+  // ── Re-fan on zoom ────────────────────────────────────────────────────
+  // Overlap is a screen-space fact, so it changes with zoom and only
+  // with zoom: the threshold is measured against each pin's own
+  // latitude, not the viewport, so panning cannot change a grouping
+  // and does not need to recompute one.
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return;
+    const listener = mapRef.current.addListener('zoom_changed', () => fanPins());
+    return () => listener.remove();
+  }, [mapReady, fanPins]);
 
   // ── Yard circles ──────────────────────────────────────────────────────
   // Redrawn whenever the yard set changes. Circles are not clickable:
@@ -1814,9 +1911,9 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
   const truckCount = useMemo(() => {
     const ids = new Set(eldLocations.map(l => l.vehicleId));
     return assets.filter(a =>
-      !a.activeTo && a.motiveVehicleId && ids.has(a.motiveVehicleId) &&
+      !retiredAssetIds.has(a.id) && a.motiveVehicleId && ids.has(a.motiveVehicleId) &&
       (unassignedAssetId == null || a.id !== unassignedAssetId)).length;
-  }, [assets, eldLocations, unassignedAssetId]);
+  }, [assets, eldLocations, unassignedAssetId, retiredAssetIds]);
 
   const content = (
     <>
