@@ -231,19 +231,24 @@ const PIN_Z: Record<PinMode, number | undefined> = {
  * area — Henderson to Cheyenne is five degrees of latitude — 800 m is
  * a fraction of a pixel, so twelve badges land on the same spot and
  * eleven of them are invisible: the map says "one truck is home" when
- * six are. So pins that would overlap ON SCREEN are fanned out onto a
- * ring around their shared position.
+ * six are. So pins that would overlap ON SCREEN are bunched into a
+ * tight block around their shared position — adjacent, touching,
+ * obviously one group standing in one place.
+ *
+ * A ring was the first attempt and was wrong: spread over a
+ * yard-sized circle it read as trucks scattered across the valley,
+ * which is the one thing this map exists to tell the truth about.
  *
  * The displacement is visual only (a transform on the pin's wrapper),
  * never a change to the marker's coordinates, so nothing downstream
  * starts believing a truck is 50 m north of where Motive put it. It is
- * recomputed per zoom: zoom in far enough and the ring collapses as
+ * recomputed per zoom: zoom in far enough and the block dissolves as
  * each pin reaches its true position, which is also the gesture a
  * dispatcher already makes to pick one out of a group.
  */
-const PIN_OVERLAP_PX    = 26;   // a dot is 22px, a rig pill 32px wide
-const FAN_SPACING_PX    = 30;   // arc length each pin gets on the ring
-const FAN_MIN_RADIUS_PX = 18;
+const PIN_OVERLAP_PX = 26;   // a dot is 22px, a rig pill 32px wide
+const BUNCH_PITCH_X  = 26;   // column spacing inside a bunch
+const BUNCH_PITCH_Y  = 24;   // row spacing
 
 /** Ground metres one screen pixel covers at this latitude and zoom. */
 function metresPerPixel(lat: number, zoom: number): number {
@@ -331,39 +336,58 @@ function makePinElement(): {
  * cab-and-box (a rig). At pin size the shape carries the meaning and
  * the strokes inside it only confirm it.
  */
+/**
+ * The system's own icons, as SVG strings.
+ *
+ * These pins are raw DOM, not React, so the lucide components can't
+ * be rendered into them — but the PATHS have to be the same ones or
+ * the map grows its own truck that looks like nothing else in
+ * FleetCal. Copied verbatim from lucide-react v1.14.0: `truck`, which
+ * 337 call sites across the app use for an asset, and `container`,
+ * the trailer icon everywhere else.
+ *
+ * stroke-width stays at lucide's own 2 rather than being fattened up
+ * for legibility: RouteMapPanel already renders this icon in white at
+ * size 11, so that IS what a FleetCal truck glyph looks like.
+ */
+const LUCIDE_TRUCK = [
+  '<path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/>',
+  '<path d="M15 18H9"/>',
+  '<path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14"/>',
+  '<circle cx="17" cy="18" r="2"/>',
+  '<circle cx="7" cy="18" r="2"/>',
+].join('');
+
+const LUCIDE_CONTAINER = [
+  '<path d="M22 7.7c0-.6-.4-1.2-.8-1.5l-6.3-3.9a1.72 1.72 0 0 0-1.7 0l-10.3 6c-.5.2-.9.8-.9 1.4v6.6c0 .5.4 1.2.8 1.5l6.3 3.9a1.72 1.72 0 0 0 1.7 0l10.3-6c.5-.3.9-1 .9-1.5Z"/>',
+  '<path d="M10 21.9V14L2.1 9.1"/>',
+  '<path d="m10 14 11.9-6.9"/>',
+  '<path d="M14 19.8v-8.1"/>',
+  '<path d="M18 17.5V9.4"/>',
+].join('');
+
+const GLYPH_ATTRS = 'fill="none" stroke="#ffffff" stroke-width="2"'
+                  + ' stroke-linecap="round" stroke-linejoin="round"';
+
+/** The system truck icon — a trailer's badge when its tractor is elsewhere. */
 function truckGlyphSvg(): string {
-  return [
-    '<svg viewBox="0 0 24 24" width="12" height="12" fill="none"',
-    ' stroke="#ffffff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">',
-    '<path d="M3 7h10v9H3z"/><path d="M13 10h4l4 3.5V16h-8z"/>',
-    '<circle cx="7" cy="18.5" r="1.6" fill="#ffffff"/>',
-    '<circle cx="17.5" cy="18.5" r="1.6" fill="#ffffff"/>',
-    '</svg>',
-  ].join('');
+  return `<svg viewBox="0 0 24 24" width="14" height="14" ${GLYPH_ATTRS}>${LUCIDE_TRUCK}</svg>`;
 }
 
 /** A tractor on its own — a truck running bobtail. */
 function cabGlyphSvg(): string {
-  return [
-    '<svg viewBox="0 0 24 24" width="13" height="13" fill="none"',
-    ' stroke="#ffffff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">',
-    '<path d="M6 6h7v10H6z"/><path d="M13 10h3l4 3.5V16h-7z"/>',
-    '<circle cx="9" cy="18.5" r="1.6" fill="#ffffff"/>',
-    '<circle cx="17" cy="18.5" r="1.6" fill="#ffffff"/>',
-    '</svg>',
-  ].join('');
+  return `<svg viewBox="0 0 24 24" width="15" height="15" ${GLYPH_ATTRS}>${LUCIDE_TRUCK}</svg>`;
 }
 
-/** A tractor with a trailer behind it — a loaded rig. Wider viewBox
- *  than the other two: the length IS the signal. */
+/** A tractor with the trailer it is pulling: the asset icon and the
+ *  trailer icon side by side — the pairing said in the two icons the
+ *  rest of the app already uses for those two things. The extra
+ *  length is the part you can read without looking closely. */
 function rigGlyphSvg(): string {
   return [
-    '<svg viewBox="0 0 30 24" width="20" height="16" fill="none"',
-    ' stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">',
-    '<path d="M2 5h17v11H2z"/><path d="M19 9h3l4 3.5V16h-7z"/>',
-    '<circle cx="7" cy="18.5" r="1.5" fill="#ffffff"/>',
-    '<circle cx="12" cy="18.5" r="1.5" fill="#ffffff"/>',
-    '<circle cx="23" cy="18.5" r="1.5" fill="#ffffff"/>',
+    `<svg viewBox="0 0 47 24" width="32" height="16" ${GLYPH_ATTRS}>`,
+    LUCIDE_TRUCK,
+    `<g transform="translate(23,0)">${LUCIDE_CONTAINER}</g>`,
     '</svg>',
   ].join('');
 }
@@ -402,8 +426,8 @@ function paintPinGlyph(dot: HTMLDivElement, tag: PinTag): void {
 
   if (tag.kind === 'truck') {
     const rig = !!tag.trailerLabel;
-    dot.style.width  = rig ? '32px' : '22px';
-    dot.style.height = rig ? '20px' : '22px';
+    dot.style.width  = rig ? '40px' : '24px';
+    dot.style.height = rig ? '22px' : '24px';
     dot.style.borderRadius = rig ? '6px' : '7px';
     dot.style.background = tag.dotColor;
     dot.style.borderStyle = 'solid';
@@ -957,13 +981,15 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
   }, []);
 
   /**
-   * Fan apart any pins that would be drawn on top of each other.
+   * Bunch together any pins that would be drawn on top of each other.
    *
    * Single-link grouping at the current zoom, then each group of more
-   * than one is placed on a ring big enough to give every member
-   * FAN_SPACING_PX of arc. Groups are keyed off the sorted pin keys so
-   * a truck keeps the same seat on the ring between repaints instead
-   * of hopping around as the poll comes in.
+   * than one is laid out as a tight near-square block centred on the
+   * shared position: columns = ceil(sqrt(n)), one pin pitch apart, so
+   * eight trucks at a yard read as a block of eight badges sitting at
+   * that yard. Seats are assigned off the sorted pin keys so a truck
+   * keeps its place between repaints instead of hopping around as the
+   * poll comes in.
    *
    * Same shape as repaintPins — no dependencies, everything through
    * refs — so the map listener wired once still sees current pins.
@@ -1001,13 +1027,19 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
       }
 
       if (group.length === 1) { setOffset(group[0], 0, 0); continue; }
-      const radius = Math.max(FAN_MIN_RADIUS_PX,
-                              (group.length * FAN_SPACING_PX) / (2 * Math.PI));
+      const cols = Math.ceil(Math.sqrt(group.length));
+      const rows = Math.ceil(group.length / cols);
       group.forEach((k, idx) => {
-        // Starts at 12 o'clock so a pair reads as one above the other
-        // rather than straddling the true position left and right.
-        const angle = (idx / group.length) * 2 * Math.PI - Math.PI / 2;
-        setOffset(k, Math.cos(angle) * radius, Math.sin(angle) * radius);
+        const col   = idx % cols;
+        const row   = Math.floor(idx / cols);
+        // Each row is centred on its OWN width, so a block of seven
+        // doesn't hang off to one side with a gap on the other.
+        const inRow = Math.min(cols, group.length - row * cols);
+        setOffset(
+          k,
+          (col - (inRow - 1) / 2) * BUNCH_PITCH_X,
+          (row - (rows - 1) / 2) * BUNCH_PITCH_Y,
+        );
       });
     }
   }, []);
@@ -1687,16 +1719,16 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
       }
 
       // Last, so brand-new pins start at the right size and any open
-      // tag refreshes with this pass's data. The fan goes first: it
-      // only writes wrapper transforms, and repaintPins is what sizes
-      // the dots that the spacing is measured against.
+      // tag refreshes with this pass's data. The bunching goes first:
+      // it only writes wrapper transforms, and repaintPins is what
+      // sizes the dots that the spacing is measured against.
       fanPins();
       repaintPins();
     });
   }, [mapReady, groups, truckEntries, pairedTrailerIds, assets, repaintPins, fanPins,
       focusPin, stillness, yards, flaggedIds]);
 
-  // ── Re-fan on zoom ────────────────────────────────────────────────────
+  // ── Re-bunch on zoom ──────────────────────────────────────────────────
   // Overlap is a screen-space fact, so it changes with zoom and only
   // with zoom: the threshold is measured against each pin's own
   // latitude, not the viewport, so panning cannot change a grouping
