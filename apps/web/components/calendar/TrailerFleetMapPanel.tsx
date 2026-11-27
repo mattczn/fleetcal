@@ -230,38 +230,6 @@ const PIN_Z: Record<PinMode, number | undefined> = {
  * wrapper's bottom centre at the trailer's coordinates, so a chip in
  * normal flow would push the glyph up off the point it marks.
  */
-/**
- * De-stacking co-located pins.
- *
- * Six of Curzon's trucks and half a dozen trailers sit inside 800 m of
- * the Salt Lake yard most nights. At a zoom that shows the operating
- * area — Henderson to Cheyenne is five degrees of latitude — 800 m is
- * a fraction of a pixel, so twelve badges land on the same spot and
- * eleven of them are invisible: the map says "one truck is home" when
- * six are. So pins that would overlap ON SCREEN are bunched into a
- * tight block around their shared position — adjacent, touching,
- * obviously one group standing in one place.
- *
- * A ring was the first attempt and was wrong: spread over a
- * yard-sized circle it read as trucks scattered across the valley,
- * which is the one thing this map exists to tell the truth about.
- *
- * The displacement is visual only (a transform on the pin's wrapper),
- * never a change to the marker's coordinates, so nothing downstream
- * starts believing a truck is 50 m north of where Motive put it. It is
- * recomputed per zoom: zoom in far enough and the block dissolves as
- * each pin reaches its true position, which is also the gesture a
- * dispatcher already makes to pick one out of a group.
- */
-const PIN_OVERLAP_PX = 26;   // a dot is 22px, a rig pill 32px wide
-const BUNCH_PITCH_X  = 26;   // column spacing inside a bunch
-const BUNCH_PITCH_Y  = 24;   // row spacing
-
-/** Ground metres one screen pixel covers at this latitude and zoom. */
-function metresPerPixel(lat: number, zoom: number): number {
-  return (156543.03392 * Math.cos((lat * Math.PI) / 180)) / 2 ** zoom;
-}
-
 function makePinElement(): {
   wrapper: HTMLDivElement; labelEl: HTMLDivElement; dot: HTMLDivElement; chipEl: HTMLDivElement;
 } {
@@ -984,70 +952,6 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
         tagDataRef.current.get(key),
         chipsRef.current.get(key),
       );
-    }
-  }, []);
-
-  /**
-   * Bunch together any pins that would be drawn on top of each other.
-   *
-   * Single-link grouping at the current zoom, then each group of more
-   * than one is laid out as a tight near-square block centred on the
-   * shared position: columns = ceil(sqrt(n)), one pin pitch apart, so
-   * eight trucks at a yard read as a block of eight badges sitting at
-   * that yard. Seats are assigned off the sorted pin keys so a truck
-   * keeps its place between repaints instead of hopping around as the
-   * poll comes in.
-   *
-   * Same shape as repaintPins — no dependencies, everything through
-   * refs — so the map listener wired once still sees current pins.
-   */
-  const fanPins = useCallback(() => {
-    const map  = mapRef.current;
-    const zoom = map?.getZoom();
-    if (!map || zoom == null) return;
-
-    const setOffset = (key: string, dx: number, dy: number) => {
-      const wrapper = markersRef.current.get(key)?.content as HTMLElement | null;
-      if (!wrapper) return;
-      wrapper.style.transform = dx === 0 && dy === 0
-        ? ''
-        : `translate(${dx.toFixed(1)}px, ${dy.toFixed(1)}px)`;
-    };
-
-    const entries = [...positionsRef.current.entries()]
-      .sort((a, b) => a[0].localeCompare(b[0]));
-    const grouped = new Set<string>();
-
-    for (let i = 0; i < entries.length; i++) {
-      const [key, pos] = entries[i];
-      if (grouped.has(key)) continue;
-      grouped.add(key);
-      const group = [key];
-      const nearM = PIN_OVERLAP_PX * metresPerPixel(pos.lat, zoom);
-      for (let j = i + 1; j < entries.length; j++) {
-        const [other, otherPos] = entries[j];
-        if (grouped.has(other)) continue;
-        if (distanceMetres(pos.lat, pos.lng, otherPos.lat, otherPos.lng) <= nearM) {
-          group.push(other);
-          grouped.add(other);
-        }
-      }
-
-      if (group.length === 1) { setOffset(group[0], 0, 0); continue; }
-      const cols = Math.ceil(Math.sqrt(group.length));
-      const rows = Math.ceil(group.length / cols);
-      group.forEach((k, idx) => {
-        const col   = idx % cols;
-        const row   = Math.floor(idx / cols);
-        // Each row is centred on its OWN width, so a block of seven
-        // doesn't hang off to one side with a gap on the other.
-        const inRow = Math.min(cols, group.length - row * cols);
-        setOffset(
-          k,
-          (col - (inRow - 1) / 2) * BUNCH_PITCH_X,
-          (row - (rows - 1) / 2) * BUNCH_PITCH_Y,
-        );
-      });
     }
   }, []);
 
@@ -1810,25 +1714,11 @@ export default function TrailerFleetMapPanel({ onClose, embedded = false }: Prop
       }
 
       // Last, so brand-new pins start at the right size and any open
-      // tag refreshes with this pass's data. The bunching goes first:
-      // it only writes wrapper transforms, and repaintPins is what
-      // sizes the dots that the spacing is measured against.
-      fanPins();
+      // tag refreshes with this pass's data.
       repaintPins();
     });
-  }, [mapReady, groups, truckEntries, pairedTrailerIds, assets, repaintPins, fanPins,
+  }, [mapReady, groups, truckEntries, pairedTrailerIds, assets, repaintPins,
       focusPin, stillness, yards, flaggedIds]);
-
-  // ── Re-bunch on zoom ──────────────────────────────────────────────────
-  // Overlap is a screen-space fact, so it changes with zoom and only
-  // with zoom: the threshold is measured against each pin's own
-  // latitude, not the viewport, so panning cannot change a grouping
-  // and does not need to recompute one.
-  useEffect(() => {
-    if (!mapReady || !mapRef.current) return;
-    const listener = mapRef.current.addListener('zoom_changed', () => fanPins());
-    return () => listener.remove();
-  }, [mapReady, fanPins]);
 
   // ── Yard circles ──────────────────────────────────────────────────────
   // Redrawn whenever the yard set changes. Circles are not clickable:
